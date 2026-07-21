@@ -1,86 +1,34 @@
 # Project agent memory
 
-This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
+`dodo` is a Rust desktop app: a single window with a collapsible sidebar, where each sidebar
+entry swaps the main pane to a self-contained developer tool (JSON formatter, Encoder/Decoder)
+plus a Settings dialog. It is built on GPUI (Zed's UI framework) and the `gpui-component` widget
+library, both pulled from git and pinned only by `Cargo.lock`. See `README.md` for the user-facing
+description and `Cargo.toml` for exact dependency sources.
 
-- Add durable project-specific notes here as they are discovered through real work.
+Read `src/main.rs` for the startup sequence and `src/layout.rs` for the view model; the doc
+comments there are the authority on structure. This file is only a map.
 
-## Adding a tool view
+## Skills
 
-Each tool is its own module (`src/json_formatter.rs`, `src/encoder_decoder.rs`) exposing an
-entity with `new(&mut Window, &mut Context<Self>)` + `Render`. `src/layout.rs` owns the
-`View` enum that drives both the sidebar menu and the main pane; the doc comment on `View`
-lists the exact places to touch when adding a tool. Views are constructed once in
-`Layout::new` and kept alive, so switching tabs preserves editor contents.
+Detailed, verified knowledge lives in `.claude/skills/<name>/SKILL.md`. Load one when its trigger
+fires — they are written to be read at the moment of need, not up front.
 
-## Assets, icons and themes
+| Skill | Load it when |
+|---|---|
+| `gpui-component-recipes` | Writing or editing any `render` / `new` that builds a gpui-component widget (input, code editor, diagnostics, select, dialog, settings panel, sidebar, button, icon); a widget call will not compile; or a widget builds but nothing appears on screen. |
+| `dodo-tool-view` | Adding, renaming, reordering or removing a sidebar tool; a new sidebar entry does not appear or renders blank. |
+| `dodo-theming-settings` | Adding or changing a setting, adding or removing a theme, adding user-visible text that should be translated, or a settings change does not apply until restart. |
+| `dodo-build-validate` | First `cargo` invocation of a session, adding tests, a build or `cargo test` failing oddly, or being asked whether a UI change actually works. |
 
-`src/assets.rs` embeds `assets/icons/**/*.svg` and `assets/themes/**/*.json`, and falls back
-to `gpui_component_assets::Assets` for anything missing — that is what makes library widgets
-(dropdown carets, menu check marks, the dialog close button) find their icons without us
-vendoring the whole Lucide set. Our own files shadow the library's by path, so dropping
-`assets/icons/search.svg` in place also replaces `IconName::Search`.
+Two things that catch everyone and belong here rather than behind a trigger:
 
-Icons are registered as variants of `AppIcon` in `src/app_icon.rs` (variant → `icons/<file>.svg`).
-Themes are vendored verbatim from the upstream `themes/` directory and loaded into
-`ThemeRegistry` by `settings::init` (called right after `gpui_component::init` in `main.rs`);
-`src/settings.rs` lists the theme *names* it offers, which come from the `name` field inside
-those JSON files, not the file names.
-
-## Settings and app-level state
-
-`src/settings.rs` owns the Settings dialog. Appearance settings deliberately have no state
-struct of their own: font size, border radius and colours are fields on the library's global
-`gpui_component::Theme`, so the dialog reads/writes that global and calls `cx.refresh_windows()`
-— that is the whole "apply live" mechanism. Language is the exception (`src/i18n.rs`), a
-`Language` global plus a `Str` enum with one match arm per string; `t(Str::X, cx)` looks it up.
-Nothing is persisted across restarts.
-
-## gpui-component widget notes (git dep, non-obvious)
-
-Source of truth is the cargo git checkout under
-`~/.cargo/git/checkouts/gpui-component-*/<rev>/crates/ui/src` (rev pinned in `Cargo.lock`).
-
-- **Overlays must be rendered by us, not by `Root`** (`root.rs`, and `docs/docs/root.md`).
-  `Root::render` only paints its child view plus the tooltip/native-menu overlays.
-  `window.open_dialog(..)` merely pushes onto `Root::active_dialogs`; the builder closure is
-  invoked *only* from `Root::render_dialog_layer`, which the first-level view under `Root` —
-  `DodoApp::render` — has to call. Omit it and the dialog opens in state and is never painted:
-  the click looks dead with no error anywhere. Same contract for
-  `render_sheet_layer` / `render_notification_layer`; add those the day we use a sheet or a
-  notification, or they will fail the same silent way.
-- **Multi-line code editor**: `gpui_component::input::InputState` + `Input::new(&state)`.
-  Build with `InputState::new(window, cx).code_editor("json").multi_line(true).line_number(true)`.
-  Read text via `state.value()`; replace via `state.set_value(text, window, cx)`
-  (`replace_all` keeps undo history). `code_editor(lang)` gives tree-sitter highlighting;
-  `"json"` and `"rust"` are supported languages.
-  `InputState::new` and `set_value` require `&mut Window`, so views holding an editor must be
-  built with a window (see `DodoApp::new`/`Layout::new`/`JsonFormatter::new` threading `window`).
-- **Inline error highlighting**: only available in `code_editor` mode. Use
-  `state.diagnostics_mut()` (returns `Some` only for code editors), then `reset(&rope)` +
-  `push(Diagnostic::new(start..end, msg).with_severity(DiagnosticSeverity::Error))`.
-  `Diagnostic`/`DiagnosticSeverity` live in `gpui_component::highlighter`; positions are
-  `gpui_component::input::Position` (= lsp_types, 0-based line/character). Renders as a wavy underline.
-- **Select/dropdown**: `gpui_component::select::{Select, SelectState}`. Build
-  `SelectState::new(vec_of_items, Some(IndexPath::default()), window, cx)` (2nd arg = initial
-  selection). `IndexPath` is at crate root. Read choice with
-  `state.selected_index(cx).map(|ip| ip.row)`. Render with `Select::new(&state)`.
-- **Settings panel + modal**: `gpui_component::setting::{Settings, SettingPage, SettingGroup,
-  SettingItem, SettingField}` is a whole settings UI (left sidebar, search box, right pane) —
-  don't hand-roll one. Open it with `window.open_dialog(cx, |dialog, _, cx| ...)` (`WindowExt`);
-  the dialog already has a close button, Escape, and overlay-click dismissal. Its search only
-  matches item titles/descriptions/`keywords`, so give items their section name as a keyword
-  if searching by section should work. Give a page `.resettable(false)` unless you want its
-  reset button. Fields are get/set closure pairs over `&App`/`&mut App`, so state lives in a
-  global, not in the element.
-- **Sidebar item selection**: `SidebarMenuItem::new(..).active(bool).on_click(|_, _, cx| ...)`.
-  `on_click` gets `&mut App` (not a `cx.listener`), so capture `cx.entity()` and
-  `view.update(cx, ..)` to mutate the parent view.
-- **Trait imports**: `ButtonVariants` (for `.ghost()`/`.primary()`) is in
-  `gpui_component::button`, not the crate root. `.opacity()` (Hsla) and most `Styled` sizing
-  (`.w()`, `.rounded()`, `.font_bold()`) resolve via gpui's own traits / `StyledExt`.
-- **Gotcha**: `cargo test` currently crashes rustc (SIGBUS / recursion limit) while expanding
-  `#[test]` against the gpui macro tree in this environment. Rely on `cargo build` + `cargo run`
-  for validation; unit tests in the `dodo` bin are not viable here.
+- **`Cargo.lock` is the only pin on the four git dependencies.** `cargo update` silently jumps
+  them to upstream HEAD. Never run it as a side effect of another task.
+- **The pinned `gpui-component` source is the reference for every widget question**, at
+  `~/.cargo/git/checkouts/gpui-component-*/<rev>/crates/ui/src` (rev from `Cargo.lock`). Its
+  `<checkout>/skills/` directory holds the upstream authors' own guidance, which is excellent on
+  GPUI fundamentals and stale in a few places — `gpui-component-recipes` records which.
 
 ## Maintaining this file
 
