@@ -1420,6 +1420,7 @@ dependencies = [
  "base64",
  "gpui",
  "gpui-component",
+ "gpui-component-assets",
  "gpui_platform",
  "percent-encoding",
  "rust-embed",

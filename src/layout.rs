@@ -9,7 +9,9 @@ use gpui_component::{ActiveTheme, StyledExt as _, h_flex, v_flex};
 
 use crate::app_icon::AppIcon;
 use crate::encoder_decoder::EncoderDecoder;
+use crate::i18n::{Str, t};
 use crate::json_formatter::JsonFormatter;
+use crate::settings;
 
 /// Which tool is currently shown in the main pane. Selecting a sidebar item
 /// switches the active view.
@@ -89,13 +91,22 @@ impl Render for Layout {
                     .collapsed(self.collapsed)
                     .w(px(240.))
                     .header(SidebarHeader::new().child("Dodo"))
-                    .child(SidebarGroup::new("General").child(self.menu(cx)))
+                    .child(SidebarGroup::new(t(Str::Tools, cx)).child(self.menu(cx)))
                     .footer(
                         SidebarFooter::new().child(
-                            h_flex()
-                                .gap_2()
-                                .child(AppIcon::Settings.view())
-                                .when(!icon_collapsed, |this| this.child("Settings")),
+                            Button::new("open-settings")
+                                .ghost()
+                                .w_full()
+                                .justify_start()
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .child(AppIcon::Settings.view())
+                                        .when(!icon_collapsed, |this| {
+                                            this.child(t(Str::Settings, cx))
+                                        }),
+                                )
+                                .on_click(|_, window, cx| settings::open(window, cx)),
                         ),
                     ),
             )

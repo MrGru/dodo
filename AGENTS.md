@@ -12,6 +12,29 @@ entity with `new(&mut Window, &mut Context<Self>)` + `Render`. `src/layout.rs` o
 lists the exact places to touch when adding a tool. Views are constructed once in
 `Layout::new` and kept alive, so switching tabs preserves editor contents.
 
+## Assets, icons and themes
+
+`src/assets.rs` embeds `assets/icons/**/*.svg` and `assets/themes/**/*.json`, and falls back
+to `gpui_component_assets::Assets` for anything missing — that is what makes library widgets
+(dropdown carets, menu check marks, the dialog close button) find their icons without us
+vendoring the whole Lucide set. Our own files shadow the library's by path, so dropping
+`assets/icons/search.svg` in place also replaces `IconName::Search`.
+
+Icons are registered as variants of `AppIcon` in `src/app_icon.rs` (variant → `icons/<file>.svg`).
+Themes are vendored verbatim from the upstream `themes/` directory and loaded into
+`ThemeRegistry` by `settings::init` (called right after `gpui_component::init` in `main.rs`);
+`src/settings.rs` lists the theme *names* it offers, which come from the `name` field inside
+those JSON files, not the file names.
+
+## Settings and app-level state
+
+`src/settings.rs` owns the Settings dialog. Appearance settings deliberately have no state
+struct of their own: font size, border radius and colours are fields on the library's global
+`gpui_component::Theme`, so the dialog reads/writes that global and calls `cx.refresh_windows()`
+— that is the whole "apply live" mechanism. Language is the exception (`src/i18n.rs`), a
+`Language` global plus a `Str` enum with one match arm per string; `t(Str::X, cx)` looks it up.
+Nothing is persisted across restarts.
+
 ## gpui-component widget notes (git dep, non-obvious)
 
 Source of truth is the cargo git checkout under
@@ -33,6 +56,14 @@ Source of truth is the cargo git checkout under
   `SelectState::new(vec_of_items, Some(IndexPath::default()), window, cx)` (2nd arg = initial
   selection). `IndexPath` is at crate root. Read choice with
   `state.selected_index(cx).map(|ip| ip.row)`. Render with `Select::new(&state)`.
+- **Settings panel + modal**: `gpui_component::setting::{Settings, SettingPage, SettingGroup,
+  SettingItem, SettingField}` is a whole settings UI (left sidebar, search box, right pane) —
+  don't hand-roll one. Open it with `window.open_dialog(cx, |dialog, _, cx| ...)` (`WindowExt`);
+  the dialog already has a close button, Escape, and overlay-click dismissal. Its search only
+  matches item titles/descriptions/`keywords`, so give items their section name as a keyword
+  if searching by section should work. Give a page `.resettable(false)` unless you want its
+  reset button. Fields are get/set closure pairs over `&App`/`&mut App`, so state lives in a
+  global, not in the element.
 - **Sidebar item selection**: `SidebarMenuItem::new(..).active(bool).on_click(|_, _, cx| ...)`.
   `on_click` gets `&mut App` (not a `cx.listener`), so capture `cx.entity()` and
   `view.update(cx, ..)` to mutate the parent view.

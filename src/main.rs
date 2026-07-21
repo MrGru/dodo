@@ -2,8 +2,10 @@ mod app;
 mod app_icon;
 mod assets;
 mod encoder_decoder;
+mod i18n;
 mod json_formatter;
 mod layout;
+mod settings;
 
 use gpui::*;
 use gpui_component::*;
@@ -16,6 +18,8 @@ fn main() {
     app.run(move |cx| {
         // This must be called before using any GPUI Component features.
         gpui_component::init(cx);
+        // Registers the vendored themes; needs the registry `init` just created.
+        settings::init(cx);
 
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(900.), px(620.)), cx)),
