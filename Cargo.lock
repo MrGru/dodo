@@ -1417,9 +1417,11 @@ name = "dodo"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "gpui",
  "gpui-component",
  "gpui_platform",
+ "percent-encoding",
  "rust-embed",
  "serde",
  "serde_json",

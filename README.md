@@ -6,15 +6,16 @@ widget library.
 
 ## Status
 
-**Early-stage scaffold.** dodo currently opens a single centered window with a
-collapsible sidebar and a main pane that demonstrates the sidebar's three
-collapse modes (Icon / Offcanvas / None), mirroring
-[shadcn](https://ui.shadcn.com/)'s `collapsible` behavior.
+**Early-stage.** dodo opens a single centered window with a collapsible sidebar;
+selecting a sidebar item switches the main pane to that tool.
 
-The sidebar includes a "Json formatter" menu item that hints at the intended
-direction of the project, but **no JSON formatter (or other tool) is implemented
-yet** - selecting it does not perform any formatting. Treat this repository as a
-starting point rather than a working tool.
+Tools available today:
+
+- **Json formatter** - pretty-prints pasted JSON at a chosen indent width, with
+  the parse error shown inline as a diagnostic when the input is invalid.
+- **Encoder / Decoder** - Base64 (standard and URL-safe), URL percent-encoding
+  and Hex in both directions, plus a JWT inspector that splits a token into its
+  header, payload and signature (decode only - no signature verification).
 
 ## Tech stack
 
