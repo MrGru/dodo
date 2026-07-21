@@ -40,6 +40,14 @@ Nothing is persisted across restarts.
 Source of truth is the cargo git checkout under
 `~/.cargo/git/checkouts/gpui-component-*/<rev>/crates/ui/src` (rev pinned in `Cargo.lock`).
 
+- **Overlays must be rendered by us, not by `Root`** (`root.rs`, and `docs/docs/root.md`).
+  `Root::render` only paints its child view plus the tooltip/native-menu overlays.
+  `window.open_dialog(..)` merely pushes onto `Root::active_dialogs`; the builder closure is
+  invoked *only* from `Root::render_dialog_layer`, which the first-level view under `Root` —
+  `DodoApp::render` — has to call. Omit it and the dialog opens in state and is never painted:
+  the click looks dead with no error anywhere. Same contract for
+  `render_sheet_layer` / `render_notification_layer`; add those the day we use a sheet or a
+  notification, or they will fail the same silent way.
 - **Multi-line code editor**: `gpui_component::input::InputState` + `Input::new(&state)`.
   Build with `InputState::new(window, cx).code_editor("json").multi_line(true).line_number(true)`.
   Read text via `state.value()`; replace via `state.set_value(text, window, cx)`
