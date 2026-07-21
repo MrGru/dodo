@@ -40,10 +40,10 @@ appears, that is the one you missed.
 
 ## Things worth knowing before you start
 
-- **Tool titles bypass i18n.** `View::title` returns a hard-coded `&'static str`, while the
-  sidebar group label and the Settings dialog go through `t(Str::X, cx)` (see
-  `dodo-theming-settings`). Adding a tool does not require a `Str` variant; matching the rest of
-  the app's localisation would.
+- **Tool titles are localized.** `View::title` returns a `Str`, rendered by callers with
+  `t(view.title(), cx)`. A new tool therefore needs a `Str` variant per title, plus one for every
+  label, button, placeholder and error message it shows — see `dodo-theming-settings`, which also
+  covers parameterized messages and the widgets whose strings do not refresh on their own.
 - **The main pane is a plain flex child**, `div().flex_1().min_h_0()`. Your view gets
   `size_full()` inside it, so give the root of your `Render` a `v_flex().size_full()` and put
   `.flex_1().min_h_0()` on whatever should absorb the leftover height. Omitting `min_h_0` makes a
