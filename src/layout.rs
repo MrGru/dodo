@@ -28,10 +28,10 @@ enum View {
 impl View {
     const ALL: [View; 2] = [View::JsonFormatter, View::EncoderDecoder];
 
-    fn title(self) -> &'static str {
+    fn title(self) -> Str {
         match self {
-            View::JsonFormatter => "Json formatter",
-            View::EncoderDecoder => "Encoder / Decoder",
+            View::JsonFormatter => Str::JsonFormatterTitle,
+            View::EncoderDecoder => Str::EncoderDecoderTitle,
         }
     }
 
@@ -65,7 +65,7 @@ impl Layout {
     fn menu(&self, cx: &mut Context<Self>) -> SidebarMenu {
         SidebarMenu::new().children(View::ALL.map(|view| {
             let layout = cx.entity();
-            SidebarMenuItem::new(view.title())
+            SidebarMenuItem::new(t(view.title(), cx))
                 .icon(view.icon().view())
                 .active(self.active == view)
                 .on_click(move |_, _, cx| {
@@ -90,6 +90,7 @@ impl Render for Layout {
                     .collapsible(self.collapsible)
                     .collapsed(self.collapsed)
                     .w(px(240.))
+                    // "Dodo" is the product name and stays untranslated.
                     .header(SidebarHeader::new().child("Dodo"))
                     .child(SidebarGroup::new(t(Str::Tools, cx)).child(self.menu(cx)))
                     .footer(
@@ -137,7 +138,7 @@ impl Render for Layout {
                                         cx.notify();
                                     })),
                             )
-                            .child(div().font_bold().child(self.active.title())),
+                            .child(div().font_bold().child(t(self.active.title(), cx))),
                     )
                     .child(
                         div()

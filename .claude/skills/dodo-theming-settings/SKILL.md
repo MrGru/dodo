@@ -75,13 +75,48 @@ and a `Language` global.
 - **Add a string**: a `Str` variant + one arm per language in `Str::text`. Call it as
   `t(Str::Foo, cx)`, which returns `SharedString`.
 - **Add a language**: a `Language` variant, a row in `Language::ALL`, arms in `code()` and
-  `label()`, and a column in every `Str::text` row — the compiler enumerates the ones you missed.
-  `code()` is the stable dropdown value; `label()` is the language's name *in* that language.
+  `label()`, and a column in every `Str::text` row (and in `JwtPart::name`) — the compiler
+  enumerates the ones you missed. `code()` is the stable dropdown value; `label()` is the
+  language's name *in* that language.
 
 `Language::set` does `cx.set_global(self)` then `cx.refresh_windows()`, the same live-apply
 trick as `Theme`. Because `t()` is called during `render`, already-painted strings pick up the
 new column on the next paint — there is no catalogue reload and no missing-key path.
 
-Not everything is localized: tool titles in `src/layout.rs` (`View::title`) and the button and
-banner text inside each tool module are hard-coded English. Only the sidebar group label and the
-Settings dialog go through `t()`.
+Every user-facing string dodo produces goes through `t()`. Four kinds deliberately do not, and
+should stay that way: the product name "Dodo", theme names (they are `ThemeRegistry` keys),
+`Language::label()` endonyms, and `eprintln!`/`expect` developer text.
+
+Three conventions that are easy to get wrong:
+
+- **Messages with runtime values are `Str` variants with fields**, e.g.
+  `Str::InvalidHexDigit { digit, position }`, so each language owns the whole sentence and its
+  word order. Never `format!("{translated_prefix}{english_tail}")`. `Str::text` returns
+  `Cow<'static, str>` for that reason.
+- **Third-party parser text stays English inside a translated frame.** serde_json's and base64's
+  own messages are the `detail: String` field of those variants; there is nothing to translate
+  them with.
+- **Store errors as `Str`, not as rendered `SharedString`.** Both tool views keep
+  `error: Option<Str>` and call `t()` in `render`, so a banner already on screen re-translates
+  when the language changes.
+
+**The catch: some library widgets cache strings instead of re-rendering them.** `InputState`
+placeholders and `SelectState` item labels live inside library entities and are *not* rebuilt
+each frame, so `refresh_windows()` alone leaves them in the old language. Both tool views hold a
+`language: Language` field and call `sync_language(window, cx)` at the top of `render`, which
+pushes new text in when that field goes stale (`set_placeholder`; `set_items` followed by
+`set_selected_index`, because `set_items` alone leaves the closed dropdown showing the old
+label). Any new widget that takes a string at construction time needs the same treatment.
+
+One string is knowingly not live: the inline JSON diagnostic (the wavy-underline hover message)
+is baked into `InputState` when the parse fails, so it keeps the language it was produced in
+until the next Format.
+
+**gpui-component's own strings cannot be fixed here.** Dialog buttons, context-menu entries
+(Copy/Cut/Paste), and the settings search placeholder come from the library's `rust_i18n`
+catalogue (`<checkout>/crates/ui/locales/ui.yml`), which ships en/zh-CN/zh-HK/zh-TW/it and no
+Vietnamese. The library *does* support an app-supplied catalogue — `<checkout>/docs/docs/i18n.md`
+— via an app-side `locales/ui.yml` under a `gpui_component:` namespace, `rust_i18n::i18n!` at our
+crate root, `rust_i18n::extend!(gpui_component)` before `gpui_component::init`, and
+`rust_i18n::set_locale` wired to `Language::set`. That is a second, separate mechanism; adopt it
+only deliberately.
