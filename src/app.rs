@@ -7,9 +7,9 @@ pub struct DodoApp {
 }
 
 impl DodoApp {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
-            layout: cx.new(|_| Layout::new()),
+            layout: cx.new(|cx| Layout::new(window, cx)),
         }
     }
 }

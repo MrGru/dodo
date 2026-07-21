@@ -1,6 +1,7 @@
 mod app;
 mod app_icon;
 mod assets;
+mod json_formatter;
 mod layout;
 
 use gpui::*;
@@ -22,7 +23,7 @@ fn main() {
 
         cx.spawn(async move |cx| {
             cx.open_window(window_options, |window, cx| {
-                let view = cx.new(|cx| DodoApp::new(cx));
+                let view = cx.new(|cx| DodoApp::new(window, cx));
                 // This first level on the window, should be a Root.
                 cx.new(|cx| Root::new(view, window, cx))
             })

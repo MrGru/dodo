@@ -1421,6 +1421,8 @@ dependencies = [
  "gpui-component",
  "gpui_platform",
  "rust-embed",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
