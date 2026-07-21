@@ -8,13 +8,37 @@ use gpui_component::sidebar::{
 use gpui_component::{ActiveTheme, StyledExt as _, h_flex, v_flex};
 
 use crate::app_icon::AppIcon;
+use crate::encoder_decoder::EncoderDecoder;
 use crate::json_formatter::JsonFormatter;
 
 /// Which tool is currently shown in the main pane. Selecting a sidebar item
 /// switches the active view.
+///
+/// Adding a tool means: a variant here, a row in [`View::ALL`], an arm in
+/// [`View::title`]/[`View::icon`], a field on [`Layout`] holding the view
+/// entity, and an arm in the main-pane `match` of [`Layout::render`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
     JsonFormatter,
+    EncoderDecoder,
+}
+
+impl View {
+    const ALL: [View; 2] = [View::JsonFormatter, View::EncoderDecoder];
+
+    fn title(self) -> &'static str {
+        match self {
+            View::JsonFormatter => "Json formatter",
+            View::EncoderDecoder => "Encoder / Decoder",
+        }
+    }
+
+    fn icon(self) -> AppIcon {
+        match self {
+            View::JsonFormatter => AppIcon::Json,
+            View::EncoderDecoder => AppIcon::Binary,
+        }
+    }
 }
 
 pub struct Layout {
@@ -22,6 +46,7 @@ pub struct Layout {
     collapsed: bool,
     active: View,
     json_formatter: Entity<JsonFormatter>,
+    encoder_decoder: Entity<EncoderDecoder>,
 }
 
 impl Layout {
@@ -31,26 +56,23 @@ impl Layout {
             collapsed: false,
             active: View::JsonFormatter,
             json_formatter: cx.new(|cx| JsonFormatter::new(window, cx)),
+            encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
         }
     }
 
     fn menu(&self, cx: &mut Context<Self>) -> SidebarMenu {
-        let view = cx.entity();
-        SidebarMenu::new().children([SidebarMenuItem::new("Json formatter")
-            .icon(AppIcon::Json.view())
-            .active(self.active == View::JsonFormatter)
-            .on_click(move |_, _, cx| {
-                view.update(cx, |this, cx| {
-                    this.active = View::JsonFormatter;
-                    cx.notify();
-                });
-            })])
-    }
-
-    fn title(&self) -> &'static str {
-        match self.active {
-            View::JsonFormatter => "Json formatter",
-        }
+        SidebarMenu::new().children(View::ALL.map(|view| {
+            let layout = cx.entity();
+            SidebarMenuItem::new(view.title())
+                .icon(view.icon().view())
+                .active(self.active == view)
+                .on_click(move |_, _, cx| {
+                    layout.update(cx, |this, cx| {
+                        this.active = view;
+                        cx.notify();
+                    });
+                })
+        }))
     }
 }
 
@@ -104,14 +126,15 @@ impl Render for Layout {
                                         cx.notify();
                                     })),
                             )
-                            .child(div().font_bold().child(self.title())),
+                            .child(div().font_bold().child(self.active.title())),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_h_0()
-                            .child(match self.active {
-                                View::JsonFormatter => self.json_formatter.clone(),
+                            .map(|this| match self.active {
+                                View::JsonFormatter => this.child(self.json_formatter.clone()),
+                                View::EncoderDecoder => this.child(self.encoder_decoder.clone()),
                             }),
                     ),
             )

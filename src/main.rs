@@ -1,6 +1,7 @@
 mod app;
 mod app_icon;
 mod assets;
+mod encoder_decoder;
 mod json_formatter;
 mod layout;
 

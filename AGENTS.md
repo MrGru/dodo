@@ -4,6 +4,14 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - Add durable project-specific notes here as they are discovered through real work.
 
+## Adding a tool view
+
+Each tool is its own module (`src/json_formatter.rs`, `src/encoder_decoder.rs`) exposing an
+entity with `new(&mut Window, &mut Context<Self>)` + `Render`. `src/layout.rs` owns the
+`View` enum that drives both the sidebar menu and the main pane; the doc comment on `View`
+lists the exact places to touch when adding a tool. Views are constructed once in
+`Layout::new` and kept alive, so switching tabs preserves editor contents.
+
 ## gpui-component widget notes (git dep, non-obvious)
 
 Source of truth is the cargo git checkout under
