@@ -53,6 +53,22 @@ impl HttpMethod {
         }
     }
 
+    /// Whether a request body means anything for this method.
+    ///
+    /// `GET`, `HEAD`, `CONNECT` and `TRACE` have no defined semantics for one;
+    /// servers, proxies and caches are entitled to drop it, and `TRACE` is
+    /// forbidden from carrying one outright. So an edited body is left out of
+    /// those requests rather than sent into a black hole — and the Body tab
+    /// says so on screen instead of the request quietly differing from the
+    /// editor. `DELETE` and `OPTIONS` keep theirs: both are used with a body in
+    /// practice.
+    pub fn carries_body(self) -> bool {
+        !matches!(
+            self,
+            HttpMethod::Get | HttpMethod::Head | HttpMethod::Connect | HttpMethod::Trace
+        )
+    }
+
     /// The accent the method is drawn in, taken from the active theme rather
     /// than from fixed hex values, so the colour coding survives a theme
     /// change instead of clashing with it.
@@ -89,6 +105,26 @@ mod tests {
             seen.push(method.as_str());
         }
         assert_eq!(seen.len(), 9);
+    }
+
+    #[test]
+    fn the_methods_that_carry_a_body_are_the_writing_ones() {
+        for method in HttpMethod::ALL {
+            let expected = matches!(
+                method,
+                HttpMethod::Post
+                    | HttpMethod::Put
+                    | HttpMethod::Patch
+                    | HttpMethod::Delete
+                    | HttpMethod::Options
+            );
+            assert_eq!(
+                method.carries_body(),
+                expected,
+                "{} carries a body when it should not, or the reverse",
+                method.as_str()
+            );
+        }
     }
 
     #[test]

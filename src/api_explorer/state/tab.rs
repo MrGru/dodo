@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use gpui::{Context, Task, Window};
 
-use crate::api_explorer::models::exchange::Exchange;
-use crate::api_explorer::services::http::prepare;
+use crate::api_explorer::models::exchange::{BodyKind, Exchange};
+use crate::api_explorer::services::http::{body, prepare};
 use crate::api_explorer::services::{Transport, TransportError};
 use crate::api_explorer::state::request::RequestState;
 use crate::api_explorer::state::response::{Outcome, ResponseState, window_lines};
@@ -77,6 +77,33 @@ impl RequestTabState {
     /// closed.
     pub fn cancel(&mut self) {
         self.send_task = None;
+    }
+
+    /// Pretty-prints the request body in place, for the body types that have a
+    /// pretty form.
+    ///
+    /// Deliberately an explicit action rather than something sending does: a
+    /// server that cares about byte-for-byte payloads must receive what is on
+    /// screen. Reformatting is `replace_all` rather than `set_value` so it can
+    /// be undone, and a document that does not parse is left exactly as typed —
+    /// the same rule the response viewer's Pretty toggle follows.
+    pub fn format_body(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.request.body_type.is_formattable() {
+            return;
+        }
+
+        let editor = self.request.body_editor.clone();
+        let current = editor.read(cx).value().to_string();
+        let formatted = body::prettify(&current, BodyKind::Json);
+        if formatted == current {
+            return;
+        }
+
+        editor.update(cx, |state, cx| {
+            state.replace_all(formatted, window, cx);
+        });
+        self.request.dirty = true;
+        cx.notify();
     }
 
     fn fail(&mut self, error: TransportError, cx: &mut Context<Self>) {

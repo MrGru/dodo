@@ -3,6 +3,8 @@
 //! Nothing here builds an element or touches a `Window`, so all of it is unit
 //! testable without a GPUI app.
 
+pub mod auth;
+pub mod body;
 pub mod exchange;
 pub mod key_value;
 pub mod method;

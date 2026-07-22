@@ -6,7 +6,10 @@
 
 pub mod collections_panel;
 pub mod explorer;
+pub mod request_auth;
+pub mod request_body;
 pub mod request_editor;
+pub mod request_scripts;
 pub mod request_tabs;
 pub mod response_viewer;
 

@@ -7,10 +7,9 @@ use gpui_component::popover::Popover;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 
-use crate::api_explorer::components::key_value_table::{Table, key_value_table};
-use crate::api_explorer::components::later_step::later_step;
+use crate::api_explorer::components::key_value_table::key_value_table;
 use crate::api_explorer::models::method::HttpMethod;
-use crate::api_explorer::state::request::RequestTab;
+use crate::api_explorer::state::request::{RequestTab, RowTable};
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
@@ -254,26 +253,21 @@ impl ApiExplorer {
             )
     }
 
+    /// Dispatches to the tab in front. Every request tab is implemented as of
+    /// phase 2, so there is no placeholder branch left here — the two controls
+    /// that are still deferred (a binary body, OAuth 2.0) say so where they
+    /// are, inside their own tab.
     fn request_pane(
         &self,
         tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let pane = tab.read(cx).request.active_tab;
-        if !pane.is_implemented() {
-            return later_step(
-                AppIcon::SquareCode,
-                t(pane.label(), cx),
-                t(Str::ArrivesLater, cx),
-                cx,
-            )
-            .into_any_element();
-        }
-
-        match pane {
-            RequestTab::Headers => key_value_table(Table::Headers, tab, cx).into_any_element(),
-            // Params is the default pane, and the only other implemented one.
-            _ => key_value_table(Table::Params, tab, cx).into_any_element(),
+    ) -> gpui::AnyElement {
+        match tab.read(cx).request.active_tab {
+            RequestTab::Params => key_value_table(RowTable::Params, tab, cx).into_any_element(),
+            RequestTab::Headers => key_value_table(RowTable::Headers, tab, cx).into_any_element(),
+            RequestTab::Body => self.request_body_pane(tab, cx),
+            RequestTab::Auth => self.request_auth_pane(tab, cx),
+            RequestTab::Scripts => self.request_scripts_pane(tab, cx),
         }
     }
 }
