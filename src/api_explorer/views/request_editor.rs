@@ -54,7 +54,9 @@ impl ApiExplorer {
             .items_center()
             .gap_2()
             .p_2()
-            .child(self.method_picker(tab, cx))
+            .child(div().flex_shrink_0().child(self.method_picker(tab, cx)))
+            // The URL is the only element that grows; `min_w_0` lets it give
+            // way rather than pushing the buttons off the row.
             .child(
                 div().flex_1().min_w_0().child(
                     Input::new(&url)
@@ -64,6 +66,7 @@ impl ApiExplorer {
             )
             .child(
                 Button::new("generate-code")
+                    .flex_shrink_0()
                     .ghost()
                     .icon(AppIcon::SquareCode)
                     // Visibly disabled with a tooltip that names the step it
@@ -71,9 +74,10 @@ impl ApiExplorer {
                     .disabled(true)
                     .tooltip(t(Str::GenerateCodeLater, cx)),
             )
-            .child(self.save_button(tab, cx))
+            .child(div().flex_shrink_0().child(self.save_button(tab, cx)))
             .child(
                 Button::new("send-request")
+                    .flex_shrink_0()
                     .primary()
                     .icon(AppIcon::Send)
                     .label(t(Str::Send, cx))
@@ -232,7 +236,6 @@ impl ApiExplorer {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
-                div().flex_1().min_w_0().child(
                 TabBar::new("request-panes")
                     .selected_index(selected)
                     .children(
@@ -248,7 +251,6 @@ impl ApiExplorer {
                         });
                         cx.notify();
                     })),
-                ),
             )
     }
 

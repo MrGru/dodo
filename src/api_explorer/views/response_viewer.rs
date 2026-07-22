@@ -181,9 +181,16 @@ impl ApiExplorer {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
-                div().flex_1().min_w_0().child(
+                // `TabBar` sizes itself to its tabs and has no width of its
+                // own, so it needs a slot that both bounds it (`flex_1` +
+                // `min_w_0`) and clips it. Without `overflow_hidden` it spills
+                // out of the slot and paints over the controls beside it.
+                div().flex_1().min_w_0().overflow_hidden().child(
+                // Denser than the request strip: this row also carries the
+                // Pretty/Raw/Copy controls, and both have to fit dodo's
+                // 900px-wide default window without either being clipped.
                 TabBar::new("response-panes")
-                    .small()
+                    .xsmall()
                     .selected_index(selected)
                     .children(ResponseTab::ALL.map(|pane| {
                         let tab = Tab::new().label(t(pane.label(), cx));
