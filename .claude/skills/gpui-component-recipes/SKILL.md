@@ -117,16 +117,23 @@ div().flex_1().min_h_0()
     )
 ```
 
-### `code_editor` does not syntax-highlight in this build
+### `code_editor` highlights only the three languages this build compiles
 
-Highlighting lives behind gpui-component's `tree-sitter` cargo feature. `dodo/Cargo.toml`
-enables no features, and `Cargo.lock` contains **zero** `tree-sitter-*` packages, so
-`gpui_component::highlighter` compiles to `wasm_stub.rs`, whose `SyntaxHighlighter::highlight`
-returns an empty vec. `code_editor("json")` still buys the gutter, indent guides, auto-indent,
-find/replace and diagnostics — just not colour. To get colour, add
-`features = ["tree-sitter"]` (JSON only) or `["tree-sitter-languages"]` (everything) to the
-`gpui-component` dependency; the language string is matched by
-`highlighter::Language::from_name` and each language is separately feature-gated.
+Highlighting lives behind gpui-component's `tree-sitter` cargo features, and without any of
+them `gpui_component::highlighter` compiles to `wasm_stub.rs`, whose
+`SyntaxHighlighter::highlight` returns an empty vec — a gutter, indent guides, auto-indent,
+find/replace and diagnostics, but no colour. That was dodo's state until the API Explorer
+needed a coloured response body.
+
+`dodo/Cargo.toml` now enables exactly **`tree-sitter` (JSON), `tree-sitter-html` and
+`tree-sitter-yaml`**. Every other language string falls back to `Language::Plain` and renders
+uncoloured — that is a graceful default, not a bug. Each language is separately feature-gated
+and matched by `highlighter::Language::from_name` (`"json"`, `"html"`, `"yaml"`, `"text"`), so
+adding one is a feature flag plus a `BodyKind` variant, not new highlighter code.
+`["tree-sitter-languages"]` would enable all ~35 grammars; it was deliberately not used.
+
+`InputState::set_highlighter(lang, cx)` re-points an existing editor at another grammar without
+rebuilding it — how the response viewer switches per `Content-Type`.
 
 ## Inline diagnostics (wavy underline)
 

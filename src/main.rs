@@ -1,3 +1,4 @@
+mod api_explorer;
 mod app;
 mod app_icon;
 mod assets;
@@ -23,6 +24,9 @@ fn main() {
         gpui_component::init(cx);
         // Registers the vendored themes; needs the registry `init` just created.
         settings::init(cx);
+        // Binds the API Explorer's send shortcut. Like `settings::init`, it has
+        // to run after `gpui_component::init` to win the key-binding tie.
+        api_explorer::init(cx);
 
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(900.), px(620.)), cx)),

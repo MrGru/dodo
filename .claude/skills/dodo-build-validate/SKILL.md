@@ -89,6 +89,24 @@ window opened, the sidebar rendered and the right pane is populated. Driving cli
 change is only observable behind an interaction, say so and ask for a human pass rather than
 claiming it verified.
 
+Three things learned the hard way while screenshotting the API Explorer:
+
+- **Capture the window, not the screen.** A full-screen grab catches whatever the human is
+  doing. Get dodo's window id from `CGWindowListCopyWindowInfo` (a ~15-line `swift` script run
+  with `/usr/bin/swift`, no project needed) and pass it to `screencapture -x -o -l<id>`.
+- **An unfocused, occluded window returns a stale frame.** macOS does not refresh the backing
+  store of a window nobody is looking at, so `-l` hands back the last frame it painted — which
+  looks exactly like a hung UI. Capture within the first couple of seconds, while the freshly
+  launched window is still frontmost, or you will "reproduce" bugs that do not exist.
+- **`osascript`/System Events is unavailable** (no Apple Events permission), so the window
+  cannot be raised or clicked programmatically. To see a state that needs interaction, add a
+  temporary harness in `Layout::new` / a view constructor, screenshot, then revert it — and
+  grep the tree afterwards to prove the harness is gone.
+
+A `cargo run` left in the background is a live window on the human's desktop; they may resize or
+click it, which shows up as an inexplicable layout change in a later capture. `pkill -f
+"target/debug/dodo"` between runs.
+
 `cargo fmt --check` currently **fails on pre-existing code** (`src/encoder_decoder.rs`,
 `src/json_formatter.rs`, `src/layout.rs`). Do not treat that as regression from your change, and
 do not reformat those files as a drive-by — it buries the real diff.

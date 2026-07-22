@@ -19,6 +19,23 @@ pub enum AppIcon {
     Sliders,
     PanelLeftClose,
     PanelLeftOpen,
+
+    // API Explorer. The five below ship as our own SVGs; the rest resolve
+    // through `Assets`' fallback to `gpui_component_assets`, which already
+    // carries them — see `src/assets.rs`.
+    Clock,
+    Import,
+    Save,
+    Send,
+    SquareCode,
+    ChevronDown,
+    Close,
+    Copy,
+    Folder,
+    Globe,
+    HardDrive,
+    PanelBottom,
+    Plus,
 }
 
 impl IconNamed for AppIcon {
@@ -32,6 +49,19 @@ impl IconNamed for AppIcon {
             Self::Sliders => "icons/sliders.svg",
             Self::PanelLeftClose => "icons/panel-left-close.svg",
             Self::PanelLeftOpen => "icons/panel-left-open.svg",
+            Self::Clock => "icons/clock.svg",
+            Self::Import => "icons/import.svg",
+            Self::Save => "icons/save.svg",
+            Self::Send => "icons/send.svg",
+            Self::SquareCode => "icons/square-code.svg",
+            Self::ChevronDown => "icons/chevron-down.svg",
+            Self::Close => "icons/close.svg",
+            Self::Copy => "icons/copy.svg",
+            Self::Folder => "icons/folder.svg",
+            Self::Globe => "icons/globe.svg",
+            Self::HardDrive => "icons/hard-drive.svg",
+            Self::PanelBottom => "icons/panel-bottom.svg",
+            Self::Plus => "icons/plus.svg",
         }
         .into()
     }

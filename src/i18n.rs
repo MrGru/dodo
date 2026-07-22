@@ -117,6 +117,7 @@ pub enum Str {
     Tools,
     JsonFormatterTitle,
     EncoderDecoderTitle,
+    ApiExplorerTitle,
 
     // JSON formatter.
     JsonPlaceholder,
@@ -176,6 +177,95 @@ pub enum Str {
         part: JwtPart,
         detail: String,
     },
+
+    // API Explorer — collections panel.
+    Collections,
+    NoCollections,
+    NoCollectionsHint,
+    ImportCollectionLater,
+    NewCollectionLater,
+    HideCollections,
+    ShowCollections,
+
+    // API Explorer — request bar and tab strip.
+    UrlPlaceholder,
+    Send,
+    NewRequest,
+    CloseRequest,
+    NameRequest,
+    NameRequestPlaceholder,
+    SaveName,
+    GenerateCodeLater,
+    ArrivesLater,
+
+    // API Explorer — request tabs.
+    RequestTabParams,
+    RequestTabHeaders,
+    RequestTabBody,
+    RequestTabAuth,
+    RequestTabScripts,
+
+    // API Explorer — key/value tables.
+    ColumnKey,
+    ColumnValue,
+    Add,
+    AddParameter,
+    AddHeader,
+    DeleteRow,
+    NoActiveParams,
+    /// "{count} active params" — the summary above the params table.
+    ActiveParams(usize),
+    NoActiveHeaders,
+    /// "{count} active headers" — the summary above the headers table.
+    ActiveHeaders(usize),
+    ParamKeyPlaceholder,
+    ParamValuePlaceholder,
+    HeaderKeyPlaceholder,
+    HeaderValuePlaceholder,
+
+    // API Explorer — response viewer.
+    ResponseTabBody,
+    ResponseTabHeaders,
+    ResponseTabCookies,
+    ResponseTabTests,
+    ResponseTabConsole,
+    NoResponseYet,
+    NoResponseHint,
+    Sending,
+    RequestFailed,
+    CollapseResponse,
+    ExpandResponse,
+    BodyPretty,
+    BodyRaw,
+    Copy,
+    LoadMoreLines,
+    BodyTruncated,
+    /// "{shown} of {total} lines" — the response body footer.
+    LineRange {
+        shown: usize,
+        total: usize,
+    },
+
+    // API Explorer — status classes.
+    StatusClassInfo,
+    StatusClassSuccess,
+    StatusClassRedirect,
+    StatusClassClientError,
+    StatusClassServerError,
+    StatusClassUnknown,
+
+    // API Explorer — request failures.
+    /// The URL parser's message is third-party English and is kept verbatim.
+    HttpInvalidUrl(String),
+    HttpUnsupportedScheme(String),
+    HttpInvalidHeader(String),
+    HttpTimeout(u64),
+    HttpDnsFailure(String),
+    /// The underlying error chain is third-party English and is kept verbatim.
+    HttpConnectFailure(String),
+    HttpTlsFailure(String),
+    HttpBodyNotText(String),
+    HttpUnexpected(String),
 }
 
 impl Str {
@@ -238,6 +328,8 @@ impl Str {
             (Str::JsonFormatterTitle, Language::Vietnamese) => "Định dạng JSON".into(),
             (Str::EncoderDecoderTitle, Language::English) => "Encoder / Decoder".into(),
             (Str::EncoderDecoderTitle, Language::Vietnamese) => "Mã hoá / Giải mã".into(),
+            (Str::ApiExplorerTitle, Language::English) => "API Explorer".into(),
+            (Str::ApiExplorerTitle, Language::Vietnamese) => "Khám phá API".into(),
 
             (Str::JsonPlaceholder, Language::English) => {
                 "Paste JSON here, then click Format.".into()
@@ -389,6 +481,231 @@ impl Str {
             (Str::JwtPartNotRenderable { part, detail }, Language::Vietnamese) => {
                 let part = part.name(Language::Vietnamese);
                 format!("JWT không hợp lệ: không thể hiển thị phần {part} ({detail}).").into()
+            }
+
+            (Str::Collections, Language::English) => "Collections".into(),
+            (Str::Collections, Language::Vietnamese) => "Bộ sưu tập".into(),
+            (Str::NoCollections, Language::English) => "No collections yet".into(),
+            (Str::NoCollections, Language::Vietnamese) => "Chưa có bộ sưu tập nào".into(),
+            (Str::NoCollectionsHint, Language::English) => {
+                "Saved requests will be grouped here.".into()
+            }
+            (Str::NoCollectionsHint, Language::Vietnamese) => {
+                "Các yêu cầu đã lưu sẽ được nhóm ở đây.".into()
+            }
+            (Str::ImportCollectionLater, Language::English) => {
+                "Importing collections arrives in a later step.".into()
+            }
+            (Str::ImportCollectionLater, Language::Vietnamese) => {
+                "Nhập bộ sưu tập sẽ có ở bước sau.".into()
+            }
+            (Str::NewCollectionLater, Language::English) => {
+                "Creating collections arrives in a later step.".into()
+            }
+            (Str::NewCollectionLater, Language::Vietnamese) => {
+                "Tạo bộ sưu tập sẽ có ở bước sau.".into()
+            }
+            (Str::HideCollections, Language::English) => "Hide collections".into(),
+            (Str::HideCollections, Language::Vietnamese) => "Ẩn bộ sưu tập".into(),
+            (Str::ShowCollections, Language::English) => "Show collections".into(),
+            (Str::ShowCollections, Language::Vietnamese) => "Hiện bộ sưu tập".into(),
+
+            (Str::UrlPlaceholder, Language::English) => {
+                "Enter a URL, then press Send.".into()
+            }
+            (Str::UrlPlaceholder, Language::Vietnamese) => {
+                "Nhập URL rồi bấm Gửi.".into()
+            }
+            (Str::Send, Language::English) => "Send".into(),
+            (Str::Send, Language::Vietnamese) => "Gửi".into(),
+            (Str::NewRequest, Language::English) => "New request".into(),
+            (Str::NewRequest, Language::Vietnamese) => "Yêu cầu mới".into(),
+            (Str::CloseRequest, Language::English) => "Close request".into(),
+            (Str::CloseRequest, Language::Vietnamese) => "Đóng yêu cầu".into(),
+            (Str::NameRequest, Language::English) => "Name this request".into(),
+            (Str::NameRequest, Language::Vietnamese) => "Đặt tên yêu cầu này".into(),
+            (Str::NameRequestPlaceholder, Language::English) => "Request name".into(),
+            (Str::NameRequestPlaceholder, Language::Vietnamese) => "Tên yêu cầu".into(),
+            (Str::SaveName, Language::English) => "Save name".into(),
+            (Str::SaveName, Language::Vietnamese) => "Lưu tên".into(),
+            (Str::GenerateCodeLater, Language::English) => {
+                "Code generation arrives in a later step.".into()
+            }
+            (Str::GenerateCodeLater, Language::Vietnamese) => {
+                "Sinh mã sẽ có ở bước sau.".into()
+            }
+            (Str::ArrivesLater, Language::English) => "This arrives in a later step.".into(),
+            (Str::ArrivesLater, Language::Vietnamese) => "Phần này sẽ có ở bước sau.".into(),
+
+            (Str::RequestTabParams, Language::English) => "Params".into(),
+            (Str::RequestTabParams, Language::Vietnamese) => "Tham số".into(),
+            (Str::RequestTabHeaders, Language::English) => "Headers".into(),
+            (Str::RequestTabHeaders, Language::Vietnamese) => "Header".into(),
+            (Str::RequestTabBody, Language::English) => "Body".into(),
+            (Str::RequestTabBody, Language::Vietnamese) => "Nội dung".into(),
+            (Str::RequestTabAuth, Language::English) => "Auth".into(),
+            (Str::RequestTabAuth, Language::Vietnamese) => "Xác thực".into(),
+            (Str::RequestTabScripts, Language::English) => "Scripts".into(),
+            (Str::RequestTabScripts, Language::Vietnamese) => "Kịch bản".into(),
+
+            (Str::ColumnKey, Language::English) => "KEY".into(),
+            (Str::ColumnKey, Language::Vietnamese) => "KHOÁ".into(),
+            (Str::ColumnValue, Language::English) => "VALUE".into(),
+            (Str::ColumnValue, Language::Vietnamese) => "GIÁ TRỊ".into(),
+            (Str::Add, Language::English) => "Add".into(),
+            (Str::Add, Language::Vietnamese) => "Thêm".into(),
+            (Str::AddParameter, Language::English) => "Add parameter".into(),
+            (Str::AddParameter, Language::Vietnamese) => "Thêm tham số".into(),
+            (Str::AddHeader, Language::English) => "Add header".into(),
+            (Str::AddHeader, Language::Vietnamese) => "Thêm header".into(),
+            (Str::DeleteRow, Language::English) => "Delete row".into(),
+            (Str::DeleteRow, Language::Vietnamese) => "Xoá dòng".into(),
+            (Str::NoActiveParams, Language::English) => "No active params".into(),
+            (Str::NoActiveParams, Language::Vietnamese) => "Không có tham số nào bật".into(),
+            (Str::ActiveParams(count), Language::English) => {
+                format!("{count} active params").into()
+            }
+            (Str::ActiveParams(count), Language::Vietnamese) => {
+                format!("{count} tham số đang bật").into()
+            }
+            (Str::NoActiveHeaders, Language::English) => "No active headers".into(),
+            (Str::NoActiveHeaders, Language::Vietnamese) => "Không có header nào bật".into(),
+            (Str::ActiveHeaders(count), Language::English) => {
+                format!("{count} active headers").into()
+            }
+            (Str::ActiveHeaders(count), Language::Vietnamese) => {
+                format!("{count} header đang bật").into()
+            }
+            (Str::ParamKeyPlaceholder, Language::English) => "Parameter".into(),
+            (Str::ParamKeyPlaceholder, Language::Vietnamese) => "Tham số".into(),
+            (Str::ParamValuePlaceholder, Language::English) => "Value".into(),
+            (Str::ParamValuePlaceholder, Language::Vietnamese) => "Giá trị".into(),
+            (Str::HeaderKeyPlaceholder, Language::English) => "Header".into(),
+            (Str::HeaderKeyPlaceholder, Language::Vietnamese) => "Tên header".into(),
+            (Str::HeaderValuePlaceholder, Language::English) => "Value".into(),
+            (Str::HeaderValuePlaceholder, Language::Vietnamese) => "Giá trị".into(),
+
+            (Str::ResponseTabBody, Language::English) => "Body".into(),
+            (Str::ResponseTabBody, Language::Vietnamese) => "Nội dung".into(),
+            (Str::ResponseTabHeaders, Language::English) => "Headers".into(),
+            (Str::ResponseTabHeaders, Language::Vietnamese) => "Header".into(),
+            (Str::ResponseTabCookies, Language::English) => "Cookies".into(),
+            (Str::ResponseTabCookies, Language::Vietnamese) => "Cookie".into(),
+            (Str::ResponseTabTests, Language::English) => "Tests".into(),
+            (Str::ResponseTabTests, Language::Vietnamese) => "Kiểm thử".into(),
+            (Str::ResponseTabConsole, Language::English) => "Console".into(),
+            (Str::ResponseTabConsole, Language::Vietnamese) => "Nhật ký".into(),
+            (Str::NoResponseYet, Language::English) => "No response yet".into(),
+            (Str::NoResponseYet, Language::Vietnamese) => "Chưa có phản hồi".into(),
+            (Str::NoResponseHint, Language::English) => {
+                "Send the request to see the response here.".into()
+            }
+            (Str::NoResponseHint, Language::Vietnamese) => {
+                "Gửi yêu cầu để xem phản hồi ở đây.".into()
+            }
+            (Str::Sending, Language::English) => "Sending…".into(),
+            (Str::Sending, Language::Vietnamese) => "Đang gửi…".into(),
+            (Str::RequestFailed, Language::English) => "FAILED".into(),
+            (Str::RequestFailed, Language::Vietnamese) => "THẤT BẠI".into(),
+            (Str::CollapseResponse, Language::English) => "Collapse response".into(),
+            (Str::CollapseResponse, Language::Vietnamese) => "Thu gọn phản hồi".into(),
+            (Str::ExpandResponse, Language::English) => "Expand response".into(),
+            (Str::ExpandResponse, Language::Vietnamese) => "Mở rộng phản hồi".into(),
+            (Str::BodyPretty, Language::English) => "Pretty".into(),
+            (Str::BodyPretty, Language::Vietnamese) => "Đẹp".into(),
+            (Str::BodyRaw, Language::English) => "Raw".into(),
+            (Str::BodyRaw, Language::Vietnamese) => "Thô".into(),
+            (Str::Copy, Language::English) => "Copy".into(),
+            (Str::Copy, Language::Vietnamese) => "Sao chép".into(),
+            (Str::LoadMoreLines, Language::English) => "Load more lines".into(),
+            (Str::LoadMoreLines, Language::Vietnamese) => "Tải thêm dòng".into(),
+            (Str::BodyTruncated, Language::English) => {
+                "The body was too large and was cut short.".into()
+            }
+            (Str::BodyTruncated, Language::Vietnamese) => {
+                "Nội dung quá lớn nên đã bị cắt bớt.".into()
+            }
+            (Str::LineRange { shown, total }, Language::English) => {
+                format!("{shown} of {total} lines").into()
+            }
+            (Str::LineRange { shown, total }, Language::Vietnamese) => {
+                format!("{shown} trên {total} dòng").into()
+            }
+
+            (Str::StatusClassInfo, Language::English) => "INFO".into(),
+            (Str::StatusClassInfo, Language::Vietnamese) => "THÔNG TIN".into(),
+            (Str::StatusClassSuccess, Language::English) => "SUCCESS".into(),
+            (Str::StatusClassSuccess, Language::Vietnamese) => "THÀNH CÔNG".into(),
+            (Str::StatusClassRedirect, Language::English) => "REDIRECT".into(),
+            (Str::StatusClassRedirect, Language::Vietnamese) => "CHUYỂN HƯỚNG".into(),
+            (Str::StatusClassClientError, Language::English) => "CLIENT ERR".into(),
+            (Str::StatusClassClientError, Language::Vietnamese) => "LỖI PHÍA GỌI".into(),
+            (Str::StatusClassServerError, Language::English) => "SERVER ERR".into(),
+            (Str::StatusClassServerError, Language::Vietnamese) => "LỖI MÁY CHỦ".into(),
+            (Str::StatusClassUnknown, Language::English) => "UNKNOWN".into(),
+            (Str::StatusClassUnknown, Language::Vietnamese) => "KHÔNG RÕ".into(),
+
+            (Str::HttpInvalidUrl(detail), Language::English) => {
+                if detail.is_empty() {
+                    "Enter a URL before sending.".into()
+                } else {
+                    format!("That URL could not be read: {detail}").into()
+                }
+            }
+            (Str::HttpInvalidUrl(detail), Language::Vietnamese) => {
+                if detail.is_empty() {
+                    "Hãy nhập URL trước khi gửi.".into()
+                } else {
+                    format!("Không đọc được URL đó: {detail}").into()
+                }
+            }
+            (Str::HttpUnsupportedScheme(scheme), Language::English) => {
+                format!("This tool can only fetch http and https, not {scheme}.").into()
+            }
+            (Str::HttpUnsupportedScheme(scheme), Language::Vietnamese) => {
+                format!("Công cụ này chỉ gọi được http và https, không phải {scheme}.").into()
+            }
+            (Str::HttpInvalidHeader(name), Language::English) => {
+                format!("The header \"{name}\" cannot be sent as written.").into()
+            }
+            (Str::HttpInvalidHeader(name), Language::Vietnamese) => {
+                format!("Header \"{name}\" không gửi được như đang viết.").into()
+            }
+            (Str::HttpTimeout(seconds), Language::English) => {
+                format!("No response within {seconds} seconds.").into()
+            }
+            (Str::HttpTimeout(seconds), Language::Vietnamese) => {
+                format!("Không có phản hồi trong {seconds} giây.").into()
+            }
+            (Str::HttpDnsFailure(host), Language::English) => {
+                format!("The address \"{host}\" could not be found.").into()
+            }
+            (Str::HttpDnsFailure(host), Language::Vietnamese) => {
+                format!("Không tìm thấy địa chỉ \"{host}\".").into()
+            }
+            (Str::HttpConnectFailure(detail), Language::English) => {
+                format!("Could not connect: {detail}").into()
+            }
+            (Str::HttpConnectFailure(detail), Language::Vietnamese) => {
+                format!("Không kết nối được: {detail}").into()
+            }
+            (Str::HttpTlsFailure(detail), Language::English) => {
+                format!("The secure connection was refused: {detail}").into()
+            }
+            (Str::HttpTlsFailure(detail), Language::Vietnamese) => {
+                format!("Kết nối bảo mật bị từ chối: {detail}").into()
+            }
+            (Str::HttpBodyNotText(detail), Language::English) => {
+                format!("The response is not text this viewer can show ({detail}).").into()
+            }
+            (Str::HttpBodyNotText(detail), Language::Vietnamese) => {
+                format!("Phản hồi không phải văn bản có thể hiển thị ({detail}).").into()
+            }
+            (Str::HttpUnexpected(detail), Language::English) => {
+                format!("The request failed: {detail}").into()
+            }
+            (Str::HttpUnexpected(detail), Language::Vietnamese) => {
+                format!("Yêu cầu thất bại: {detail}").into()
             }
         }
     }
@@ -562,6 +879,83 @@ mod tests {
                 },
                 &[DETAIL],
             ),
+            // API Explorer. Appended rather than slotted in beside the strings
+            // they read next to, so that adding a tool does not renumber every
+            // existing entry.
+            plain(Str::ApiExplorerTitle),
+            plain(Str::Collections),
+            plain(Str::NoCollections),
+            plain(Str::NoCollectionsHint),
+            plain(Str::ImportCollectionLater),
+            plain(Str::NewCollectionLater),
+            plain(Str::HideCollections),
+            plain(Str::ShowCollections),
+            plain(Str::UrlPlaceholder),
+            plain(Str::Send),
+            plain(Str::NewRequest),
+            plain(Str::CloseRequest),
+            plain(Str::NameRequest),
+            plain(Str::NameRequestPlaceholder),
+            plain(Str::SaveName),
+            plain(Str::GenerateCodeLater),
+            plain(Str::ArrivesLater),
+            plain(Str::RequestTabParams),
+            plain(Str::RequestTabHeaders),
+            plain(Str::RequestTabBody),
+            plain(Str::RequestTabAuth),
+            plain(Str::RequestTabScripts),
+            plain(Str::ColumnKey),
+            plain(Str::ColumnValue),
+            plain(Str::Add),
+            plain(Str::AddParameter),
+            plain(Str::AddHeader),
+            plain(Str::DeleteRow),
+            plain(Str::NoActiveParams),
+            with(Str::ActiveParams(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::NoActiveHeaders),
+            with(Str::ActiveHeaders(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::ParamKeyPlaceholder),
+            plain(Str::ParamValuePlaceholder),
+            plain(Str::HeaderKeyPlaceholder),
+            plain(Str::HeaderValuePlaceholder),
+            plain(Str::ResponseTabBody),
+            plain(Str::ResponseTabHeaders),
+            plain(Str::ResponseTabCookies),
+            plain(Str::ResponseTabTests),
+            plain(Str::ResponseTabConsole),
+            plain(Str::NoResponseYet),
+            plain(Str::NoResponseHint),
+            plain(Str::Sending),
+            plain(Str::RequestFailed),
+            plain(Str::CollapseResponse),
+            plain(Str::ExpandResponse),
+            plain(Str::BodyPretty),
+            plain(Str::BodyRaw),
+            plain(Str::Copy),
+            plain(Str::LoadMoreLines),
+            plain(Str::BodyTruncated),
+            with(
+                Str::LineRange {
+                    shown: NUMBER,
+                    total: 77,
+                },
+                &[NUMBER_TEXT, "77"],
+            ),
+            plain(Str::StatusClassInfo),
+            plain(Str::StatusClassSuccess),
+            plain(Str::StatusClassRedirect),
+            plain(Str::StatusClassClientError),
+            plain(Str::StatusClassServerError),
+            plain(Str::StatusClassUnknown),
+            with(Str::HttpInvalidUrl(DETAIL.into()), &[DETAIL]),
+            with(Str::HttpUnsupportedScheme(DETAIL.into()), &[DETAIL]),
+            with(Str::HttpInvalidHeader(DETAIL.into()), &[DETAIL]),
+            with(Str::HttpTimeout(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::HttpDnsFailure(DETAIL.into()), &[DETAIL]),
+            with(Str::HttpConnectFailure(DETAIL.into()), &[DETAIL]),
+            with(Str::HttpTlsFailure(DETAIL.into()), &[DETAIL]),
+            with(Str::HttpBodyNotText(DETAIL.into()), &[DETAIL]),
+            with(Str::HttpUnexpected(DETAIL.into()), &[DETAIL]),
         ]
     }
 
@@ -621,6 +1015,75 @@ mod tests {
             Str::JwtPartNotBase64 { .. } => 49,
             Str::JwtPartNotJson { .. } => 50,
             Str::JwtPartNotRenderable { .. } => 51,
+
+            Str::ApiExplorerTitle => 52,
+            Str::Collections => 53,
+            Str::NoCollections => 54,
+            Str::NoCollectionsHint => 55,
+            Str::ImportCollectionLater => 56,
+            Str::NewCollectionLater => 57,
+            Str::HideCollections => 58,
+            Str::ShowCollections => 59,
+            Str::UrlPlaceholder => 60,
+            Str::Send => 61,
+            Str::NewRequest => 62,
+            Str::CloseRequest => 63,
+            Str::NameRequest => 64,
+            Str::NameRequestPlaceholder => 65,
+            Str::SaveName => 66,
+            Str::GenerateCodeLater => 67,
+            Str::ArrivesLater => 68,
+            Str::RequestTabParams => 69,
+            Str::RequestTabHeaders => 70,
+            Str::RequestTabBody => 71,
+            Str::RequestTabAuth => 72,
+            Str::RequestTabScripts => 73,
+            Str::ColumnKey => 74,
+            Str::ColumnValue => 75,
+            Str::Add => 76,
+            Str::AddParameter => 77,
+            Str::AddHeader => 78,
+            Str::DeleteRow => 79,
+            Str::NoActiveParams => 80,
+            Str::ActiveParams(_) => 81,
+            Str::NoActiveHeaders => 82,
+            Str::ActiveHeaders(_) => 83,
+            Str::ParamKeyPlaceholder => 84,
+            Str::ParamValuePlaceholder => 85,
+            Str::HeaderKeyPlaceholder => 86,
+            Str::HeaderValuePlaceholder => 87,
+            Str::ResponseTabBody => 88,
+            Str::ResponseTabHeaders => 89,
+            Str::ResponseTabCookies => 90,
+            Str::ResponseTabTests => 91,
+            Str::ResponseTabConsole => 92,
+            Str::NoResponseYet => 93,
+            Str::NoResponseHint => 94,
+            Str::Sending => 95,
+            Str::RequestFailed => 96,
+            Str::CollapseResponse => 97,
+            Str::ExpandResponse => 98,
+            Str::BodyPretty => 99,
+            Str::BodyRaw => 100,
+            Str::Copy => 101,
+            Str::LoadMoreLines => 102,
+            Str::BodyTruncated => 103,
+            Str::LineRange { .. } => 104,
+            Str::StatusClassInfo => 105,
+            Str::StatusClassSuccess => 106,
+            Str::StatusClassRedirect => 107,
+            Str::StatusClassClientError => 108,
+            Str::StatusClassServerError => 109,
+            Str::StatusClassUnknown => 110,
+            Str::HttpInvalidUrl(_) => 111,
+            Str::HttpUnsupportedScheme(_) => 112,
+            Str::HttpInvalidHeader(_) => 113,
+            Str::HttpTimeout(_) => 114,
+            Str::HttpDnsFailure(_) => 115,
+            Str::HttpConnectFailure(_) => 116,
+            Str::HttpTlsFailure(_) => 117,
+            Str::HttpBodyNotText(_) => 118,
+            Str::HttpUnexpected(_) => 119,
         }
     }
 
