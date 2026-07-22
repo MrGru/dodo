@@ -12,7 +12,7 @@ use gpui_component::resizable::ResizableState;
 /// Narrower than the reference's, because dodo's window opens at 900px wide and
 /// the request bar has to stay usable in it. The panel is resizable and
 /// collapsible, so the reference's proportions are one drag away.
-pub const COLLECTIONS_WIDTH: Pixels = px(180.);
+pub const COLLECTIONS_WIDTH: Pixels = px(185.);
 
 /// Default height of the request editor above the response viewer.
 pub const REQUEST_HEIGHT: Pixels = px(240.);
