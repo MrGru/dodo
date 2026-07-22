@@ -16,6 +16,12 @@ Tools available today:
 - **Encoder / Decoder** - Base64 (standard and URL-safe), URL percent-encoding
   and Hex in both directions, plus a JWT inspector that splits a token into its
   header, payload and signature (decode only - no signature verification).
+- **API Explorer** - an HTTP client: several request tabs, each with its own
+  method, URL, query parameters and headers, sent asynchronously (Cmd/Ctrl+Enter
+  or the Send button) and answered with a status badge, timing, size, the
+  response headers and a syntax-highlighted body. Request Body, Auth and Scripts,
+  the response Cookies, Tests and Console tabs, and saved collections are marked
+  in the UI as arriving in a later step.
 
 ## Tech stack
 
@@ -26,6 +32,8 @@ Tools available today:
 - **[rust-embed](https://crates.io/crates/rust-embed)** - embeds SVG icons into the
   binary at build time.
 - **[anyhow](https://crates.io/crates/anyhow)** - error handling.
+- **[reqwest](https://crates.io/crates/reqwest)** - the API Explorer's HTTP client,
+  built with rustls rather than the platform TLS stack, so no OpenSSL is needed.
 
 See [`Cargo.toml`](Cargo.toml) for exact dependency sources. Note that `gpui`,
 `gpui_platform`, and `gpui-component` are all fetched from git rather than
@@ -62,7 +70,8 @@ This opens a 900x620 centered window mounting the `DodoApp`.
 │   ├── app.rs          # DodoApp: top-level view holding the Layout
 │   ├── layout.rs       # Sidebar + main pane; sidebar collapse-mode demo
 │   ├── app_icon.rs     # AppIcon enum mapping icon names to embedded SVG paths
-│   └── assets.rs       # rust-embed AssetSource that loads embedded icons
+│   ├── assets.rs       # rust-embed AssetSource that loads embedded icons
+│   └── api_explorer/   # The HTTP client tool: models, services, state, views
 └── assets/
     └── icons/          # SVG icons embedded into the binary
 ```

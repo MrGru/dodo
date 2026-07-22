@@ -7,6 +7,7 @@ use gpui_component::sidebar::{
 };
 use gpui_component::{ActiveTheme, StyledExt as _, h_flex, v_flex};
 
+use crate::api_explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
 use crate::encoder_decoder::EncoderDecoder;
 use crate::i18n::{Str, t};
@@ -23,15 +24,21 @@ use crate::settings;
 enum View {
     JsonFormatter,
     EncoderDecoder,
+    ApiExplorer,
 }
 
 impl View {
-    const ALL: [View; 2] = [View::JsonFormatter, View::EncoderDecoder];
+    const ALL: [View; 3] = [
+        View::JsonFormatter,
+        View::EncoderDecoder,
+        View::ApiExplorer,
+    ];
 
     fn title(self) -> Str {
         match self {
             View::JsonFormatter => Str::JsonFormatterTitle,
             View::EncoderDecoder => Str::EncoderDecoderTitle,
+            View::ApiExplorer => Str::ApiExplorerTitle,
         }
     }
 
@@ -39,6 +46,7 @@ impl View {
         match self {
             View::JsonFormatter => AppIcon::Json,
             View::EncoderDecoder => AppIcon::Binary,
+            View::ApiExplorer => AppIcon::Globe,
         }
     }
 }
@@ -49,6 +57,7 @@ pub struct Layout {
     active: View,
     json_formatter: Entity<JsonFormatter>,
     encoder_decoder: Entity<EncoderDecoder>,
+    api_explorer: Entity<ApiExplorer>,
 }
 
 impl Layout {
@@ -59,6 +68,7 @@ impl Layout {
             active: View::JsonFormatter,
             json_formatter: cx.new(|cx| JsonFormatter::new(window, cx)),
             encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
+            api_explorer: cx.new(|cx| ApiExplorer::new(window, cx)),
         }
     }
 
@@ -147,6 +157,7 @@ impl Render for Layout {
                             .map(|this| match self.active {
                                 View::JsonFormatter => this.child(self.json_formatter.clone()),
                                 View::EncoderDecoder => this.child(self.encoder_decoder.clone()),
+                                View::ApiExplorer => this.child(self.api_explorer.clone()),
                             }),
                     ),
             )

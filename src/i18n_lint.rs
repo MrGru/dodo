@@ -36,11 +36,43 @@
 /// The view sources, embedded at compile time so the test needs no working
 /// directory. These are the files that build what the user sees; pure logic
 /// modules have no text sinks and are not worth scanning.
-const SOURCES: [(&str, &str); 4] = [
+const SOURCES: [(&str, &str); 12] = [
     ("src/layout.rs", include_str!("layout.rs")),
     ("src/json_formatter.rs", include_str!("json_formatter.rs")),
     ("src/encoder_decoder.rs", include_str!("encoder_decoder.rs")),
     ("src/settings.rs", include_str!("settings.rs")),
+    (
+        "src/api_explorer/views/explorer.rs",
+        include_str!("api_explorer/views/explorer.rs"),
+    ),
+    (
+        "src/api_explorer/views/collections_panel.rs",
+        include_str!("api_explorer/views/collections_panel.rs"),
+    ),
+    (
+        "src/api_explorer/views/request_tabs.rs",
+        include_str!("api_explorer/views/request_tabs.rs"),
+    ),
+    (
+        "src/api_explorer/views/request_editor.rs",
+        include_str!("api_explorer/views/request_editor.rs"),
+    ),
+    (
+        "src/api_explorer/views/response_viewer.rs",
+        include_str!("api_explorer/views/response_viewer.rs"),
+    ),
+    (
+        "src/api_explorer/components/key_value_table.rs",
+        include_str!("api_explorer/components/key_value_table.rs"),
+    ),
+    (
+        "src/api_explorer/components/empty_state.rs",
+        include_str!("api_explorer/components/empty_state.rs"),
+    ),
+    (
+        "src/api_explorer/components/later_step.rs",
+        include_str!("api_explorer/components/later_step.rs"),
+    ),
 ];
 
 /// Calls whose first argument is drawn on screen. Anything reached by another
@@ -274,11 +306,24 @@ mod tests {
 
     /// Keeps `SOURCES` honest: `include_str!` would happily embed a file that
     /// no longer builds any UI.
+    ///
+    /// A file builds UI if it implements `Render`, implements `RenderOnce`,
+    /// opens a dialog, or returns an element from a builder function. The last
+    /// three forms were added for the API Explorer's `components/` and the
+    /// per-region `impl ApiExplorer` blocks, which draw translated text without
+    /// implementing `Render` themselves; `AnyElement` is in the list because a
+    /// region renderer whose result outlives the `cx` borrow has to return it
+    /// boxed. The guard that actually matters —
+    /// `view_code_draws_no_untranslated_literals` — is unchanged.
     #[test]
     fn scanned_sources_are_the_view_sources() {
         for (path, source) in super::SOURCES {
             assert!(
-                source.contains("impl Render for") || source.contains("open_dialog"),
+                source.contains("impl Render for")
+                    || source.contains("impl RenderOnce for")
+                    || source.contains("open_dialog")
+                    || source.contains("-> impl IntoElement")
+                    || source.contains("-> gpui::AnyElement"),
                 "{path} no longer renders anything — it does not belong in SOURCES"
             );
         }

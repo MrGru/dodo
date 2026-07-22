@@ -1,13 +1,20 @@
 # Project agent memory
 
 `dodo` is a Rust desktop app: a single window with a collapsible sidebar, where each sidebar
-entry swaps the main pane to a self-contained developer tool (JSON formatter, Encoder/Decoder)
-plus a Settings dialog. It is built on GPUI (Zed's UI framework) and the `gpui-component` widget
+entry swaps the main pane to a self-contained developer tool (JSON formatter, Encoder/Decoder,
+API Explorer) plus a Settings dialog. It is built on GPUI (Zed's UI framework) and the `gpui-component` widget
 library, both pulled from git and pinned only by `Cargo.lock`. See `README.md` for the user-facing
 description and `Cargo.toml` for exact dependency sources.
 
 Read `src/main.rs` for the startup sequence and `src/layout.rs` for the view model; the doc
 comments there are the authority on structure. This file is only a map.
+
+Most tools are a single `src/<tool>.rs`. **`src/api_explorer/` is the exception** and the pattern
+to copy when a tool outgrows one file: `models/` (plain data, no GPUI, unit tested), `services/`
+(the `Transport` trait — the only place that may name `reqwest`), `state/`, `components/`,
+`views/`. Its `mod.rs` doc comments explain the split and where later phases plug in. It is also
+the only tool that registers a key binding (`api_explorer::init`, called from `main` after
+`gpui_component::init`, same ordering rule as `settings::init`).
 
 ## Skills
 
