@@ -281,13 +281,19 @@ impl ListDelegate for SearchDelegate {
 
         Some(
             ListItem::new(ix.row)
-                .h(px(32.))
-                .child(t(setting.label(), cx))
+                .h(px(36.))
                 .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(t(setting.section(), cx)),
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .w_full()
+                        .child(t(setting.label(), cx))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t(setting.section(), cx)),
+                        ),
                 ),
         )
     }
