@@ -215,11 +215,51 @@ Constructors: `switch` / `checkbox` (→ `SettingField<bool>`), `input` / `dropd
 (→ `SettingField<f64>`). Use `scrollable_dropdown` for long lists — the plain `dropdown` popup
 does not scroll and pushes options below the fold.
 
-Two behaviours that surprise people:
+Four behaviours that surprise people:
 
 - The search box matches an item's **title, description and `keywords` only** — never its page
-  or group title. Pass the section name as a keyword if searching by section should work.
+  or group title, and by lowercase `contains`, not fuzzily. Pass the section name as a keyword
+  if searching by section should work.
 - A page shows a reset button unless you give it `.resettable(false)`.
+- **`Settings` is a `RenderOnce` element over `window.use_keyed_state(self.id)`.** Its search
+  input and selected page are that private state, so nothing outside can read the query or set
+  the page. `default_selected_index` is read *only* when the state is first created, so the only
+  way to drive the selection from outside is to hand `Settings::new` a **different id** —
+  dodo keeps a `nonce` in `SettingsView` for exactly that. A new id also resets the sidebar's
+  resizable width, which is the price.
+- `SettingField<T>` implements `Styled`, and the refinement lands on the field's own control
+  (e.g. the dropdown `Button`). That is the hook for highlighting one item.
+  `header_style(&StyleRefinement::default().hidden())` is the hook for hiding the built-in
+  search box; the sidebar's header wrapper still contributes its `pt_3`.
+
+## Searchable `List` — the command-palette primitive
+
+`ListState::new(delegate, window, cx).searchable(true)` is a search input, a virtualized result
+list, keyboard nav and an empty state in one widget. Reach for it before hand-rolling a popover.
+`ListDelegate` gives you `perform_search` (returns a `Task`, so it may be async), `items_count`,
+`render_item` (→ `ListItem`, which the list styles and wires to click-confirm for you),
+`render_empty` (the "no results" state), `render_initial` (shown only while the query is empty —
+return `Some(div())` to collapse the panel to just the box), `set_selected_index` and `confirm`.
+
+- **Keyboard works even though focus sits in the inner `InputState`.** gpui returns *all*
+  matching bindings sorted by context depth and tries them until one is consumed. `Input`
+  registers `MoveUp`/`MoveDown` listeners **only in multi-line mode**, and its `Enter`/`Escape`
+  handlers call `cx.propagate()` for a single-line input, so `up`/`down`/`enter`/`escape` all
+  fall through to the `List` context.
+- **Escape keeps falling through to the `Dialog`**, which binds `escape` → `CancelDialog` and
+  closes. `gpui_component::actions` is `pub(crate)`, so you cannot listen for its `Cancel`. Bind
+  your own action in a context tighter than the input's: `Some("YourContext > Input")` matches at
+  full depth and wins the tie on registration order, provided you `cx.bind_keys` *after*
+  `gpui_component::init`.
+- **`ListState::set_query` does not trigger a search**, despite its doc comment. It goes through
+  `InputState::set_value`, which sets `emit_events = false`, so no `InputEvent::Change` fires and
+  `perform_search` never runs. Clearing programmatically means `set_query("")` **plus** resetting
+  `list.delegate_mut()` by hand.
+- `confirm` runs while the list entity is leased, so anything that touches the list again (such
+  as clearing the query) must go through `cx.defer_in(window, ..)` or it panics with
+  "cannot update … while it is already being updated".
+- The virtual list sizes itself with `size_full`, so give the container a **definite height**
+  when results are showing; an auto-height parent can collapse it.
 
 ## Sidebar
 
