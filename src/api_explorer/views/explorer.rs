@@ -42,6 +42,10 @@ pub struct ApiExplorer {
     pub(super) method_menu_open: bool,
     /// Whether the request-naming popover is showing.
     pub(super) save_menu_open: bool,
+    /// Whether the Body tab's type dropdown is showing.
+    pub(super) body_menu_open: bool,
+    /// Whether the Auth tab's scheme dropdown is showing.
+    pub(super) auth_menu_open: bool,
     /// The name field inside that popover. One field shared by every tab: only
     /// one popover can be open at a time, and it is filled from the active tab
     /// each time it opens.
@@ -66,6 +70,8 @@ impl ApiExplorer {
             transports: TransportRegistry::with_defaults(),
             method_menu_open: false,
             save_menu_open: false,
+            body_menu_open: false,
+            auth_menu_open: false,
             name_input,
             language: Language::current(cx),
             focus_handle: cx.focus_handle(),
@@ -138,24 +144,17 @@ impl ApiExplorer {
         }
         self.language = language;
 
-        let url_placeholder = t(Str::UrlPlaceholder, cx);
-        for tab in &self.tabs {
-            tab.update(cx, |tab, cx| {
-                tab.request.url.update(cx, |state, cx| {
-                    state.set_placeholder(url_placeholder.clone(), window, cx);
-                });
-            });
-        }
-
         let name_placeholder = t(Str::NameRequestPlaceholder, cx);
         self.name_input.update(cx, |state, cx| {
             state.set_placeholder(name_placeholder, window, cx);
         });
 
-        // Each key/value cell holds its own placeholder too.
+        // The URL field, every key/value cell, both script panes and every auth
+        // field hold their own placeholder; `RequestState` owns the sweep so
+        // that adding a field is one edit there rather than two.
         for tab in &self.tabs {
             tab.update(cx, |tab, cx| {
-                tab.request.sync_row_placeholders(window, cx);
+                tab.request.sync_placeholders(window, cx);
             });
         }
     }

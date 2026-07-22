@@ -222,6 +222,66 @@ pub enum Str {
     ParamValuePlaceholder,
     HeaderKeyPlaceholder,
     HeaderValuePlaceholder,
+    ColumnDescription,
+    DescriptionPlaceholder,
+    DuplicateRow,
+    MoveRowUp,
+    MoveRowDown,
+    AddField,
+    NoActiveFields,
+    /// "{count} active fields" — the summary above the form-body table.
+    ActiveFields(usize),
+    FieldKeyPlaceholder,
+    FieldValuePlaceholder,
+
+    // API Explorer — Body tab.
+    BodyTypeLabel,
+    BodyTypeNone,
+    BodyTypeJson,
+    BodyTypeText,
+    BodyTypeXml,
+    BodyTypeHtml,
+    BodyTypeFormData,
+    BodyTypeUrlEncoded,
+    BodyTypeBinary,
+    BodyPlaceholder,
+    NoBodyTitle,
+    NoBodyHint,
+    BinaryBodyLater,
+    /// "GET requests are sent without a body." The method is a wire token and
+    /// is not translated; the sentence around it is.
+    MethodSendsNoBody(String),
+
+    // API Explorer — Auth tab.
+    AuthTypeLabel,
+    AuthTypeNone,
+    AuthTypeBearer,
+    AuthTypeBasic,
+    AuthTypeApiKey,
+    AuthTypeOAuth2,
+    OAuth2Later,
+    NoAuthTitle,
+    NoAuthHint,
+    AuthTokenLabel,
+    AuthTokenPlaceholder,
+    AuthUsernameLabel,
+    AuthUsernamePlaceholder,
+    AuthPasswordLabel,
+    AuthPasswordPlaceholder,
+    ApiKeyNameLabel,
+    ApiKeyNamePlaceholder,
+    ApiKeyValueLabel,
+    ApiKeyValuePlaceholder,
+    ApiKeySendAs,
+    ApiKeyInHeader,
+    ApiKeyInQuery,
+
+    // API Explorer — Scripts tab.
+    ScriptsNotExecuted,
+    PreRequestScriptLabel,
+    PreRequestScriptPlaceholder,
+    PostResponseScriptLabel,
+    PostResponseScriptPlaceholder,
 
     // API Explorer — response viewer.
     ResponseTabBody,
@@ -584,6 +644,156 @@ impl Str {
             (Str::HeaderKeyPlaceholder, Language::Vietnamese) => "Tên header".into(),
             (Str::HeaderValuePlaceholder, Language::English) => "Value".into(),
             (Str::HeaderValuePlaceholder, Language::Vietnamese) => "Giá trị".into(),
+            (Str::ColumnDescription, Language::English) => "DESCRIPTION".into(),
+            (Str::ColumnDescription, Language::Vietnamese) => "MÔ TẢ".into(),
+            (Str::DescriptionPlaceholder, Language::English) => "Description".into(),
+            (Str::DescriptionPlaceholder, Language::Vietnamese) => "Mô tả".into(),
+            (Str::DuplicateRow, Language::English) => "Duplicate row".into(),
+            (Str::DuplicateRow, Language::Vietnamese) => "Nhân đôi dòng".into(),
+            (Str::MoveRowUp, Language::English) => "Move row up".into(),
+            (Str::MoveRowUp, Language::Vietnamese) => "Chuyển dòng lên".into(),
+            (Str::MoveRowDown, Language::English) => "Move row down".into(),
+            (Str::MoveRowDown, Language::Vietnamese) => "Chuyển dòng xuống".into(),
+            (Str::AddField, Language::English) => "Add field".into(),
+            (Str::AddField, Language::Vietnamese) => "Thêm trường".into(),
+            (Str::NoActiveFields, Language::English) => "No active fields".into(),
+            (Str::NoActiveFields, Language::Vietnamese) => "Không có trường nào đang bật".into(),
+            (Str::ActiveFields(count), Language::English) => format!("{count} active fields").into(),
+            (Str::ActiveFields(count), Language::Vietnamese) => {
+                format!("{count} trường đang bật").into()
+            }
+            (Str::FieldKeyPlaceholder, Language::English) => "Field".into(),
+            (Str::FieldKeyPlaceholder, Language::Vietnamese) => "Trường".into(),
+            (Str::FieldValuePlaceholder, Language::English) => "Value".into(),
+            (Str::FieldValuePlaceholder, Language::Vietnamese) => "Giá trị".into(),
+
+            (Str::BodyTypeLabel, Language::English) => "Body type".into(),
+            (Str::BodyTypeLabel, Language::Vietnamese) => "Loại nội dung".into(),
+            (Str::BodyTypeNone, Language::English) => "None".into(),
+            (Str::BodyTypeNone, Language::Vietnamese) => "Không có".into(),
+            (Str::BodyTypeJson, Language::English) => "JSON".into(),
+            (Str::BodyTypeJson, Language::Vietnamese) => "JSON".into(),
+            (Str::BodyTypeText, Language::English) => "Raw text".into(),
+            (Str::BodyTypeText, Language::Vietnamese) => "Văn bản thô".into(),
+            (Str::BodyTypeXml, Language::English) => "XML".into(),
+            (Str::BodyTypeXml, Language::Vietnamese) => "XML".into(),
+            (Str::BodyTypeHtml, Language::English) => "HTML".into(),
+            (Str::BodyTypeHtml, Language::Vietnamese) => "HTML".into(),
+            (Str::BodyTypeFormData, Language::English) => "Form data".into(),
+            (Str::BodyTypeFormData, Language::Vietnamese) => "Dữ liệu biểu mẫu".into(),
+            (Str::BodyTypeUrlEncoded, Language::English) => "x-www-form-urlencoded".into(),
+            (Str::BodyTypeUrlEncoded, Language::Vietnamese) => "x-www-form-urlencoded".into(),
+            (Str::BodyTypeBinary, Language::English) => "Binary".into(),
+            (Str::BodyTypeBinary, Language::Vietnamese) => "Nhị phân".into(),
+            (Str::BodyPlaceholder, Language::English) => {
+                "Type or paste the request body here.".into()
+            }
+            (Str::BodyPlaceholder, Language::Vietnamese) => {
+                "Nhập hoặc dán nội dung yêu cầu vào đây.".into()
+            }
+            (Str::NoBodyTitle, Language::English) => "No body".into(),
+            (Str::NoBodyTitle, Language::Vietnamese) => "Không có nội dung".into(),
+            (Str::NoBodyHint, Language::English) => {
+                "This request is sent without a body. Choose a type above to add one.".into()
+            }
+            (Str::NoBodyHint, Language::Vietnamese) => {
+                "Yêu cầu này được gửi mà không có nội dung. Chọn một loại ở trên để thêm.".into()
+            }
+            (Str::BinaryBodyLater, Language::English) => {
+                "A binary body needs a file picker; it arrives in a later step.".into()
+            }
+            (Str::BinaryBodyLater, Language::Vietnamese) => {
+                "Nội dung nhị phân cần bộ chọn tệp; phần này sẽ có ở bước sau.".into()
+            }
+            (Str::MethodSendsNoBody(method), Language::English) => {
+                format!("{method} requests are sent without a body.").into()
+            }
+            (Str::MethodSendsNoBody(method), Language::Vietnamese) => {
+                format!("Yêu cầu {method} được gửi mà không có nội dung.").into()
+            }
+
+            (Str::AuthTypeLabel, Language::English) => "Auth type".into(),
+            (Str::AuthTypeLabel, Language::Vietnamese) => "Kiểu xác thực".into(),
+            (Str::AuthTypeNone, Language::English) => "No auth".into(),
+            (Str::AuthTypeNone, Language::Vietnamese) => "Không xác thực".into(),
+            (Str::AuthTypeBearer, Language::English) => "Bearer token".into(),
+            (Str::AuthTypeBearer, Language::Vietnamese) => "Bearer token".into(),
+            (Str::AuthTypeBasic, Language::English) => "Basic auth".into(),
+            (Str::AuthTypeBasic, Language::Vietnamese) => "Basic auth".into(),
+            (Str::AuthTypeApiKey, Language::English) => "API key".into(),
+            (Str::AuthTypeApiKey, Language::Vietnamese) => "API key".into(),
+            (Str::AuthTypeOAuth2, Language::English) => "OAuth 2.0".into(),
+            (Str::AuthTypeOAuth2, Language::Vietnamese) => "OAuth 2.0".into(),
+            (Str::OAuth2Later, Language::English) => {
+                "OAuth 2.0 needs a browser redirect and a token store; it arrives in a later step."
+                    .into()
+            }
+            (Str::OAuth2Later, Language::Vietnamese) => {
+                "OAuth 2.0 cần chuyển hướng trình duyệt và nơi lưu token; phần này sẽ có ở bước sau."
+                    .into()
+            }
+            (Str::NoAuthTitle, Language::English) => "No authorization".into(),
+            (Str::NoAuthTitle, Language::Vietnamese) => "Không có xác thực".into(),
+            (Str::NoAuthHint, Language::English) => {
+                "This request carries no Authorization header. Choose a scheme above to add one."
+                    .into()
+            }
+            (Str::NoAuthHint, Language::Vietnamese) => {
+                "Yêu cầu này không mang header Authorization. Chọn một cách ở trên để thêm.".into()
+            }
+            (Str::AuthTokenLabel, Language::English) => "Token".into(),
+            (Str::AuthTokenLabel, Language::Vietnamese) => "Token".into(),
+            (Str::AuthTokenPlaceholder, Language::English) => "Paste the bearer token".into(),
+            (Str::AuthTokenPlaceholder, Language::Vietnamese) => "Dán bearer token vào đây".into(),
+            (Str::AuthUsernameLabel, Language::English) => "Username".into(),
+            (Str::AuthUsernameLabel, Language::Vietnamese) => "Tên đăng nhập".into(),
+            (Str::AuthUsernamePlaceholder, Language::English) => "Your username".into(),
+            (Str::AuthUsernamePlaceholder, Language::Vietnamese) => {
+                "Tên đăng nhập của bạn".into()
+            }
+            (Str::AuthPasswordLabel, Language::English) => "Password".into(),
+            (Str::AuthPasswordLabel, Language::Vietnamese) => "Mật khẩu".into(),
+            (Str::AuthPasswordPlaceholder, Language::English) => "Your password".into(),
+            (Str::AuthPasswordPlaceholder, Language::Vietnamese) => "Mật khẩu của bạn".into(),
+            (Str::ApiKeyNameLabel, Language::English) => "Key".into(),
+            (Str::ApiKeyNameLabel, Language::Vietnamese) => "Khoá".into(),
+            (Str::ApiKeyNamePlaceholder, Language::English) => "For example X-Api-Key".into(),
+            (Str::ApiKeyNamePlaceholder, Language::Vietnamese) => "Ví dụ X-Api-Key".into(),
+            (Str::ApiKeyValueLabel, Language::English) => "Value".into(),
+            (Str::ApiKeyValueLabel, Language::Vietnamese) => "Giá trị".into(),
+            (Str::ApiKeyValuePlaceholder, Language::English) => "The key's value".into(),
+            (Str::ApiKeyValuePlaceholder, Language::Vietnamese) => "Giá trị của khoá".into(),
+            (Str::ApiKeySendAs, Language::English) => "Send as".into(),
+            (Str::ApiKeySendAs, Language::Vietnamese) => "Gửi dưới dạng".into(),
+            (Str::ApiKeyInHeader, Language::English) => "Header".into(),
+            (Str::ApiKeyInHeader, Language::Vietnamese) => "Header".into(),
+            (Str::ApiKeyInQuery, Language::English) => "Query parameter".into(),
+            (Str::ApiKeyInQuery, Language::Vietnamese) => "Tham số truy vấn".into(),
+
+            (Str::ScriptsNotExecuted, Language::English) => {
+                "Scripts are saved with the request for this session. Nothing runs them yet — \
+                 there is no script engine in this build.".into()
+            }
+            (Str::ScriptsNotExecuted, Language::Vietnamese) => {
+                "Kịch bản được lưu cùng yêu cầu trong phiên này. Chưa có gì chạy chúng — \
+                 bản dựng này không có bộ chạy kịch bản.".into()
+            }
+            (Str::PreRequestScriptLabel, Language::English) => "Pre-request script".into(),
+            (Str::PreRequestScriptLabel, Language::Vietnamese) => "Kịch bản trước yêu cầu".into(),
+            (Str::PreRequestScriptPlaceholder, Language::English) => {
+                "Would run before the request is sent.".into()
+            }
+            (Str::PreRequestScriptPlaceholder, Language::Vietnamese) => {
+                "Sẽ chạy trước khi yêu cầu được gửi.".into()
+            }
+            (Str::PostResponseScriptLabel, Language::English) => "Post-response script".into(),
+            (Str::PostResponseScriptLabel, Language::Vietnamese) => "Kịch bản sau phản hồi".into(),
+            (Str::PostResponseScriptPlaceholder, Language::English) => {
+                "Would run after the response arrives.".into()
+            }
+            (Str::PostResponseScriptPlaceholder, Language::Vietnamese) => {
+                "Sẽ chạy sau khi phản hồi về.".into()
+            }
 
             (Str::ResponseTabBody, Language::English) => "Body".into(),
             (Str::ResponseTabBody, Language::Vietnamese) => "Nội dung".into(),
@@ -918,6 +1128,58 @@ mod tests {
             plain(Str::ParamValuePlaceholder),
             plain(Str::HeaderKeyPlaceholder),
             plain(Str::HeaderValuePlaceholder),
+            plain(Str::ColumnDescription),
+            plain(Str::DescriptionPlaceholder),
+            plain(Str::DuplicateRow),
+            plain(Str::MoveRowUp),
+            plain(Str::MoveRowDown),
+            plain(Str::AddField),
+            plain(Str::NoActiveFields),
+            with(Str::ActiveFields(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::FieldKeyPlaceholder),
+            plain(Str::FieldValuePlaceholder),
+            plain(Str::BodyTypeLabel),
+            plain(Str::BodyTypeNone),
+            term(Str::BodyTypeJson),
+            plain(Str::BodyTypeText),
+            term(Str::BodyTypeXml),
+            term(Str::BodyTypeHtml),
+            plain(Str::BodyTypeFormData),
+            // The wire spelling of the media type, in both languages.
+            term(Str::BodyTypeUrlEncoded),
+            plain(Str::BodyTypeBinary),
+            plain(Str::BodyPlaceholder),
+            plain(Str::NoBodyTitle),
+            plain(Str::NoBodyHint),
+            plain(Str::BinaryBodyLater),
+            with(Str::MethodSendsNoBody("GET".into()), &["GET"]),
+            plain(Str::AuthTypeLabel),
+            plain(Str::AuthTypeNone),
+            term(Str::AuthTypeBearer),
+            term(Str::AuthTypeBasic),
+            term(Str::AuthTypeApiKey),
+            term(Str::AuthTypeOAuth2),
+            plain(Str::OAuth2Later),
+            plain(Str::NoAuthTitle),
+            plain(Str::NoAuthHint),
+            term(Str::AuthTokenLabel),
+            plain(Str::AuthTokenPlaceholder),
+            plain(Str::AuthUsernameLabel),
+            plain(Str::AuthUsernamePlaceholder),
+            plain(Str::AuthPasswordLabel),
+            plain(Str::AuthPasswordPlaceholder),
+            plain(Str::ApiKeyNameLabel),
+            plain(Str::ApiKeyNamePlaceholder),
+            plain(Str::ApiKeyValueLabel),
+            plain(Str::ApiKeyValuePlaceholder),
+            plain(Str::ApiKeySendAs),
+            term(Str::ApiKeyInHeader),
+            plain(Str::ApiKeyInQuery),
+            plain(Str::ScriptsNotExecuted),
+            plain(Str::PreRequestScriptLabel),
+            plain(Str::PreRequestScriptPlaceholder),
+            plain(Str::PostResponseScriptLabel),
+            plain(Str::PostResponseScriptPlaceholder),
             plain(Str::ResponseTabBody),
             plain(Str::ResponseTabHeaders),
             plain(Str::ResponseTabCookies),
@@ -1052,38 +1314,89 @@ mod tests {
             Str::ParamValuePlaceholder => 85,
             Str::HeaderKeyPlaceholder => 86,
             Str::HeaderValuePlaceholder => 87,
-            Str::ResponseTabBody => 88,
-            Str::ResponseTabHeaders => 89,
-            Str::ResponseTabCookies => 90,
-            Str::ResponseTabTests => 91,
-            Str::ResponseTabConsole => 92,
-            Str::NoResponseYet => 93,
-            Str::NoResponseHint => 94,
-            Str::Sending => 95,
-            Str::RequestFailed => 96,
-            Str::CollapseResponse => 97,
-            Str::ExpandResponse => 98,
-            Str::BodyPretty => 99,
-            Str::BodyRaw => 100,
-            Str::Copy => 101,
-            Str::LoadMoreLines => 102,
-            Str::BodyTruncated => 103,
-            Str::LineRange { .. } => 104,
-            Str::StatusClassInfo => 105,
-            Str::StatusClassSuccess => 106,
-            Str::StatusClassRedirect => 107,
-            Str::StatusClassClientError => 108,
-            Str::StatusClassServerError => 109,
-            Str::StatusClassUnknown => 110,
-            Str::HttpInvalidUrl(_) => 111,
-            Str::HttpUnsupportedScheme(_) => 112,
-            Str::HttpInvalidHeader(_) => 113,
-            Str::HttpTimeout(_) => 114,
-            Str::HttpDnsFailure(_) => 115,
-            Str::HttpConnectFailure(_) => 116,
-            Str::HttpTlsFailure(_) => 117,
-            Str::HttpBodyNotText(_) => 118,
-            Str::HttpUnexpected(_) => 119,
+            Str::ColumnDescription => 88,
+            Str::DescriptionPlaceholder => 89,
+            Str::DuplicateRow => 90,
+            Str::MoveRowUp => 91,
+            Str::MoveRowDown => 92,
+            Str::AddField => 93,
+            Str::NoActiveFields => 94,
+            Str::ActiveFields(_) => 95,
+            Str::FieldKeyPlaceholder => 96,
+            Str::FieldValuePlaceholder => 97,
+            Str::BodyTypeLabel => 98,
+            Str::BodyTypeNone => 99,
+            Str::BodyTypeJson => 100,
+            Str::BodyTypeText => 101,
+            Str::BodyTypeXml => 102,
+            Str::BodyTypeHtml => 103,
+            Str::BodyTypeFormData => 104,
+            Str::BodyTypeUrlEncoded => 105,
+            Str::BodyTypeBinary => 106,
+            Str::BodyPlaceholder => 107,
+            Str::NoBodyTitle => 108,
+            Str::NoBodyHint => 109,
+            Str::BinaryBodyLater => 110,
+            Str::MethodSendsNoBody(_) => 111,
+            Str::AuthTypeLabel => 112,
+            Str::AuthTypeNone => 113,
+            Str::AuthTypeBearer => 114,
+            Str::AuthTypeBasic => 115,
+            Str::AuthTypeApiKey => 116,
+            Str::AuthTypeOAuth2 => 117,
+            Str::OAuth2Later => 118,
+            Str::NoAuthTitle => 119,
+            Str::NoAuthHint => 120,
+            Str::AuthTokenLabel => 121,
+            Str::AuthTokenPlaceholder => 122,
+            Str::AuthUsernameLabel => 123,
+            Str::AuthUsernamePlaceholder => 124,
+            Str::AuthPasswordLabel => 125,
+            Str::AuthPasswordPlaceholder => 126,
+            Str::ApiKeyNameLabel => 127,
+            Str::ApiKeyNamePlaceholder => 128,
+            Str::ApiKeyValueLabel => 129,
+            Str::ApiKeyValuePlaceholder => 130,
+            Str::ApiKeySendAs => 131,
+            Str::ApiKeyInHeader => 132,
+            Str::ApiKeyInQuery => 133,
+            Str::ScriptsNotExecuted => 134,
+            Str::PreRequestScriptLabel => 135,
+            Str::PreRequestScriptPlaceholder => 136,
+            Str::PostResponseScriptLabel => 137,
+            Str::PostResponseScriptPlaceholder => 138,
+            Str::ResponseTabBody => 139,
+            Str::ResponseTabHeaders => 140,
+            Str::ResponseTabCookies => 141,
+            Str::ResponseTabTests => 142,
+            Str::ResponseTabConsole => 143,
+            Str::NoResponseYet => 144,
+            Str::NoResponseHint => 145,
+            Str::Sending => 146,
+            Str::RequestFailed => 147,
+            Str::CollapseResponse => 148,
+            Str::ExpandResponse => 149,
+            Str::BodyPretty => 150,
+            Str::BodyRaw => 151,
+            Str::Copy => 152,
+            Str::LoadMoreLines => 153,
+            Str::BodyTruncated => 154,
+            Str::LineRange { .. } => 155,
+            Str::StatusClassInfo => 156,
+            Str::StatusClassSuccess => 157,
+            Str::StatusClassRedirect => 158,
+            Str::StatusClassClientError => 159,
+            Str::StatusClassServerError => 160,
+            Str::StatusClassUnknown => 161,
+            Str::HttpInvalidUrl(_) => 162,
+            Str::HttpUnsupportedScheme(_) => 163,
+            Str::HttpInvalidHeader(_) => 164,
+            Str::HttpTimeout(_) => 165,
+            Str::HttpDnsFailure(_) => 166,
+            Str::HttpConnectFailure(_) => 167,
+            Str::HttpTlsFailure(_) => 168,
+            Str::HttpBodyNotText(_) => 169,
+            Str::HttpUnexpected(_) => 170,
         }
     }
 

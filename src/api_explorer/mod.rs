@@ -1,19 +1,23 @@
 //! The API Explorer: an HTTP client as a dodo tool.
 //!
-//! Phase 1 delivers one working request/response loop — method, URL, query
-//! params and headers up; status, timing, size, headers and a highlighted body
-//! back — plus the module structure the later phases plug into:
+//! The request half is complete: method, URL, query params, headers, a body in
+//! seven shapes, and four authorization schemes go up; status, timing, size,
+//! headers and a highlighted body come back. The module structure is what keeps
+//! that from being one file:
 //!
 //! - [`models`] — plain data, no GPUI, unit tested.
 //! - [`services`] — the `Transport` trait and its HTTP implementation. The one
-//!   place that knows about `reqwest`; views cannot reach it.
+//!   place that knows about `reqwest`; views cannot reach it, and it is also
+//!   where a body becomes bytes and an auth scheme becomes a header.
 //! - [`state`] — request, response, collections and layout state, split apart.
 //! - [`components`] — the few small elements the widget library does not have.
 //! - [`views`] — rendering only.
 //!
-//! Body, Auth and Scripts (request) and Cookies, Tests and Console (response)
-//! render an honest placeholder naming the step they arrive in; collections are
-//! phase 3.
+//! What is deliberately still absent, each said out loud where a user would
+//! look for it rather than left to be discovered: a binary body (needs a file
+//! picker), OAuth 2.0 (needs a redirect flow and a token store), running the
+//! scripts the Scripts tab edits (needs an engine), the Cookies, Tests and
+//! Console response tabs, and collections.
 
 pub mod components;
 pub mod models;
