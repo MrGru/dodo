@@ -60,10 +60,22 @@ const THEMES: [&str; 16] = [
     "Catppuccin Frappe",
 ];
 
-/// Height of the result list once the user has typed something. It is fixed so
+/// Height of the search box once the user has typed something. It is fixed so
 /// that the list's own `size_full` layout has a definite box to fill; an empty
-/// query collapses the panel back to the height of the search box alone.
+/// query collapses the box back to [`collapsed_height`].
+///
+/// The box is drawn as an overlay, so growing to this height covers the
+/// settings panel instead of pushing it down.
 const RESULTS_HEIGHT: f32 = 232.;
+
+/// Height of the search box with no results under it.
+///
+/// The library draws the query input at `h_8` — 2rem, so it tracks the font
+/// size setting — with a 1px rule under it, and the box adds its own 1px border
+/// top and bottom.
+fn collapsed_height(window: &Window) -> Pixels {
+    window.rem_size() * 2. + px(3.)
+}
 
 /// Key context of the search box. Escape has to be bound *tighter* than the
 /// text input's own Escape, which propagates all the way to the dialog and
@@ -419,8 +431,9 @@ impl SettingsView {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let searching = !self.search.read(cx).delegate().query.is_empty();
+        let collapsed = collapsed_height(window);
 
         v_flex()
             .key_context(SEARCH_CONTEXT)
@@ -429,17 +442,42 @@ impl Render for SettingsView {
             .h(px(440.))
             .gap_2()
             .child(
+                // The slot the search box occupies in the layout. It never grows:
+                // the box itself is drawn by the overlay below, so results float
+                // over the settings panel rather than pushing it down.
                 div()
+                    .relative()
                     .w_full()
                     .flex_none()
-                    .when(searching, |this| this.h(px(RESULTS_HEIGHT)))
-                    .overflow_hidden()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .rounded(cx.theme().radius)
+                    .h(collapsed)
                     .child(
-                        List::new(&self.search)
-                            .search_placeholder(t(Str::SearchSettingsPlaceholder, cx)),
+                        // `deferred` paints after the rest of the dialog, which is
+                        // what puts the results on top of the panel; `left_0` +
+                        // `right_0` size the box from the slot's own edges, so the
+                        // input inside it gets a real width to lay text out in.
+                        deferred(
+                            v_flex()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .right_0()
+                                .h(if searching {
+                                    px(RESULTS_HEIGHT)
+                                } else {
+                                    collapsed
+                                })
+                                .overflow_hidden()
+                                .bg(cx.theme().background)
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .rounded(cx.theme().radius)
+                                .when(searching, |this| this.shadow_md())
+                                .child(
+                                    List::new(&self.search)
+                                        .search_placeholder(t(Str::SearchSettingsPlaceholder, cx)),
+                                ),
+                        )
+                        .with_priority(1),
                     ),
             )
             .child(
