@@ -35,6 +35,10 @@ never rebuild a view on selection.
    - a `Entity<YourTool>` field on `Layout`, initialised in `Layout::new`, and an arm in the
      main-pane `match self.active` inside `Layout::render`.
 
+6. **`src/i18n.rs`** — `View::title` returns a `Str`, not a string, so the tool needs a `Str`
+   variant for its sidebar title and one for every label inside it. Load `dodo-i18n-text` before
+   writing that text; `cargo test i18n` will fail until each new variant is registered there.
+
 `cargo build` catches every step except the `ALL` array. If the tool builds but no sidebar row
 appears, that is the one you missed.
 

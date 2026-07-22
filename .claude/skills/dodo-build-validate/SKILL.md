@@ -65,9 +65,10 @@ Verified: this compiles and runs (`test encoder_decoder::tests::hex_roundtrip ..
 deliberately when you want a `TestAppContext`, never by accident. There is no reason to reach for
 a scratch crate to test pure logic.
 
-The pure, testable logic sits at the bottom of the tool modules — `encode_hex`, `decode_hex`,
-`decode_base64`, `decode_url`, `split_jwt`, `JsonFormatter::pretty_print`. There are no tests
-today.
+The tests that exist today are the localization guards in `src/i18n.rs` and `src/i18n_lint.rs`
+(`cargo test i18n`); see `dodo-i18n-text` for what they enforce. The pure, testable logic that is
+still uncovered sits at the bottom of the tool modules — `encode_hex`, `decode_hex`,
+`decode_base64`, `decode_url`, `split_jwt`, `JsonFormatter::pretty_print`.
 
 ## Verifying a change
 
