@@ -1,6 +1,6 @@
 ---
 name: dodo-theming-settings
-description: How dodo's themes, font size, border radius and language actually work - where vendored theme JSON lives, how it reaches ThemeRegistry, why writing gpui_component::Theme applies live, and how to add a localized string or language. Load when adding or changing a setting, adding/removing a theme, adding user-visible text that should be translated, or when a settings change does not take effect until restart.
+description: How dodo's themes, font size, border radius and language switching actually work - where vendored theme JSON lives, how it reaches ThemeRegistry, why writing gpui_component::Theme applies live, how to add a language, and which library widgets cache their strings and need sync_language. Load when adding or changing a setting, adding/removing a theme or a language, or when a settings change does not take effect until restart. For adding or changing user-facing text, load `dodo-i18n-text` instead.
 ---
 
 Two files own all of this: `src/settings.rs` (the dialog and the app-level state it edits) and
@@ -69,36 +69,19 @@ stored choice does not change meaning when the language does.
 
 ## Localization
 
-`src/i18n.rs` is deliberately tiny: an enum of strings, a match arm per (string, language) pair,
-and a `Language` global.
+**Adding or changing a user-facing string is `dodo-i18n-text`'s subject, not this skill's** — the
+rule, the steps, the exemptions and the two `cargo test` guards all live there. This section covers
+only what localization has to do with *settings*: switching the language, and adding a new one.
 
-- **Add a string**: a `Str` variant + one arm per language in `Str::text`. Call it as
-  `t(Str::Foo, cx)`, which returns `SharedString`.
-- **Add a language**: a `Language` variant, a row in `Language::ALL`, arms in `code()` and
-  `label()`, and a column in every `Str::text` row (and in `JwtPart::name`) — the compiler
-  enumerates the ones you missed. `code()` is the stable dropdown value; `label()` is the
-  language's name *in* that language.
+**Add a language**: a `Language` variant, a row in `Language::ALL`, arms in `code()` and `label()`,
+and a column in every `Str::text` row (and in `JwtPart::name`) — the compiler enumerates the ones
+you missed. `code()` is the stable dropdown value; `label()` is the language's name *in* that
+language, so it is deliberately not translated. Expect `cargo test i18n` to then fail on any row
+you filled in by pasting the English text; that is the guard working.
 
 `Language::set` does `cx.set_global(self)` then `cx.refresh_windows()`, the same live-apply
 trick as `Theme`. Because `t()` is called during `render`, already-painted strings pick up the
 new column on the next paint — there is no catalogue reload and no missing-key path.
-
-Every user-facing string dodo produces goes through `t()`. Four kinds deliberately do not, and
-should stay that way: the product name "Dodo", theme names (they are `ThemeRegistry` keys),
-`Language::label()` endonyms, and `eprintln!`/`expect` developer text.
-
-Three conventions that are easy to get wrong:
-
-- **Messages with runtime values are `Str` variants with fields**, e.g.
-  `Str::InvalidHexDigit { digit, position }`, so each language owns the whole sentence and its
-  word order. Never `format!("{translated_prefix}{english_tail}")`. `Str::text` returns
-  `Cow<'static, str>` for that reason.
-- **Third-party parser text stays English inside a translated frame.** serde_json's and base64's
-  own messages are the `detail: String` field of those variants; there is nothing to translate
-  them with.
-- **Store errors as `Str`, not as rendered `SharedString`.** Both tool views keep
-  `error: Option<Str>` and call `t()` in `render`, so a banner already on screen re-translates
-  when the language changes.
 
 **The catch: some library widgets cache strings instead of re-rendering them.** `InputState`
 placeholders and `SelectState` item labels live inside library entities and are *not* rebuilt
@@ -107,10 +90,7 @@ each frame, so `refresh_windows()` alone leaves them in the old language. Both t
 pushes new text in when that field goes stale (`set_placeholder`; `set_items` followed by
 `set_selected_index`, because `set_items` alone leaves the closed dropdown showing the old
 label). Any new widget that takes a string at construction time needs the same treatment.
-
-One string is knowingly not live: the inline JSON diagnostic (the wavy-underline hover message)
-is baked into `InputState` when the parse fails, so it keeps the language it was produced in
-until the next Format.
+(`dodo-i18n-text` records the one string that is knowingly left out of this and why.)
 
 **gpui-component's own strings cannot be fixed here.** Dialog buttons, context-menu entries
 (Copy/Cut/Paste), and the settings search placeholder come from the library's `rust_i18n`

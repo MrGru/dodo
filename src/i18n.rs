@@ -389,3 +389,299 @@ pub fn t(str: Str, cx: &App) -> SharedString {
         Cow::Owned(text) => SharedString::from(text),
     }
 }
+
+/// What these tests protect
+/// ------------------------
+///
+/// The `match` in [`Str::text`] already makes a *missing* language a compile
+/// error. Three things it cannot catch, and that these tests do:
+///
+/// 1. A language arm that is present but empty, or whitespace only.
+/// 2. A parameterized arm that forgot its `{placeholder}`, so the runtime value
+///    (a line number, a parser's message) silently never reaches the screen.
+/// 3. A language arm that was filled in by pasting the English text. Asserting
+///    "every language differs" would be false — `Hex`, `Header` and `Payload`
+///    are the same word in both languages by design — so every variant declares
+///    which it is via [`Expect`], and the test holds it to that declaration in
+///    *both* directions.
+///
+/// Adding a `Str` variant is a compile error in `position` below until it is
+/// given a slot, and the slot then has to line up with a real entry in
+/// `samples`. (The one thing that slips through is deliberately reusing another
+/// variant's index; nothing here can detect that.)
+#[cfg(test)]
+mod tests {
+    use super::{JwtPart, Language, Str};
+
+    /// Stands in for a third-party parser's own message. Deliberately unlike
+    /// any word in the catalogue so `contains` cannot match by accident.
+    const DETAIL: &str = "<<detail-sentinel>>";
+    /// Ditto for numeric values: no catalogue string contains this digit run.
+    const NUMBER: usize = 4242;
+    const NUMBER_TEXT: &str = "4242";
+
+    /// Whether a variant is expected to read differently in each language.
+    #[derive(Clone, Copy)]
+    enum Expect {
+        /// Prose. Every language must produce its own wording.
+        Translated,
+        /// A term of art that is the same word in every language we ship.
+        /// Asserted as equality, so "translating" one later fails here and
+        /// forces the declaration to be updated rather than quietly diverging.
+        SameEverywhere,
+    }
+
+    struct Sample {
+        str: Str,
+        /// Runtime values the rendered text must surface, in every language.
+        parts: &'static [&'static str],
+        expect: Expect,
+    }
+
+    fn plain(str: Str) -> Sample {
+        Sample {
+            str,
+            parts: &[],
+            expect: Expect::Translated,
+        }
+    }
+
+    fn term(str: Str) -> Sample {
+        Sample {
+            str,
+            parts: &[],
+            expect: Expect::SameEverywhere,
+        }
+    }
+
+    fn with(str: Str, parts: &'static [&'static str]) -> Sample {
+        Sample {
+            str,
+            parts,
+            expect: Expect::Translated,
+        }
+    }
+
+    /// One entry per `Str` variant, in `position` order.
+    fn samples() -> Vec<Sample> {
+        vec![
+            plain(Str::Settings),
+            plain(Str::General),
+            plain(Str::Appearance),
+            plain(Str::Language),
+            plain(Str::LanguageDescription),
+            plain(Str::Theme),
+            plain(Str::ThemeDescription),
+            plain(Str::FontSize),
+            plain(Str::FontSizeDescription),
+            plain(Str::BorderRadius),
+            plain(Str::BorderRadiusDescription),
+            plain(Str::Large),
+            plain(Str::Medium),
+            plain(Str::Small),
+            plain(Str::Tools),
+            plain(Str::JsonFormatterTitle),
+            plain(Str::EncoderDecoderTitle),
+            plain(Str::JsonPlaceholder),
+            plain(Str::FormatButton),
+            plain(Str::IndentLabel),
+            with(Str::IndentSpaces(NUMBER), &[NUMBER_TEXT]),
+            with(
+                Str::InvalidJson {
+                    line: NUMBER,
+                    column: 77,
+                    detail: DETAIL.into(),
+                },
+                &[NUMBER_TEXT, "77", DETAIL],
+            ),
+            plain(Str::FormatLabel),
+            plain(Str::EncodeButton),
+            plain(Str::DecodeButton),
+            plain(Str::DecodeJwtButton),
+            plain(Str::InputLabel),
+            plain(Str::OutputLabel),
+            term(Str::JwtHeaderLabel),
+            term(Str::JwtPayloadLabel),
+            plain(Str::JwtSignatureLabel),
+            plain(Str::EncoderInputPlaceholder),
+            plain(Str::EncoderOutputPlaceholder),
+            plain(Str::FormatBase64),
+            plain(Str::FormatBase64UrlSafe),
+            plain(Str::FormatUrl),
+            term(Str::FormatHex),
+            plain(Str::FormatJwt),
+            plain(Str::JwtEncodeUnsupported),
+            with(Str::InvalidHexOddLength(NUMBER), &[NUMBER_TEXT]),
+            with(
+                Str::InvalidHexDigit {
+                    digit: 'Z',
+                    position: NUMBER,
+                },
+                &["Z", NUMBER_TEXT],
+            ),
+            with(Str::InvalidBase64(DETAIL.into()), &[DETAIL]),
+            with(Str::InvalidPercentAt(NUMBER), &[NUMBER_TEXT]),
+            with(Str::InvalidPercentEncoding(DETAIL.into()), &[DETAIL]),
+            with(Str::NotUtf8(DETAIL.into()), &[DETAIL]),
+            plain(Str::JwtEmpty),
+            with(Str::JwtPartCount(NUMBER), &[NUMBER_TEXT]),
+            // The part name is checked separately: it is language-dependent, so
+            // it cannot be a fixed fragment here.
+            with(
+                Str::JwtPartNotBase64 {
+                    part: JwtPart::Header,
+                    detail: DETAIL.into(),
+                },
+                &[DETAIL],
+            ),
+            with(
+                Str::JwtPartNotJson {
+                    part: JwtPart::Payload,
+                    detail: DETAIL.into(),
+                },
+                &[DETAIL],
+            ),
+            with(
+                Str::JwtPartNotRenderable {
+                    part: JwtPart::Header,
+                    detail: DETAIL.into(),
+                },
+                &[DETAIL],
+            ),
+        ]
+    }
+
+    /// Exhaustive over `Str`: a new variant does not compile until it is given
+    /// a position, and `samples` must then have an entry at that position.
+    fn position(str: &Str) -> usize {
+        match str {
+            Str::Settings => 0,
+            Str::General => 1,
+            Str::Appearance => 2,
+            Str::Language => 3,
+            Str::LanguageDescription => 4,
+            Str::Theme => 5,
+            Str::ThemeDescription => 6,
+            Str::FontSize => 7,
+            Str::FontSizeDescription => 8,
+            Str::BorderRadius => 9,
+            Str::BorderRadiusDescription => 10,
+            Str::Large => 11,
+            Str::Medium => 12,
+            Str::Small => 13,
+            Str::Tools => 14,
+            Str::JsonFormatterTitle => 15,
+            Str::EncoderDecoderTitle => 16,
+            Str::JsonPlaceholder => 17,
+            Str::FormatButton => 18,
+            Str::IndentLabel => 19,
+            Str::IndentSpaces(_) => 20,
+            Str::InvalidJson { .. } => 21,
+            Str::FormatLabel => 22,
+            Str::EncodeButton => 23,
+            Str::DecodeButton => 24,
+            Str::DecodeJwtButton => 25,
+            Str::InputLabel => 26,
+            Str::OutputLabel => 27,
+            Str::JwtHeaderLabel => 28,
+            Str::JwtPayloadLabel => 29,
+            Str::JwtSignatureLabel => 30,
+            Str::EncoderInputPlaceholder => 31,
+            Str::EncoderOutputPlaceholder => 32,
+            Str::FormatBase64 => 33,
+            Str::FormatBase64UrlSafe => 34,
+            Str::FormatUrl => 35,
+            Str::FormatHex => 36,
+            Str::FormatJwt => 37,
+            Str::JwtEncodeUnsupported => 38,
+            Str::InvalidHexOddLength(_) => 39,
+            Str::InvalidHexDigit { .. } => 40,
+            Str::InvalidBase64(_) => 41,
+            Str::InvalidPercentAt(_) => 42,
+            Str::InvalidPercentEncoding(_) => 43,
+            Str::NotUtf8(_) => 44,
+            Str::JwtEmpty => 45,
+            Str::JwtPartCount(_) => 46,
+            Str::JwtPartNotBase64 { .. } => 47,
+            Str::JwtPartNotJson { .. } => 48,
+            Str::JwtPartNotRenderable { .. } => 49,
+        }
+    }
+
+    #[test]
+    fn every_str_variant_has_a_sample() {
+        for (index, sample) in samples().iter().enumerate() {
+            assert_eq!(
+                position(&sample.str),
+                index,
+                "samples() is out of step with position() at index {index}: add the \
+                 missing entry rather than renumbering position()"
+            );
+        }
+    }
+
+    #[test]
+    fn every_language_renders_every_string() {
+        for sample in samples() {
+            let english = sample.str.clone().text(Language::English).into_owned();
+
+            for language in Language::ALL {
+                let text = sample.str.clone().text(language).into_owned();
+                let code = language.code();
+
+                assert!(
+                    !text.trim().is_empty(),
+                    "{code} translation of \"{english}\" is empty"
+                );
+                for part in sample.parts {
+                    assert!(
+                        text.contains(part),
+                        "{code} translation of \"{english}\" dropped the runtime value \
+                         `{part}`; it rendered as \"{text}\""
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn translations_match_their_declared_kind() {
+        for sample in samples() {
+            let english = sample.str.clone().text(Language::English).into_owned();
+
+            for language in Language::ALL {
+                if language == Language::English {
+                    continue;
+                }
+                let text = sample.str.clone().text(language).into_owned();
+                let code = language.code();
+
+                match sample.expect {
+                    Expect::Translated => assert_ne!(
+                        text, english,
+                        "{code} still shows the English text for \"{english}\" — translate it, \
+                         or declare it with term() if it really is the same word"
+                    ),
+                    Expect::SameEverywhere => assert_eq!(
+                        text, english,
+                        "\"{english}\" is declared as a term of art that is identical in every \
+                         language, but {code} differs — declare it with plain() instead"
+                    ),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_language_names_every_jwt_part() {
+        for part in [JwtPart::Header, JwtPart::Payload] {
+            for language in Language::ALL {
+                assert!(
+                    !part.name(language).trim().is_empty(),
+                    "{} has no name for a JWT part",
+                    language.code()
+                );
+            }
+        }
+    }
+}

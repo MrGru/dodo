@@ -18,7 +18,8 @@ fires — they are written to be read at the moment of need, not up front.
 |---|---|
 | `gpui-component-recipes` | Writing or editing any `render` / `new` that builds a gpui-component widget (input, code editor, diagnostics, select, dialog, settings panel, sidebar, button, icon); a widget call will not compile; or a widget builds but nothing appears on screen. |
 | `dodo-tool-view` | Adding, renaming, reordering or removing a sidebar tool; a new sidebar entry does not appear or renders blank. |
-| `dodo-theming-settings` | Adding or changing a setting, adding or removing a theme, adding user-visible text that should be translated, or a settings change does not apply until restart. |
+| `dodo-i18n-text` | Writing or changing **any** text a user reads — a label, title, placeholder, description, error, dropdown option; or an `i18n` / `i18n_lint` test fails. |
+| `dodo-theming-settings` | Adding or changing a setting, adding or removing a theme or a language, or a settings change does not apply until restart. |
 | `dodo-build-validate` | First `cargo` invocation of a session, adding tests, a build or `cargo test` failing oddly, or being asked whether a UI change actually works. |
 
 Two things that catch everyone and belong here rather than behind a trigger:

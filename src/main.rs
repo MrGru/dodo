@@ -3,6 +3,9 @@ mod app_icon;
 mod assets;
 mod encoder_decoder;
 mod i18n;
+/// Guards the rule that `i18n` only enforces halfway; test-only.
+#[cfg(test)]
+mod i18n_lint;
 mod json_formatter;
 mod layout;
 mod settings;
