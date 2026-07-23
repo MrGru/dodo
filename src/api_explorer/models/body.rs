@@ -14,7 +14,7 @@ use crate::i18n::Str;
 /// kind cannot silently miss one.
 ///
 /// [`HttpMethod`]: crate::api_explorer::models::method::HttpMethod
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum BodyType {
     #[default]
     None,
@@ -115,7 +115,7 @@ impl BodyType {
 /// Both editing surfaces are carried regardless of `kind`, because the tab
 /// keeps what was typed when the kind is switched — swapping JSON for Raw and
 /// back must not lose the document.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BodyDraft {
     pub kind: BodyType,
     /// What the code editor holds, for the text-shaped kinds.

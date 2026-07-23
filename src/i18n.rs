@@ -182,10 +182,6 @@ pub enum Str {
     Collections,
     NoCollections,
     NoCollectionsHint,
-    ImportCollectionLater,
-    NewCollectionLater,
-    HideCollections,
-    ShowCollections,
 
     // API Explorer — request bar and tab strip.
     UrlPlaceholder,
@@ -326,6 +322,47 @@ pub enum Str {
     HttpTlsFailure(String),
     HttpBodyNotText(String),
     HttpUnexpected(String),
+
+    // API Explorer — collections panel (phase 3).
+    ImportCollection,
+    NewCollection,
+    NewFolder,
+    SearchCollectionsPlaceholder,
+    Rename,
+    Delete,
+    Duplicate,
+    Open,
+    MoreActions,
+    NamePlaceholder,
+    DefaultCollectionName,
+    DefaultFolderName,
+    SaveToCollectionNote,
+    /// The store's own IO/serde message is third-party English, kept verbatim.
+    CollectionStoreError(String),
+    CollectionImportError(String),
+
+    // API Explorer — request history (phase 3).
+    History,
+    NoHistory,
+    NoHistoryHint,
+    HistoryReopen,
+    HistoryResend,
+    HistoryClearAll,
+    HistoryJustNow,
+    /// "{minutes}m ago" — how long ago a request in the history ran.
+    HistoryMinutesAgo(u64),
+    HistoryHoursAgo(u64),
+    HistoryDaysAgo(u64),
+
+    // API Explorer — response viewer polish (phase 3).
+    BodyPreview,
+    BodyTree,
+    SaveToFile,
+    /// "Showing the first {count} nodes — collapse some to see the rest."
+    JsonTreeTruncated(usize),
+    HtmlPreviewNote,
+    NoCookies,
+    NoCookiesHint,
 }
 
 impl Str {
@@ -553,22 +590,6 @@ impl Str {
             (Str::NoCollectionsHint, Language::Vietnamese) => {
                 "Các yêu cầu đã lưu sẽ được nhóm ở đây.".into()
             }
-            (Str::ImportCollectionLater, Language::English) => {
-                "Importing collections arrives in a later step.".into()
-            }
-            (Str::ImportCollectionLater, Language::Vietnamese) => {
-                "Nhập bộ sưu tập sẽ có ở bước sau.".into()
-            }
-            (Str::NewCollectionLater, Language::English) => {
-                "Creating collections arrives in a later step.".into()
-            }
-            (Str::NewCollectionLater, Language::Vietnamese) => {
-                "Tạo bộ sưu tập sẽ có ở bước sau.".into()
-            }
-            (Str::HideCollections, Language::English) => "Hide collections".into(),
-            (Str::HideCollections, Language::Vietnamese) => "Ẩn bộ sưu tập".into(),
-            (Str::ShowCollections, Language::English) => "Show collections".into(),
-            (Str::ShowCollections, Language::Vietnamese) => "Hiện bộ sưu tập".into(),
 
             (Str::UrlPlaceholder, Language::English) => {
                 "Enter a URL, then press Send.".into()
@@ -917,6 +938,107 @@ impl Str {
             (Str::HttpUnexpected(detail), Language::Vietnamese) => {
                 format!("Yêu cầu thất bại: {detail}").into()
             }
+
+            (Str::ImportCollection, Language::English) => "Import a collection".into(),
+            (Str::ImportCollection, Language::Vietnamese) => "Nhập bộ sưu tập".into(),
+            (Str::NewCollection, Language::English) => "New collection".into(),
+            (Str::NewCollection, Language::Vietnamese) => "Bộ sưu tập mới".into(),
+            (Str::NewFolder, Language::English) => "New folder".into(),
+            (Str::NewFolder, Language::Vietnamese) => "Thư mục mới".into(),
+            (Str::SearchCollectionsPlaceholder, Language::English) => "Search collections".into(),
+            (Str::SearchCollectionsPlaceholder, Language::Vietnamese) => "Tìm bộ sưu tập".into(),
+            (Str::Rename, Language::English) => "Rename".into(),
+            (Str::Rename, Language::Vietnamese) => "Đổi tên".into(),
+            (Str::Delete, Language::English) => "Delete".into(),
+            (Str::Delete, Language::Vietnamese) => "Xoá".into(),
+            (Str::Duplicate, Language::English) => "Duplicate".into(),
+            (Str::Duplicate, Language::Vietnamese) => "Nhân đôi".into(),
+            (Str::Open, Language::English) => "Open".into(),
+            (Str::Open, Language::Vietnamese) => "Mở".into(),
+            (Str::MoreActions, Language::English) => "Actions".into(),
+            (Str::MoreActions, Language::Vietnamese) => "Thao tác".into(),
+            (Str::NamePlaceholder, Language::English) => "Name".into(),
+            (Str::NamePlaceholder, Language::Vietnamese) => "Tên".into(),
+            (Str::DefaultCollectionName, Language::English) => "New collection".into(),
+            (Str::DefaultCollectionName, Language::Vietnamese) => "Bộ sưu tập mới".into(),
+            (Str::DefaultFolderName, Language::English) => "New folder".into(),
+            (Str::DefaultFolderName, Language::Vietnamese) => "Thư mục mới".into(),
+            (Str::SaveToCollectionNote, Language::English) => {
+                "Saved into your collections.".into()
+            }
+            (Str::SaveToCollectionNote, Language::Vietnamese) => {
+                "Đã lưu vào bộ sưu tập của bạn.".into()
+            }
+            (Str::CollectionStoreError(detail), Language::English) => {
+                format!("Could not save collections: {detail}").into()
+            }
+            (Str::CollectionStoreError(detail), Language::Vietnamese) => {
+                format!("Không lưu được bộ sưu tập: {detail}").into()
+            }
+            (Str::CollectionImportError(detail), Language::English) => {
+                format!("Could not import that file: {detail}").into()
+            }
+            (Str::CollectionImportError(detail), Language::Vietnamese) => {
+                format!("Không nhập được tệp đó: {detail}").into()
+            }
+
+            (Str::History, Language::English) => "History".into(),
+            (Str::History, Language::Vietnamese) => "Lịch sử".into(),
+            (Str::NoHistory, Language::English) => "No requests yet".into(),
+            (Str::NoHistory, Language::Vietnamese) => "Chưa có yêu cầu nào".into(),
+            (Str::NoHistoryHint, Language::English) => {
+                "Requests you send appear here, newest first.".into()
+            }
+            (Str::NoHistoryHint, Language::Vietnamese) => {
+                "Các yêu cầu bạn gửi sẽ hiện ở đây, mới nhất trước.".into()
+            }
+            (Str::HistoryReopen, Language::English) => "Reopen in a new tab".into(),
+            (Str::HistoryReopen, Language::Vietnamese) => "Mở lại trong thẻ mới".into(),
+            (Str::HistoryResend, Language::English) => "Resend".into(),
+            (Str::HistoryResend, Language::Vietnamese) => "Gửi lại".into(),
+            (Str::HistoryClearAll, Language::English) => "Clear all".into(),
+            (Str::HistoryClearAll, Language::Vietnamese) => "Xoá tất cả".into(),
+            (Str::HistoryJustNow, Language::English) => "just now".into(),
+            (Str::HistoryJustNow, Language::Vietnamese) => "vừa xong".into(),
+            (Str::HistoryMinutesAgo(minutes), Language::English) => {
+                format!("{minutes}m ago").into()
+            }
+            (Str::HistoryMinutesAgo(minutes), Language::Vietnamese) => {
+                format!("{minutes} phút trước").into()
+            }
+            (Str::HistoryHoursAgo(hours), Language::English) => format!("{hours}h ago").into(),
+            (Str::HistoryHoursAgo(hours), Language::Vietnamese) => {
+                format!("{hours} giờ trước").into()
+            }
+            (Str::HistoryDaysAgo(days), Language::English) => format!("{days}d ago").into(),
+            (Str::HistoryDaysAgo(days), Language::Vietnamese) => format!("{days} ngày trước").into(),
+
+            (Str::BodyPreview, Language::English) => "Preview".into(),
+            (Str::BodyPreview, Language::Vietnamese) => "Xem trước".into(),
+            (Str::BodyTree, Language::English) => "Tree".into(),
+            (Str::BodyTree, Language::Vietnamese) => "Cây".into(),
+            (Str::SaveToFile, Language::English) => "Save to file".into(),
+            (Str::SaveToFile, Language::Vietnamese) => "Lưu ra tệp".into(),
+            (Str::JsonTreeTruncated(count), Language::English) => {
+                format!("Showing the first {count} nodes — collapse some to see the rest.").into()
+            }
+            (Str::JsonTreeTruncated(count), Language::Vietnamese) => {
+                format!("Đang hiện {count} nút đầu — thu gọn bớt để xem phần còn lại.").into()
+            }
+            (Str::HtmlPreviewNote, Language::English) => {
+                "Text preview — markup is shown as readable text, not rendered.".into()
+            }
+            (Str::HtmlPreviewNote, Language::Vietnamese) => {
+                "Xem trước văn bản — mã đánh dấu hiển thị dạng chữ, không kết xuất.".into()
+            }
+            (Str::NoCookies, Language::English) => "No cookies set".into(),
+            (Str::NoCookies, Language::Vietnamese) => "Không có cookie nào".into(),
+            (Str::NoCookiesHint, Language::English) => {
+                "This response sent no Set-Cookie headers.".into()
+            }
+            (Str::NoCookiesHint, Language::Vietnamese) => {
+                "Phản hồi này không gửi header Set-Cookie nào.".into()
+            }
         }
     }
 }
@@ -1096,10 +1218,6 @@ mod tests {
             plain(Str::Collections),
             plain(Str::NoCollections),
             plain(Str::NoCollectionsHint),
-            plain(Str::ImportCollectionLater),
-            plain(Str::NewCollectionLater),
-            plain(Str::HideCollections),
-            plain(Str::ShowCollections),
             plain(Str::UrlPlaceholder),
             plain(Str::Send),
             plain(Str::NewRequest),
@@ -1218,6 +1336,39 @@ mod tests {
             with(Str::HttpTlsFailure(DETAIL.into()), &[DETAIL]),
             with(Str::HttpBodyNotText(DETAIL.into()), &[DETAIL]),
             with(Str::HttpUnexpected(DETAIL.into()), &[DETAIL]),
+            // Phase 3.
+            plain(Str::ImportCollection),
+            plain(Str::NewCollection),
+            plain(Str::NewFolder),
+            plain(Str::SearchCollectionsPlaceholder),
+            plain(Str::Rename),
+            plain(Str::Delete),
+            plain(Str::Duplicate),
+            plain(Str::Open),
+            plain(Str::MoreActions),
+            plain(Str::NamePlaceholder),
+            plain(Str::DefaultCollectionName),
+            plain(Str::DefaultFolderName),
+            plain(Str::SaveToCollectionNote),
+            with(Str::CollectionStoreError(DETAIL.into()), &[DETAIL]),
+            with(Str::CollectionImportError(DETAIL.into()), &[DETAIL]),
+            plain(Str::History),
+            plain(Str::NoHistory),
+            plain(Str::NoHistoryHint),
+            plain(Str::HistoryReopen),
+            plain(Str::HistoryResend),
+            plain(Str::HistoryClearAll),
+            plain(Str::HistoryJustNow),
+            with(Str::HistoryMinutesAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::HistoryHoursAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::HistoryDaysAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            plain(Str::BodyPreview),
+            plain(Str::BodyTree),
+            plain(Str::SaveToFile),
+            with(Str::JsonTreeTruncated(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::HtmlPreviewNote),
+            plain(Str::NoCookies),
+            plain(Str::NoCookiesHint),
         ]
     }
 
@@ -1282,121 +1433,150 @@ mod tests {
             Str::Collections => 53,
             Str::NoCollections => 54,
             Str::NoCollectionsHint => 55,
-            Str::ImportCollectionLater => 56,
-            Str::NewCollectionLater => 57,
-            Str::HideCollections => 58,
-            Str::ShowCollections => 59,
-            Str::UrlPlaceholder => 60,
-            Str::Send => 61,
-            Str::NewRequest => 62,
-            Str::CloseRequest => 63,
-            Str::NameRequest => 64,
-            Str::NameRequestPlaceholder => 65,
-            Str::SaveName => 66,
-            Str::GenerateCodeLater => 67,
-            Str::ArrivesLater => 68,
-            Str::RequestTabParams => 69,
-            Str::RequestTabHeaders => 70,
-            Str::RequestTabBody => 71,
-            Str::RequestTabAuth => 72,
-            Str::RequestTabScripts => 73,
-            Str::ColumnKey => 74,
-            Str::ColumnValue => 75,
-            Str::Add => 76,
-            Str::AddParameter => 77,
-            Str::AddHeader => 78,
-            Str::DeleteRow => 79,
-            Str::NoActiveParams => 80,
-            Str::ActiveParams(_) => 81,
-            Str::NoActiveHeaders => 82,
-            Str::ActiveHeaders(_) => 83,
-            Str::ParamKeyPlaceholder => 84,
-            Str::ParamValuePlaceholder => 85,
-            Str::HeaderKeyPlaceholder => 86,
-            Str::HeaderValuePlaceholder => 87,
-            Str::ColumnDescription => 88,
-            Str::DescriptionPlaceholder => 89,
-            Str::DuplicateRow => 90,
-            Str::MoveRowUp => 91,
-            Str::MoveRowDown => 92,
-            Str::AddField => 93,
-            Str::NoActiveFields => 94,
-            Str::ActiveFields(_) => 95,
-            Str::FieldKeyPlaceholder => 96,
-            Str::FieldValuePlaceholder => 97,
-            Str::BodyTypeLabel => 98,
-            Str::BodyTypeNone => 99,
-            Str::BodyTypeJson => 100,
-            Str::BodyTypeText => 101,
-            Str::BodyTypeXml => 102,
-            Str::BodyTypeHtml => 103,
-            Str::BodyTypeFormData => 104,
-            Str::BodyTypeUrlEncoded => 105,
-            Str::BodyTypeBinary => 106,
-            Str::BodyPlaceholder => 107,
-            Str::NoBodyTitle => 108,
-            Str::NoBodyHint => 109,
-            Str::BinaryBodyLater => 110,
-            Str::MethodSendsNoBody(_) => 111,
-            Str::AuthTypeLabel => 112,
-            Str::AuthTypeNone => 113,
-            Str::AuthTypeBearer => 114,
-            Str::AuthTypeBasic => 115,
-            Str::AuthTypeApiKey => 116,
-            Str::AuthTypeOAuth2 => 117,
-            Str::OAuth2Later => 118,
-            Str::NoAuthTitle => 119,
-            Str::NoAuthHint => 120,
-            Str::AuthTokenLabel => 121,
-            Str::AuthTokenPlaceholder => 122,
-            Str::AuthUsernameLabel => 123,
-            Str::AuthUsernamePlaceholder => 124,
-            Str::AuthPasswordLabel => 125,
-            Str::AuthPasswordPlaceholder => 126,
-            Str::ApiKeyNameLabel => 127,
-            Str::ApiKeyNamePlaceholder => 128,
-            Str::ApiKeyValueLabel => 129,
-            Str::ApiKeyValuePlaceholder => 130,
-            Str::ApiKeySendAs => 131,
-            Str::ApiKeyInHeader => 132,
-            Str::ApiKeyInQuery => 133,
-            Str::ScriptsNotExecuted => 134,
-            Str::PreRequestScriptLabel => 135,
-            Str::PreRequestScriptPlaceholder => 136,
-            Str::PostResponseScriptLabel => 137,
-            Str::PostResponseScriptPlaceholder => 138,
-            Str::ResponseTabBody => 139,
-            Str::ResponseTabHeaders => 140,
-            Str::ResponseTabCookies => 141,
-            Str::ResponseTabTests => 142,
-            Str::ResponseTabConsole => 143,
-            Str::NoResponseYet => 144,
-            Str::NoResponseHint => 145,
-            Str::Sending => 146,
-            Str::RequestFailed => 147,
-            Str::CollapseResponse => 148,
-            Str::ExpandResponse => 149,
-            Str::BodyPretty => 150,
-            Str::BodyRaw => 151,
-            Str::Copy => 152,
-            Str::LoadMoreLines => 153,
-            Str::BodyTruncated => 154,
-            Str::LineRange { .. } => 155,
-            Str::StatusClassInfo => 156,
-            Str::StatusClassSuccess => 157,
-            Str::StatusClassRedirect => 158,
-            Str::StatusClassClientError => 159,
-            Str::StatusClassServerError => 160,
-            Str::StatusClassUnknown => 161,
-            Str::HttpInvalidUrl(_) => 162,
-            Str::HttpUnsupportedScheme(_) => 163,
-            Str::HttpInvalidHeader(_) => 164,
-            Str::HttpTimeout(_) => 165,
-            Str::HttpDnsFailure(_) => 166,
-            Str::HttpConnectFailure(_) => 167,
-            Str::HttpTlsFailure(_) => 168,
-            Str::HttpBodyNotText(_) => 169,
-            Str::HttpUnexpected(_) => 170,
+            Str::UrlPlaceholder => 56,
+            Str::Send => 57,
+            Str::NewRequest => 58,
+            Str::CloseRequest => 59,
+            Str::NameRequest => 60,
+            Str::NameRequestPlaceholder => 61,
+            Str::SaveName => 62,
+            Str::GenerateCodeLater => 63,
+            Str::ArrivesLater => 64,
+            Str::RequestTabParams => 65,
+            Str::RequestTabHeaders => 66,
+            Str::RequestTabBody => 67,
+            Str::RequestTabAuth => 68,
+            Str::RequestTabScripts => 69,
+            Str::ColumnKey => 70,
+            Str::ColumnValue => 71,
+            Str::Add => 72,
+            Str::AddParameter => 73,
+            Str::AddHeader => 74,
+            Str::DeleteRow => 75,
+            Str::NoActiveParams => 76,
+            Str::ActiveParams(_) => 77,
+            Str::NoActiveHeaders => 78,
+            Str::ActiveHeaders(_) => 79,
+            Str::ParamKeyPlaceholder => 80,
+            Str::ParamValuePlaceholder => 81,
+            Str::HeaderKeyPlaceholder => 82,
+            Str::HeaderValuePlaceholder => 83,
+            Str::ColumnDescription => 84,
+            Str::DescriptionPlaceholder => 85,
+            Str::DuplicateRow => 86,
+            Str::MoveRowUp => 87,
+            Str::MoveRowDown => 88,
+            Str::AddField => 89,
+            Str::NoActiveFields => 90,
+            Str::ActiveFields(_) => 91,
+            Str::FieldKeyPlaceholder => 92,
+            Str::FieldValuePlaceholder => 93,
+            Str::BodyTypeLabel => 94,
+            Str::BodyTypeNone => 95,
+            Str::BodyTypeJson => 96,
+            Str::BodyTypeText => 97,
+            Str::BodyTypeXml => 98,
+            Str::BodyTypeHtml => 99,
+            Str::BodyTypeFormData => 100,
+            Str::BodyTypeUrlEncoded => 101,
+            Str::BodyTypeBinary => 102,
+            Str::BodyPlaceholder => 103,
+            Str::NoBodyTitle => 104,
+            Str::NoBodyHint => 105,
+            Str::BinaryBodyLater => 106,
+            Str::MethodSendsNoBody(_) => 107,
+            Str::AuthTypeLabel => 108,
+            Str::AuthTypeNone => 109,
+            Str::AuthTypeBearer => 110,
+            Str::AuthTypeBasic => 111,
+            Str::AuthTypeApiKey => 112,
+            Str::AuthTypeOAuth2 => 113,
+            Str::OAuth2Later => 114,
+            Str::NoAuthTitle => 115,
+            Str::NoAuthHint => 116,
+            Str::AuthTokenLabel => 117,
+            Str::AuthTokenPlaceholder => 118,
+            Str::AuthUsernameLabel => 119,
+            Str::AuthUsernamePlaceholder => 120,
+            Str::AuthPasswordLabel => 121,
+            Str::AuthPasswordPlaceholder => 122,
+            Str::ApiKeyNameLabel => 123,
+            Str::ApiKeyNamePlaceholder => 124,
+            Str::ApiKeyValueLabel => 125,
+            Str::ApiKeyValuePlaceholder => 126,
+            Str::ApiKeySendAs => 127,
+            Str::ApiKeyInHeader => 128,
+            Str::ApiKeyInQuery => 129,
+            Str::ScriptsNotExecuted => 130,
+            Str::PreRequestScriptLabel => 131,
+            Str::PreRequestScriptPlaceholder => 132,
+            Str::PostResponseScriptLabel => 133,
+            Str::PostResponseScriptPlaceholder => 134,
+            Str::ResponseTabBody => 135,
+            Str::ResponseTabHeaders => 136,
+            Str::ResponseTabCookies => 137,
+            Str::ResponseTabTests => 138,
+            Str::ResponseTabConsole => 139,
+            Str::NoResponseYet => 140,
+            Str::NoResponseHint => 141,
+            Str::Sending => 142,
+            Str::RequestFailed => 143,
+            Str::CollapseResponse => 144,
+            Str::ExpandResponse => 145,
+            Str::BodyPretty => 146,
+            Str::BodyRaw => 147,
+            Str::Copy => 148,
+            Str::LoadMoreLines => 149,
+            Str::BodyTruncated => 150,
+            Str::LineRange { .. } => 151,
+            Str::StatusClassInfo => 152,
+            Str::StatusClassSuccess => 153,
+            Str::StatusClassRedirect => 154,
+            Str::StatusClassClientError => 155,
+            Str::StatusClassServerError => 156,
+            Str::StatusClassUnknown => 157,
+            Str::HttpInvalidUrl(_) => 158,
+            Str::HttpUnsupportedScheme(_) => 159,
+            Str::HttpInvalidHeader(_) => 160,
+            Str::HttpTimeout(_) => 161,
+            Str::HttpDnsFailure(_) => 162,
+            Str::HttpConnectFailure(_) => 163,
+            Str::HttpTlsFailure(_) => 164,
+            Str::HttpBodyNotText(_) => 165,
+            Str::HttpUnexpected(_) => 166,
+
+            Str::ImportCollection => 167,
+            Str::NewCollection => 168,
+            Str::NewFolder => 169,
+            Str::SearchCollectionsPlaceholder => 170,
+            Str::Rename => 171,
+            Str::Delete => 172,
+            Str::Duplicate => 173,
+            Str::Open => 174,
+            Str::MoreActions => 175,
+            Str::NamePlaceholder => 176,
+            Str::DefaultCollectionName => 177,
+            Str::DefaultFolderName => 178,
+            Str::SaveToCollectionNote => 179,
+            Str::CollectionStoreError(_) => 180,
+            Str::CollectionImportError(_) => 181,
+            Str::History => 182,
+            Str::NoHistory => 183,
+            Str::NoHistoryHint => 184,
+            Str::HistoryReopen => 185,
+            Str::HistoryResend => 186,
+            Str::HistoryClearAll => 187,
+            Str::HistoryJustNow => 188,
+            Str::HistoryMinutesAgo(_) => 189,
+            Str::HistoryHoursAgo(_) => 190,
+            Str::HistoryDaysAgo(_) => 191,
+            Str::BodyPreview => 192,
+            Str::BodyTree => 193,
+            Str::SaveToFile => 194,
+            Str::JsonTreeTruncated(_) => 195,
+            Str::HtmlPreviewNote => 196,
+            Str::NoCookies => 197,
+            Str::NoCookiesHint => 198,
         }
     }
 

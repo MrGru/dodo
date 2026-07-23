@@ -5,14 +5,14 @@
 //! - [`response`] — what came back, per open tab.
 //! - [`tab`] — the pair of those two plus the in-flight task; one entity per
 //!   open request, which is what makes tabs independent.
-//! - [`collection`] — the Collections panel's data (phase 3 fills it).
-//! - [`ui`] — panel sizes, collapse flags, active tab.
-//!
-//! History is deliberately absent in phase 1: with no UI reading it, every
-//! field would be dead code. Its seam is a `history` module beside these, fed
-//! from the one place a request completes — `tab::RequestTabState::receive`.
+//! - [`collection`] — the Collections panel's runtime state, over the plain-data
+//!   [`collection::CollectionState`] tree the model owns.
+//! - [`history`] — the in-memory request history, fed from where an exchange
+//!   completes: `tab::RequestTabState` emits a record and the page records it.
+//! - [`ui`] — panel sizes, collapse flags, which left panel is shown, active tab.
 
 pub mod collection;
+pub mod history;
 pub mod request;
 pub mod response;
 pub mod tab;

@@ -71,9 +71,103 @@ pub fn prettify(body: &str, kind: BodyKind) -> String {
     }
 }
 
+/// The body as the Preview toggle shows it.
+///
+/// For HTML this strips the markup to the readable text a page is made of —
+/// GPUI has no browser to render a real page, so an honest text preview is what
+/// "Preview" means here, and the tab says so. Any other kind falls back to its
+/// pretty form, so Preview is never a worse view than Pretty.
+pub fn preview(body: &str, kind: BodyKind) -> String {
+    match kind {
+        BodyKind::Html => strip_html(body),
+        _ => prettify(body, kind),
+    }
+}
+
+/// Reduces HTML to its visible text: the contents of `<script>` and `<style>`
+/// are dropped, every other tag is removed, a handful of common entities are
+/// decoded, and runs of blank lines are collapsed.
+fn strip_html(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let bytes = html.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            // Skip the whole contents of a script or style element, not just
+            // its tags — that text is code, not something to read.
+            let rest = &html[i..];
+            let lower = rest
+                .get(..rest.len().min(8))
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if let Some(tag) = ["script", "style"]
+                .into_iter()
+                .find(|tag| lower.starts_with(&format!("<{tag}")))
+            {
+                let close = format!("</{tag}");
+                match rest.to_ascii_lowercase().find(&close) {
+                    Some(end) => {
+                        // Advance past the closing tag's `>`.
+                        let after = i + end;
+                        i = html[after..]
+                            .find('>')
+                            .map_or(html.len(), |offset| after + offset + 1);
+                    }
+                    None => break,
+                }
+                continue;
+            }
+
+            // An ordinary tag: skip to its `>`.
+            match rest.find('>') {
+                Some(offset) => i += offset + 1,
+                None => break,
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+
+    decode_entities(collapse_blank_lines(&out))
+}
+
+/// Collapses runs of whitespace-only lines to a single blank line and trims each
+/// line, so stripped markup reads as text rather than a column of indentation.
+fn collapse_blank_lines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blank_run = 0;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            blank_run += 1;
+            if blank_run <= 1 {
+                out.push('\n');
+            }
+        } else {
+            blank_run = 0;
+            out.push_str(trimmed);
+            out.push('\n');
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Decodes the few HTML entities common enough that leaving them raw would read
+/// as noise. Not a full entity table — this is a preview, not a parser.
+fn decode_entities(text: String) -> String {
+    text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{decode, kind_of, prettify};
+    use super::{decode, kind_of, preview, prettify};
     use crate::api_explorer::models::exchange::BodyKind;
     use crate::api_explorer::services::TransportError;
 
@@ -127,5 +221,31 @@ mod tests {
     fn non_json_bodies_are_left_alone() {
         let html = "<html>  <body>x</body></html>";
         assert_eq!(prettify(html, BodyKind::Html), html);
+    }
+
+    #[test]
+    fn html_preview_keeps_text_and_drops_tags() {
+        let html = "<html><body><h1>Title</h1><p>Hello &amp; welcome</p></body></html>";
+        let text = preview(html, BodyKind::Html);
+        assert!(text.contains("Title"));
+        assert!(text.contains("Hello & welcome"));
+        assert!(!text.contains('<'));
+    }
+
+    #[test]
+    fn html_preview_drops_script_and_style_contents() {
+        let html = "<style>.a{color:red}</style><p>Visible</p><script>alert(1)</script>";
+        let text = preview(html, BodyKind::Html);
+        assert!(text.contains("Visible"));
+        assert!(!text.contains("color:red"));
+        assert!(!text.contains("alert"));
+    }
+
+    #[test]
+    fn preview_of_json_falls_back_to_pretty() {
+        assert_eq!(
+            preview(r#"{"a":1}"#, BodyKind::Json),
+            prettify(r#"{"a":1}"#, BodyKind::Json)
+        );
     }
 }

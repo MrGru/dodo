@@ -8,7 +8,7 @@ use gpui_component::ActiveTheme as _;
 /// Deliberately a closed enum rather than a free-text field: an HTTP method is
 /// a token from a fixed set here, and keeping it closed is what lets
 /// [`HttpMethod::color`] be exhaustive.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum HttpMethod {
     #[default]
     Get,

@@ -31,13 +31,18 @@ pub enum AppIcon {
     ArrowDown,
     ArrowUp,
     ChevronDown,
+    ChevronRight,
     Close,
     Copy,
+    Ellipsis,
+    File,
     Folder,
+    FolderOpen,
     Globe,
     HardDrive,
     PanelBottom,
     Plus,
+    Trash,
 }
 
 impl IconNamed for AppIcon {
@@ -59,13 +64,18 @@ impl IconNamed for AppIcon {
             Self::ArrowDown => "icons/arrow-down.svg",
             Self::ArrowUp => "icons/arrow-up.svg",
             Self::ChevronDown => "icons/chevron-down.svg",
+            Self::ChevronRight => "icons/chevron-right.svg",
             Self::Close => "icons/close.svg",
             Self::Copy => "icons/copy.svg",
+            Self::Ellipsis => "icons/ellipsis-vertical.svg",
+            Self::File => "icons/file.svg",
             Self::Folder => "icons/folder.svg",
+            Self::FolderOpen => "icons/folder-open.svg",
             Self::Globe => "icons/globe.svg",
             Self::HardDrive => "icons/hard-drive.svg",
             Self::PanelBottom => "icons/panel-bottom.svg",
             Self::Plus => "icons/plus.svg",
+            Self::Trash => "icons/delete.svg",
         }
         .into()
     }

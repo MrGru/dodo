@@ -6,6 +6,7 @@
 
 pub mod collections_panel;
 pub mod explorer;
+pub mod history_panel;
 pub mod request_auth;
 pub mod request_body;
 pub mod request_editor;

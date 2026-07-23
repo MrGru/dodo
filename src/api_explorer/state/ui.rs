@@ -14,17 +14,40 @@ use gpui_component::resizable::ResizableState;
 /// collapsible, so the reference's proportions are one drag away.
 pub const COLLECTIONS_WIDTH: Pixels = px(185.);
 
-/// Default height of the request editor above the response viewer.
-pub const REQUEST_HEIGHT: Pixels = px(240.);
+/// Default height of the response viewer below the request editor.
+///
+/// The *response* pane is the sized one and the request pane is the one that
+/// grows to fill the rest — deliberately, because the request is what is being
+/// edited before any response exists, so it should get the larger share of a
+/// short window rather than a fixed stub. A response arriving later does not
+/// change either panel's geometry (the split is content-independent), so the
+/// proportions never get yanked out from under a drag.
+pub const RESPONSE_HEIGHT: Pixels = px(240.);
+
+/// Smallest the request editor is allowed to shrink to when the response pane
+/// is dragged up over it.
+pub const REQUEST_MIN_HEIGHT: Pixels = px(160.);
+
+/// Which view the left panel is showing. Selected from the far-left rail; the
+/// panel body swaps between the Collections tree and the request History.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum LeftPanel {
+    #[default]
+    Collections,
+    History,
+}
 
 pub struct UiState {
-    /// Collections | (request over response). Held as an entity so the
-    /// library's drag handling writes back into it, which is what makes a
-    /// dragged size persist for the session.
+    /// left panel | (request over response). Held as an entity so the library's
+    /// drag handling writes back into it, which is what makes a dragged size
+    /// persist for the session.
     pub outer_split: Entity<ResizableState>,
     /// Request editor over response viewer.
     pub inner_split: Entity<ResizableState>,
-    pub collections_collapsed: bool,
+    /// Which view the left panel shows.
+    pub left_panel: LeftPanel,
+    /// Whether the left panel is collapsed to just its rail.
+    pub panel_collapsed: bool,
     /// Index into the open tabs. Kept valid by [`UiState::clamp_active`].
     pub active_tab: usize,
 }
@@ -34,7 +57,8 @@ impl UiState {
         Self {
             outer_split: cx.new(|_| ResizableState::default()),
             inner_split: cx.new(|_| ResizableState::default()),
-            collections_collapsed: false,
+            left_panel: LeftPanel::default(),
+            panel_collapsed: false,
             active_tab: 0,
         }
     }

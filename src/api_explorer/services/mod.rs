@@ -22,6 +22,9 @@
 //! testable — a fake transport in a unit test is a struct with one method — and
 //! keeps a second async runtime out of the render path.
 
+pub mod collection_import;
+pub mod collection_store;
+pub mod file_export;
 pub mod http;
 
 use std::sync::Arc;
