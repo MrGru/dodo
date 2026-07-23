@@ -43,6 +43,20 @@ pub enum AppIcon {
     PanelBottom,
     Plus,
     Trash,
+
+    // Docker module. `container`, `layers`, `refresh-cw`, `filter`, `square`
+    // and `rotate-ccw` ship as our own SVGs; the rest resolve through `Assets`'
+    // fallback to `gpui_component_assets`.
+    Container,
+    Layers,
+    Network,
+    Inbox,
+    AlertTriangle,
+    Refresh,
+    Filter,
+    Play,
+    Stop,
+    Restart,
 }
 
 impl IconNamed for AppIcon {
@@ -76,6 +90,16 @@ impl IconNamed for AppIcon {
             Self::PanelBottom => "icons/panel-bottom.svg",
             Self::Plus => "icons/plus.svg",
             Self::Trash => "icons/delete.svg",
+            Self::Container => "icons/container.svg",
+            Self::Layers => "icons/layers.svg",
+            Self::Network => "icons/network.svg",
+            Self::Inbox => "icons/inbox.svg",
+            Self::AlertTriangle => "icons/triangle-alert.svg",
+            Self::Refresh => "icons/refresh-cw.svg",
+            Self::Filter => "icons/filter.svg",
+            Self::Play => "icons/play.svg",
+            Self::Stop => "icons/square.svg",
+            Self::Restart => "icons/rotate-ccw.svg",
         }
         .into()
     }

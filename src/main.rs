@@ -2,6 +2,7 @@ mod api_explorer;
 mod app;
 mod app_icon;
 mod assets;
+mod docker;
 mod encoder_decoder;
 mod i18n;
 /// Guards the rule that `i18n` only enforces halfway; test-only.

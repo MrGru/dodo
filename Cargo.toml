@@ -35,3 +35,21 @@ base64 = "0.22.1"
 percent-encoding = "2.3.2"
 nucleo-matcher = "0.3"
 unicode-normalization = "0.1"
+# The Docker Engine API client behind the Docker module. Default features
+# already carry `hyperlocal` (the local unix-socket connector) and pointedly do
+# NOT enable `ssl`/`rustls` — the local socket needs no TLS, so this keeps the
+# project's rustls-only, OpenSSL-free posture (no `openssl-sys`, no `native-tls`).
+# Only `docker::services` may name this crate, mirroring `services::Transport`
+# and `reqwest`.
+bollard = "0.21.0"
+# bollard is async on tokio, unlike the API Explorer's blocking `reqwest`. A
+# single multi-thread runtime, built once and owned by `docker::services`, drives
+# every bollard call via `Runtime::block_on` from GPUI's background executor — so
+# the blocking-by-contract discipline is preserved and no async runtime touches
+# the UI thread. Minimal feature set: the multi-thread scheduler plus the net and
+# time drivers `enable_all()` needs for the unix-socket IO.
+tokio = { version = "1.53.1", default-features = false, features = ["rt-multi-thread", "net", "time"] }
+# Only to consume bollard's container-stats `Stream` (two frames, to compute a
+# CPU delta) inside `docker::services`. Already in the tree transitively via
+# bollard, so it adds no build cost; pure Rust, no TLS.
+futures-util = "0.3.33"

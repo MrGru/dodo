@@ -22,6 +22,13 @@ Tools available today:
   response headers and a syntax-highlighted body. Request Body, Auth and Scripts,
   the response Cookies, Tests and Console tabs, and saved collections are marked
   in the UI as arriving in a later step.
+- **Docker** - a Docker/Podman manager talking to the Docker Engine API (honours
+  `DOCKER_HOST`, else the local Docker or Podman socket). The **Containers** page
+  lists containers with colored status badges, live CPU %, published ports,
+  relative last-started times, instant search, and per-row Start / Stop / Restart
+  / Delete actions (Delete confirms first); an unreachable engine shows an error
+  state with Retry. **Images**, **Volumes** and **Networks** are placeholder pages
+  arriving in a later round, alongside compose grouping, filters and bulk actions.
 
 ## Tech stack
 
@@ -34,6 +41,9 @@ Tools available today:
 - **[anyhow](https://crates.io/crates/anyhow)** - error handling.
 - **[reqwest](https://crates.io/crates/reqwest)** - the API Explorer's HTTP client,
   built with rustls rather than the platform TLS stack, so no OpenSSL is needed.
+- **[bollard](https://crates.io/crates/bollard)** - the Docker module's Docker Engine
+  API client (local unix socket, no TLS, so no OpenSSL), driven from a small
+  **[tokio](https://crates.io/crates/tokio)** runtime on the background executor.
 
 See [`Cargo.toml`](Cargo.toml) for exact dependency sources. Note that `gpui`,
 `gpui_platform`, and `gpui-component` are all fetched from git rather than

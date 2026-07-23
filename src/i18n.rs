@@ -377,6 +377,78 @@ pub enum Str {
     TemplateAssertStatus,
     TemplateLogResponse,
     TemplateExtractField,
+
+    // Docker module — sidebar section and page names. These are Docker's own
+    // resource types (and the product name), the same words in both languages we
+    // ship, so they are terms of art like JSON/JWT above rather than prose.
+    Docker,
+    Containers,
+    Images,
+    Volumes,
+    Networks,
+
+    // Docker module — Containers toolbar.
+    DockerSearchPlaceholder,
+    DockerRefresh,
+    DockerFilter,
+    DockerCreate,
+
+    // Docker module — Containers table columns.
+    DockerColumnName,
+    DockerColumnImage,
+    DockerColumnStatus,
+    DockerColumnCpu,
+    DockerColumnPorts,
+    DockerColumnLastStarted,
+    DockerColumnActions,
+
+    // Docker module — status badges.
+    DockerStatusRunning,
+    DockerStatusExited,
+    DockerStatusCreated,
+    DockerStatusRestarting,
+    DockerStatusPaused,
+    DockerStatusDead,
+    DockerStatusRemoving,
+    DockerStatusStopping,
+    DockerStatusUnknown,
+
+    // Docker module — per-row actions and the delete confirmation.
+    DockerStart,
+    DockerStop,
+    DockerRestart,
+    DockerDeleteTitle,
+    /// "Permanently remove \"{name}\"? …" — the container name is user data.
+    DockerDeleteMessage(String),
+    DockerCancel,
+
+    // Docker module — empty and error states.
+    NoContainers,
+    NoContainersHint,
+    DockerRetry,
+    /// bollard's own connection message is third-party English, kept verbatim.
+    DockerConnectionError(String),
+    /// bollard's own operation message is third-party English, kept verbatim.
+    DockerOperationError(String),
+
+    // Docker module — selection and placeholder pages.
+    DockerSelectAll,
+    DockerSelectRow,
+    DockerComingSoon,
+
+    // Docker module — Last Started relative time.
+    DockerRelNever,
+    DockerRelJustNow,
+    DockerRelSecondsAgo(u64),
+    DockerRelMinutesAgo(u64),
+    DockerRelHoursAgo(u64),
+    DockerRelDaysAgo(u64),
+    DockerRelWeeksAgo(u64),
+    DockerRelMonthsAgo(u64),
+    DockerRelYearsAgo(u64),
+
+    // Docker module — error-state title (the detail follows below it).
+    DockerUnreachableTitle,
 }
 
 impl Str {
@@ -1081,6 +1153,143 @@ impl Str {
             }
             (Str::TemplateExtractField, Language::English) => "Extract a JSON field".into(),
             (Str::TemplateExtractField, Language::Vietnamese) => "Trích một trường JSON".into(),
+
+            // Docker module — section and page names (terms of art, identical).
+            (Str::Docker, _) => "Docker".into(),
+            (Str::Containers, _) => "Containers".into(),
+            (Str::Images, _) => "Images".into(),
+            (Str::Volumes, _) => "Volumes".into(),
+            (Str::Networks, _) => "Networks".into(),
+
+            (Str::DockerSearchPlaceholder, Language::English) => "Search containers".into(),
+            (Str::DockerSearchPlaceholder, Language::Vietnamese) => "Tìm container".into(),
+            (Str::DockerRefresh, Language::English) => "Refresh".into(),
+            (Str::DockerRefresh, Language::Vietnamese) => "Làm mới".into(),
+            (Str::DockerFilter, Language::English) => "Filter".into(),
+            (Str::DockerFilter, Language::Vietnamese) => "Bộ lọc".into(),
+            (Str::DockerCreate, Language::English) => "Create".into(),
+            (Str::DockerCreate, Language::Vietnamese) => "Tạo mới".into(),
+
+            (Str::DockerColumnName, Language::English) => "Name".into(),
+            (Str::DockerColumnName, Language::Vietnamese) => "Tên".into(),
+            (Str::DockerColumnImage, _) => "Image".into(),
+            (Str::DockerColumnStatus, Language::English) => "Status".into(),
+            (Str::DockerColumnStatus, Language::Vietnamese) => "Trạng thái".into(),
+            (Str::DockerColumnCpu, _) => "CPU %".into(),
+            (Str::DockerColumnPorts, Language::English) => "Ports".into(),
+            (Str::DockerColumnPorts, Language::Vietnamese) => "Cổng".into(),
+            (Str::DockerColumnLastStarted, Language::English) => "Last Started".into(),
+            (Str::DockerColumnLastStarted, Language::Vietnamese) => "Khởi động lần cuối".into(),
+            (Str::DockerColumnActions, Language::English) => "Actions".into(),
+            (Str::DockerColumnActions, Language::Vietnamese) => "Thao tác".into(),
+
+            (Str::DockerStatusRunning, Language::English) => "Running".into(),
+            (Str::DockerStatusRunning, Language::Vietnamese) => "Đang chạy".into(),
+            (Str::DockerStatusExited, Language::English) => "Exited".into(),
+            (Str::DockerStatusExited, Language::Vietnamese) => "Đã dừng".into(),
+            (Str::DockerStatusCreated, Language::English) => "Created".into(),
+            (Str::DockerStatusCreated, Language::Vietnamese) => "Đã tạo".into(),
+            (Str::DockerStatusRestarting, Language::English) => "Restarting".into(),
+            (Str::DockerStatusRestarting, Language::Vietnamese) => "Đang khởi động lại".into(),
+            (Str::DockerStatusPaused, Language::English) => "Paused".into(),
+            (Str::DockerStatusPaused, Language::Vietnamese) => "Tạm dừng".into(),
+            (Str::DockerStatusDead, Language::English) => "Dead".into(),
+            (Str::DockerStatusDead, Language::Vietnamese) => "Đã hỏng".into(),
+            (Str::DockerStatusRemoving, Language::English) => "Removing".into(),
+            (Str::DockerStatusRemoving, Language::Vietnamese) => "Đang xoá".into(),
+            (Str::DockerStatusStopping, Language::English) => "Stopping".into(),
+            (Str::DockerStatusStopping, Language::Vietnamese) => "Đang dừng".into(),
+            (Str::DockerStatusUnknown, Language::English) => "Unknown".into(),
+            (Str::DockerStatusUnknown, Language::Vietnamese) => "Không rõ".into(),
+
+            (Str::DockerStart, Language::English) => "Start".into(),
+            (Str::DockerStart, Language::Vietnamese) => "Khởi động".into(),
+            (Str::DockerStop, Language::English) => "Stop".into(),
+            (Str::DockerStop, Language::Vietnamese) => "Dừng".into(),
+            (Str::DockerRestart, Language::English) => "Restart".into(),
+            (Str::DockerRestart, Language::Vietnamese) => "Khởi động lại".into(),
+            (Str::DockerDeleteTitle, Language::English) => "Delete container?".into(),
+            (Str::DockerDeleteTitle, Language::Vietnamese) => "Xoá container?".into(),
+            (Str::DockerDeleteMessage(name), Language::English) => {
+                format!("Permanently remove \"{name}\"? This cannot be undone.").into()
+            }
+            (Str::DockerDeleteMessage(name), Language::Vietnamese) => {
+                format!("Xoá vĩnh viễn \"{name}\"? Hành động này không thể hoàn tác.").into()
+            }
+            (Str::DockerCancel, Language::English) => "Cancel".into(),
+            (Str::DockerCancel, Language::Vietnamese) => "Huỷ".into(),
+
+            (Str::NoContainers, Language::English) => "No containers found.".into(),
+            (Str::NoContainers, Language::Vietnamese) => "Không tìm thấy container nào.".into(),
+            (Str::NoContainersHint, Language::English) => {
+                "Containers you create will appear here.".into()
+            }
+            (Str::NoContainersHint, Language::Vietnamese) => {
+                "Các container bạn tạo sẽ hiển thị ở đây.".into()
+            }
+            (Str::DockerRetry, Language::English) => "Retry".into(),
+            (Str::DockerRetry, Language::Vietnamese) => "Thử lại".into(),
+            (Str::DockerConnectionError(detail), Language::English) => {
+                format!("Could not reach the Docker engine: {detail}").into()
+            }
+            (Str::DockerConnectionError(detail), Language::Vietnamese) => {
+                format!("Không kết nối được tới Docker engine: {detail}").into()
+            }
+            (Str::DockerOperationError(detail), Language::English) => {
+                format!("That action could not be completed: {detail}").into()
+            }
+            (Str::DockerOperationError(detail), Language::Vietnamese) => {
+                format!("Không thể hoàn tất thao tác đó: {detail}").into()
+            }
+
+            (Str::DockerSelectAll, Language::English) => "Select all".into(),
+            (Str::DockerSelectAll, Language::Vietnamese) => "Chọn tất cả".into(),
+            (Str::DockerSelectRow, Language::English) => "Select container".into(),
+            (Str::DockerSelectRow, Language::Vietnamese) => "Chọn container".into(),
+            (Str::DockerComingSoon, Language::English) => {
+                "This page arrives in a later round.".into()
+            }
+            (Str::DockerComingSoon, Language::Vietnamese) => {
+                "Trang này sẽ có ở vòng sau.".into()
+            }
+
+            (Str::DockerRelNever, Language::English) => "Never".into(),
+            (Str::DockerRelNever, Language::Vietnamese) => "Chưa bao giờ".into(),
+            (Str::DockerRelJustNow, Language::English) => "just now".into(),
+            (Str::DockerRelJustNow, Language::Vietnamese) => "vừa xong".into(),
+            (Str::DockerRelSecondsAgo(n), Language::English) => {
+                format!("{n} second{} ago", if n == 1 { "" } else { "s" }).into()
+            }
+            (Str::DockerRelSecondsAgo(n), Language::Vietnamese) => format!("{n} giây trước").into(),
+            (Str::DockerRelMinutesAgo(n), Language::English) => {
+                format!("{n} minute{} ago", if n == 1 { "" } else { "s" }).into()
+            }
+            (Str::DockerRelMinutesAgo(n), Language::Vietnamese) => format!("{n} phút trước").into(),
+            (Str::DockerRelHoursAgo(n), Language::English) => {
+                format!("{n} hour{} ago", if n == 1 { "" } else { "s" }).into()
+            }
+            (Str::DockerRelHoursAgo(n), Language::Vietnamese) => format!("{n} giờ trước").into(),
+            (Str::DockerRelDaysAgo(n), Language::English) => {
+                format!("{n} day{} ago", if n == 1 { "" } else { "s" }).into()
+            }
+            (Str::DockerRelDaysAgo(n), Language::Vietnamese) => format!("{n} ngày trước").into(),
+            (Str::DockerRelWeeksAgo(n), Language::English) => {
+                format!("{n} week{} ago", if n == 1 { "" } else { "s" }).into()
+            }
+            (Str::DockerRelWeeksAgo(n), Language::Vietnamese) => format!("{n} tuần trước").into(),
+            (Str::DockerRelMonthsAgo(n), Language::English) => {
+                format!("{n} month{} ago", if n == 1 { "" } else { "s" }).into()
+            }
+            (Str::DockerRelMonthsAgo(n), Language::Vietnamese) => format!("{n} tháng trước").into(),
+            (Str::DockerRelYearsAgo(n), Language::English) => {
+                format!("{n} year{} ago", if n == 1 { "" } else { "s" }).into()
+            }
+            (Str::DockerRelYearsAgo(n), Language::Vietnamese) => format!("{n} năm trước").into(),
+
+            (Str::DockerUnreachableTitle, Language::English) => "Can't reach the Docker engine".into(),
+            (Str::DockerUnreachableTitle, Language::Vietnamese) => {
+                "Không kết nối được Docker engine".into()
+            }
         }
     }
 }
@@ -1421,6 +1630,56 @@ mod tests {
             plain(Str::TemplateAssertStatus),
             plain(Str::TemplateLogResponse),
             plain(Str::TemplateExtractField),
+            // Docker module.
+            term(Str::Docker),
+            term(Str::Containers),
+            term(Str::Images),
+            term(Str::Volumes),
+            term(Str::Networks),
+            plain(Str::DockerSearchPlaceholder),
+            plain(Str::DockerRefresh),
+            plain(Str::DockerFilter),
+            plain(Str::DockerCreate),
+            plain(Str::DockerColumnName),
+            term(Str::DockerColumnImage),
+            plain(Str::DockerColumnStatus),
+            term(Str::DockerColumnCpu),
+            plain(Str::DockerColumnPorts),
+            plain(Str::DockerColumnLastStarted),
+            plain(Str::DockerColumnActions),
+            plain(Str::DockerStatusRunning),
+            plain(Str::DockerStatusExited),
+            plain(Str::DockerStatusCreated),
+            plain(Str::DockerStatusRestarting),
+            plain(Str::DockerStatusPaused),
+            plain(Str::DockerStatusDead),
+            plain(Str::DockerStatusRemoving),
+            plain(Str::DockerStatusStopping),
+            plain(Str::DockerStatusUnknown),
+            plain(Str::DockerStart),
+            plain(Str::DockerStop),
+            plain(Str::DockerRestart),
+            plain(Str::DockerDeleteTitle),
+            with(Str::DockerDeleteMessage(DETAIL.into()), &[DETAIL]),
+            plain(Str::DockerCancel),
+            plain(Str::NoContainers),
+            plain(Str::NoContainersHint),
+            plain(Str::DockerRetry),
+            with(Str::DockerConnectionError(DETAIL.into()), &[DETAIL]),
+            with(Str::DockerOperationError(DETAIL.into()), &[DETAIL]),
+            plain(Str::DockerSelectAll),
+            plain(Str::DockerSelectRow),
+            plain(Str::DockerComingSoon),
+            plain(Str::DockerRelNever),
+            plain(Str::DockerRelJustNow),
+            with(Str::DockerRelSecondsAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::DockerRelMinutesAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::DockerRelHoursAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::DockerRelDaysAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::DockerRelWeeksAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::DockerRelMonthsAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::DockerRelYearsAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            plain(Str::DockerUnreachableTitle),
         ]
     }
 
@@ -1640,6 +1899,56 @@ mod tests {
             Str::TemplateAssertStatus => 206,
             Str::TemplateLogResponse => 207,
             Str::TemplateExtractField => 208,
+
+            Str::Docker => 209,
+            Str::Containers => 210,
+            Str::Images => 211,
+            Str::Volumes => 212,
+            Str::Networks => 213,
+            Str::DockerSearchPlaceholder => 214,
+            Str::DockerRefresh => 215,
+            Str::DockerFilter => 216,
+            Str::DockerCreate => 217,
+            Str::DockerColumnName => 218,
+            Str::DockerColumnImage => 219,
+            Str::DockerColumnStatus => 220,
+            Str::DockerColumnCpu => 221,
+            Str::DockerColumnPorts => 222,
+            Str::DockerColumnLastStarted => 223,
+            Str::DockerColumnActions => 224,
+            Str::DockerStatusRunning => 225,
+            Str::DockerStatusExited => 226,
+            Str::DockerStatusCreated => 227,
+            Str::DockerStatusRestarting => 228,
+            Str::DockerStatusPaused => 229,
+            Str::DockerStatusDead => 230,
+            Str::DockerStatusRemoving => 231,
+            Str::DockerStatusStopping => 232,
+            Str::DockerStatusUnknown => 233,
+            Str::DockerStart => 234,
+            Str::DockerStop => 235,
+            Str::DockerRestart => 236,
+            Str::DockerDeleteTitle => 237,
+            Str::DockerDeleteMessage(_) => 238,
+            Str::DockerCancel => 239,
+            Str::NoContainers => 240,
+            Str::NoContainersHint => 241,
+            Str::DockerRetry => 242,
+            Str::DockerConnectionError(_) => 243,
+            Str::DockerOperationError(_) => 244,
+            Str::DockerSelectAll => 245,
+            Str::DockerSelectRow => 246,
+            Str::DockerComingSoon => 247,
+            Str::DockerRelNever => 248,
+            Str::DockerRelJustNow => 249,
+            Str::DockerRelSecondsAgo(_) => 250,
+            Str::DockerRelMinutesAgo(_) => 251,
+            Str::DockerRelHoursAgo(_) => 252,
+            Str::DockerRelDaysAgo(_) => 253,
+            Str::DockerRelWeeksAgo(_) => 254,
+            Str::DockerRelMonthsAgo(_) => 255,
+            Str::DockerRelYearsAgo(_) => 256,
+            Str::DockerUnreachableTitle => 257,
         }
     }
 
