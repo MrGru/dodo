@@ -9,13 +9,21 @@ description and `Cargo.toml` for exact dependency sources.
 Read `src/main.rs` for the startup sequence and `src/layout.rs` for the view model; the doc
 comments there are the authority on structure. This file is only a map.
 
-Most tools are a single `src/<tool>.rs`. **`src/api_explorer/` is the exception** and the pattern
-to copy when a tool outgrows one file: `models/` (plain data, no GPUI, unit tested), `services/`
-(the `Transport` trait — the only place that may name `reqwest` — and `CollectionStore`, the only
-place that does disk IO), `state/`, `components/`, `views/`. Its `mod.rs` doc comments explain the
-split and where later phases plug in. It is also the only tool that registers a key binding
+Most tools are a single `src/<tool>.rs`. **`src/api_explorer/` and `src/docker/` are the
+exceptions** and the pattern to copy when a tool outgrows one file: `models/` (plain data, no GPUI,
+unit tested), `services/` (the trait that is the only place naming the outside-world crate),
+`state/`, `components/`, `views/`. Each `mod.rs` doc comments explain the split and where later
+phases plug in. `api_explorer` is also the only tool that registers a key binding
 (`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
 `settings::init`).
+
+**`src/docker/`** is the Docker/Podman module (round 1: Containers live; Images/Volumes/Networks
+are placeholder pages). Read `src/docker/mod.rs` — it is the authority. Two things unique to it:
+`services/` is the only place that may name `bollard` (the Docker Engine API client) and the only
+place a **tokio runtime** lives — `bollard` is async, so `BollardEngine` drives every call with
+`Runtime::block_on` on the background executor, keeping the blocking-by-contract discipline
+`Transport` follows. The sidebar's Docker section is the only expandable/nested `SidebarMenuItem`
+group; `src/layout.rs` shows the `View` variants and page routing.
 
 **dodo now persists one thing across restarts:** the API Explorer's collections, written by
 `services::collection_store::DiskCollectionStore` to `~/Library/Application Support/dodo/`
