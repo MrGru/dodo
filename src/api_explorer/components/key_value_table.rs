@@ -15,6 +15,7 @@
 //! row operation lives once, in `state::request`; this module is the drawing
 //! and the words around it.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, SharedString,
     StatefulInteractiveElement as _, Styled as _,
@@ -23,7 +24,9 @@ use gpui::{div, px};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::Input;
-use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, h_flex, v_flex,
+};
 
 use crate::api_explorer::state::request::{KeyValueRow, MoveRow, RowTable};
 use crate::api_explorer::state::tab::RequestTabState;
@@ -83,23 +86,52 @@ fn labels(table: RowTable) -> Labels {
 }
 
 /// Renders one table, wired to `tab` for every edit.
+///
+/// The table has two views the toolbar switches between: the row editor (Table)
+/// and a `Key: Value` text area (Bulk Edit). Both write back to the same request
+/// state, so switching never loses data.
 pub fn key_value_table(
     table: RowTable,
     tab: &Entity<RequestTabState>,
     cx: &App,
 ) -> impl IntoElement {
     let labels = labels(table);
+    let bulk = tab.read(cx).request.is_bulk_edit(table);
     let rows = tab.read(cx).request.rows(table);
     let active = rows
         .iter()
         .filter(|row| row.enabled && !row.key.read(cx).value().trim().is_empty())
         .count();
+    let all_enabled = tab.read(cx).request.all_rows_enabled(table);
     let last = rows.len().saturating_sub(1);
+
+    let body = if bulk {
+        bulk_pane(table, tab, cx).into_any_element()
+    } else {
+        table_pane(table, &labels, all_enabled, last, tab, cx).into_any_element()
+    };
 
     v_flex()
         .size_full()
-        .child(summary_row(table, &labels, active, tab, cx))
-        .child(column_header(cx))
+        .child(toolbar_row(table, &labels, bulk, active, tab, cx))
+        .child(body)
+}
+
+/// The Table view: the column header (with the toggle-all control) over the
+/// scrolling list of rows.
+fn table_pane(
+    table: RowTable,
+    labels: &Labels,
+    all_enabled: bool,
+    last: usize,
+    tab: &Entity<RequestTabState>,
+    cx: &App,
+) -> impl IntoElement {
+    let rows = tab.read(cx).request.rows(table);
+    v_flex()
+        .flex_1()
+        .min_h_0()
+        .child(column_header(table, labels.id_prefix, all_enabled, tab, cx))
         .child(
             div()
                 .id(SharedString::from(format!("{}-rows", labels.id_prefix)))
@@ -107,51 +139,161 @@ pub fn key_value_table(
                 .min_h_0()
                 .overflow_y_scroll()
                 .children(rows.iter().enumerate().map(|(index, row)| {
-                    render_row(table, &labels, row, index == 0, index == last, tab, cx)
+                    render_row(table, labels, row, index == 0, index == last, tab, cx)
                         .into_any_element()
                 }))
-                .child(add_row(table, &labels, tab, cx)),
+                .child(add_row(table, labels, tab, cx)),
         )
 }
 
-/// "No active params" on the left, "+ Add" on the right.
-fn summary_row(
+/// The Bulk Edit view: one multiline text area of `Key: Value` lines.
+fn bulk_pane(
+    table: RowTable,
+    tab: &Entity<RequestTabState>,
+    cx: &App,
+) -> impl IntoElement {
+    let editor = tab.read(cx).request.bulk_editor(table).clone();
+    div().flex_1().min_h_0().p_2().child(
+        div()
+            .size_full()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(
+                Input::new(&editor)
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(cx.theme().mono_font_size)
+                    .size_full(),
+            ),
+    )
+}
+
+/// The active-row count on the left; the Table / Bulk Edit switch and, in Table
+/// view, the "+ Add" button on the right.
+fn toolbar_row(
     table: RowTable,
     labels: &Labels,
+    bulk: bool,
     active: usize,
     tab: &Entity<RequestTabState>,
     cx: &App,
 ) -> impl IntoElement {
-    let tab = tab.clone();
     h_flex()
         .items_center()
         .justify_between()
+        .gap_2()
         .px_3()
         .py_2()
         .child(
+            // The count reads off the rows, which are stale mid-bulk-edit, so it
+            // is shown only in Table view.
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(t((labels.summary)(active), cx)),
+                .when(!bulk, |this| this.child(t((labels.summary)(active), cx))),
         )
         .child(
-            Button::new(format!("{}-add-top", labels.id_prefix))
-                .ghost()
-                .xsmall()
-                .icon(AppIcon::Plus)
-                .label(t(Str::Add, cx))
-                .on_click(move |_, window, cx| {
-                    tab.update(cx, |state, cx| {
-                        state.request.add_row(table, window, cx);
-                        state.request.dirty = true;
-                        cx.notify();
-                    });
+            h_flex()
+                .items_center()
+                .gap_2()
+                .child(mode_switch(table, labels, bulk, tab, cx))
+                .when(!bulk, |this| {
+                    this.child(add_top_button(table, labels, tab, cx))
                 }),
         )
 }
 
-/// The `KEY` / `VALUE` / `DESCRIPTION` rule.
-fn column_header(cx: &App) -> impl IntoElement {
+/// The Table / Bulk Edit segmented switch.
+fn mode_switch(
+    table: RowTable,
+    labels: &Labels,
+    bulk: bool,
+    tab: &Entity<RequestTabState>,
+    cx: &App,
+) -> impl IntoElement {
+    h_flex()
+        .items_center()
+        .gap_1()
+        .child(mode_button(
+            table,
+            labels,
+            "table",
+            Str::EditModeTable,
+            !bulk,
+            false,
+            tab,
+            cx,
+        ))
+        .child(mode_button(
+            table,
+            labels,
+            "bulk",
+            Str::EditModeBulk,
+            bulk,
+            true,
+            tab,
+            cx,
+        ))
+}
+
+/// One button of the mode switch. `bulk` is the mode it selects.
+#[allow(clippy::too_many_arguments)]
+fn mode_button(
+    table: RowTable,
+    labels: &Labels,
+    suffix: &'static str,
+    label: Str,
+    selected: bool,
+    bulk: bool,
+    tab: &Entity<RequestTabState>,
+    cx: &App,
+) -> impl IntoElement {
+    let tab = tab.clone();
+    Button::new(format!("{}-mode-{suffix}", labels.id_prefix))
+        .ghost()
+        .xsmall()
+        .selected(selected)
+        .label(t(label, cx))
+        .on_click(move |_, window, cx| {
+            tab.update(cx, |state, cx| {
+                state.request.set_edit_mode(table, bulk, window, cx);
+                cx.notify();
+            });
+        })
+}
+
+/// The "+ Add" button in the toolbar.
+fn add_top_button(
+    table: RowTable,
+    labels: &Labels,
+    tab: &Entity<RequestTabState>,
+    cx: &App,
+) -> impl IntoElement {
+    let tab = tab.clone();
+    Button::new(format!("{}-add-top", labels.id_prefix))
+        .ghost()
+        .xsmall()
+        .icon(AppIcon::Plus)
+        .label(t(Str::Add, cx))
+        .on_click(move |_, window, cx| {
+            tab.update(cx, |state, cx| {
+                state.request.add_row(table, window, cx);
+                state.request.dirty = true;
+                cx.notify();
+            });
+        })
+}
+
+/// The `KEY` / `VALUE` / `DESCRIPTION` rule, led by the toggle-all checkbox that
+/// enables or disables every row at once.
+fn column_header(
+    table: RowTable,
+    prefix: &'static str,
+    all_enabled: bool,
+    tab: &Entity<RequestTabState>,
+    cx: &App,
+) -> impl IntoElement {
+    let tab = tab.clone();
     h_flex()
         .items_center()
         .px_3()
@@ -161,8 +303,22 @@ fn column_header(cx: &App) -> impl IntoElement {
         .border_color(cx.theme().border)
         .text_xs()
         .text_color(cx.theme().muted_foreground)
-        // Aligns with the checkbox column of the rows below.
-        .child(div().w(ENABLE_COLUMN).flex_shrink_0())
+        // Aligns with, and toggles, the checkbox column of the rows below.
+        .child(
+            div().w(ENABLE_COLUMN).flex_shrink_0().child(
+                Checkbox::new(format!("{prefix}-toggle-all"))
+                    .checked(all_enabled)
+                    .tooltip(t(Str::ToggleAllRows, cx))
+                    .on_click(move |checked, _, cx| {
+                        let checked = *checked;
+                        tab.update(cx, |state, cx| {
+                            state.request.set_all_rows_enabled(table, checked);
+                            state.request.dirty = true;
+                            cx.notify();
+                        });
+                    }),
+            ),
+        )
         .child(div().flex_1().min_w_0().child(t(Str::ColumnKey, cx)))
         .child(div().flex_1().min_w_0().child(t(Str::ColumnValue, cx)))
         .child(

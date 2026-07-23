@@ -61,6 +61,16 @@ pub enum RowTable {
 }
 
 impl RowTable {
+    /// Position in the per-table arrays [`RequestState`] keeps (the bulk-edit
+    /// flag and its editor). In [`RowTable`] declaration order.
+    fn index(self) -> usize {
+        match self {
+            RowTable::Params => 0,
+            RowTable::Headers => 1,
+            RowTable::BodyFields => 2,
+        }
+    }
+
     /// The key, value and description placeholders a fresh row is given.
     fn placeholders(self) -> (Str, Str, Str) {
         match self {
@@ -145,6 +155,50 @@ fn single_line(
     cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
 }
 
+/// A plain multi-line field: the Bulk Edit text area. No code gutter — it holds
+/// `Key: Value` lines, not source, so soft wrap and a placeholder are enough.
+fn multi_line(
+    placeholder: SharedString,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> Entity<InputState> {
+    cx.new(|cx| {
+        InputState::new(window, cx)
+            .multi_line(true)
+            .soft_wrap(true)
+            .placeholder(placeholder)
+    })
+}
+
+/// Parses Bulk Edit text back into `(enabled, key, value)` rows.
+///
+/// One entry per non-blank line, `Key: Value`, splitting on the first colon so a
+/// value may itself contain one (`Host: example.com:8080`). A line beginning
+/// with `#` is a disabled entry; a line with no colon is a key with an empty
+/// value. This is the inverse of [`RequestState::rows_to_bulk`].
+fn parse_bulk_lines(text: &str) -> Vec<(bool, String, String)> {
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (enabled, rest) = match line.strip_prefix('#') {
+            Some(rest) => (false, rest.trim_start()),
+            None => (true, line),
+        };
+        if rest.is_empty() {
+            continue;
+        }
+        let (key, value) = match rest.split_once(':') {
+            Some((key, value)) => (key.trim().to_string(), value.trim().to_string()),
+            None => (rest.to_string(), String::new()),
+        };
+        out.push((enabled, key, value));
+    }
+    out
+}
+
 /// A multi-line code editor: the body document and both script panes.
 ///
 /// `code_editor` comes first because it *replaces* the mode, and `line_number`
@@ -172,6 +226,16 @@ pub struct RequestState {
     pub params: Vec<KeyValueRow>,
     pub headers: Vec<KeyValueRow>,
     pub active_tab: RequestTab,
+
+    /// Whether each key/value table is showing its Bulk Edit text view instead
+    /// of the row editor. Indexed by [`RowTable::index`].
+    ///
+    /// In Bulk Edit the editor at the same index is the source of truth; in
+    /// Table mode the rows are. Switching modes serializes one into the other
+    /// (see [`RequestState::set_edit_mode`]).
+    bulk_edit: [bool; 3],
+    /// The multiline editor behind each table's Bulk Edit view.
+    bulk_editors: [Entity<InputState>; 3],
 
     // Body tab.
     pub body_type: BodyType,
@@ -222,6 +286,7 @@ impl RequestState {
         let password_placeholder = t(Str::AuthPasswordPlaceholder, cx);
         let key_name_placeholder = t(Str::ApiKeyNamePlaceholder, cx);
         let key_value_placeholder = t(Str::ApiKeyValuePlaceholder, cx);
+        let bulk_placeholder = t(Str::BulkEditPlaceholder, cx);
 
         let mut state = Self {
             method: HttpMethod::default(),
@@ -229,6 +294,13 @@ impl RequestState {
             params: Vec::new(),
             headers: Vec::new(),
             active_tab: RequestTab::default(),
+
+            bulk_edit: [false; 3],
+            bulk_editors: [
+                multi_line(bulk_placeholder.clone(), window, cx),
+                multi_line(bulk_placeholder.clone(), window, cx),
+                multi_line(bulk_placeholder, window, cx),
+            ],
 
             body_type: BodyType::default(),
             body_editor: code_editor("text", body_placeholder, window, cx),
@@ -355,6 +427,126 @@ impl RequestState {
         }
     }
 
+    /// Whether every row of a table is enabled — the checked state of the
+    /// toggle-all control. An empty table reads as not-all-on.
+    pub fn all_rows_enabled(&self, table: RowTable) -> bool {
+        let rows = self.rows(table);
+        !rows.is_empty() && rows.iter().all(|row| row.enabled)
+    }
+
+    /// Enables or disables every row of a table at once (the toggle-all control).
+    pub fn set_all_rows_enabled(&mut self, table: RowTable, enabled: bool) {
+        for row in self.rows_mut(table) {
+            row.enabled = enabled;
+        }
+    }
+
+    /// Whether a table is showing its Bulk Edit text view.
+    pub fn is_bulk_edit(&self, table: RowTable) -> bool {
+        self.bulk_edit[table.index()]
+    }
+
+    /// The multiline editor behind a table's Bulk Edit view.
+    pub fn bulk_editor(&self, table: RowTable) -> &Entity<InputState> {
+        &self.bulk_editors[table.index()]
+    }
+
+    /// Switches a table between Table and Bulk Edit, carrying the data across
+    /// losslessly. Entering Bulk Edit serializes the rows into the editor;
+    /// leaving it parses the editor back into rows, reusing the existing row
+    /// entities by position so each row keeps its description.
+    pub fn set_edit_mode(
+        &mut self,
+        table: RowTable,
+        bulk: bool,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        if self.bulk_edit[table.index()] == bulk {
+            return;
+        }
+        if bulk {
+            let text = self.rows_to_bulk(table, cx);
+            let editor = self.bulk_editors[table.index()].clone();
+            editor.update(cx, |state, cx| state.set_value(text, window, cx));
+        } else {
+            let text = self.bulk_editors[table.index()].read(cx).value().to_string();
+            self.apply_bulk_text(table, &text, window, cx);
+        }
+        self.bulk_edit[table.index()] = bulk;
+    }
+
+    /// Serializes a table's rows into Bulk Edit text: one `Key: Value` per row,
+    /// disabled rows prefixed with `# `. Fully empty rows (the trailing "type
+    /// here" row) contribute nothing.
+    fn rows_to_bulk(&self, table: RowTable, cx: &gpui::App) -> String {
+        let mut lines = Vec::new();
+        for row in self.rows(table) {
+            let key = row.key.read(cx).value();
+            let value = row.value.read(cx).value();
+            let key = key.trim();
+            let value = value.trim();
+            if key.is_empty() && value.is_empty() {
+                continue;
+            }
+            let prefix = if row.enabled { "" } else { "# " };
+            lines.push(format!("{prefix}{key}: {value}"));
+        }
+        lines.join("\n")
+    }
+
+    /// Rebuilds a table's rows from Bulk Edit text, reusing existing row entities
+    /// positionally so descriptions (which Bulk Edit cannot express) survive the
+    /// round trip when rows are only toggled or their values edited.
+    fn apply_bulk_text(
+        &mut self,
+        table: RowTable,
+        text: &str,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        let parsed = parse_bulk_lines(text);
+        let mut existing = std::mem::take(self.rows_mut(table)).into_iter();
+        let mut rows = Vec::with_capacity(parsed.len().max(1));
+        for (enabled, key, value) in parsed {
+            let mut row = existing.next().unwrap_or_else(|| {
+                let row = KeyValueRow::new(self.next_row_id, table, window, cx);
+                self.next_row_id += 1;
+                row
+            });
+            row.enabled = enabled;
+            row.key.update(cx, |state, cx| state.set_value(key, window, cx));
+            row.value
+                .update(cx, |state, cx| state.set_value(value, window, cx));
+            rows.push(row);
+        }
+        if rows.is_empty() {
+            rows.push(KeyValueRow::new(self.next_row_id, table, window, cx));
+            self.next_row_id += 1;
+        }
+        *self.rows_mut(table) = rows;
+    }
+
+    /// A table's rows as plain [`KeyValue`] data, taken from whichever view is
+    /// authoritative: the Bulk Edit editor when that view is open, the rows
+    /// otherwise. This is how [`RequestState::draft`] stays correct even when a
+    /// table is left in Bulk Edit at Send time.
+    fn table_key_values(&self, table: RowTable, cx: &gpui::App) -> Vec<KeyValue> {
+        if self.is_bulk_edit(table) {
+            let text = self.bulk_editors[table.index()].read(cx).value();
+            parse_bulk_lines(&text)
+                .into_iter()
+                .map(|(enabled, key, value)| KeyValue {
+                    enabled,
+                    key,
+                    value,
+                })
+                .collect()
+        } else {
+            self.rows(table).iter().map(|row| row.snapshot(cx)).collect()
+        }
+    }
+
     fn index_of(&self, table: RowTable, id: usize) -> Option<usize> {
         self.rows(table).iter().position(|row| row.id == id)
     }
@@ -400,6 +592,13 @@ impl RequestState {
             });
         }
 
+        let bulk_placeholder = t(Str::BulkEditPlaceholder, cx);
+        for editor in &self.bulk_editors {
+            editor.update(cx, |state, cx| {
+                state.set_placeholder(bulk_placeholder.clone(), window, cx);
+            });
+        }
+
         for table in [RowTable::Params, RowTable::Headers, RowTable::BodyFields] {
             let (key, value, description) = table.placeholders();
             let placeholders = [t(key, cx), t(value, cx), t(description, cx)];
@@ -426,16 +625,12 @@ impl RequestState {
         RequestDraft {
             method: self.method,
             url: self.url.read(cx).value().to_string(),
-            params: self.params.iter().map(|row| row.snapshot(cx)).collect(),
-            headers: self.headers.iter().map(|row| row.snapshot(cx)).collect(),
+            params: self.table_key_values(RowTable::Params, cx),
+            headers: self.table_key_values(RowTable::Headers, cx),
             body: BodyDraft {
                 kind: self.body_type,
                 text: self.body_editor.read(cx).value().to_string(),
-                fields: self
-                    .body_fields
-                    .iter()
-                    .map(|row| row.snapshot(cx))
-                    .collect(),
+                fields: self.table_key_values(RowTable::BodyFields, cx),
             },
             auth: AuthDraft {
                 kind: self.auth_type,
@@ -543,6 +738,8 @@ impl RequestState {
             self.next_row_id += 1;
         }
         *self.rows_mut(table) = rows;
+        // A restored request opens in Table view; its rows are authoritative.
+        self.bulk_edit[table.index()] = false;
     }
 
     /// What the request tab strip shows: the given name, or a summary of the
@@ -572,5 +769,46 @@ impl RequestState {
             }
             Err(_) => SharedString::from(trimmed.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_bulk_lines;
+
+    #[test]
+    fn parses_key_value_lines() {
+        let parsed = parse_bulk_lines("Accept: application/json\nX-Trace: abc");
+        assert_eq!(
+            parsed,
+            vec![
+                (true, "Accept".to_string(), "application/json".to_string()),
+                (true, "X-Trace".to_string(), "abc".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_leading_hash_marks_a_disabled_entry() {
+        let parsed = parse_bulk_lines("# Authorization: Bearer x");
+        assert_eq!(
+            parsed,
+            vec![(false, "Authorization".to_string(), "Bearer x".to_string())]
+        );
+    }
+
+    #[test]
+    fn only_the_first_colon_splits_so_values_may_contain_one() {
+        let parsed = parse_bulk_lines("Host: example.com:8080");
+        assert_eq!(
+            parsed,
+            vec![(true, "Host".to_string(), "example.com:8080".to_string())]
+        );
+    }
+
+    #[test]
+    fn blank_lines_and_bare_hashes_are_skipped_and_missing_values_are_empty() {
+        let parsed = parse_bulk_lines("\n  \n#\nflag\n");
+        assert_eq!(parsed, vec![(true, "flag".to_string(), String::new())]);
     }
 }

@@ -8,13 +8,11 @@
 //! no opinion about the wire.
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{Context, Entity, IntoElement, ParentElement as _, Styled as _, div, px};
+use gpui::{Context, Entity, IntoElement, ParentElement as _, Styled as _, div};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
-use gpui_component::popover::Popover;
-use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex,
-};
+use gpui_component::tab::{Tab, TabBar};
+use gpui_component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 
 use crate::api_explorer::components::empty_state::empty_state;
 use crate::api_explorer::components::key_value_table::key_value_table;
@@ -61,7 +59,7 @@ impl ApiExplorer {
             .into_any_element()
     }
 
-    /// The type picker on the left; format and copy on the right.
+    /// The type selector on the left; format and copy on the right.
     fn body_toolbar(
         &self,
         tab: &Entity<RequestTabState>,
@@ -75,11 +73,18 @@ impl ApiExplorer {
             .w_full()
             .min_w_0()
             .items_center()
-            .justify_between()
             .gap_2()
-            .px_3()
-            .py_2()
-            .child(div().flex_shrink_0().child(self.body_type_picker(tab, cx)))
+            .px_2()
+            .py_1p5()
+            .child(
+                // The selector grows and scrolls its tabs when the window is
+                // narrow; the format/copy controls are pinned so they never clip.
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.body_type_tabs(tab, body_type, cx)),
+            )
             .child(
                 h_flex()
                     .flex_shrink_0()
@@ -128,68 +133,50 @@ impl ApiExplorer {
             )
     }
 
-    /// The body-type dropdown.
+    /// The body-type selector: a horizontal tab strip, one tab per kind, styled
+    /// like the request and response sub-tab strips.
     ///
-    /// A `Popover` of buttons rather than a `Select`, for the same two reasons
-    /// the method picker is one: the trigger shows more than a plain string,
-    /// and `SelectState` caches its item labels, which would then have to be
-    /// re-pushed on every language change.
-    fn body_type_picker(
+    /// A tab strip rather than a dropdown so every kind is visible at a glance;
+    /// the strip scrolls its own tabs when the window is too narrow for all of
+    /// them. Binary is shown as a disabled tab — the honest placeholder for a
+    /// kind this build cannot build yet — and its tab does not switch the editor.
+    fn body_type_tabs(
         &self,
         tab: &Entity<RequestTabState>,
+        current: BodyType,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let current = tab.read(cx).request.body_type;
+        let selected = BodyType::ALL
+            .iter()
+            .position(|candidate| *candidate == current)
+            .unwrap_or(0);
+        let switch_tab = tab.clone();
 
-        let rows = BodyType::ALL.map(|candidate| {
-            let tab = tab.clone();
-            Button::new(("body-type-option", candidate as usize))
-                .ghost()
-                .w_full()
-                .justify_start()
-                .selected(candidate == current)
-                // Binary is shown disabled with the reason attached, rather
-                // than hidden — the same convention as the code-generation
-                // button in the request bar.
-                .disabled(!candidate.is_available())
-                .when(!candidate.is_available(), |this| {
-                    this.tooltip(t(Str::BinaryBodyLater, cx))
-                })
-                .label(t(candidate.label(), cx))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    tab.update(cx, |state, cx| {
-                        state.request.body_type = candidate;
-                        state.request.apply_body_language(cx);
-                        state.request.dirty = true;
-                        cx.notify();
-                    });
-                    this.body_menu_open = false;
+        TabBar::new("body-type-tabs")
+            .xsmall()
+            .selected_index(selected)
+            .children(BodyType::ALL.map(|candidate| {
+                Tab::new()
+                    .label(t(candidate.label(), cx))
+                    .disabled(!candidate.is_available())
+            }))
+            .on_click(cx.listener(move |_, index: &usize, _, cx| {
+                let Some(candidate) = BodyType::ALL.get(*index).copied() else {
+                    return;
+                };
+                // A disabled tab never fires this, but guard anyway so Binary can
+                // never be selected.
+                if !candidate.is_available() {
+                    return;
+                }
+                switch_tab.update(cx, |state, cx| {
+                    state.request.body_type = candidate;
+                    state.request.apply_body_language(cx);
+                    state.request.dirty = true;
                     cx.notify();
-                }))
-        });
-
-        Popover::new("body-type-picker")
-            .open(self.body_menu_open)
-            .on_open_change(cx.listener(|this, open, _, cx| {
-                this.body_menu_open = *open;
+                });
                 cx.notify();
             }))
-            .trigger(
-                Button::new("body-type-trigger")
-                    .outline()
-                    .xsmall()
-                    .tooltip(t(Str::BodyTypeLabel, cx))
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_1()
-                            .child(t(current.label(), cx))
-                            .child(Icon::new(AppIcon::ChevronDown).size(px(12.))),
-                    ),
-            )
-            .p_1()
-            .w(px(220.))
-            .children(rows)
     }
 
     fn body_editor(

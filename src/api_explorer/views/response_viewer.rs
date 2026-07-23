@@ -184,6 +184,9 @@ impl ApiExplorer {
             .items_center()
             .gap_2()
             .px_2()
+            // A divider above the strip separates it from the status row, and
+            // the existing one below separates it from the response pane.
+            .border_t_1()
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
