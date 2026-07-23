@@ -10,23 +10,16 @@
 //! never uses would be the beginning of pretending.
 
 use gpui::{
-    Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, SharedString,
-    StatefulInteractiveElement as _, Styled as _, div, px,
+    Context, Entity, IntoElement, ParentElement as _, Pixels, SharedString, Styled as _, div, px,
 };
 use gpui_component::input::{Input, InputState};
 use gpui_component::{ActiveTheme as _, Icon, StyledExt as _, h_flex, v_flex};
 
-/// The least each script editor is given before the pair starts to scroll.
-///
-/// The two editors share the pane's height (each `flex_1`) so both are visible
-/// at once, which is the point of the tab. This floor keeps each usable when
-/// the request pane is dragged very short: below it, the pane scrolls rather
-/// than squeezing the post-response editor down to a single reachable line.
-const SCRIPT_MIN_HEIGHT: Pixels = px(150.);
-
-/// The content height the two editors need before they stop shrinking and the
-/// pane starts to scroll — both floors plus a little for the two headers.
-const SCRIPTS_MIN_CONTENT: Pixels = px(330.);
+/// A small floor under each script editor, so a very short pane still shows two
+/// usable editors rather than squeezing one to a line. The two editors share
+/// the pane's height (each `flex_1`), so both are always on screen at once —
+/// which is the whole point of the tab — and grow as the request pane grows.
+const SCRIPT_MIN_HEIGHT: Pixels = px(64.);
 
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
@@ -47,24 +40,15 @@ impl ApiExplorer {
             .size_full()
             .child(self.scripts_notice(cx))
             .child(
-                // Both panes on screen rather than behind a nested tab strip:
-                // seeing the pair at once is the point of the tab. Each editor
-                // takes half the available height; when the pane is dragged
-                // shorter than the pair can fit, the inner column keeps its
-                // minimum and this scrolls instead of hiding the second editor.
-                div()
-                    .id("script-panes")
+                // Both editors on screen rather than behind a nested tab strip:
+                // seeing the pair at once is the point of the tab. Each takes an
+                // equal share of the available height and both stay visible even
+                // when the request pane is short.
+                v_flex()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .child(
-                        v_flex()
-                            .w_full()
-                            .size_full()
-                            .min_h(SCRIPTS_MIN_CONTENT)
-                            .child(script_pane(t(Str::PreRequestScriptLabel, cx), &pre, cx))
-                            .child(script_pane(t(Str::PostResponseScriptLabel, cx), &post, cx)),
-                    ),
+                    .child(script_pane(t(Str::PreRequestScriptLabel, cx), &pre, cx))
+                    .child(script_pane(t(Str::PostResponseScriptLabel, cx), &post, cx)),
             )
             .into_any_element()
     }
