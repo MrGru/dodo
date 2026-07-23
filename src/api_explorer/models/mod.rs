@@ -5,7 +5,10 @@
 
 pub mod auth;
 pub mod body;
+pub mod collection;
 pub mod exchange;
+pub mod json_tree;
 pub mod key_value;
 pub mod method;
 pub mod request;
+pub mod snapshot;

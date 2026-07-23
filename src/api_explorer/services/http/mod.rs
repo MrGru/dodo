@@ -14,6 +14,7 @@ pub mod auth;
 pub mod body;
 pub mod classify;
 pub mod client;
+pub mod cookies;
 pub mod headers;
 pub mod prepare;
 pub mod request_body;

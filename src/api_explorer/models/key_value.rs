@@ -9,7 +9,7 @@
 /// This is the plain-data form. The editable form — which owns the two text
 /// inputs — lives in `state::request`, so that this stays testable without a
 /// `Window`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct KeyValue {
     pub enabled: bool,
     pub key: String,

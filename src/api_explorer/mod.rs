@@ -1,23 +1,28 @@
 //! The API Explorer: an HTTP client as a dodo tool.
 //!
-//! The request half is complete: method, URL, query params, headers, a body in
-//! seven shapes, and four authorization schemes go up; status, timing, size,
-//! headers and a highlighted body come back. The module structure is what keeps
-//! that from being one file:
+//! A request goes up — method, URL, query params, headers, a body in seven
+//! shapes, four authorization schemes — and status, timing, size, headers and a
+//! highlighted body come back. Around that: a persistent tree of saved
+//! collections, an in-session history, and a response viewer that renders JSON
+//! as a tree, HTML as a text preview, and parses Set-Cookie. The module
+//! structure is what keeps that from being one file:
 //!
-//! - [`models`] — plain data, no GPUI, unit tested.
-//! - [`services`] — the `Transport` trait and its HTTP implementation. The one
-//!   place that knows about `reqwest`; views cannot reach it, and it is also
-//!   where a body becomes bytes and an auth scheme becomes a header.
-//! - [`state`] — request, response, collections and layout state, split apart.
+//! - [`models`] — plain data, no GPUI, unit tested (request/response, the
+//!   collection tree, the JSON tree, a request snapshot).
+//! - [`services`] — the `Transport` trait and its HTTP implementation, plus the
+//!   `CollectionStore` trait and its disk implementation. The two places that
+//!   touch the outside world (`reqwest`, the filesystem); views cannot reach
+//!   either.
+//! - [`state`] — request, response, collections, history and layout state.
 //! - [`components`] — the few small elements the widget library does not have.
 //! - [`views`] — rendering only.
 //!
-//! What is deliberately still absent, each said out loud where a user would
-//! look for it rather than left to be discovered: a binary body (needs a file
+//! What is deliberately still absent, each said out loud where a user would look
+//! for it rather than left to be discovered: a binary body (needs a file
 //! picker), OAuth 2.0 (needs a redirect flow and a token store), running the
-//! scripts the Scripts tab edits (needs an engine), the Cookies, Tests and
-//! Console response tabs, and collections.
+//! scripts the Scripts tab edits and the Tests/Console response tabs (need an
+//! engine), and drag-and-drop reordering of collections (the model supports it;
+//! the gesture is future work).
 
 pub mod components;
 pub mod models;

@@ -4,6 +4,7 @@ use gpui::{AppContext as _, Context, Entity, Window};
 use gpui_component::input::InputState;
 
 use crate::api_explorer::models::exchange::Exchange;
+use crate::api_explorer::models::json_tree::JsonTree;
 use crate::i18n::Str;
 
 /// How many lines of a body are put into the editor at once.
@@ -44,16 +45,26 @@ impl ResponseTab {
     }
 
     pub fn is_implemented(self) -> bool {
-        matches!(self, ResponseTab::Body | ResponseTab::Headers)
+        matches!(
+            self,
+            ResponseTab::Body | ResponseTab::Headers | ResponseTab::Cookies
+        )
     }
 }
 
-/// Whether the body is shown as sent or pretty-printed.
+/// How the response body is shown.
+///
+/// Pretty and Raw put text in the editor; Preview renders it readably (HTML as
+/// stripped text); Tree shows JSON as an expand/collapse tree instead of the
+/// editor. Which modes are offered depends on the body's kind — the view only
+/// shows Tree for JSON and Preview for HTML.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum BodyView {
     #[default]
     Pretty,
     Raw,
+    Preview,
+    Tree,
 }
 
 /// Where a request tab is in the request lifecycle.
@@ -85,6 +96,13 @@ pub struct ResponseState {
     /// time.
     pub body: Entity<InputState>,
     pub collapsed: bool,
+    /// The parsed JSON tree for Tree mode, built lazily the first time it is
+    /// shown and dropped when a new response arrives. `None` after an attempt
+    /// means the body did not parse as JSON.
+    json_tree: Option<JsonTree>,
+    /// Whether a parse has been attempted for the current body, so an
+    /// unparseable body is not re-parsed every frame.
+    json_tree_attempted: bool,
 }
 
 impl ResponseState {
@@ -102,7 +120,25 @@ impl ResponseState {
                     .line_number(true)
             }),
             collapsed: false,
+            json_tree: None,
+            json_tree_attempted: false,
         }
+    }
+
+    /// Drops the cached JSON tree, so the next response re-parses its own body.
+    pub fn reset_json_tree(&mut self) {
+        self.json_tree = None;
+        self.json_tree_attempted = false;
+    }
+
+    /// Parses `source` into the JSON tree the first time Tree mode needs it, and
+    /// returns it. `None` means the body is not JSON.
+    pub fn json_tree(&mut self, source: &str) -> Option<&mut JsonTree> {
+        if !self.json_tree_attempted {
+            self.json_tree_attempted = true;
+            self.json_tree = JsonTree::parse(source);
+        }
+        self.json_tree.as_mut()
     }
 
     pub fn is_in_flight(&self) -> bool {

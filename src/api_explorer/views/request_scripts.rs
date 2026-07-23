@@ -16,14 +16,17 @@ use gpui::{
 use gpui_component::input::{Input, InputState};
 use gpui_component::{ActiveTheme as _, Icon, StyledExt as _, h_flex, v_flex};
 
-/// How tall each script editor is.
+/// The least each script editor is given before the pair starts to scroll.
 ///
-/// Fixed rather than a share of the pane: the request editor opens 240px tall,
-/// and splitting that between two editors leaves each about one line — legible
-/// as a screenshot, useless as an editor. At this height the pair overflows a
-/// short pane and the tab scrolls, which is the honest trade. Dragging the
-/// divider down still shows both at once.
-const SCRIPT_HEIGHT: Pixels = px(180.);
+/// The two editors share the pane's height (each `flex_1`) so both are visible
+/// at once, which is the point of the tab. This floor keeps each usable when
+/// the request pane is dragged very short: below it, the pane scrolls rather
+/// than squeezing the post-response editor down to a single reachable line.
+const SCRIPT_MIN_HEIGHT: Pixels = px(150.);
+
+/// The content height the two editors need before they stop shrinking and the
+/// pane starts to scroll — both floors plus a little for the two headers.
+const SCRIPTS_MIN_CONTENT: Pixels = px(330.);
 
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
@@ -45,8 +48,10 @@ impl ApiExplorer {
             .child(self.scripts_notice(cx))
             .child(
                 // Both panes on screen rather than behind a nested tab strip:
-                // seeing the pair at once is the point of the tab. They scroll
-                // together when the request editor is short.
+                // seeing the pair at once is the point of the tab. Each editor
+                // takes half the available height; when the pane is dragged
+                // shorter than the pair can fit, the inner column keeps its
+                // minimum and this scrolls instead of hiding the second editor.
                 div()
                     .id("script-panes")
                     .flex_1()
@@ -55,6 +60,8 @@ impl ApiExplorer {
                     .child(
                         v_flex()
                             .w_full()
+                            .size_full()
+                            .min_h(SCRIPTS_MIN_CONTENT)
                             .child(script_pane(t(Str::PreRequestScriptLabel, cx), &pre, cx))
                             .child(script_pane(t(Str::PostResponseScriptLabel, cx), &post, cx)),
                     ),
@@ -90,7 +97,8 @@ impl ApiExplorer {
     }
 }
 
-/// A titled editor, one [`SCRIPT_HEIGHT`] tall.
+/// A titled editor that takes an equal share of the pane, down to
+/// [`SCRIPT_MIN_HEIGHT`].
 fn script_pane(
     label: SharedString,
     editor: &Entity<InputState>,
@@ -98,8 +106,8 @@ fn script_pane(
 ) -> impl IntoElement {
     v_flex()
         .w_full()
-        .flex_shrink_0()
-        .h(SCRIPT_HEIGHT)
+        .flex_1()
+        .min_h(SCRIPT_MIN_HEIGHT)
         .child(
             div()
                 .w_full()

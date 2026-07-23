@@ -13,6 +13,7 @@ use crate::api_explorer::models::body::{BodyDraft, BodyType};
 use crate::api_explorer::models::key_value::KeyValue;
 use crate::api_explorer::models::method::HttpMethod;
 use crate::api_explorer::models::request::RequestDraft;
+use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::i18n::{Str, t};
 
 /// Which of the request tabs is showing.
@@ -446,6 +447,102 @@ impl RequestState {
                 key_location: self.auth_key_location,
             },
         }
+    }
+
+    /// A full plain-data capture of this request, including the scripts the
+    /// wire-facing [`RequestDraft`] drops. This is what a saved collection entry
+    /// and a history entry store.
+    pub fn snapshot(&self, cx: &gpui::App) -> RequestSnapshot {
+        let draft = self.draft(cx);
+        RequestSnapshot {
+            method: draft.method,
+            url: draft.url,
+            params: draft.params,
+            headers: draft.headers,
+            body: draft.body,
+            auth: draft.auth,
+            pre_request_script: self.pre_request_script.read(cx).value().to_string(),
+            post_response_script: self.post_response_script.read(cx).value().to_string(),
+        }
+    }
+
+    /// Restores this request from a saved snapshot — the reverse of
+    /// [`RequestState::snapshot`], used when a saved request or a history entry
+    /// is reopened into a tab. `name` is the tab's display name (the collection
+    /// node's name, or `None` for a history reopen).
+    pub fn apply_snapshot(
+        &mut self,
+        snapshot: &RequestSnapshot,
+        name: Option<SharedString>,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        self.method = snapshot.method;
+        let url = snapshot.url.clone();
+        self.url.update(cx, |state, cx| state.set_value(url, window, cx));
+
+        self.load_rows(RowTable::Params, &snapshot.params, window, cx);
+        self.load_rows(RowTable::Headers, &snapshot.headers, window, cx);
+
+        self.body_type = snapshot.body.kind;
+        let body_text = snapshot.body.text.clone();
+        self.body_editor
+            .update(cx, |state, cx| state.set_value(body_text, window, cx));
+        self.apply_body_language(cx);
+        self.load_rows(RowTable::BodyFields, &snapshot.body.fields, window, cx);
+
+        self.auth_type = snapshot.auth.kind;
+        self.auth_key_location = snapshot.auth.key_location;
+        for (field, text) in [
+            (&self.auth_token, &snapshot.auth.token),
+            (&self.auth_username, &snapshot.auth.username),
+            (&self.auth_password, &snapshot.auth.password),
+            (&self.auth_key_name, &snapshot.auth.key_name),
+            (&self.auth_key_value, &snapshot.auth.key_value),
+        ] {
+            let text = text.clone();
+            field.update(cx, |state, cx| state.set_value(text, window, cx));
+        }
+
+        let pre = snapshot.pre_request_script.clone();
+        self.pre_request_script
+            .update(cx, |state, cx| state.set_value(pre, window, cx));
+        let post = snapshot.post_response_script.clone();
+        self.post_response_script
+            .update(cx, |state, cx| state.set_value(post, window, cx));
+
+        self.name = name;
+        // A freshly restored request matches what is saved, so no unsaved dot.
+        self.dirty = false;
+    }
+
+    /// Replaces a table's rows with ones seeded from saved key/value pairs,
+    /// keeping the "one empty row to type into" invariant when the list is
+    /// empty.
+    fn load_rows(
+        &mut self,
+        table: RowTable,
+        values: &[KeyValue],
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        let mut rows = Vec::with_capacity(values.len().max(1));
+        for value in values {
+            let mut row = KeyValueRow::new(self.next_row_id, table, window, cx);
+            self.next_row_id += 1;
+            row.enabled = value.enabled;
+            let key = value.key.clone();
+            let val = value.value.clone();
+            row.key.update(cx, |state, cx| state.set_value(key, window, cx));
+            row.value
+                .update(cx, |state, cx| state.set_value(val, window, cx));
+            rows.push(row);
+        }
+        if rows.is_empty() {
+            rows.push(KeyValueRow::new(self.next_row_id, table, window, cx));
+            self.next_row_id += 1;
+        }
+        *self.rows_mut(table) = rows;
     }
 
     /// What the request tab strip shows: the given name, or a summary of the

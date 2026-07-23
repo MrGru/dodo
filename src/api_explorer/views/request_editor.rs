@@ -148,17 +148,17 @@ impl ApiExplorer {
             .children(rows)
     }
 
-    /// Names the request for this session and clears the unsaved dot.
+    /// Names the request and saves it into a collection, clearing the unsaved
+    /// dot.
     ///
-    /// Session-scoped on purpose: dodo persists nothing across restarts today
-    /// (see the `dodo-theming-settings` skill), and inventing a store here
-    /// would be a bigger decision than this button.
+    /// The request is stored through the `CollectionStore` (disk-backed), so it
+    /// survives a restart; reopening it from the Collections panel restores the
+    /// full request state.
     fn save_button(
         &self,
-        tab: &Entity<RequestTabState>,
+        _tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let tab = tab.clone();
         let name_input = self.name_input.clone();
         let confirm_input = self.name_input.clone();
 
@@ -193,21 +193,19 @@ impl ApiExplorer {
                     .child(div().text_xs().font_bold().child(t(Str::NameRequest, cx)))
                     .child(Input::new(&name_input).small())
                     .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(Str::SaveToCollectionNote, cx)),
+                    )
+                    .child(
                         Button::new("save-request-confirm")
                             .primary()
                             .small()
                             .label(t(Str::SaveName, cx))
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                let name = confirm_input.read(cx).value();
-                                let trimmed = name.trim();
-                                if !trimmed.is_empty() {
-                                    let name = trimmed.to_string();
-                                    tab.update(cx, |state, cx| {
-                                        state.request.name = Some(name.into());
-                                        state.request.dirty = false;
-                                        cx.notify();
-                                    });
-                                }
+                                let name = confirm_input.read(cx).value().to_string();
+                                this.save_active_request(name, cx);
                                 this.save_menu_open = false;
                                 cx.notify();
                             })),

@@ -7,7 +7,7 @@
 use crate::i18n::Str;
 
 /// The authorization schemes the Auth tab offers.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum AuthType {
     #[default]
     None,
@@ -47,7 +47,7 @@ impl AuthType {
 }
 
 /// Where an API key rides: as a header, or as a query parameter.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum ApiKeyLocation {
     #[default]
     Header,
@@ -72,7 +72,7 @@ impl ApiKeyLocation {
 /// must not wipe what was typed.
 ///
 /// [`BodyDraft`]: crate::api_explorer::models::body::BodyDraft
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AuthDraft {
     pub kind: AuthType,
     pub token: String,

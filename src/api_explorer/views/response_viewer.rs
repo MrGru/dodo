@@ -18,7 +18,9 @@ use gpui_component::{
 use crate::api_explorer::components::empty_state::empty_state;
 use crate::api_explorer::components::later_step::later_step;
 use crate::api_explorer::components::status_tag::{metric, status_tag};
-use crate::api_explorer::models::exchange::{StatusClass, format_duration, format_size};
+use crate::api_explorer::models::exchange::{BodyKind, StatusClass, format_duration, format_size};
+use crate::api_explorer::models::json_tree::{RowContent, RowLabel, ScalarKind};
+use crate::api_explorer::services::http::cookies::{Cookie, cookies_from_headers};
 use crate::api_explorer::state::response::{BodyView, Outcome, ResponseTab};
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
@@ -162,6 +164,10 @@ impl ApiExplorer {
         let header_count = state.response.header_count();
         let body_view = state.response.body_view;
         let has_body = state.response.exchange().is_some();
+        let kind = state
+            .response
+            .exchange()
+            .map_or(BodyKind::Text, |exchange| exchange.kind);
         let selected = ResponseTab::ALL
             .iter()
             .position(|candidate| *candidate == active)
@@ -222,55 +228,48 @@ impl ApiExplorer {
                 this.child(
                     h_flex()
                         .flex_shrink_0()
-                        .child(self.body_controls(tab, body_view, cx)),
+                        .child(self.body_controls(tab, body_view, kind, cx)),
                 )
             })
     }
 
-    /// Pretty / Raw and Copy.
+    /// Pretty / Raw, plus Preview for HTML and Tree for JSON, then Copy and
+    /// Save-to-file. The mode buttons that only make sense for a given body kind
+    /// are shown only for that kind rather than as dead controls.
     fn body_controls(
         &self,
         tab: &Entity<RequestTabState>,
         body_view: BodyView,
+        kind: BodyKind,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let pretty_tab = tab.clone();
-        let raw_tab = tab.clone();
         let copy_tab = tab.clone();
 
         h_flex()
             .items_center()
             .gap_1()
-            .child(
-                Button::new("body-pretty")
-                    .ghost()
-                    .xsmall()
-                    .selected(body_view == BodyView::Pretty)
-                    .label(t(Str::BodyPretty, cx))
-                    .on_click(cx.listener(move |_, _, window, cx| {
-                        pretty_tab.update(cx, |state, cx| {
-                            state.response.body_view = BodyView::Pretty;
-                            state.refresh_body(window, cx);
-                            cx.notify();
-                        });
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("body-raw")
-                    .ghost()
-                    .xsmall()
-                    .selected(body_view == BodyView::Raw)
-                    .label(t(Str::BodyRaw, cx))
-                    .on_click(cx.listener(move |_, _, window, cx| {
-                        raw_tab.update(cx, |state, cx| {
-                            state.response.body_view = BodyView::Raw;
-                            state.refresh_body(window, cx);
-                            cx.notify();
-                        });
-                        cx.notify();
-                    })),
-            )
+            .child(self.body_mode_button(tab, body_view, BodyView::Pretty, Str::BodyPretty, "body-pretty", cx))
+            .child(self.body_mode_button(tab, body_view, BodyView::Raw, Str::BodyRaw, "body-raw", cx))
+            .when(kind == BodyKind::Html, |this| {
+                this.child(self.body_mode_button(
+                    tab,
+                    body_view,
+                    BodyView::Preview,
+                    Str::BodyPreview,
+                    "body-preview",
+                    cx,
+                ))
+            })
+            .when(kind == BodyKind::Json, |this| {
+                this.child(self.body_mode_button(
+                    tab,
+                    body_view,
+                    BodyView::Tree,
+                    Str::BodyTree,
+                    "body-tree",
+                    cx,
+                ))
+            })
             .child(
                 Button::new("body-copy")
                     .ghost()
@@ -290,6 +289,43 @@ impl ApiExplorer {
                         }
                     })),
             )
+            .child(
+                Button::new("body-save-file")
+                    .ghost()
+                    .xsmall()
+                    .icon(AppIcon::Save)
+                    .tooltip(t(Str::SaveToFile, cx))
+                    .on_click(cx.listener(|this, _, _, cx| this.save_body_to_file(cx))),
+            )
+    }
+
+    /// One body-view mode toggle. Every mode but Tree refreshes the shared
+    /// editor; Tree renders its own element, so it only flips the mode.
+    fn body_mode_button(
+        &self,
+        tab: &Entity<RequestTabState>,
+        current: BodyView,
+        target: BodyView,
+        label: Str,
+        id: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let tab = tab.clone();
+        Button::new(id)
+            .ghost()
+            .xsmall()
+            .selected(current == target)
+            .label(t(label, cx))
+            .on_click(cx.listener(move |_, _, window, cx| {
+                tab.update(cx, |state, cx| {
+                    state.response.body_view = target;
+                    if target != BodyView::Tree {
+                        state.refresh_body(window, cx);
+                    }
+                    cx.notify();
+                });
+                cx.notify();
+            }))
     }
 
     fn response_pane(
@@ -316,6 +352,8 @@ impl ApiExplorer {
         }
 
         let pane = state.response.active_tab;
+        // Read before the immutable borrow of `cx` is needed mutably below.
+        let body_view = state.response.body_view;
         if !pane.is_implemented() {
             return later_step(
                 AppIcon::SquareCode,
@@ -328,8 +366,16 @@ impl ApiExplorer {
 
         match pane {
             ResponseTab::Headers => self.headers_pane(tab, cx).into_any_element(),
-            // Body is the default pane, and the only other implemented one.
-            _ => self.body_pane(tab, cx).into_any_element(),
+            ResponseTab::Cookies => self.cookies_pane(tab, cx).into_any_element(),
+            // Body is the default pane. In Tree mode it renders the parsed JSON
+            // tree; every other mode renders through the shared editor.
+            _ => {
+                if body_view == BodyView::Tree {
+                    self.json_tree_pane(tab, cx).into_any_element()
+                } else {
+                    self.body_pane(tab, cx).into_any_element()
+                }
+            }
         }
     }
 
@@ -363,10 +409,29 @@ impl ApiExplorer {
             .response
             .exchange()
             .is_some_and(|exchange| exchange.truncated);
+        // The HTML preview is honestly a text rendering, not a real page; the
+        // note says so at the top of the pane.
+        let preview_note = state.response.body_view == BodyView::Preview
+            && state
+                .response
+                .exchange()
+                .is_some_and(|exchange| exchange.kind == BodyKind::Html);
         let more_tab = tab.clone();
 
         v_flex()
             .size_full()
+            .when(preview_note, |this| {
+                this.child(
+                    div()
+                        .w_full()
+                        .px_3()
+                        .py_1p5()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .bg(cx.theme().muted.opacity(0.4))
+                        .child(t(Str::HtmlPreviewNote, cx)),
+                )
+            })
             .child(
                 div().flex_1().min_h_0().child(
                     Input::new(&body)
@@ -416,6 +481,212 @@ impl ApiExplorer {
             )
     }
 
+    /// The JSON tree view: an expand/collapse outline of the parsed body.
+    ///
+    /// The tree is parsed once and cached on the response state; rendering asks
+    /// only for the visible rows, so a large document costs a screenful of
+    /// elements, not one per node. Deep nodes start collapsed.
+    fn json_tree_pane(
+        &self,
+        tab: &Entity<RequestTabState>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let source = tab
+            .read(cx)
+            .response
+            .exchange()
+            .map(|exchange| exchange.body.clone())
+            .unwrap_or_default();
+
+        // Build the tree lazily and read out its visible rows in one update.
+        // A body that is not JSON, or is a bare scalar with no tree worth
+        // showing, falls back to the plain text body.
+        let visible = tab.update(cx, |state, _| {
+            state.response.json_tree(&source).and_then(|tree| {
+                tree.is_expandable().then(|| tree.visible_rows())
+            })
+        });
+
+        let Some(visible) = visible else {
+            return self.body_pane(tab, cx).into_any_element();
+        };
+
+        let truncated = visible.truncated;
+
+        // Built eagerly so the row elements do not keep `cx` borrowed as a lazy
+        // iterator would.
+        let mut row_elements: Vec<gpui::AnyElement> = Vec::new();
+        for (index, row) in visible.rows.into_iter().enumerate() {
+            row_elements.push(
+                self.json_tree_row(tab, &source, index, row, cx)
+                    .into_any_element(),
+            );
+        }
+
+        v_flex()
+            .size_full()
+            .child(
+                div()
+                    .id("json-tree")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_scroll()
+                    .p_1()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(cx.theme().mono_font_size)
+                    .children(row_elements),
+            )
+            .when(truncated, |this| {
+                this.child(
+                    h_flex()
+                        .w_full()
+                        .px_3()
+                        .py_1()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t(
+                            Str::JsonTreeTruncated(
+                                crate::api_explorer::models::json_tree::ROW_BUDGET,
+                            ),
+                            cx,
+                        )),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// One line of the JSON tree: a disclosure control for containers, the key,
+    /// and the value (or a bracket-and-count for a collapsed container).
+    fn json_tree_row(
+        &self,
+        tab: &Entity<RequestTabState>,
+        source: &str,
+        index: usize,
+        row: crate::api_explorer::models::json_tree::JsonRow,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let tab = tab.clone();
+        let indent = px(4. + row.depth as f32 * 14.);
+
+        let key_element = match &row.label {
+            RowLabel::Root => div().into_any_element(),
+            RowLabel::Index(i) => div()
+                .flex_shrink_0()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("{i}:"))
+                .into_any_element(),
+            RowLabel::Field(name) => div()
+                .flex_shrink_0()
+                .text_color(cx.theme().info)
+                .child(format!("{name}:"))
+                .into_any_element(),
+        };
+
+        let (disclosure, value_element) = match row.content {
+            RowContent::Scalar { text, kind } => (
+                div().w(px(16.)).flex_shrink_0().into_any_element(),
+                div()
+                    .min_w_0()
+                    .text_color(scalar_color(kind, cx))
+                    .child(scalar_text(&text, kind))
+                    .into_any_element(),
+            ),
+            RowContent::Container {
+                open,
+                close,
+                count,
+                expanded,
+            } => {
+                let path = row.path.clone();
+                let source = source.to_string();
+                let toggle = Button::new(("json-toggle", index))
+                    .ghost()
+                    .xsmall()
+                    .icon(if expanded {
+                        AppIcon::ChevronDown
+                    } else {
+                        AppIcon::ChevronRight
+                    })
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let source = source.clone();
+                        let path = path.clone();
+                        tab.update(cx, |state, cx| {
+                            if let Some(tree) = state.response.json_tree(&source) {
+                                tree.toggle(&path);
+                                cx.notify();
+                            }
+                        });
+                        cx.notify();
+                    }))
+                    .into_any_element();
+                let summary = if expanded {
+                    format!("{open}")
+                } else {
+                    format!("{open} … {close} {count}")
+                };
+                (
+                    toggle,
+                    div()
+                        .min_w_0()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(summary)
+                        .into_any_element(),
+                )
+            }
+        };
+
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap_1()
+            .pl(indent)
+            .pr_2()
+            .py(px(1.))
+            .child(disclosure)
+            .child(key_element)
+            .child(value_element)
+    }
+
+    /// The Cookies pane: the `Set-Cookie` headers parsed into name, value and
+    /// attributes.
+    fn cookies_pane(
+        &self,
+        tab: &Entity<RequestTabState>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let cookies = tab
+            .read(cx)
+            .response
+            .exchange()
+            .map(|exchange| cookies_from_headers(&exchange.headers))
+            .unwrap_or_default();
+
+        if cookies.is_empty() {
+            return empty_state(
+                AppIcon::File,
+                t(Str::NoCookies, cx),
+                Some(t(Str::NoCookiesHint, cx)),
+                cx,
+            )
+            .into_any_element();
+        }
+
+        let rows: Vec<_> = cookies
+            .into_iter()
+            .enumerate()
+            .map(|(index, cookie)| cookie_row(index, cookie, cx))
+            .collect();
+
+        div()
+            .id("response-cookies")
+            .size_full()
+            .overflow_y_scroll()
+            .child(v_flex().w_full().children(rows))
+            .into_any_element()
+    }
+
     fn headers_pane(
         &self,
         tab: &Entity<RequestTabState>,
@@ -458,4 +729,60 @@ impl ApiExplorer {
                     })),
             )
     }
+}
+
+/// The theme colour a scalar is drawn in, by type, matching the code editor's
+/// own JSON highlighting closely enough to read as the same document.
+fn scalar_color(kind: ScalarKind, cx: &Context<ApiExplorer>) -> gpui::Hsla {
+    match kind {
+        ScalarKind::String => cx.theme().success,
+        ScalarKind::Number => cx.theme().info,
+        ScalarKind::Bool => cx.theme().warning,
+        ScalarKind::Null => cx.theme().muted_foreground,
+    }
+}
+
+/// A scalar as it reads in the tree: strings quoted, everything else bare.
+fn scalar_text(text: &str, kind: ScalarKind) -> String {
+    match kind {
+        ScalarKind::String => format!("\"{text}\""),
+        _ => text.to_string(),
+    }
+}
+
+/// One cookie: its `name = value`, then its attributes as small tags.
+fn cookie_row(index: usize, cookie: Cookie, cx: &Context<ApiExplorer>) -> impl IntoElement {
+    let attributes = cookie.attributes;
+    v_flex()
+        .w_full()
+        .gap_1()
+        .px_3()
+        .py_2()
+        .border_b_1()
+        .border_color(cx.theme().border.opacity(0.5))
+        .when(index % 2 == 1, |this| this.bg(cx.theme().list_even))
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_1()
+                .text_xs()
+                .font_family(cx.theme().mono_font_family.clone())
+                .child(div().flex_shrink_0().font_bold().child(cookie.name.clone()))
+                .child(div().flex_shrink_0().text_color(cx.theme().muted_foreground).child("="))
+                .child(div().flex_1().min_w_0().overflow_hidden().child(cookie.value.clone())),
+        )
+        .when(!attributes.is_empty(), |this| {
+            this.child(
+                h_flex().w_full().flex_wrap().gap_1().children(
+                    attributes.into_iter().map(|attribute| {
+                        let text = match attribute.value {
+                            Some(value) => format!("{}={value}", attribute.name),
+                            None => attribute.name,
+                        };
+                        Tag::secondary().small().child(text)
+                    }),
+                ),
+            )
+        })
 }

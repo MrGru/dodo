@@ -6,11 +6,12 @@
 
 use std::sync::Arc;
 
-use gpui::{Context, Task, Window};
+use gpui::{Context, EventEmitter, Task, Window};
 
 use crate::api_explorer::models::exchange::{BodyKind, Exchange};
 use crate::api_explorer::services::http::{body, prepare};
 use crate::api_explorer::services::{Transport, TransportError};
+use crate::api_explorer::state::history::HistoryRecord;
 use crate::api_explorer::state::request::RequestState;
 use crate::api_explorer::state::response::{Outcome, ResponseState, window_lines};
 
@@ -24,6 +25,11 @@ pub struct RequestTabState {
     /// new `Task` drops the old one, which cancels it.
     send_task: Option<Task<()>>,
 }
+
+/// A finished request is emitted so the page can record it in history. The page
+/// subscribes to every tab; the tab is the one place that knows a request
+/// completed, which is the seam phase 1 described.
+impl EventEmitter<HistoryRecord> for RequestTabState {}
 
 impl RequestTabState {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -109,14 +115,34 @@ impl RequestTabState {
     fn fail(&mut self, error: TransportError, cx: &mut Context<Self>) {
         self.response.outcome = Outcome::Failed(error.message());
         self.send_task = None;
+        // A failed request is still history: no status, no timing.
+        let snapshot = self.request.snapshot(cx);
+        cx.emit(HistoryRecord {
+            snapshot,
+            status: None,
+            elapsed: None,
+        });
         cx.notify();
     }
 
     fn receive(&mut self, exchange: Exchange, window: &mut Window, cx: &mut Context<Self>) {
+        // Read the metadata history needs before the exchange is moved into the
+        // outcome.
+        let status = exchange.status;
+        let elapsed = exchange.elapsed;
+
         self.response.reset_window();
+        self.response.reset_json_tree();
         self.response.outcome = Outcome::Received(exchange);
         self.send_task = None;
         self.refresh_body(window, cx);
+
+        let snapshot = self.request.snapshot(cx);
+        cx.emit(HistoryRecord {
+            snapshot,
+            status: Some(status),
+            elapsed: Some(elapsed),
+        });
         cx.notify();
     }
 
@@ -131,12 +157,17 @@ impl RequestTabState {
             return;
         };
 
+        use crate::api_explorer::services::http::body;
+        use crate::api_explorer::state::response::BodyView;
+
         let kind = exchange.kind;
         let text = match self.response.body_view {
-            crate::api_explorer::state::response::BodyView::Pretty => {
-                crate::api_explorer::services::http::body::prettify(&exchange.body, kind)
-            }
-            crate::api_explorer::state::response::BodyView::Raw => exchange.body.clone(),
+            BodyView::Pretty => body::prettify(&exchange.body, kind),
+            BodyView::Raw => exchange.body.clone(),
+            BodyView::Preview => body::preview(&exchange.body, kind),
+            // Tree mode renders its own element from the parsed tree; the shared
+            // editor is not shown, so there is nothing to refresh here.
+            BodyView::Tree => return,
         };
 
         let (windowed, total) = window_lines(&text, self.response.visible_lines);
