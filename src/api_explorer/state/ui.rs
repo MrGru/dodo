@@ -22,7 +22,7 @@ pub const COLLECTIONS_WIDTH: Pixels = px(185.);
 /// short window rather than a fixed stub. A response arriving later does not
 /// change either panel's geometry (the split is content-independent), so the
 /// proportions never get yanked out from under a drag.
-pub const RESPONSE_HEIGHT: Pixels = px(240.);
+pub const RESPONSE_HEIGHT: Pixels = px(200.);
 
 /// Smallest the request editor is allowed to shrink to when the response pane
 /// is dragged up over it.
