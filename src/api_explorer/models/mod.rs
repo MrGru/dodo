@@ -11,4 +11,5 @@ pub mod json_tree;
 pub mod key_value;
 pub mod method;
 pub mod request;
+pub mod script_template;
 pub mod snapshot;

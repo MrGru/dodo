@@ -130,17 +130,20 @@ impl ApiExplorer {
                 cx.notify();
             }))
             .trigger(
-                Button::new("method-trigger").outline().child(
+                // A compact control proportionate to the URL field: xsmall
+                // height and padding, small bold text, a small chevron.
+                Button::new("method-trigger").outline().xsmall().child(
                     h_flex()
                         .items_center()
                         .gap_1()
                         .child(
                             div()
+                                .text_xs()
                                 .font_bold()
                                 .text_color(method.color(cx))
                                 .child(method.as_str()),
                         )
-                        .child(Icon::new(AppIcon::ChevronDown).size(px(12.))),
+                        .child(Icon::new(AppIcon::ChevronDown).size(px(10.))),
                 ),
             )
             .p_1()
@@ -230,6 +233,9 @@ impl ApiExplorer {
             .min_w_0()
             .px_2()
             .overflow_hidden()
+            // A divider above the strip separates it from the request bar, and
+            // the existing one below separates it from the pane.
+            .border_t_1()
             .border_b_1()
             .border_color(cx.theme().border)
             .child(

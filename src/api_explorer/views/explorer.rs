@@ -61,10 +61,12 @@ pub struct ApiExplorer {
     pub(super) method_menu_open: bool,
     /// Whether the request-naming popover is showing.
     pub(super) save_menu_open: bool,
-    /// Whether the Body tab's type dropdown is showing.
-    pub(super) body_menu_open: bool,
     /// Whether the Auth tab's scheme dropdown is showing.
     pub(super) auth_menu_open: bool,
+    /// Whether each Scripts-tab templates popover is showing. Held here rather
+    /// than inside the popover so picking a template can close it.
+    pub(super) pre_template_menu_open: bool,
+    pub(super) post_template_menu_open: bool,
     /// The name field inside that popover. One field shared by every tab: only
     /// one popover can be open at a time, and it is filled from the active tab
     /// each time it opens.
@@ -109,8 +111,9 @@ impl ApiExplorer {
             collection_store,
             method_menu_open: false,
             save_menu_open: false,
-            body_menu_open: false,
             auth_menu_open: false,
+            pre_template_menu_open: false,
+            post_template_menu_open: false,
             name_input,
             search_input,
             rename_input,

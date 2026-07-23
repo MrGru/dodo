@@ -1,7 +1,6 @@
 //! Deciding what a response body *is*, and rendering it readably.
 
 use crate::api_explorer::models::exchange::BodyKind;
-use crate::api_explorer::services::TransportError;
 
 /// Reads the media type out of a `Content-Type` header value, discarding
 /// parameters (`; charset=utf-8`) and case.
@@ -12,6 +11,17 @@ fn media_type(content_type: &str) -> String {
         .unwrap_or_default()
         .trim()
         .to_lowercase()
+}
+
+/// Reads the `charset` parameter out of a `Content-Type` header value,
+/// lowercased and unquoted. `text/html; charset=ISO-8859-1` yields `iso-8859-1`.
+fn charset_of(content_type: &str) -> Option<String> {
+    content_type.split(';').skip(1).find_map(|param| {
+        let (name, value) = param.split_once('=')?;
+        name.trim()
+            .eq_ignore_ascii_case("charset")
+            .then(|| value.trim().trim_matches('"').to_lowercase())
+    })
 }
 
 /// Which highlighter grammar to show a body with.
@@ -35,22 +45,28 @@ pub fn kind_of(content_type: Option<&str>) -> BodyKind {
     }
 }
 
-/// Decodes response bytes as UTF-8.
+/// Decodes response bytes into a displayable string, never failing.
 ///
-/// A body that is not UTF-8 — a JPEG, or text in a legacy encoding — is a
-/// reportable condition rather than something to render as mojibake, so this
-/// returns the error that becomes a calm banner.
-pub fn decode(bytes: &[u8], content_type: Option<&str>) -> Result<String, TransportError> {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => Ok(text.to_string()),
-        Err(err) => Err(TransportError::BodyNotText {
-            // The media type is the useful half of "why is this not text", so
-            // it goes in beside the position of the bad byte.
-            detail: match content_type {
-                Some(content_type) => format!("{}, {err}", media_type(content_type)),
-                None => err.to_string(),
-            },
-        }),
+/// A browser renders whatever bytes arrive; so does this. Bytes that are valid
+/// UTF-8 come back verbatim. When `Content-Type` declares a single-byte legacy
+/// charset (`ISO-8859-1` and friends — what `https://www.google.com/` serves),
+/// each byte is that encoding's code point. Anything else — a declared UTF-8
+/// body with a stray byte, an unknown label, or no charset at all — is read as
+/// UTF-8 with invalid sequences replaced, so even a JPEG shows *something*
+/// rather than tripping the failure banner. A genuine transport failure (DNS,
+/// timeout, TLS, refused connection) still errors upstream in `client`; this
+/// only ever sees bytes that already arrived.
+pub fn decode(bytes: &[u8], content_type: Option<&str>) -> String {
+    match content_type.and_then(charset_of).as_deref() {
+        // Single-byte legacy encodings map every byte into U+0000..=U+00FF.
+        // windows-1252 differs from latin-1 only across 0x80..=0x9F; latin-1 is
+        // a faithful-enough rendering without vendoring a code-page table.
+        Some("iso-8859-1" | "latin1" | "latin-1" | "iso8859-1" | "windows-1252" | "cp1252") => {
+            bytes.iter().map(|&byte| byte as char).collect()
+        }
+        // utf-8, us-ascii, an unknown label, or no charset: read as UTF-8 and
+        // replace any invalid sequence rather than reject the whole body.
+        _ => String::from_utf8_lossy(bytes).into_owned(),
     }
 }
 
@@ -169,7 +185,6 @@ fn decode_entities(text: String) -> String {
 mod tests {
     use super::{decode, kind_of, preview, prettify};
     use crate::api_explorer::models::exchange::BodyKind;
-    use crate::api_explorer::services::TransportError;
 
     #[test]
     fn content_type_selects_the_grammar() {
@@ -189,20 +204,40 @@ mod tests {
 
     #[test]
     fn utf8_bodies_decode() {
-        assert_eq!(decode("hello".as_bytes(), None).expect("valid"), "hello");
-        assert_eq!(decode("xin chào".as_bytes(), None).expect("valid"), "xin chào");
+        assert_eq!(decode("hello".as_bytes(), None), "hello");
+        assert_eq!(decode("xin chào".as_bytes(), None), "xin chào");
+    }
+
+    /// Regression for the `https://google.com` failure: `www.google.com` serves
+    /// HTML declared `charset=ISO-8859-1` whose bytes are not valid UTF-8. A
+    /// strict UTF-8 decode reported it as a transport failure and showed the red
+    /// banner; honoring the declared charset renders it instead.
+    #[test]
+    fn latin1_declared_body_renders_instead_of_failing() {
+        // 0xE9 is `é` in ISO-8859-1 but an invalid lone continuation byte in UTF-8.
+        let bytes = b"caf\xe9";
+        assert_eq!(decode(bytes, Some("text/html; charset=ISO-8859-1")), "café");
+    }
+
+    /// Any received bytes must render, not error — even a binary body with no
+    /// usable charset. Invalid UTF-8 sequences become the replacement character
+    /// rather than tripping a failure.
+    #[test]
+    fn a_non_utf8_body_renders_rather_than_erroring() {
+        let text = decode(&[0xff, 0xfe, 0x00], Some("image/png"));
+        assert!(
+            text.contains('\u{fffd}'),
+            "invalid bytes should decode to replacement chars, got {text:?}"
+        );
     }
 
     #[test]
-    fn a_binary_body_is_reported_not_rendered() {
-        let error = decode(&[0xff, 0xfe, 0x00], Some("image/png")).expect_err("not text");
-        match error {
-            TransportError::BodyNotText { detail } => assert!(
-                detail.contains("image/png"),
-                "the media type should reach the message, got {detail:?}"
-            ),
-            other => panic!("expected BodyNotText, got {other:?}"),
-        }
+    fn charset_is_read_case_and_quote_insensitively() {
+        // Quoted, upper-cased, extra parameters: still latin-1.
+        let bytes = b"\xe9";
+        assert_eq!(decode(bytes, Some("text/plain; CharSet=\"iso-8859-1\"")), "é");
+        // No charset falls back to lossy UTF-8, so the same byte is replaced.
+        assert_eq!(decode(bytes, Some("text/plain")), "\u{fffd}");
     }
 
     #[test]

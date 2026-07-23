@@ -28,6 +28,10 @@ impl ApiExplorer {
                 let name = state.request.display_name(cx);
 
                 Tab::new()
+                    // The method label and close button otherwise sit flush
+                    // against the tab's edges; a little horizontal padding gives
+                    // each tab room to breathe.
+                    .px_2()
                     .prefix(
                         div()
                             .text_xs()
@@ -76,14 +80,23 @@ impl ApiExplorer {
                     .selected_index(active)
                     .children(tabs)
                     .suffix(
-                        Button::new("new-request-tab")
-                            .ghost()
-                            .xsmall()
-                            .icon(AppIcon::Plus)
-                            .tooltip(t(Str::NewRequest, cx))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_tab(window, cx);
-                            })),
+                        // Centered in a square slot the height of the tab strip,
+                        // so the `+` sits in the middle of its cell rather than
+                        // hard against the last tab.
+                        h_flex()
+                            .size(px(28.))
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Button::new("new-request-tab")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(AppIcon::Plus)
+                                    .tooltip(t(Str::NewRequest, cx))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_tab(window, cx);
+                                    })),
+                            ),
                     )
                     .on_click(cx.listener(|this, index: &usize, _, cx| {
                         this.ui.active_tab = *index;

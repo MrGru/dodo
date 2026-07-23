@@ -115,7 +115,7 @@ impl Transport for HttpTransport {
         let elapsed = started.elapsed();
         let size_bytes = buffer.len();
         let kind = body::kind_of(content_type.as_deref());
-        let text = body::decode(&buffer, content_type.as_deref())?;
+        let text = body::decode(&buffer, content_type.as_deref());
 
         Ok(Exchange {
             status: status.as_u16(),
