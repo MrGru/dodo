@@ -11,8 +11,9 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{Context, Entity, IntoElement, ParentElement as _, Styled as _, div};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, h_flex, v_flex,
+};
 
 use crate::api_explorer::components::empty_state::empty_state;
 use crate::api_explorer::components::key_value_table::key_value_table;
@@ -70,20 +71,22 @@ impl ApiExplorer {
         let copy_tab = tab.clone();
 
         h_flex()
+            // `items_start`: the selector wraps to a second line at a narrow
+            // window, and the format/copy controls stay aligned to its top row.
             .w_full()
             .min_w_0()
-            .items_center()
+            .items_start()
             .gap_2()
             .px_2()
             .py_1p5()
             .child(
-                // The selector grows and scrolls its tabs when the window is
-                // narrow; the format/copy controls are pinned so they never clip.
+                // The selector takes the leftover width and wraps rather than
+                // scrolling, so no type is ever hidden; the format/copy controls
+                // live in their own pinned slot beside it, never overlapping.
                 div()
                     .flex_1()
                     .min_w_0()
-                    .overflow_hidden()
-                    .child(self.body_type_tabs(tab, body_type, cx)),
+                    .child(self.body_type_selector(tab, body_type, cx)),
             )
             .child(
                 h_flex()
@@ -133,50 +136,46 @@ impl ApiExplorer {
             )
     }
 
-    /// The body-type selector: a horizontal tab strip, one tab per kind, styled
-    /// like the request and response sub-tab strips.
+    /// The body-type selector: a wrapping segmented control, one button per kind.
     ///
-    /// A tab strip rather than a dropdown so every kind is visible at a glance;
-    /// the strip scrolls its own tabs when the window is too narrow for all of
-    /// them. Binary is shown as a disabled tab — the honest placeholder for a
-    /// kind this build cannot build yet — and its tab does not switch the editor.
-    fn body_type_tabs(
+    /// It wraps to as many lines as it needs so every kind stays visible and
+    /// selectable at any width — nothing is pushed off-screen. Binary is shown
+    /// disabled with the reason attached, the honest placeholder for a kind this
+    /// build cannot build yet.
+    fn body_type_selector(
         &self,
         tab: &Entity<RequestTabState>,
         current: BodyType,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let selected = BodyType::ALL
-            .iter()
-            .position(|candidate| *candidate == current)
-            .unwrap_or(0);
-        let switch_tab = tab.clone();
-
-        TabBar::new("body-type-tabs")
-            .xsmall()
-            .selected_index(selected)
-            .children(BodyType::ALL.map(|candidate| {
-                Tab::new()
-                    .label(t(candidate.label(), cx))
-                    .disabled(!candidate.is_available())
-            }))
-            .on_click(cx.listener(move |_, index: &usize, _, cx| {
-                let Some(candidate) = BodyType::ALL.get(*index).copied() else {
-                    return;
-                };
-                // A disabled tab never fires this, but guard anyway so Binary can
-                // never be selected.
-                if !candidate.is_available() {
-                    return;
-                }
-                switch_tab.update(cx, |state, cx| {
-                    state.request.body_type = candidate;
-                    state.request.apply_body_language(cx);
-                    state.request.dirty = true;
+        // Built inline rather than through a helper: an edition-2024 `impl
+        // IntoElement` return would capture `cx`, which cannot escape the map
+        // closure.
+        let buttons = BodyType::ALL.map(|candidate| {
+            let available = candidate.is_available();
+            let switch_tab = tab.clone();
+            Button::new(("body-type", candidate as usize))
+                .ghost()
+                .xsmall()
+                .selected(candidate == current)
+                // Binary is shown disabled with the reason attached rather than
+                // hidden, the honest placeholder for a kind this build cannot
+                // build yet.
+                .disabled(!available)
+                .when(!available, |this| this.tooltip(t(Str::BinaryBodyLater, cx)))
+                .label(t(candidate.label(), cx))
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    switch_tab.update(cx, |state, cx| {
+                        state.request.body_type = candidate;
+                        state.request.apply_body_language(cx);
+                        state.request.dirty = true;
+                        cx.notify();
+                    });
                     cx.notify();
-                });
-                cx.notify();
-            }))
+                }))
+        });
+
+        h_flex().w_full().flex_wrap().gap_1().children(buttons)
     }
 
     fn body_editor(
