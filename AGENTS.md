@@ -11,10 +11,17 @@ comments there are the authority on structure. This file is only a map.
 
 Most tools are a single `src/<tool>.rs`. **`src/api_explorer/` is the exception** and the pattern
 to copy when a tool outgrows one file: `models/` (plain data, no GPUI, unit tested), `services/`
-(the `Transport` trait — the only place that may name `reqwest`), `state/`, `components/`,
-`views/`. Its `mod.rs` doc comments explain the split and where later phases plug in. It is also
-the only tool that registers a key binding (`api_explorer::init`, called from `main` after
-`gpui_component::init`, same ordering rule as `settings::init`).
+(the `Transport` trait — the only place that may name `reqwest` — and `CollectionStore`, the only
+place that does disk IO), `state/`, `components/`, `views/`. Its `mod.rs` doc comments explain the
+split and where later phases plug in. It is also the only tool that registers a key binding
+(`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
+`settings::init`).
+
+**dodo now persists one thing across restarts:** the API Explorer's collections, written by
+`services::collection_store::DiskCollectionStore` to `~/Library/Application Support/dodo/`
+(`data_dir()`). This is the first user data dodo saves, so the `dodo-theming-settings` skill's
+"nothing is persisted across restarts" is now scoped to appearance/language settings only, not
+collections. Persistence and initial load run on the background executor, never the UI thread.
 
 ## Skills
 
