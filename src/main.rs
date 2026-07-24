@@ -2,6 +2,7 @@ mod api_explorer;
 mod app;
 mod app_icon;
 mod assets;
+mod build_info;
 mod docker;
 mod encoder_decoder;
 mod i18n;
@@ -18,6 +19,10 @@ use gpui_component::*;
 use crate::{app::DodoApp, assets::Assets};
 
 fn main() {
+    if print_build_metadata_and_exit() {
+        return;
+    }
+
     let app = gpui_platform::application().with_assets(Assets);
 
     app.run(move |cx| {
@@ -47,4 +52,26 @@ fn main() {
         })
         .detach();
     });
+}
+
+/// dodo's only command-line surface: `--version` / `-V` and `--build-info`
+/// print the metadata `build.rs` embedded and exit, before any GPUI state or
+/// window exists.
+///
+/// This is what lets CI prove a packaged binary actually runs — a GUI app
+/// cannot be launched on a headless runner, so the release workflow executes
+/// this path instead (see `docs/release.md` for exactly what that does and
+/// does not prove).
+///
+/// Returns `true` when it handled the arguments and `main` should stop.
+/// Anything else — no arguments, an unrecognised argument, the arguments macOS
+/// passes to a bundled `.app` — falls through to the window, so normal launch
+/// behaviour is unchanged.
+fn print_build_metadata_and_exit() -> bool {
+    match std::env::args().nth(1).as_deref() {
+        Some("--version" | "-V") => println!("{}", build_info::VERSION_INFO.short()),
+        Some("--build-info") => println!("{}", build_info::VERSION_INFO.long()),
+        _ => return false,
+    }
+    true
 }

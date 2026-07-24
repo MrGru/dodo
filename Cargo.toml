@@ -3,6 +3,25 @@ name = "dodo"
 version = "0.1.0"
 edition = "2024"
 
+# Only features that switch real code off are listed here. `production` /
+# `development` / `profiling` marker flags were considered and deliberately not
+# added: nothing in this crate reads them, so they would be decorative — see
+# `docs/build-optimization.md` for the same question about a `docker` feature,
+# which is real but not worth the ~550 `Str` variants it would have to gate.
+[features]
+default = ["syntax-highlighting"]
+# The three tree-sitter grammars the code editor highlights with. Turning this
+# off (`--no-default-features`) drops the grammar crates and their generated C
+# parsers entirely and the editor falls back to plain, unhighlighted text —
+# which is exactly what the library does when none of the features is set. It
+# is the one lever in this crate that trades a visible feature for real binary
+# size; `docs/build-optimization.md` records what it is worth.
+syntax-highlighting = [
+    "gpui-component/tree-sitter",
+    "gpui-component/tree-sitter-html",
+    "gpui-component/tree-sitter-yaml",
+]
+
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
@@ -10,12 +29,10 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["fo
 # the code editor actually colour text: without any of them the library's
 # highlighter compiles to a stub that returns no highlights. Three grammars
 # rather than the ~35 of `tree-sitter-languages`, chosen for what an HTTP
-# response body actually is. Everything else degrades to plain text.
-gpui-component = { git = "https://github.com/longbridge/gpui-component", features = [
-    "tree-sitter",
-    "tree-sitter-html",
-    "tree-sitter-yaml",
-] }
+# response body actually is. Everything else degrades to plain text. They are
+# selected through this crate's own `syntax-highlighting` feature (on by
+# default) rather than listed here, so a size-constrained build can drop them.
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 anyhow = "1.0"
 # The HTTP client behind the API Explorer. `default-features = false` drops
@@ -53,3 +70,64 @@ tokio = { version = "1.53.1", default-features = false, features = ["rt-multi-th
 # CPU delta) inside `docker::services`. Already in the tree transitively via
 # bollard, so it adds no build cost; pure Rust, no TLS.
 futures-util = "0.3.33"
+
+# ---------------------------------------------------------------------------
+# Build profiles
+#
+# `docs/build-optimization.md` carries the measurements these settings are
+# based on (all taken on macOS arm64) and the reasoning that is too long for a
+# comment. Keep the two in sync when changing anything here.
+# ---------------------------------------------------------------------------
+
+# What ships. Every release archive is built with this profile plus `--locked`.
+[profile.release]
+opt-level = 3
+# Fat LTO rather than the usual "thin" default advice, because it was measured
+# on this graph rather than assumed: fat produced a 20,513,488-byte binary
+# against thin's 22,370,896 (-8.3%) for 5m42s against 4m29s of clean build
+# time, with a 2.3 GiB peak RSS in the link step — well inside a CI runner.
+# 73 seconds on a build that happens once per tag is a good trade for 1.8 MB
+# off every download. Runtime performance was NOT benchmarked either way.
+lto = "fat"
+# One codegen unit per crate: strictly better optimisation input than the
+# default 16, and the wall-clock cost is small next to LTO.
+codegen-units = 1
+# The shipped binary carries no symbol table. This is the deliberate other half
+# of the crash-symbolication story: build `release-debug` below when you need a
+# symbolicated stack, and see section "Crash reporting" in `docs/release.md`
+# for how a `.dSYM` would be produced and uploaded once that exists.
+strip = "symbols"
+# No debug info to strip in the first place; keeps LTO input small.
+debug = false
+# Incremental compilation exists to make *rebuilds* cheap by splitting code
+# into more units. A release build is built once, from clean, in CI — the split
+# would only cost optimisation quality.
+incremental = false
+# Release builds wrap on integer overflow (the Rust default for `release`).
+# Stated explicitly because the alternative is a runtime panic in a GUI app
+# with unsaved state; dodo's arithmetic is UI layout and byte counts, not
+# anything where a wrap is a security boundary.
+overflow-checks = false
+# NOT `panic = "abort"`, against the baseline this profile started from — and
+# this one is a genuinely close call, so read `docs/build-optimization.md`
+# before changing it. `abort` was built and launched: it works, and it is worth
+# 3.5 MB (17,040,784 bytes vs 20,513,488, -16.9%) and 76 seconds of build time.
+# What it costs is failure isolation. dodo runs fallible work — HTTP requests,
+# Docker API polling, collection files — on GPUI background threads and inside
+# a tokio runtime whose task harness wraps every poll in `catch_unwind`. Today
+# a panic there kills one task; with `abort` it SIGABRTs a GUI app holding
+# unsaved editor state. That failure path is the part no local test can verify,
+# which is exactly why the smaller binary does not win.
+panic = "unwind"
+
+# A release build you can profile or symbolicate: same optimisation as
+# `release`, plus full debug info kept out of the executable itself. On macOS
+# `packed` runs `dsymutil`, producing `target/release-debug/dodo.dSYM` (277 MB,
+# same UUID as the binary — that pairing is what a symbol server needs). Not
+# what ships, and not cheap: 11m 46s clean, so reach for it deliberately.
+# `cargo dist-debug` is the alias.
+[profile.release-debug]
+inherits = "release"
+debug = "full"
+split-debuginfo = "packed"
+strip = "none"

@@ -48,6 +48,27 @@ Four things about the module that are not obvious from any one file:
 "nothing is persisted across restarts" is now scoped to appearance/language settings only, not
 collections. Persistence and initial load run on the background executor, never the UI thread.
 
+**Build and release engineering lives in `docs/`**, and those two files are the authority for it:
+`docs/build-optimization.md` (release profile, the measured before/after size table, linker
+findings, the dependency report, startup review) and `docs/release.md` (CI, the release workflow,
+packaging, verification, future signing/notarisation placeholders). The rest is `Cargo.toml`'s
+`[profile.*]` comments, `build.rs`, `scripts/` and `.github/`.
+
+Three things about it that catch people:
+
+- **Everything under `.github/workflows/` is written but never executed**, and dodo has never been
+  built on Linux or Windows. Matrix rows for those platforms are marked `experimental` and are
+  non-blocking on purpose; `cargo fmt --check` is non-blocking too, because 34 files predate it.
+- **`Cargo.lock` really is the only possible pin on the four git dependencies.** Explicit
+  `rev = "…"` pins were tried and cannot work here — upstream depends on itself through unpinned
+  default-branch refs, and the three resulting cargo errors are recorded in
+  `docs/build-optimization.md`. Hence `--locked` everywhere, and `cargo update` only ever as its
+  own reviewed commit.
+- **`dodo --version` / `--build-info`** print what `build.rs` embedded and exit before any window
+  opens (`print_build_metadata_and_exit` in `src/main.rs`). That path is how CI proves a packaged
+  binary runs at all — a GUI app cannot open a window on a headless runner — so keep it free of
+  GPUI initialisation.
+
 ## Skills
 
 Detailed, verified knowledge lives in `.claude/skills/<name>/SKILL.md`. Load one when its trigger
@@ -64,7 +85,8 @@ fires — they are written to be read at the moment of need, not up front.
 Two things that catch everyone and belong here rather than behind a trigger:
 
 - **`Cargo.lock` is the only pin on the four git dependencies.** `cargo update` silently jumps
-  them to upstream HEAD. Never run it as a side effect of another task.
+  them to upstream HEAD. Never run it as a side effect of another task. (Why an explicit `rev`
+  pin cannot replace it: `docs/build-optimization.md`.)
 - **The pinned `gpui-component` source is the reference for every widget question**, at
   `~/.cargo/git/checkouts/gpui-component-*/<rev>/crates/ui/src` (rev from `Cargo.lock`). Its
   `<checkout>/skills/` directory holds the upstream authors' own guidance, which is excellent on

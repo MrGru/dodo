@@ -1,0 +1,87 @@
+# Installs the Rust toolchain and restores the cargo caches.
+#
+# Used by every job in every workflow, which is the whole point: the cache key
+# strategy and the git-dependency handling below are subtle enough that having
+# two copies of them would guarantee they drift apart.
+#
+# The expensive thing about building dodo is not dodo. Four of its
+# dependencies come from git — `gpui`/`gpui_platform` from zed-industries/zed
+# and `gpui-component`/`gpui-component-assets` from longbridge/gpui-component —
+# and the zed repository is large (hundreds of MB) and produces ~800 crates to
+# compile. A cold job spends most of its time there, so this action leans hard
+# on caching and on fetching with the git CLI.
+
+name: Set up Rust
+description: Install a Rust toolchain and restore the cargo registry, git and target caches.
+
+inputs:
+  toolchain:
+    description: Toolchain to install (stable, 1.85.0, nightly, ...).
+    required: false
+    default: stable
+  components:
+    description: Space- or comma-separated rustup components, e.g. "clippy rustfmt".
+    required: false
+    default: ""
+  targets:
+    description: Extra target triples to install, e.g. "aarch64-apple-darwin".
+    required: false
+    default: ""
+  cache-key:
+    description: >
+      Extra text mixed into the cache key. Give jobs that produce different
+      artifacts (a clippy job and a release build) different values so they do
+      not fight over one cache entry.
+    required: false
+    default: ""
+  save-cache:
+    description: >
+      Whether this job may write the cache. Set to "false" in jobs that only
+      read it, so a short-lived job cannot evict a useful entry.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust ${{ inputs.toolchain }}
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}
+
+    - name: Configure cargo for CI
+      shell: bash
+      run: |
+        # Fetch git dependencies with the real git binary instead of cargo's
+        # built-in libgit2 client. For a repository the size of zed this is the
+        # difference between a fetch that finishes and one that times out, and
+        # it is the only way to get a shallow-ish, resumable fetch.
+        echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+        # Retry transient network failures rather than failing the whole job.
+        echo "CARGO_NET_RETRY=5" >> "$GITHUB_ENV"
+        # Incremental compilation is pure overhead on a machine that builds
+        # once and is then destroyed; it also bloats the cache we upload.
+        echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+        # Thin debug info in CI: enough for a backtrace, a fraction of the
+        # disk and cache size of full debug info. (Release builds set their
+        # own `debug` in Cargo.toml and are unaffected.)
+        echo "CARGO_PROFILE_DEV_DEBUG=line-tables-only" >> "$GITHUB_ENV"
+        echo "CARGO_TERM_COLOR=always" >> "$GITHUB_ENV"
+        echo "RUST_BACKTRACE=1" >> "$GITHUB_ENV"
+
+    - name: Restore cargo caches
+      uses: Swatinem/rust-cache@v2
+      with:
+        # Keys are per-job-kind and per-runner. rust-cache already mixes in the
+        # runner OS, the toolchain version and a hash of Cargo.lock.
+        key: ${{ inputs.cache-key }}
+        save-if: ${{ inputs.save-cache == 'true' }}
+        # Cache the git checkouts too, not just the bare clones: re-checking
+        # out zed from the object database is not free either.
+        cache-directories: |
+          ~/.cargo/git/checkouts
+        # A build that fails after 20 minutes of compiling dependencies should
+        # still leave those dependencies cached for the next attempt.
+        cache-on-failure: true

@@ -1,2 +1,4 @@
 /target
 .claude/settings.local.json
+# Release archives produced by scripts/package.sh; regenerated, never committed.
+/dist

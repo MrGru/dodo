@@ -1,0 +1,106 @@
+# cargo-deny policy for dodo.
+#
+# STATUS: ADVISORY. This file does not pass today, on purpose, and the CI job
+# that runs it (.github/workflows/analysis.yml) is `continue-on-error: true`.
+# One real finding is deliberately left un-suppressed:
+#
+#   zlog, ztracing and ztracing_macro (from zed-industries/zed) are
+#   GPL-3.0-or-later, and they are linked into the shipped binary through
+#   gpui -> sum_tree -> ztracing -> zlog. dodo itself carries no LICENSE file
+#   yet. Distributing binaries therefore has a licensing question attached to
+#   it that only a human can answer: adopt a GPL-3.0-compatible licence for
+#   dodo, or stop linking those crates (which currently means not using gpui).
+#   Adding an `exceptions` entry here would make the check green and make the
+#   question invisible, so it is not added. See "Licensing" in
+#   docs/build-optimization.md.
+#
+# Once that is resolved, delete `continue-on-error` from the deny job and this
+# file becomes a real gate.
+#
+# Run it locally with:  cargo deny --all-features check
+# UNVERIFIED: cargo-deny is not installed in the environment where this file
+# was written, so the schema is per the 0.16+ documentation but has not been
+# executed. If it errors on a key, the key — not the policy — is wrong.
+
+[graph]
+# Check the platforms dodo actually ships to. Without this, cargo-deny
+# considers every target's dependencies, which for a GPUI app means dragging in
+# the whole X11/Wayland/Windows graph on every host and reporting licence
+# problems in code that is never linked.
+targets = [
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "x86_64-pc-windows-msvc" },
+]
+all-features = true
+
+[advisories]
+# RustSec advisories against the locked graph. `deny` is the right severity
+# even in an advisory-only file: when this does fire, someone should look.
+yanked = "warn"
+# Advisories consciously accepted go here, each with a reason and a date.
+# Empty is the correct state; an entry is a promise to revisit.
+ignore = []
+
+[licenses]
+# Permissive licences, plus the ones that appear in this graph in practice.
+# Compiled from `cargo metadata` on the current lock, not from a template.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "NCSA",
+    "CDLA-Permissive-2.0",
+    # aws-lc-sys, reached through rustls' default crypto provider.
+    "OpenSSL",
+    # File-level copyleft, not viral across a binary: acceptable for a
+    # dynamically-unmodified dependency. nucleo-matcher (dodo's own fuzzy
+    # matcher), dwrote, option-ext.
+    "MPL-2.0",
+]
+# The score below which a licence text is not confidently identified. 0.8 is
+# cargo-deny's default; lowering it hides genuinely ambiguous licences.
+confidence-threshold = 0.8
+exceptions = []
+
+[bans]
+# Duplicate versions are the normal state of a graph this size (about 15 pairs
+# today, nearly all inside zed's own dependencies and unfixable from here), so
+# they are a warning, not an error. The point is to notice a *new* one.
+multiple-versions = "warn"
+# A wildcard version requirement makes builds non-reproducible by definition.
+wildcards = "deny"
+# `highlight` picks which duplicate to show first in the tree output.
+highlight = "all"
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+# dodo has four git dependencies and no way around them; see the note about
+# rev-pinning in docs/build-optimization.md for why they are unpinned in
+# Cargo.toml and pinned only by Cargo.lock.
+unknown-git = "deny"
+allow-git = [
+    "https://github.com/zed-industries/zed",
+    "https://github.com/longbridge/gpui-component",
+    # Transitive, from zed's own manifests.
+    "https://github.com/zed-industries/font-kit",
+    "https://github.com/zed-industries/reqwest.git",
+    "https://github.com/zed-industries/scap",
+]
+
+[sources.allow-org]
+github = []
