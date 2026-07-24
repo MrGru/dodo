@@ -503,6 +503,13 @@ pub enum Str {
     DockerNone,
     DockerInspect,
     DockerNetworkPredefined,
+
+    // Docker module (round 4) — right-click context-menu items for the container
+    // detail views a later round fills in, and the section label that marks them
+    // as not yet available.
+    DockerViewLogs,
+    DockerOpenTerminal,
+    DockerComingSoonLabel,
 }
 
 impl Str {
@@ -1472,6 +1479,13 @@ impl Str {
             (Str::DockerNetworkPredefined, Language::Vietnamese) => {
                 "Không thể xoá mạng định sẵn".into()
             }
+
+            (Str::DockerViewLogs, Language::English) => "View Logs".into(),
+            (Str::DockerViewLogs, Language::Vietnamese) => "Xem nhật ký".into(),
+            (Str::DockerOpenTerminal, Language::English) => "Open Terminal".into(),
+            (Str::DockerOpenTerminal, Language::Vietnamese) => "Mở terminal".into(),
+            (Str::DockerComingSoonLabel, Language::English) => "Coming soon".into(),
+            (Str::DockerComingSoonLabel, Language::Vietnamese) => "Sắp có".into(),
         }
     }
 }
@@ -1903,6 +1917,10 @@ mod tests {
             term(Str::DockerNone),
             plain(Str::DockerInspect),
             plain(Str::DockerNetworkPredefined),
+            // Round 4 — context-menu placeholders.
+            plain(Str::DockerViewLogs),
+            plain(Str::DockerOpenTerminal),
+            plain(Str::DockerComingSoonLabel),
         ]
     }
 
@@ -2211,6 +2229,9 @@ mod tests {
             Str::DockerNone => 294,
             Str::DockerInspect => 295,
             Str::DockerNetworkPredefined => 296,
+            Str::DockerViewLogs => 297,
+            Str::DockerOpenTerminal => 298,
+            Str::DockerComingSoonLabel => 299,
         }
     }
 

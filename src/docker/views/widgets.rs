@@ -10,12 +10,16 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::{
-    App, ClickEvent, Div, ParentElement as _, SharedString, Styled as _, Window, div,
+    App, ClickEvent, Context, Div, FocusHandle, ParentElement as _, SharedString, Styled as _,
+    Window, div,
 };
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_component::menu::PopupMenu;
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
 
 use crate::app_icon::AppIcon;
+use crate::docker::{DockerContextDelete, DockerContextInspect};
+use crate::i18n::{Str, t};
 
 /// A header cell: a `div` carrying the caption, truncating if the column is
 /// squeezed. The caller sets the width.
@@ -65,6 +69,35 @@ pub fn placeholder_button(id: SharedString, icon: AppIcon, tooltip: SharedString
 /// column uses.
 pub fn muted_cell(text: SharedString, cx: &App) -> Div {
     div().text_color(cx.theme().muted_foreground).child(text)
+}
+
+/// The right-click menu the Images, Volumes and Networks pages share: a Delete
+/// (disabled where the resource cannot be removed, e.g. a predefined network),
+/// then a "Coming soon" label heading the disabled Inspect placeholder a later
+/// round fills in. `action_context` points the actions at the view's focus handle
+/// so its `on_action` handlers catch them; the view records which row was
+/// right-clicked before the menu builds.
+pub fn resource_context_menu(
+    menu: PopupMenu,
+    focus: FocusHandle,
+    delete_enabled: bool,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    menu.action_context(focus)
+        .menu_with_icon_and_disabled(
+            t(Str::Delete, cx),
+            AppIcon::Trash,
+            Box::new(DockerContextDelete),
+            !delete_enabled,
+        )
+        .separator()
+        .label(t(Str::DockerComingSoonLabel, cx))
+        .menu_with_icon_and_disabled(
+            t(Str::DockerInspect, cx),
+            AppIcon::Eye,
+            Box::new(DockerContextInspect),
+            true,
+        )
 }
 
 /// Now, in Unix seconds, for relative-time formatting. A clock before the epoch

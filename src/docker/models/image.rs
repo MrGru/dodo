@@ -47,6 +47,16 @@ impl Image {
         self.repository.is_none() && self.tag.is_none()
     }
 
+    /// The label the delete confirmation names the image by: its `repo:tag`
+    /// reference when tagged, else the short id. Shared by the row's Delete button
+    /// and the right-click menu so both name the same thing.
+    pub fn confirm_label(&self) -> String {
+        match (&self.repository, &self.tag) {
+            (Some(repo), Some(tag)) => format!("{repo}:{tag}"),
+            _ => self.short_id(),
+        }
+    }
+
     /// Whether this row matches a search query, case-insensitively over the
     /// repository and the tag. An empty query matches everything; an untagged
     /// image has no text to match, so a non-empty query never selects it.

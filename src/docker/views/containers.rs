@@ -12,14 +12,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Anchor, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Task, Window, div, px,
+    Anchor, App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, MouseButton, ParentElement as _, Pixels, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::input::{InputEvent, InputState};
+use gpui_component::menu::{ContextMenuExt as _, PopupMenu};
 use gpui_component::popover::Popover;
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex,
@@ -34,11 +35,18 @@ use crate::docker::components::status_badge::status_badge;
 use crate::docker::components::toolbar::toolbar;
 use crate::docker::models::container::Container;
 use crate::docker::models::port::format_ports;
+use crate::docker::models::status::ContainerStatus;
 use crate::docker::models::time::RelativeTime;
 use crate::docker::services::{DockerEngine, default_engine};
 use crate::docker::state::containers::{ContainersState, LoadStatus};
 use crate::docker::state::filters::FILTERABLE_STATUSES;
+use crate::docker::state::focus::{FocusMove, next_focus};
 use crate::docker::state::grouping::{ContainerGroup, GroupKey, GroupStatus};
+use crate::docker::{
+    DockerContextDelete, DockerContextInspect, DockerContextLogs, DockerContextRestart,
+    DockerContextStart, DockerContextStop, DockerContextTerminal, DockerMoveDown, DockerMoveUp,
+    DockerRefreshList, DockerToggleSelect, KEY_CONTEXT, POLL_INTERVAL,
+};
 use crate::i18n::{Language, Str, t};
 
 /// Fixed column widths shared by the header and every row so they line up. Name,
@@ -71,6 +79,22 @@ pub struct ContainersView {
     load_task: Option<Task<()>>,
     /// The in-flight per-row CPU sweep, cancelled the same way on refresh.
     cpu_task: Option<Task<()>>,
+    /// The background auto-refresh loop, present only while this is the active,
+    /// visible page. Dropping it (via [`Self::set_polling`]) stops polling.
+    poll_task: Option<Task<()>>,
+    /// The list's own focus handle: the key-binding context ([`KEY_CONTEXT`]) and
+    /// the arrow/space/refresh actions hang off this, so navigation is scoped to
+    /// the Docker page and does not leak into other tools.
+    focus_handle: FocusHandle,
+    /// The keyboard-highlighted row (a container id), moved by arrow keys and
+    /// toggled by space/x. `None` until the first arrow press.
+    focused: Option<String>,
+    /// The row a right-click opened the context menu on; the menu's lifecycle
+    /// actions read this. Set on right mouse-down, before the menu builds.
+    context_target: Option<String>,
+    /// Set when the page becomes active so `render` moves focus to the list once,
+    /// letting keyboard navigation work without a click first.
+    needs_focus: bool,
     /// Whether the first load has been kicked off; makes [`Self::ensure_loaded`]
     /// idempotent so returning to the page preserves its rows.
     loaded_once: bool,
@@ -98,6 +122,11 @@ impl ContainersView {
             search,
             load_task: None,
             cpu_task: None,
+            poll_task: None,
+            focus_handle: cx.focus_handle(),
+            focused: None,
+            context_target: None,
+            needs_focus: false,
             loaded_once: false,
             language: Language::current(cx),
         }
@@ -170,6 +199,163 @@ impl ContainersView {
                 }
             }
         }));
+    }
+
+    /// Starts or stops the background auto-refresh loop. [`DockerView`] drives
+    /// this so exactly the active, visible page polls. Idempotent: starting an
+    /// already-running loop is a no-op, so it is safe to call on every page
+    /// switch.
+    ///
+    /// [`DockerView`]: crate::docker::views::DockerView
+    pub fn set_polling(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if enabled {
+            if self.poll_task.is_some() {
+                return;
+            }
+            // Becoming the active page: pull keyboard focus to the list once so
+            // arrow navigation works without a click first.
+            self.needs_focus = true;
+            self.start_poll_loop(cx);
+            cx.notify();
+        } else {
+            self.poll_task = None;
+        }
+    }
+
+    /// The auto-refresh loop: every [`POLL_INTERVAL`] it re-lists the containers on
+    /// the background executor, merges the result incrementally (only changed rows
+    /// re-render, and selection/scroll/expanded/search all survive), then sweeps
+    /// live CPU for the running rows in the same task so sweeps never overlap. An
+    /// unreachable engine degrades to the error state without spamming re-renders;
+    /// the table returns on the next good tick. The whole cycle is sequential, so
+    /// a slow engine simply slows the cadence rather than piling tasks up.
+    fn start_poll_loop(&mut self, cx: &mut Context<Self>) {
+        let engine = self.engine.clone();
+        self.poll_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(POLL_INTERVAL).await;
+
+                let list_engine = engine.clone();
+                let listed = cx
+                    .background_executor()
+                    .spawn(async move { list_engine.list_containers() })
+                    .await;
+
+                // Merge the fresh list (or record the error). The running ids come
+                // back so the CPU sweep runs in this same task, never overlapping.
+                let running = this.update(cx, |this, cx| match listed {
+                    Ok(rows) => {
+                        if this.state.merge_rows(rows) {
+                            cx.notify();
+                        }
+                        Some(this.state.running_ids())
+                    }
+                    Err(error) => {
+                        if this.state.set_poll_error(error.message()) {
+                            cx.notify();
+                        }
+                        None
+                    }
+                });
+                let running = match running {
+                    Ok(running) => running,
+                    Err(_) => break, // the view is gone; stop the loop.
+                };
+
+                if let Some(ids) = running {
+                    for id in ids {
+                        let cpu_engine = engine.clone();
+                        let fetch_id = id.clone();
+                        let percent = cx
+                            .background_executor()
+                            .spawn(async move { cpu_engine.cpu_percent(&fetch_id) })
+                            .await
+                            .ok()
+                            .flatten();
+                        if this
+                            .update(cx, |this, cx| {
+                                if this.state.set_cpu(&id, percent) {
+                                    cx.notify();
+                                }
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+        }));
+    }
+
+    // ---- Keyboard navigation -------------------------------------------------
+
+    /// Moves the keyboard highlight one row, in visible (grouped) order.
+    fn move_focus(&mut self, dir: FocusMove, cx: &mut Context<Self>) {
+        let keys = self.state.visible_ids();
+        self.focused = next_focus(&keys, self.focused.as_deref(), dir);
+        cx.notify();
+    }
+
+    fn on_move_up(&mut self, _: &DockerMoveUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_focus(FocusMove::Up, cx);
+    }
+
+    fn on_move_down(&mut self, _: &DockerMoveDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_focus(FocusMove::Down, cx);
+    }
+
+    /// Toggles the highlighted row's selection (space / x). A no-op when nothing
+    /// is highlighted yet.
+    fn on_toggle_select(&mut self, _: &DockerToggleSelect, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.focused.clone() {
+            let selected = self.state.selection.is_selected(&id);
+            self.state.selection.toggle(&id, !selected);
+            cx.notify();
+        }
+    }
+
+    fn on_refresh_action(&mut self, _: &DockerRefreshList, _: &mut Window, cx: &mut Context<Self>) {
+        self.refresh(cx);
+    }
+
+    // ---- Right-click context menu --------------------------------------------
+
+    fn on_context_start(&mut self, _: &DockerContextStart, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.context_target.clone() {
+            self.run_lifecycle(id, Lifecycle::Start, cx);
+        }
+    }
+
+    fn on_context_stop(&mut self, _: &DockerContextStop, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.context_target.clone() {
+            self.run_lifecycle(id, Lifecycle::Stop, cx);
+        }
+    }
+
+    fn on_context_restart(
+        &mut self,
+        _: &DockerContextRestart,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.context_target.clone() {
+            self.run_lifecycle(id, Lifecycle::Restart, cx);
+        }
+    }
+
+    fn on_context_delete(
+        &mut self,
+        _: &DockerContextDelete,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.context_target.clone() {
+            if let Some(row) = self.state.row(&id) {
+                let name = row.name.clone();
+                self.confirm_delete(id, name, window, cx);
+            }
+        }
     }
 
     /// Runs a lifecycle call, then reloads so the table reflects the change.
@@ -505,6 +691,9 @@ impl ContainersView {
         h_flex()
             .w_full()
             .flex_shrink_0()
+            // Wrap the bulk buttons onto a second row at a narrow width rather
+            // than clipping them, the same rule the toolbar follows.
+            .flex_wrap()
             .items_center()
             .gap_2()
             .px_3()
@@ -651,7 +840,12 @@ impl ContainersView {
             .size_full()
             .overflow_scroll()
             .child(
+                // `w_full` + `min_w`: on a wide window the flex columns (Name,
+                // Image, Ports) grow to fill the pane, so there is no dead space
+                // on the right; below `TABLE_MIN_W` the min width wins and the
+                // table scrolls horizontally instead of crushing those columns.
                 v_flex()
+                    .w_full()
                     .min_w(TABLE_MIN_W)
                     .child(self.render_header(all_selected, cx))
                     .children(blocks),
@@ -780,12 +974,15 @@ impl ContainersView {
 
     fn render_row(&self, row: Container, now: i64, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.state.selection.is_selected(&row.id);
+        let focused = self.focused.as_deref() == Some(row.id.as_str());
         let status = row.status;
         let ports = format_ports(&row.ports);
         let started = RelativeTime::since(row.started_at, now);
         let cpu = cpu_label(&row);
+        let focus_handle = self.focus_handle.clone();
 
         h_flex()
+            .id(SharedString::from(format!("crow-{}", row.id)))
             .w_full()
             .min_w(TABLE_MIN_W)
             .flex_shrink_0()
@@ -797,6 +994,23 @@ impl ContainersView {
             .border_color(cx.theme().border.opacity(0.5))
             .text_sm()
             .when(selected, |this| this.bg(cx.theme().accent.opacity(0.4)))
+            // The keyboard highlight: a left accent stripe (plus a faint tint when
+            // the row is not also selected) so arrow-key focus is unmistakable.
+            .when(focused && !selected, |this| {
+                this.bg(cx.theme().accent.opacity(0.2))
+            })
+            .when(focused, |this| {
+                this.border_l_2().border_color(cx.theme().primary)
+            })
+            // Record which row a right-click targets, before the menu builds, so
+            // the context actions know which container to act on.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener({
+                    let id = row.id.clone();
+                    move |this, _, _, _| this.context_target = Some(id.clone())
+                }),
+            )
             .child(
                 div().w(SELECT_W).flex_shrink_0().child(
                     Checkbox::new(SharedString::from(format!("sel-{}", row.id)))
@@ -864,6 +1078,14 @@ impl ContainersView {
                     .flex_shrink_0()
                     .child(self.render_actions(&row, cx)),
             )
+            // Right-click menu: the lifecycle four mirror the row buttons and are
+            // state-aware; Inspect / View Logs / Open Terminal are disabled
+            // "coming soon" placeholders a later round fills in. Actions dispatch
+            // to this view's focus handle and route through the same service layer
+            // off the UI thread.
+            .context_menu(move |menu, _window, cx| {
+                container_context_menu(menu, status, focus_handle.clone(), cx)
+            })
     }
 
     fn render_actions(&self, row: &Container, cx: &mut Context<Self>) -> impl IntoElement {
@@ -920,9 +1142,22 @@ impl ContainersView {
     }
 }
 
+impl Focusable for ContainersView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl Render for ContainersView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_language(window, cx);
+
+        // On becoming the active page, pull focus to the list once so arrow-key
+        // navigation works before the user clicks anything.
+        if self.needs_focus {
+            self.needs_focus = false;
+            self.focus_handle.focus(window, cx);
+        }
 
         let action_error = self
             .state
@@ -932,6 +1167,19 @@ impl Render for ContainersView {
 
         v_flex()
             .size_full()
+            // The Docker list's key-binding scope: arrow/space/x/refresh actions
+            // fire only while this page holds focus, and a focused search box
+            // (a deeper context) still takes the arrows for text editing.
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_move_up))
+            .on_action(cx.listener(Self::on_move_down))
+            .on_action(cx.listener(Self::on_toggle_select))
+            .on_action(cx.listener(Self::on_refresh_action))
+            .on_action(cx.listener(Self::on_context_start))
+            .on_action(cx.listener(Self::on_context_stop))
+            .on_action(cx.listener(Self::on_context_restart))
+            .on_action(cx.listener(Self::on_context_delete))
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
@@ -987,6 +1235,60 @@ fn action_button(
         .tooltip(tooltip)
         .disabled(!enabled)
         .on_click(on_click)
+}
+
+/// Builds the per-row right-click menu. The lifecycle four mirror the row
+/// buttons and are enabled by the same status predicates; a separator sets off
+/// Delete; a "Coming soon" label heads the three disabled placeholders (Inspect,
+/// View Logs, Open Terminal) a later round implements. `action_context` points
+/// the actions at the view's focus handle so its `on_action` handlers catch them.
+fn container_context_menu(
+    menu: PopupMenu,
+    status: ContainerStatus,
+    focus: FocusHandle,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    menu.action_context(focus)
+        .menu_with_icon_and_disabled(
+            t(Str::DockerStart, cx),
+            AppIcon::Play,
+            Box::new(DockerContextStart),
+            !status.can_start(),
+        )
+        .menu_with_icon_and_disabled(
+            t(Str::DockerStop, cx),
+            AppIcon::Stop,
+            Box::new(DockerContextStop),
+            !status.can_stop(),
+        )
+        .menu_with_icon_and_disabled(
+            t(Str::DockerRestart, cx),
+            AppIcon::Restart,
+            Box::new(DockerContextRestart),
+            !status.can_restart(),
+        )
+        .separator()
+        .menu_with_icon(t(Str::Delete, cx), AppIcon::Trash, Box::new(DockerContextDelete))
+        .separator()
+        .label(t(Str::DockerComingSoonLabel, cx))
+        .menu_with_icon_and_disabled(
+            t(Str::DockerInspect, cx),
+            AppIcon::Eye,
+            Box::new(DockerContextInspect),
+            true,
+        )
+        .menu_with_icon_and_disabled(
+            t(Str::DockerViewLogs, cx),
+            AppIcon::File,
+            Box::new(DockerContextLogs),
+            true,
+        )
+        .menu_with_icon_and_disabled(
+            t(Str::DockerOpenTerminal, cx),
+            AppIcon::SquareCode,
+            Box::new(DockerContextTerminal),
+            true,
+        )
 }
 
 /// The CPU cell text: a percentage once measured, an ellipsis while a running

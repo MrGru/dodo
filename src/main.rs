@@ -28,6 +28,9 @@ fn main() {
         // Binds the API Explorer's send shortcut. Like `settings::init`, it has
         // to run after `gpui_component::init` to win the key-binding tie.
         api_explorer::init(cx);
+        // Binds the Docker list pages' keyboard navigation, scoped to the Docker
+        // view. Same post-`init` ordering rule as the two above.
+        docker::init(cx);
 
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(900.), px(620.)), cx)),

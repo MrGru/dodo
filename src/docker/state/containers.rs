@@ -84,12 +84,50 @@ impl ContainersState {
     }
 
     /// Updates one row's CPU percent in place, without disturbing the rest — the
-    /// seam live per-row polling plugs into in round 2. A no-op if the row is
-    /// gone (a refresh raced the stats fetch).
-    pub fn set_cpu(&mut self, id: &str, percent: Option<f64>) {
+    /// seam live per-row polling plugs into. Returns whether the value actually
+    /// changed, so a poll can skip a re-render when the reading is identical. A
+    /// no-op (returning `false`) if the row is gone (a refresh raced the stats
+    /// fetch).
+    pub fn set_cpu(&mut self, id: &str, percent: Option<f64>) -> bool {
         if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
-            row.cpu_percent = percent;
+            if row.cpu_percent != percent {
+                row.cpu_percent = percent;
+                return true;
+            }
         }
+        false
+    }
+
+    /// Merges a freshly-listed set over the current rows without a wholesale
+    /// replace — the incremental path background polling takes each tick. Carries
+    /// each surviving row's last CPU reading forward (a fresh list reports none),
+    /// re-sorts, and only when the visible data actually differs prunes the
+    /// selection and swaps the rows in. Returns whether anything changed — the
+    /// rows differed, or a prior error/loading status has cleared — so the view
+    /// re-renders (and re-sweeps CPU) only when it is worth it. Preserves the
+    /// query, filters, group-expansion and selection across the merge.
+    pub fn merge_rows(&mut self, mut incoming: Vec<Container>) -> bool {
+        crate::docker::state::diff::carry_cpu(&self.rows, &mut incoming);
+        sort_for_display(&mut incoming);
+        let rows_differ = crate::docker::state::diff::rows_changed(&self.rows, &incoming);
+        let was_not_ready = !matches!(self.status, LoadStatus::Ready);
+        if rows_differ {
+            self.selection.retain(incoming.iter().map(|row| row.id.as_str()));
+            self.rows = incoming;
+        }
+        self.status = LoadStatus::Ready;
+        rows_differ || was_not_ready
+    }
+
+    /// Degrades to the error state from a background poll that could not reach the
+    /// engine, keeping the rows in memory so they return on the next good poll.
+    /// Returns whether this is a *transition* into the error state, so repeated
+    /// failed polls re-render at most once rather than spamming a re-render per
+    /// tick.
+    pub fn set_poll_error(&mut self, message: Str) -> bool {
+        let was_failed = matches!(self.status, LoadStatus::Failed(_));
+        self.status = LoadStatus::Failed(message);
+        !was_failed
     }
 
     /// The rows matching the current search **and** every active filter, in
@@ -149,6 +187,13 @@ impl ContainersState {
         images.sort();
         images.dedup();
         images
+    }
+
+    /// One loaded row by id, for the context menu's Delete to name it in the
+    /// confirmation. `None` if a refresh removed it between the right-click and
+    /// the menu action.
+    pub fn row(&self, id: &str) -> Option<&Container> {
+        self.rows.iter().find(|row| row.id == id)
     }
 
     /// The ids of every running container, for the CPU-stats sweep after a load.
@@ -225,6 +270,7 @@ mod tests {
     use super::{ContainersState, sort_for_display};
     use crate::docker::models::container::Container;
     use crate::docker::models::status::ContainerStatus;
+    use crate::i18n::Str;
 
     fn container(id: &str, name: &str, status: ContainerStatus) -> Container {
         Container {
@@ -396,6 +442,80 @@ mod tests {
         assert!(state.is_collapsed(&key));
         state.toggle_group(key.clone());
         assert!(!state.is_collapsed(&key));
+    }
+
+    #[test]
+    fn merge_rows_carries_cpu_and_reports_change() {
+        let mut state = ContainersState::default();
+        state.set_rows(vec![
+            full("1", "web", ContainerStatus::Running, "nginx", Some("app")),
+            full("2", "db", ContainerStatus::Exited, "postgres", Some("app")),
+        ]);
+        state.set_cpu("1", Some(42.0));
+
+        // Re-listing the identical set (CPU always None off the wire) is not a
+        // change, and the carried-forward CPU survives.
+        let same = vec![
+            full("1", "web", ContainerStatus::Running, "nginx", Some("app")),
+            full("2", "db", ContainerStatus::Exited, "postgres", Some("app")),
+        ];
+        assert!(!state.merge_rows(same));
+        assert_eq!(
+            state.visible().iter().find(|r| r.id == "1").unwrap().cpu_percent,
+            Some(42.0)
+        );
+
+        // A status flip is a change.
+        let changed = vec![
+            full("1", "web", ContainerStatus::Exited, "nginx", Some("app")),
+            full("2", "db", ContainerStatus::Exited, "postgres", Some("app")),
+        ];
+        assert!(state.merge_rows(changed));
+    }
+
+    #[test]
+    fn merge_rows_preserves_selection_of_surviving_rows() {
+        let mut state = seeded();
+        state.selection.set_all(["1".to_string(), "2".to_string()]);
+        // Re-list without row "2": its selection is pruned, "1" survives.
+        let incoming = vec![
+            full("1", "web", ContainerStatus::Running, "nginx", Some("app")),
+            full("3", "cache", ContainerStatus::Running, "redis", Some("infra")),
+            full("4", "lonely", ContainerStatus::Exited, "alpine", None),
+        ];
+        assert!(state.merge_rows(incoming));
+        assert!(state.selection.is_selected("1"));
+        assert!(!state.selection.is_selected("2"));
+    }
+
+    #[test]
+    fn merge_after_error_re_renders_even_when_rows_match() {
+        let mut state = ContainersState::default();
+        let rows = vec![full("1", "web", ContainerStatus::Running, "nginx", None)];
+        state.set_rows(rows.clone());
+        // A poll fails: transition into error is a change; a second failure is not.
+        assert!(state.set_poll_error(Str::DockerConnectionError("down".into())));
+        assert!(!state.set_poll_error(Str::DockerConnectionError("still down".into())));
+        // Recovery re-lists the same rows — still a change, because the error is
+        // clearing and the table must come back.
+        assert!(state.merge_rows(rows));
+    }
+
+    #[test]
+    fn set_cpu_reports_whether_it_changed() {
+        let mut state = ContainersState::default();
+        state.set_rows(vec![full(
+            "1",
+            "web",
+            ContainerStatus::Running,
+            "nginx",
+            None,
+        )]);
+        assert!(state.set_cpu("1", Some(10.0)));
+        assert!(!state.set_cpu("1", Some(10.0)));
+        assert!(state.set_cpu("1", Some(11.0)));
+        // A missing row is a no-op.
+        assert!(!state.set_cpu("nope", Some(1.0)));
     }
 
     #[test]
