@@ -449,6 +449,29 @@ pub enum Str {
 
     // Docker module — error-state title (the detail follows below it).
     DockerUnreachableTitle,
+
+    // Docker module (round 2) — compose grouping.
+    DockerUngrouped,
+    DockerGroupContainers(usize),
+    DockerGroupRunning(usize),
+
+    // Docker module (round 2) — the filter popover.
+    DockerFilterWithCount(usize),
+    DockerFilterTitle,
+    DockerFilterProject,
+    DockerFilterPublishedPorts,
+    DockerFilterFavorites,
+    DockerFilterClear,
+
+    // Docker module (round 2) — bulk actions on the selection.
+    DockerBulkSelected(usize),
+    DockerBulkStart,
+    DockerBulkStop,
+    DockerBulkDelete,
+    DockerBulkClear,
+    DockerBulkDeleteTitle,
+    DockerBulkDeleteMessage(usize),
+    DockerBulkFailures(usize),
 }
 
 impl Str {
@@ -1290,6 +1313,68 @@ impl Str {
             (Str::DockerUnreachableTitle, Language::Vietnamese) => {
                 "Không kết nối được Docker engine".into()
             }
+
+            // Docker module (round 2) — compose grouping.
+            (Str::DockerUngrouped, Language::English) => "Ungrouped".into(),
+            (Str::DockerUngrouped, Language::Vietnamese) => "Chưa nhóm".into(),
+            (Str::DockerGroupContainers(n), Language::English) => {
+                format!("{n} container{}", if n == 1 { "" } else { "s" }).into()
+            }
+            (Str::DockerGroupContainers(n), Language::Vietnamese) => {
+                format!("{n} container").into()
+            }
+            (Str::DockerGroupRunning(n), Language::English) => format!("{n} running").into(),
+            (Str::DockerGroupRunning(n), Language::Vietnamese) => {
+                format!("{n} đang chạy").into()
+            }
+
+            // Docker module (round 2) — the filter popover.
+            (Str::DockerFilterWithCount(n), Language::English) => format!("Filter ({n})").into(),
+            (Str::DockerFilterWithCount(n), Language::Vietnamese) => {
+                format!("Bộ lọc ({n})").into()
+            }
+            (Str::DockerFilterTitle, Language::English) => "Filters".into(),
+            (Str::DockerFilterTitle, Language::Vietnamese) => "Bộ lọc".into(),
+            (Str::DockerFilterProject, Language::English) => "Compose project".into(),
+            (Str::DockerFilterProject, Language::Vietnamese) => "Dự án Compose".into(),
+            (Str::DockerFilterPublishedPorts, Language::English) => "Has published ports".into(),
+            (Str::DockerFilterPublishedPorts, Language::Vietnamese) => "Có cổng công bố".into(),
+            (Str::DockerFilterFavorites, Language::English) => "Favorites (coming soon)".into(),
+            (Str::DockerFilterFavorites, Language::Vietnamese) => {
+                "Yêu thích (sắp có)".into()
+            }
+            (Str::DockerFilterClear, Language::English) => "Clear filters".into(),
+            (Str::DockerFilterClear, Language::Vietnamese) => "Xoá bộ lọc".into(),
+
+            // Docker module (round 2) — bulk actions on the selection.
+            (Str::DockerBulkSelected(n), Language::English) => format!("{n} selected").into(),
+            (Str::DockerBulkSelected(n), Language::Vietnamese) => format!("Đã chọn {n}").into(),
+            (Str::DockerBulkStart, Language::English) => "Start selected".into(),
+            (Str::DockerBulkStart, Language::Vietnamese) => "Khởi động mục đã chọn".into(),
+            (Str::DockerBulkStop, Language::English) => "Stop selected".into(),
+            (Str::DockerBulkStop, Language::Vietnamese) => "Dừng mục đã chọn".into(),
+            (Str::DockerBulkDelete, Language::English) => "Delete selected".into(),
+            (Str::DockerBulkDelete, Language::Vietnamese) => "Xoá mục đã chọn".into(),
+            (Str::DockerBulkClear, Language::English) => "Clear selection".into(),
+            (Str::DockerBulkClear, Language::Vietnamese) => "Bỏ chọn".into(),
+            (Str::DockerBulkDeleteTitle, Language::English) => "Delete containers?".into(),
+            (Str::DockerBulkDeleteTitle, Language::Vietnamese) => "Xoá các container?".into(),
+            (Str::DockerBulkDeleteMessage(n), Language::English) => format!(
+                "Permanently remove {n} container{}? This cannot be undone.",
+                if n == 1 { "" } else { "s" }
+            )
+            .into(),
+            (Str::DockerBulkDeleteMessage(n), Language::Vietnamese) => {
+                format!("Xoá vĩnh viễn {n} container? Hành động này không thể hoàn tác.").into()
+            }
+            (Str::DockerBulkFailures(n), Language::English) => format!(
+                "{n} container{} could not be updated.",
+                if n == 1 { "" } else { "s" }
+            )
+            .into(),
+            (Str::DockerBulkFailures(n), Language::Vietnamese) => {
+                format!("{n} container không thể cập nhật.").into()
+            }
         }
     }
 }
@@ -1680,6 +1765,24 @@ mod tests {
             with(Str::DockerRelMonthsAgo(NUMBER as u64), &[NUMBER_TEXT]),
             with(Str::DockerRelYearsAgo(NUMBER as u64), &[NUMBER_TEXT]),
             plain(Str::DockerUnreachableTitle),
+            // Round 2 — grouping, filters, bulk actions.
+            plain(Str::DockerUngrouped),
+            with(Str::DockerGroupContainers(NUMBER), &[NUMBER_TEXT]),
+            with(Str::DockerGroupRunning(NUMBER), &[NUMBER_TEXT]),
+            with(Str::DockerFilterWithCount(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::DockerFilterTitle),
+            plain(Str::DockerFilterProject),
+            plain(Str::DockerFilterPublishedPorts),
+            plain(Str::DockerFilterFavorites),
+            plain(Str::DockerFilterClear),
+            with(Str::DockerBulkSelected(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::DockerBulkStart),
+            plain(Str::DockerBulkStop),
+            plain(Str::DockerBulkDelete),
+            plain(Str::DockerBulkClear),
+            plain(Str::DockerBulkDeleteTitle),
+            with(Str::DockerBulkDeleteMessage(NUMBER), &[NUMBER_TEXT]),
+            with(Str::DockerBulkFailures(NUMBER), &[NUMBER_TEXT]),
         ]
     }
 
@@ -1949,6 +2052,23 @@ mod tests {
             Str::DockerRelMonthsAgo(_) => 255,
             Str::DockerRelYearsAgo(_) => 256,
             Str::DockerUnreachableTitle => 257,
+            Str::DockerUngrouped => 258,
+            Str::DockerGroupContainers(_) => 259,
+            Str::DockerGroupRunning(_) => 260,
+            Str::DockerFilterWithCount(_) => 261,
+            Str::DockerFilterTitle => 262,
+            Str::DockerFilterProject => 263,
+            Str::DockerFilterPublishedPorts => 264,
+            Str::DockerFilterFavorites => 265,
+            Str::DockerFilterClear => 266,
+            Str::DockerBulkSelected(_) => 267,
+            Str::DockerBulkStart => 268,
+            Str::DockerBulkStop => 269,
+            Str::DockerBulkDelete => 270,
+            Str::DockerBulkClear => 271,
+            Str::DockerBulkDeleteTitle => 272,
+            Str::DockerBulkDeleteMessage(_) => 273,
+            Str::DockerBulkFailures(_) => 274,
         }
     }
 

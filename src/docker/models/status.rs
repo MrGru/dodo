@@ -11,7 +11,7 @@ use gpui_component::ActiveTheme as _;
 use crate::i18n::Str;
 
 /// The Docker container lifecycle states, as the Engine API reports them.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum ContainerStatus {
     Created,
     Running,

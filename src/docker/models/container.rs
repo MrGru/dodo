@@ -41,6 +41,15 @@ pub struct Container {
 }
 
 impl Container {
+    /// Whether the container publishes any port to the host — the "Has published
+    /// ports" filter's predicate. A port with no host side is exposed but not
+    /// reachable, so it does not count (the same rule [`format_ports`] renders by).
+    ///
+    /// [`format_ports`]: crate::docker::models::port::format_ports
+    pub fn has_published_ports(&self) -> bool {
+        self.ports.iter().any(|port| port.host.is_some())
+    }
+
     /// Whether this row matches a search query. Case-insensitive over the name,
     /// the image and the compose project — the three identifiers a user types to
     /// find a container. An empty (or whitespace-only) query matches everything.
@@ -83,6 +92,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{Container, clean_name, compose_project};
+    use crate::docker::models::port::PortMapping;
     use crate::docker::models::status::ContainerStatus;
 
     fn container(name: &str, image: &str, project: Option<&str>) -> Container {
@@ -141,5 +151,23 @@ mod tests {
         let c = container("anything", "image", None);
         assert!(c.matches(""));
         assert!(c.matches("   "));
+    }
+
+    #[test]
+    fn published_ports_need_a_host_side() {
+        let mut c = container("web", "nginx", None);
+        assert!(!c.has_published_ports());
+        c.ports = vec![PortMapping {
+            host: None,
+            container: 6379,
+            protocol: "tcp".into(),
+        }];
+        assert!(!c.has_published_ports());
+        c.ports.push(PortMapping {
+            host: Some(8080),
+            container: 80,
+            protocol: "tcp".into(),
+        });
+        assert!(c.has_published_ports());
     }
 }

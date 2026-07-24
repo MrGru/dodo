@@ -17,8 +17,12 @@ phases plug in. `api_explorer` is also the only tool that registers a key bindin
 (`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
 `settings::init`).
 
-**`src/docker/`** is the Docker/Podman module (round 1: Containers live; Images/Volumes/Networks
-are placeholder pages). Read `src/docker/mod.rs` — it is the authority. Two things unique to it:
+**`src/docker/`** is the Docker/Podman module. Containers is the built-out page (round 2 added
+compose grouping, the filter popover and bulk actions on top of round 1's table); Images/Volumes/
+Networks are still placeholder pages. Read `src/docker/mod.rs` — it is the authority — and note the
+round-2 pure-logic modules `state/grouping.rs` (compose partition + group status) and
+`state/filters.rs` (the multi-filter predicate), both unit-tested without GPUI. Two things unique
+to the module:
 `services/` is the only place that may name `bollard` (the Docker Engine API client) and the only
 place a **tokio runtime** lives — `bollard` is async, so `BollardEngine` drives every call with
 `Runtime::block_on` on the background executor, keeping the blocking-by-contract discipline

@@ -22,14 +22,15 @@
 //!
 //! # Where later rounds plug in
 //!
-//! Round 1 ships Containers in full; Images, Volumes and Networks are placeholder
-//! pages so the nav shape and state preservation are correct now. Their real
+//! Rounds 1–2 ship Containers in full: the table, then compose grouping
+//! ([`state::grouping`]), the multi-filter popover ([`state::filters`]) and bulk
+//! actions over the selection. Images, Volumes and Networks are still placeholder
+//! pages so the nav shape and state preservation are correct now; their real
 //! pages are `models::{image,volume,network}` + `state::*` siblings + `views::*`
 //! pages, switched to by the same [`DockerPage`](views::DockerPage) already wired
-//! into the sidebar. Compose grouping, filters, bulk actions, context menus and
-//! live auto-polling all attach to the Containers store and view that exist here
-//! — the selection model, the per-row CPU seam and the compose-project label are
-//! already in place for them.
+//! into the sidebar. Round 4's context menus and live auto-polling attach to the
+//! Containers store and view that exist here — the selection model and the per-row
+//! CPU seam are already in place for them.
 
 pub mod components;
 pub mod models;
