@@ -12,13 +12,14 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Task, Window, div, px,
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, MouseButton, ParentElement as _, Pixels, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariant};
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::input::{InputEvent, InputState};
+use gpui_component::menu::ContextMenuExt as _;
 use gpui_component::{
     ActiveTheme as _, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
@@ -33,9 +34,15 @@ use crate::docker::models::size::format_size;
 use crate::docker::models::time::RelativeTime;
 use crate::docker::services::{DockerEngine, default_engine};
 use crate::docker::state::containers::LoadStatus;
+use crate::docker::state::focus::{FocusMove, next_focus};
 use crate::docker::state::resource::ResourceState;
 use crate::docker::views::widgets::{
     action_button, count_cell, header_cell, muted_cell, now_unix, placeholder_button,
+    resource_context_menu,
+};
+use crate::docker::{
+    DockerContextDelete, DockerMoveDown, DockerMoveUp, DockerRefreshList, KEY_CONTEXT,
+    POLL_INTERVAL,
 };
 use crate::i18n::{Language, Str, t};
 
@@ -58,6 +65,17 @@ pub struct ImagesView {
     search: Entity<InputState>,
     /// The in-flight load; held so a new refresh replaces (cancels) the old.
     load_task: Option<Task<()>>,
+    /// The background auto-refresh loop, present only while this is the active,
+    /// visible page.
+    poll_task: Option<Task<()>>,
+    /// The list's focus handle: keyboard nav is scoped to it (see [`KEY_CONTEXT`]).
+    focus_handle: FocusHandle,
+    /// The keyboard-highlighted row (an image id). `None` until the first arrow.
+    focused: Option<String>,
+    /// The row a right-click opened the menu on; the Delete action reads it.
+    context_target: Option<String>,
+    /// Set when the page becomes active so `render` focuses the list once.
+    needs_focus: bool,
     /// Whether the first load has been kicked off; makes [`Self::ensure_loaded`]
     /// idempotent so returning to the page preserves its rows.
     loaded_once: bool,
@@ -83,6 +101,11 @@ impl ImagesView {
             state: ResourceState::default(),
             search,
             load_task: None,
+            poll_task: None,
+            focus_handle: cx.focus_handle(),
+            focused: None,
+            context_target: None,
+            needs_focus: false,
             loaded_once: false,
             language: Language::current(cx),
         }
@@ -93,6 +116,97 @@ impl ImagesView {
         if !self.loaded_once {
             self.loaded_once = true;
             self.refresh(cx);
+        }
+    }
+
+    /// Starts or stops the background auto-refresh loop; [`DockerView`] drives it
+    /// so only the active, visible page polls. Idempotent.
+    ///
+    /// [`DockerView`]: crate::docker::views::DockerView
+    pub fn set_polling(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if enabled {
+            if self.poll_task.is_some() {
+                return;
+            }
+            self.needs_focus = true;
+            self.start_poll_loop(cx);
+            cx.notify();
+        } else {
+            self.poll_task = None;
+        }
+    }
+
+    /// Re-lists the images and their usage every [`POLL_INTERVAL`] on the
+    /// background executor and merges the result incrementally — only changed rows
+    /// re-render, and the search query is preserved. An unreachable engine
+    /// degrades to the error state without spamming; the table returns on the next
+    /// good tick.
+    fn start_poll_loop(&mut self, cx: &mut Context<Self>) {
+        let engine = self.engine.clone();
+        self.poll_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(POLL_INTERVAL).await;
+                let fetch = engine.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let images = fetch.list_images()?;
+                        let usage = fetch.container_usage().unwrap_or_default();
+                        Ok::<_, crate::docker::services::DockerError>((sorted(images), usage))
+                    })
+                    .await;
+                if this
+                    .update(cx, |this, cx| match result {
+                        Ok((rows, usage)) => {
+                            if this.state.merge(rows, usage) {
+                                cx.notify();
+                            }
+                        }
+                        Err(error) => {
+                            if this.state.set_poll_error(error.message()) {
+                                cx.notify();
+                            }
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
+    }
+
+    // ---- Keyboard navigation and context menu --------------------------------
+
+    fn move_focus(&mut self, dir: FocusMove, cx: &mut Context<Self>) {
+        let keys: Vec<String> = self.state.visible().iter().map(|row| row.id.clone()).collect();
+        self.focused = next_focus(&keys, self.focused.as_deref(), dir);
+        cx.notify();
+    }
+
+    fn on_move_up(&mut self, _: &DockerMoveUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_focus(FocusMove::Up, cx);
+    }
+
+    fn on_move_down(&mut self, _: &DockerMoveDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_focus(FocusMove::Down, cx);
+    }
+
+    fn on_refresh_action(&mut self, _: &DockerRefreshList, _: &mut Window, cx: &mut Context<Self>) {
+        self.refresh(cx);
+    }
+
+    fn on_context_delete(
+        &mut self,
+        _: &DockerContextDelete,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.context_target.clone() {
+            if let Some(row) = self.state.visible().into_iter().find(|row| row.id == id) {
+                let name = row.confirm_label();
+                self.confirm_delete(id, name, window, cx);
+            }
         }
     }
 
@@ -272,7 +386,10 @@ impl ImagesView {
             .size_full()
             .overflow_scroll()
             .child(
+                // `w_full` + `min_w`: flex columns fill a wide pane (no dead
+                // space), and below the min width the table scrolls horizontally.
                 v_flex()
+                    .w_full()
                     .min_w(TABLE_MIN_W)
                     .child(self.render_header(cx))
                     .children(blocks),
@@ -341,8 +458,11 @@ impl ImagesView {
         let size = SharedString::from(format_size(row.size));
         let created = RelativeTime::since(Some(row.created), now);
         let using = self.state.usage().images_using(&row.id);
+        let focused = self.focused.as_deref() == Some(row.id.as_str());
+        let focus_handle = self.focus_handle.clone();
 
         h_flex()
+            .id(SharedString::from(format!("irow-{}", row.id)))
             .w_full()
             .min_w(TABLE_MIN_W)
             .flex_shrink_0()
@@ -353,6 +473,18 @@ impl ImagesView {
             .border_b_1()
             .border_color(cx.theme().border.opacity(0.5))
             .text_sm()
+            .when(focused, |this| {
+                this.bg(cx.theme().accent.opacity(0.2))
+                    .border_l_2()
+                    .border_color(cx.theme().primary)
+            })
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener({
+                    let id = row.id.clone();
+                    move |this, _, _, _| this.context_target = Some(id.clone())
+                }),
+            )
             .child(
                 div()
                     .flex_1()
@@ -380,14 +512,16 @@ impl ImagesView {
                     .flex_shrink_0()
                     .child(self.render_actions(&row, cx)),
             )
+            // Right-click: Delete (always available for an image) plus the
+            // disabled Inspect placeholder.
+            .context_menu(move |menu, _window, cx| {
+                resource_context_menu(menu, focus_handle.clone(), true, cx)
+            })
     }
 
     fn render_actions(&self, row: &Image, cx: &mut Context<Self>) -> impl IntoElement {
         // A label for the confirmation: the reference if tagged, else the short id.
-        let name = match (&row.repository, &row.tag) {
-            (Some(repo), Some(tag)) => format!("{repo}:{tag}"),
-            _ => row.short_id(),
-        };
+        let name = row.confirm_label();
         h_flex()
             .gap_1()
             .child(placeholder_button(
@@ -411,9 +545,21 @@ impl ImagesView {
     }
 }
 
+impl Focusable for ImagesView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl Render for ImagesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_language(window, cx);
+
+        if self.needs_focus {
+            self.needs_focus = false;
+            self.focus_handle.focus(window, cx);
+        }
+
         let action_error = self
             .state
             .action_error()
@@ -421,6 +567,12 @@ impl Render for ImagesView {
 
         v_flex()
             .size_full()
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_move_up))
+            .on_action(cx.listener(Self::on_move_down))
+            .on_action(cx.listener(Self::on_refresh_action))
+            .on_action(cx.listener(Self::on_context_delete))
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)

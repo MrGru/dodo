@@ -132,6 +132,10 @@ impl Layout {
             .on_click(move |_, _, cx| {
                 layout.update(cx, |this, cx| {
                     this.active = view;
+                    // Leaving for a standalone tool pauses Docker's background
+                    // polling until a Docker page is selected again.
+                    this.docker
+                        .update(cx, |docker, cx| docker.set_section_active(false, cx));
                     cx.notify();
                 });
             })

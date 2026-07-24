@@ -41,4 +41,65 @@ pub mod services;
 pub mod state;
 pub mod views;
 
+use std::time::Duration;
+
+use gpui::{App, KeyBinding, actions};
+
 pub use views::{DockerPage, DockerView};
+
+/// How often the active Docker page re-lists its data in the background, without
+/// the user pressing Refresh. Five seconds is Docker Desktop's own list cadence:
+/// brisk enough that a container starting or stopping shows up on its own within
+/// a beat, slow enough that dozens of rows (each Containers tick also re-measures
+/// live CPU) never saturate the background executor. It is a constant rather than
+/// a setting on purpose — see `AGENTS.md` — polling pauses whenever the Docker
+/// section is not the visible view, so an idle cadence never runs.
+pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// The key-binding context the Docker list pages establish on their root. Bindings
+/// registered against it in [`init`] fire only while a Docker page holds focus, so
+/// row navigation never leaks into another tool — the same scoping
+/// `api_explorer`'s `ApiExplorer` context uses for its send shortcut.
+pub const KEY_CONTEXT: &str = "DockerList";
+
+actions!(
+    dodo,
+    [
+        // Keyboard navigation on the list pages.
+        DockerMoveUp,
+        DockerMoveDown,
+        DockerToggleSelect,
+        DockerRefreshList,
+        // Right-click context-menu actions. The lifecycle four mirror the row
+        // buttons and act on the right-clicked row; the last three are the
+        // disabled "coming soon" placeholders a later round fills in.
+        DockerContextStart,
+        DockerContextStop,
+        DockerContextRestart,
+        DockerContextDelete,
+        DockerContextInspect,
+        DockerContextLogs,
+        DockerContextTerminal,
+    ]
+);
+
+/// Registers the Docker list pages' keyboard shortcuts, scoped to [`KEY_CONTEXT`]:
+///
+/// - `up` / `down` — move the highlighted row.
+/// - `space` / `x` — toggle the highlighted row's selection (Containers only).
+/// - `cmd-r` — refresh the active page (manual Refresh, from the keyboard).
+///
+/// Must run after `gpui_component::init`, so a binding registered here wins the
+/// tie at equal context depth — the same ordering rule `api_explorer::init` and
+/// `settings::init` depend on. The arrow and space keys are only claimed by a
+/// focused text input (the search box), whose deeper context takes them first, so
+/// they drive row navigation everywhere else on the page.
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("up", DockerMoveUp, Some(KEY_CONTEXT)),
+        KeyBinding::new("down", DockerMoveDown, Some(KEY_CONTEXT)),
+        KeyBinding::new("space", DockerToggleSelect, Some(KEY_CONTEXT)),
+        KeyBinding::new("x", DockerToggleSelect, Some(KEY_CONTEXT)),
+        KeyBinding::new("cmd-r", DockerRefreshList, Some(KEY_CONTEXT)),
+    ]);
+}

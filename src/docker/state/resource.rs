@@ -106,6 +106,35 @@ impl<T: Searchable + Clone> ResourceState<T> {
         self.status = LoadStatus::Failed(message);
     }
 
+    /// Merges a freshly-listed set and its usage over the current state — the
+    /// incremental path background polling takes each tick. Only when the rows or
+    /// the usage counts actually differ does it swap them in. Returns whether
+    /// anything changed (rows, usage, or a prior error/loading status clearing),
+    /// so the view re-renders only when it is worth it and the search query is
+    /// preserved across the merge.
+    pub fn merge(&mut self, incoming: Vec<T>, usage: ContainerUsage) -> bool
+    where
+        T: PartialEq,
+    {
+        let differ = self.rows != incoming || self.usage != usage;
+        let was_not_ready = !matches!(self.status, LoadStatus::Ready);
+        if differ {
+            self.rows = incoming;
+            self.usage = usage;
+        }
+        self.status = LoadStatus::Ready;
+        differ || was_not_ready
+    }
+
+    /// Degrades to the error state from a background poll, keeping the rows so
+    /// they return on the next good poll. Returns whether this is a *transition*
+    /// into error, so repeated failed polls re-render at most once.
+    pub fn set_poll_error(&mut self, message: Str) -> bool {
+        let was_failed = matches!(self.status, LoadStatus::Failed(_));
+        self.status = LoadStatus::Failed(message);
+        !was_failed
+    }
+
     pub fn set_action_error(&mut self, message: Str) {
         self.action_error = Some(message);
     }
@@ -169,6 +198,43 @@ mod tests {
         state.set_rows(vec![volume("data")]);
         assert!(!state.is_empty());
         assert!(state.has_rows());
+    }
+
+    #[test]
+    fn merge_reports_change_only_when_rows_or_usage_differ() {
+        use crate::docker::models::usage::{ContainerUsage, ContainerUsageEntry};
+
+        let mut state: ResourceState<Volume> = ResourceState::default();
+        state.set_rows(vec![volume("pgdata"), volume("cache")]);
+
+        // Same rows, same (empty) usage: not a change.
+        assert!(!state.merge(vec![volume("pgdata"), volume("cache")], ContainerUsage::default()));
+
+        // A new usage entry (a container now mounts a volume) is a change even
+        // though the row list is identical.
+        let usage = ContainerUsage::new(vec![ContainerUsageEntry {
+            image_id: "img".into(),
+            volume_names: vec!["pgdata".into()],
+            network_names: Vec::new(),
+        }]);
+        assert!(state.merge(vec![volume("pgdata"), volume("cache")], usage));
+
+        // A removed row is a change.
+        assert!(state.merge(vec![volume("pgdata")], ContainerUsage::default()));
+    }
+
+    #[test]
+    fn merge_after_error_re_renders_even_when_rows_match() {
+        use crate::docker::models::usage::ContainerUsage;
+        use crate::i18n::Str;
+
+        let mut state: ResourceState<Volume> = ResourceState::default();
+        let rows = vec![volume("pgdata")];
+        state.set_rows(rows.clone());
+        assert!(state.set_poll_error(Str::DockerConnectionError("down".into())));
+        assert!(!state.set_poll_error(Str::DockerConnectionError("still".into())));
+        // Recovery with the same rows is still a change: the table must return.
+        assert!(state.merge(rows, ContainerUsage::default()));
     }
 
     #[test]
