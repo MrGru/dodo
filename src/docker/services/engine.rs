@@ -9,18 +9,22 @@
 use std::future::Future;
 use std::path::Path;
 
+use bollard::container::LogOutput;
 use bollard::models::{ContainerStatsResponse, ContainerSummary, ImageSummary};
 use bollard::query_parameters::{
-    ListContainersOptionsBuilder, ListImagesOptionsBuilder, RemoveContainerOptionsBuilder,
-    RemoveImageOptionsBuilder, RemoveVolumeOptionsBuilder, RestartContainerOptionsBuilder,
-    StatsOptionsBuilder, StopContainerOptionsBuilder,
+    ListContainersOptionsBuilder, ListImagesOptionsBuilder, LogsOptionsBuilder,
+    RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder, RemoveVolumeOptionsBuilder,
+    RestartContainerOptionsBuilder, StatsOptionsBuilder, StopContainerOptionsBuilder,
 };
 use bollard::{API_DEFAULT_VERSION, Docker};
 use futures_util::StreamExt as _;
+use serde::Serialize;
 use tokio::runtime::Runtime;
 
 use crate::docker::models::container::{Container, clean_name, compose_project};
 use crate::docker::models::image::{Image, split_repo_tag};
+use crate::docker::models::inspect::{InspectDetail, InspectKind};
+use crate::docker::models::logs::{LogLine, LogStream, lines_from_frames, tail};
 use crate::docker::models::network::Network;
 use crate::docker::models::port::PortMapping;
 use crate::docker::models::stats::{CpuSample, cpu_percent};
@@ -289,6 +293,89 @@ impl DockerEngine for BollardEngine {
             docker.remove_network(id).await.map_err(operation)
         })
     }
+
+    fn inspect_container(&self, id: &str) -> Result<InspectDetail, DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            let response = docker
+                .inspect_container(id, None)
+                .await
+                .map_err(operation)?;
+            detail(InspectKind::Container, &response)
+        })
+    }
+
+    fn inspect_image(&self, id: &str) -> Result<InspectDetail, DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            let response = docker.inspect_image(id).await.map_err(operation)?;
+            detail(InspectKind::Image, &response)
+        })
+    }
+
+    fn inspect_volume(&self, name: &str) -> Result<InspectDetail, DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            let response = docker.inspect_volume(name).await.map_err(operation)?;
+            detail(InspectKind::Volume, &response)
+        })
+    }
+
+    fn inspect_network(&self, id: &str) -> Result<InspectDetail, DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            let response = docker.inspect_network(id, None).await.map_err(operation)?;
+            detail(InspectKind::Network, &response)
+        })
+    }
+
+    fn container_logs(&self, id: &str, tail_lines: usize) -> Result<Vec<LogLine>, DockerError> {
+        self.block_on(async move {
+            let docker = connect()?;
+            // `follow(false)`: the engine replays the requested window and closes
+            // the stream, so the call terminates on its own. Live following is
+            // deliberately out of scope — see `models::logs`.
+            let options = LogsOptionsBuilder::new()
+                .stdout(true)
+                .stderr(true)
+                .follow(false)
+                .tail(&tail_lines.to_string())
+                .build();
+            let mut stream = Box::pin(docker.logs(id, Some(options)));
+
+            let mut frames = Vec::new();
+            while let Some(frame) = stream.next().await {
+                frames.push(log_frame(frame.map_err(operation)?));
+            }
+            // The engine already bounded the window; bounding again keeps the
+            // promise even if a daemon ignores `tail`.
+            Ok(tail(lines_from_frames(frames), tail_lines))
+        })
+    }
+}
+
+/// Reduces one inspect response to the panel's detail. The response is turned
+/// into plain JSON here — the last point where a `bollard` type is named — and
+/// every field rule then lives in the unit-tested
+/// [`models::inspect`](crate::docker::models::inspect).
+fn detail(kind: InspectKind, response: &impl Serialize) -> Result<InspectDetail, DockerError> {
+    let value = serde_json::to_value(response)
+        .map_err(|error| DockerError::Operation(error.to_string()))?;
+    Ok(InspectDetail::from_value(kind, &value))
+}
+
+/// One log frame as the model wants it: which stream it came from and its bytes
+/// as lossy UTF-8 (a container may write anything at all).
+fn log_frame(output: LogOutput) -> (LogStream, String) {
+    let (stream, message) = match output {
+        LogOutput::StdErr { message } => (LogStream::Stderr, message),
+        // StdIn and Console are what a TTY-attached container reports; both are
+        // what the user sees as normal output.
+        LogOutput::StdOut { message }
+        | LogOutput::StdIn { message }
+        | LogOutput::Console { message } => (LogStream::Stdout, message),
+    };
+    (stream, String::from_utf8_lossy(&message).into_owned())
 }
 
 /// Reduces one container summary to its resource references for the usage

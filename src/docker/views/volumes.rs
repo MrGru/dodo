@@ -5,7 +5,9 @@
 //! background executor — over the volume columns. Size is `N/A` whenever the
 //! engine did not report it (the common case), rather than blocking the page on a
 //! size scan; "containers using" counts the container mounts. Delete is confirmed
-//! then refused sanely while a container still mounts the volume.
+//! then refused sanely while a container still mounts the volume; Inspect opens
+//! the shared read-only
+//! [`DetailPanel`](crate::docker::views::detail::DetailPanel).
 
 use std::sync::Arc;
 
@@ -28,18 +30,20 @@ use crate::docker::components::search_bar::search_bar;
 use crate::docker::components::skeleton::loading_skeleton;
 use crate::docker::components::states::{empty_state, error_state};
 use crate::docker::components::toolbar::toolbar;
+use crate::docker::models::inspect::InspectKind;
 use crate::docker::models::size::format_size;
 use crate::docker::models::volume::Volume;
 use crate::docker::services::{DockerEngine, default_engine};
 use crate::docker::state::containers::LoadStatus;
 use crate::docker::state::focus::{FocusMove, next_focus};
 use crate::docker::state::resource::ResourceState;
+use crate::docker::views::detail::DetailPanel;
 use crate::docker::views::widgets::{
     action_button, count_cell, header_cell, muted_cell, resource_context_menu,
 };
 use crate::docker::{
-    DockerContextDelete, DockerMoveDown, DockerMoveUp, DockerRefreshList, KEY_CONTEXT,
-    POLL_INTERVAL,
+    DockerCloseDetail, DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp,
+    DockerRefreshList, KEY_CONTEXT, POLL_INTERVAL,
 };
 use crate::i18n::{Language, Str, t};
 
@@ -48,7 +52,7 @@ use crate::i18n::{Language, Str, t};
 const DRIVER_W: Pixels = px(120.);
 const SIZE_W: Pixels = px(96.);
 const USING_W: Pixels = px(132.);
-const ACTIONS_W: Pixels = px(48.);
+const ACTIONS_W: Pixels = px(84.);
 const SEARCH_W: Pixels = px(240.);
 const TABLE_MIN_W: Pixels = px(820.);
 
@@ -63,8 +67,11 @@ pub struct VolumesView {
     focus_handle: FocusHandle,
     /// The keyboard-highlighted row (a volume name). `None` until the first arrow.
     focused: Option<String>,
-    /// The row a right-click opened the menu on; the Delete action reads it.
+    /// The row a right-click opened the menu on; the Delete and Inspect actions
+    /// read it.
     context_target: Option<String>,
+    /// The read-only Inspect overlay, closed until a row action opens it.
+    detail: DetailPanel,
     /// Set when the page becomes active so `render` focuses the list once.
     needs_focus: bool,
     loaded_once: bool,
@@ -93,10 +100,17 @@ impl VolumesView {
             focus_handle: cx.focus_handle(),
             focused: None,
             context_target: None,
+            detail: DetailPanel::new(window, cx),
             needs_focus: false,
             loaded_once: false,
             language: Language::current(cx),
         }
+    }
+
+    /// How the detail panel's background fetch finds its way back to itself
+    /// through this view; see [`DetailPanel`].
+    fn detail_mut(&mut self) -> &mut DetailPanel {
+        &mut self.detail
     }
 
     pub fn ensure_loaded(&mut self, cx: &mut Context<Self>) {
@@ -196,6 +210,40 @@ impl VolumesView {
         if let Some(name) = self.context_target.clone() {
             self.confirm_delete(name, window, cx);
         }
+    }
+
+    fn on_context_inspect(
+        &mut self,
+        _: &DockerContextInspect,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(name) = self.context_target.clone() {
+            self.open_inspect(name, window, cx);
+        }
+    }
+
+    fn on_close_detail(&mut self, _: &DockerCloseDetail, _: &mut Window, cx: &mut Context<Self>) {
+        if self.detail.is_open() {
+            self.detail.close();
+            cx.notify();
+        }
+    }
+
+    /// Opens the read-only Inspect panel on one volume. A volume is addressed by
+    /// name, which is also what labels the panel.
+    fn open_inspect(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let engine = self.engine.clone();
+        let title = name.clone();
+        self.detail.open_inspect(
+            engine,
+            InspectKind::Volume,
+            name,
+            title,
+            Self::detail_mut,
+            window,
+            cx,
+        );
     }
 
     /// Reloads the volume list and the container usage together on the background
@@ -477,7 +525,20 @@ impl VolumesView {
     }
 
     fn render_actions(&self, row: &Volume, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex().gap_1().child(action_button(
+        h_flex()
+            .gap_1()
+            .child(action_button(
+                SharedString::from(format!("inspect-{}", row.name)),
+                AppIcon::Eye,
+                t(Str::DockerInspect, cx),
+                true,
+                ButtonVariant::Ghost,
+                cx.listener({
+                    let name = row.name.clone();
+                    move |this, _, window, cx| this.open_inspect(name.clone(), window, cx)
+                }),
+            ))
+            .child(action_button(
             SharedString::from(format!("delete-{}", row.name)),
             AppIcon::Trash,
             t(Str::Delete, cx),
@@ -511,14 +572,30 @@ impl Render for VolumesView {
             .action_error()
             .map(|message| t(message.clone(), cx));
 
+        let engine = self.engine.clone();
+        let detail = self.detail.render(
+            cx.listener(|this, _, _, cx| {
+                this.detail.close();
+                cx.notify();
+            }),
+            cx.listener(move |this, _, window, cx| {
+                this.detail
+                    .reload(engine.clone(), Self::detail_mut, window, cx);
+            }),
+            cx,
+        );
+
         v_flex()
             .size_full()
+            .relative()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_move_up))
             .on_action(cx.listener(Self::on_move_down))
             .on_action(cx.listener(Self::on_refresh_action))
             .on_action(cx.listener(Self::on_context_delete))
+            .on_action(cx.listener(Self::on_context_inspect))
+            .on_action(cx.listener(Self::on_close_detail))
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
@@ -529,6 +606,7 @@ impl Render for VolumesView {
                 this.child(self.render_action_banner(message, cx))
             })
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
+            .children(detail)
     }
 }
 

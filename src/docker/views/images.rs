@@ -6,7 +6,9 @@
 //! and the container usage together, so the "containers using" column is derived
 //! from the live container set rather than the engine's own (often uncalculated)
 //! counter. Delete is confirmed first, then refused sanely when a container still
-//! uses the image; Inspect is a disabled placeholder for a later round.
+//! uses the image; Inspect opens the shared read-only
+//! [`DetailPanel`](crate::docker::views::detail::DetailPanel). Pull and Build are
+//! the toolbar's two labelled placeholders.
 
 use std::sync::Arc;
 
@@ -30,19 +32,21 @@ use crate::docker::components::skeleton::loading_skeleton;
 use crate::docker::components::states::{empty_state, error_state};
 use crate::docker::components::toolbar::toolbar;
 use crate::docker::models::image::Image;
+use crate::docker::models::inspect::InspectKind;
 use crate::docker::models::size::format_size;
 use crate::docker::models::time::RelativeTime;
 use crate::docker::services::{DockerEngine, default_engine};
 use crate::docker::state::containers::LoadStatus;
 use crate::docker::state::focus::{FocusMove, next_focus};
 use crate::docker::state::resource::ResourceState;
+use crate::docker::views::detail::DetailPanel;
 use crate::docker::views::widgets::{
-    action_button, count_cell, header_cell, muted_cell, now_unix, placeholder_button,
+    action_button, coming_soon_button, count_cell, header_cell, muted_cell, now_unix,
     resource_context_menu,
 };
 use crate::docker::{
-    DockerContextDelete, DockerMoveDown, DockerMoveUp, DockerRefreshList, KEY_CONTEXT,
-    POLL_INTERVAL,
+    DockerCloseDetail, DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp,
+    DockerRefreshList, KEY_CONTEXT, POLL_INTERVAL,
 };
 use crate::i18n::{Language, Str, t};
 
@@ -72,8 +76,11 @@ pub struct ImagesView {
     focus_handle: FocusHandle,
     /// The keyboard-highlighted row (an image id). `None` until the first arrow.
     focused: Option<String>,
-    /// The row a right-click opened the menu on; the Delete action reads it.
+    /// The row a right-click opened the menu on; the Delete and Inspect actions
+    /// read it.
     context_target: Option<String>,
+    /// The read-only Inspect overlay, closed until a row action opens it.
+    detail: DetailPanel,
     /// Set when the page becomes active so `render` focuses the list once.
     needs_focus: bool,
     /// Whether the first load has been kicked off; makes [`Self::ensure_loaded`]
@@ -105,10 +112,17 @@ impl ImagesView {
             focus_handle: cx.focus_handle(),
             focused: None,
             context_target: None,
+            detail: DetailPanel::new(window, cx),
             needs_focus: false,
             loaded_once: false,
             language: Language::current(cx),
         }
+    }
+
+    /// How the detail panel's background fetch finds its way back to itself
+    /// through this view; see [`DetailPanel`].
+    fn detail_mut(&mut self) -> &mut DetailPanel {
+        &mut self.detail
     }
 
     /// Loads the list the first time the page is shown, once.
@@ -208,6 +222,57 @@ impl ImagesView {
                 self.confirm_delete(id, name, window, cx);
             }
         }
+    }
+
+    fn on_context_inspect(
+        &mut self,
+        _: &DockerContextInspect,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.context_target.clone() {
+            let title = self.row_label(&id);
+            self.open_inspect(id, title, window, cx);
+        }
+    }
+
+    fn on_close_detail(&mut self, _: &DockerCloseDetail, _: &mut Window, cx: &mut Context<Self>) {
+        if self.detail.is_open() {
+            self.detail.close();
+            cx.notify();
+        }
+    }
+
+    /// Opens the read-only Inspect panel on one image; the fetch runs on the
+    /// background executor.
+    fn open_inspect(
+        &mut self,
+        id: String,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let engine = self.engine.clone();
+        self.detail.open_inspect(
+            engine,
+            InspectKind::Image,
+            id,
+            title,
+            Self::detail_mut,
+            window,
+            cx,
+        );
+    }
+
+    /// How the panel labels this row until the engine's own name arrives: the
+    /// `repo:tag` reference, or the short id.
+    fn row_label(&self, id: &str) -> String {
+        self.state
+            .visible()
+            .into_iter()
+            .find(|row| row.id == id)
+            .map(|row| row.confirm_label())
+            .unwrap_or_else(|| id.to_string())
     }
 
     /// Reloads the image list and the container usage together on the background
@@ -318,6 +383,20 @@ impl ImagesView {
                     .label(t(Str::DockerRefresh, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
+            // Pull and Build are the registry/creation flows a later round adds:
+            // present, disabled and labelled, so they read as planned features.
+            .child(coming_soon_button(
+                "docker-images-pull".into(),
+                AppIcon::Import,
+                t(Str::DockerPull, cx),
+                cx,
+            ))
+            .child(coming_soon_button(
+                "docker-images-build".into(),
+                AppIcon::Layers,
+                t(Str::DockerBuild, cx),
+                cx,
+            ))
     }
 
     fn render_action_banner(&self, message: SharedString, cx: &App) -> impl IntoElement {
@@ -520,14 +599,24 @@ impl ImagesView {
     }
 
     fn render_actions(&self, row: &Image, cx: &mut Context<Self>) -> impl IntoElement {
-        // A label for the confirmation: the reference if tagged, else the short id.
+        // A label for the confirmation and the detail panel: the reference if
+        // tagged, else the short id.
         let name = row.confirm_label();
         h_flex()
             .gap_1()
-            .child(placeholder_button(
+            .child(action_button(
                 SharedString::from(format!("inspect-{}", row.id)),
                 AppIcon::Eye,
                 t(Str::DockerInspect, cx),
+                true,
+                ButtonVariant::Ghost,
+                cx.listener({
+                    let id = row.id.clone();
+                    let title = name.clone();
+                    move |this, _, window, cx| {
+                        this.open_inspect(id.clone(), title.clone(), window, cx)
+                    }
+                }),
             ))
             .child(action_button(
                 SharedString::from(format!("delete-{}", row.id)),
@@ -565,14 +654,30 @@ impl Render for ImagesView {
             .action_error()
             .map(|message| t(message.clone(), cx));
 
+        let engine = self.engine.clone();
+        let detail = self.detail.render(
+            cx.listener(|this, _, _, cx| {
+                this.detail.close();
+                cx.notify();
+            }),
+            cx.listener(move |this, _, window, cx| {
+                this.detail
+                    .reload(engine.clone(), Self::detail_mut, window, cx);
+            }),
+            cx,
+        );
+
         v_flex()
             .size_full()
+            .relative()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_move_up))
             .on_action(cx.listener(Self::on_move_down))
             .on_action(cx.listener(Self::on_refresh_action))
             .on_action(cx.listener(Self::on_context_delete))
+            .on_action(cx.listener(Self::on_context_inspect))
+            .on_action(cx.listener(Self::on_close_detail))
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
@@ -583,6 +688,7 @@ impl Render for ImagesView {
                 this.child(self.render_action_banner(message, cx))
             })
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
+            .children(detail)
     }
 }
 

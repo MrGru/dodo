@@ -17,41 +17,30 @@ phases plug in. `api_explorer` is also the only tool that registers a key bindin
 (`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
 `settings::init`).
 
-**`src/docker/`** is the Docker/Podman module. All four pages are built out: Containers (round 2 —
-compose grouping, filter popover, bulk actions) and, since round 3, Images/Volumes/Networks — real
-list pages with search, Refresh, per-row Delete (confirm) and the loading/empty/error+retry states,
-sharing round 1–2's `components/`. Read `src/docker/mod.rs` — it is the authority. The three round-3
-pages share one generic store, `state/resource.rs`'s `ResourceState<T>` (only Containers needs the
-selection/grouping/filter machinery); their pure logic lives in `models/{image,volume,network,
-size,usage}.rs`, all unit-tested without GPUI — note `models/usage.rs`, the "containers using"
-derivation the three pages count against (from the container set, not the engine's own counters).
-The round-2 pure-logic modules `state/grouping.rs` (compose partition + group status) and
-`state/filters.rs` (the multi-filter predicate) remain Containers-only. Inspect, Logs, Terminal and
-a Create/Build/Pull flow are still placeholders for a later round (the round-4 context menu shows
-them disabled under a "Coming soon" label). Two things unique to the module:
-`services/` is the only place that may name `bollard` (the Docker Engine API client) and the only
-place a **tokio runtime** lives — `bollard` is async, so `BollardEngine` drives every call with
-`Runtime::block_on` on the background executor, keeping the blocking-by-contract discipline
-`Transport` follows. The sidebar's Docker section is the only expandable/nested `SidebarMenuItem`
-group; `src/layout.rs` shows the `View` variants and page routing.
+**`src/docker/`** is the Docker/Podman module, and it is **feature-complete as of round 5**: four
+list pages (Containers with compose grouping, filters, bulk actions; Images/Volumes/Networks),
+background polling with incremental merges, keyboard navigation, row context menus, and a
+read-only Inspect panel for all four resource types plus a basic container log viewer.
+**`src/docker/mod.rs` is the authority** — it documents the layer split, what each round shipped,
+and, for the features that are still deliberately disabled "Coming soon" placeholders (Exec/
+Terminal, Create/Pull/Build, Stats beyond live CPU%, Favorites), exactly where each one plugs in.
+Read it before changing anything here rather than inferring the structure from the files.
 
-**Round 4 (background polling, keyboard nav, context menus).** The active Docker page
-auto-refreshes off the UI thread on `docker::POLL_INTERVAL` (a documented constant, default 5s —
-not a setting on purpose). `DockerView` gates it: `should_poll(section_active, active_page, page)`
-means exactly one visible page polls; leaving for another tool calls `set_section_active(false)`
-(wired in `layout.rs`) and pauses it. Each page's `set_polling`/`start_poll_loop` re-lists and
-**merges incrementally** — `ContainersState::merge_rows` / `ResourceState::merge` return whether
-anything changed so an unchanged tick skips `cx.notify()`, and selection/scroll/expanded/search all
-survive; the pure diff helpers (`state/diff.rs`, CPU carry-forward + change detection) are
-unit-tested. An unreachable engine degrades via `set_poll_error` (transition-only re-render, no
-spam). Containers runs its CPU sweep inline in the same loop so sweeps never overlap. Keyboard nav
-and the right-click menus route through GPUI **actions** defined in `src/docker/mod.rs` and bound by
-`docker::init` (called from `main` after `gpui_component::init`, same tie-break rule as
-`api_explorer::init`), scoped to the `DockerList` key context: `up`/`down` move the highlighted row
-(`state/focus.rs`), `space`/`x` toggle selection (Containers), `cmd-r` refreshes. Row context menus
-use `gpui_component`'s `ContextMenuExt::context_menu`; the right-clicked row's key is stashed in the
-view's `context_target` on right mouse-down before the menu builds. The shared `components/toolbar.rs`
-now `flex_wrap`s and each table's inner list is `w_full` + `min_w` (flex on wide, scroll on narrow).
+Four things about the module that are not obvious from any one file:
+
+- **`services/` is the only place that may name `bollard`**, and the only place a **tokio runtime**
+  lives. `bollard` is async, so `BollardEngine` drives every call with `Runtime::block_on` on the
+  background executor, keeping the blocking-by-contract discipline `Transport` follows. Inspect
+  responses cross that boundary as `serde_json::Value`, so the field extraction in
+  `models/inspect.rs` stays testable without a daemon.
+- **`docker::init` registers the module's key bindings** and must run from `main` after
+  `gpui_component::init` — the same tie-break rule as `api_explorer::init`. Bindings are scoped to
+  the `DockerList` key context; the actions themselves are declared in `src/docker/mod.rs`.
+- **`docker::POLL_INTERVAL` is a constant, not a setting, on purpose** (5s). Exactly one visible
+  page polls (`DockerView::should_poll`), and leaving the section calls `set_section_active(false)`
+  (wired in `layout.rs`), so an idle cadence never runs.
+- The sidebar's Docker section is dodo's only expandable/nested `SidebarMenuItem` group;
+  `src/layout.rs` shows the `View` variants and page routing.
 
 **dodo now persists one thing across restarts:** the API Explorer's collections, written by
 `services::collection_store::DiskCollectionStore` to `~/Library/Application Support/dodo/`
