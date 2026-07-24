@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=dodo
+GenericName=Developer Tools
+Comment=A collection of small developer tools in one window
+Exec=dodo
+Icon=dodo
+Terminal=false
+Categories=Development;Utility;
+Keywords=json;base64;jwt;http;api;docker;
+# UNVERIFIED, like the rest of the Linux packaging: dodo has never been built or
+# run on Linux. This must match the WM_CLASS the running window reports, which
+# GPUI derives from WindowOptions::app_id - and dodo leaves that at its default
+# today (src/main.rs). If the task bar shows a generic icon next to a correct
+# launcher icon, this line is why; check with `xprop WM_CLASS` and fix it here.
+StartupWMClass=dodo
+StartupNotify=true

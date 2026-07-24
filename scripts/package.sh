@@ -103,6 +103,32 @@ for doc in README.md LICENSE LICENSE.md LICENSE.txt; do
     [ -f "$repo_root/$doc" ] && cp "$repo_root/$doc" "$stage/"
 done
 
+# --- desktop integration files --------------------------------------------
+#
+# Linux only, and laid out under share/ exactly as they must end up on disk:
+#
+#   share/applications/dodo.desktop
+#   share/icons/hicolor/<n>x<n>/apps/dodo.png
+#
+# so installing is `cp -r share/ ~/.local/` (or /usr/local/) with no renaming,
+# and a future .deb or AppImage job can copy the tree wholesale into its own
+# staging root. macOS carries its icon inside dodo.app instead, and Windows is
+# packaged by package.ps1.
+#
+# These are committed artifacts (scripts/generate-icons.py regenerates them);
+# packaging never builds them, because most of the tooling to do so is macOS
+# only. Missing files are a hard error rather than a quietly icon-less archive.
+if [ "$platform" = "linux" ]; then
+    desktop_file="$repo_root/assets/linux/dodo.desktop"
+    hicolor="$repo_root/assets/linux/hicolor"
+    [ -f "$desktop_file" ] || die "missing $desktop_file"
+    [ -d "$hicolor" ] || die "missing $hicolor; run: scripts/generate-icons.py"
+    mkdir -p "$stage/share/applications"
+    cp "$desktop_file" "$stage/share/applications/dodo.desktop"
+    mkdir -p "$stage/share/icons"
+    cp -R "$hicolor" "$stage/share/icons/hicolor"
+fi
+
 # tar: GNU tar can be told to produce a byte-identical archive from identical
 # inputs; BSD tar (the macOS default) cannot, so those flags are added only
 # when they are understood. Everything else about the archive is already

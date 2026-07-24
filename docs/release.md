@@ -117,6 +117,111 @@ and open it. Do that before announcing a release.
 
 ---
 
+## Application icon
+
+dodo's artwork is a dark squircle tile carrying the dodo bird and a "DODO"
+wordmark. Two files in `assets/branding/` are the whole source of truth:
+
+| File | What it is |
+|---|---|
+| `dodo-artwork-source.png` | the original supplied artwork, 1254×1254, **opaque**, tile on a black canvas. Never edited. |
+| `dodo-1024.png` | the 1024×1024 RGBA master every icon is derived from: the same art with everything outside the tile's rounded border cut to full transparency. |
+
+### Regenerating
+
+```sh
+python3 scripts/generate-icons.py            # master -> every derived artifact
+python3 scripts/generate-icons.py --remaster # also rebuild the master from the
+                                             # original artwork first
+python3 scripts/generate-icons.py --check    # diff against what is committed
+```
+
+Both scripts are stdlib-only Python 3 — no Pillow, no ImageMagick, nothing in
+`Cargo.toml` — because this is a once-per-artwork-change chore and neither tool
+is present on the machine dodo is developed on. `scripts/make-icon-master.py`
+carries a small hand-rolled PNG codec and explains why the transparent-corner
+cut is derived from the artwork's own outline rather than a fitted superellipse
+(a fitted curve that is a pixel off clips one edge and leaves a black sliver on
+the other). The only external tool is `iconutil`, for the `.icns`; when it is
+absent the script writes everything else, says exactly what it could not build,
+and exits non-zero. It never emits a placeholder.
+
+### What is generated, and where it goes
+
+All of it is **committed**, because packaging must not depend on the host:
+`iconutil` exists only on macOS, so a Linux runner could never build the
+`.icns`.
+
+| Artifact | Sizes | Shipped as |
+|---|---|---|
+| `assets/macos/dodo.icns` | 16/32/128/256/512 at 1× and 2× | `dodo.app/Contents/Resources/dodo.icns`, named by `CFBundleIconFile` |
+| `assets/windows/dodo.ico` | 16/32/48/64/128/256 | a loose file next to `dodo.exe` in the ZIP |
+| `assets/linux/hicolor/<n>x<n>/apps/dodo.png` | 16/24/32/48/64/128/256/512 | `share/icons/hicolor/…` in the tar.gz |
+| `assets/linux/dodo.desktop` | — | `share/applications/dodo.desktop` in the tar.gz (hand-written, not generated) |
+
+The Linux tar.gz lays those out under `share/` exactly as they must end up on
+disk, so installing is `cp -r share/ ~/.local/` (or `/usr/local/`) with no
+renaming, and a future `.deb`/AppImage job can copy the tree wholesale.
+
+**None of this is embedded in the binary.** `src/assets.rs` embeds `assets/`
+through `rust-embed` but with explicit `#[include]` filters — `icons/**/*.svg`
+and `themes/**/*.json` — and every path above falls outside both. Confirmed by
+measurement: `target/release/dodo` is 20,513,488 bytes before and after adding
+them, byte for byte. Anything new under `assets/` that must stay out of the
+binary has to stay outside those two filters; check the size, do not assume.
+
+### Windows icon: shipped, not embedded
+
+Making Explorer and the taskbar show the icon for `dodo.exe` itself requires
+embedding a Win32 `RT_GROUP_ICON` resource, which needs a build-dependency
+(`winresource` or `winres`) plus a `build.rs` branch. **Not done, deliberately.**
+
+The consequence, accepted: `dodo.exe` shows the generic executable icon in
+Explorer and on the taskbar. The `.ico` ships next to it, so a shortcut, an
+installer or a future MSI can point at the real one.
+
+The reasoning: dodo has never been built or run on Windows or by a Windows
+runner (the Windows matrix row is `experimental` and non-blocking), so the
+build.rs branch could not be tested, only hoped at — and it would add an
+unverifiable subtree to `Cargo.lock`, which is the *only* pin on the four git
+dependencies. Doing it once Windows is genuinely built is three edits:
+
+```toml
+# Cargo.toml — must be target-scoped, so macOS and Linux builds never see it
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+```
+
+```rust
+// build.rs, at the end of main()
+#[cfg(windows)]
+winresource::WindowsResource::new()
+    .set_icon("assets/windows/dodo.ico")
+    .compile()
+    .expect("embedding the Windows icon");
+```
+
+then `cargo build` once on Windows to update `Cargo.lock`, as its own reviewed
+commit (see `docs/build-optimization.md` on why the lockfile is handled that
+way), and check Explorer actually shows it.
+
+### Verified, not assumed
+
+A `.icns` that `iconutil` accepted can still render as a blank generic document
+— exit 0 proves nothing here. What was actually checked on macOS arm64:
+
+- the master's corner pixels have alpha 0 and its centre alpha 255, with the
+  edge fading over ~1px and edge pixels carrying the tile's own border colour
+  rather than black (no halo);
+- `sips` decodes the `.icns` back to recognisable artwork;
+- `iconutil` produced all ten `ic**` entries including `ic10` (1024);
+- **`dist/dodo.app` shows the dodo icon in Finder and in the Dock at normal
+  size**, screenshotted, after `lsregister -f` on the freshly built bundle.
+
+Repeat at least the last one after any artwork change.
+
+---
+
 ## Creating a new release
 
 1. **Decide the version** (see semantic versioning below) and set it in
@@ -214,8 +319,10 @@ extra asset alongside the ZIP, never as a replacement for it.
 
 **Linux packages (.deb, .rpm, AppImage).** Not started. `cargo-deb` and
 `cargo-generate-rpm` both read metadata from `Cargo.toml`, so the natural first
-step is a `[package.metadata.deb]` section plus one more matrix step. AppImage
-needs a desktop entry and an icon; dodo has neither yet (see below).
+step is a `[package.metadata.deb]` section plus one more matrix step. The
+desktop entry and icons an AppImage or `.deb` needs now exist and are already
+staged in the tar.gz under `share/` — see
+[Application icon](#application-icon).
 
 **Automatic updates.** Nothing in dodo checks for a new version. If it ever
 does, the pieces are already in place: `--build-info` reports the running
@@ -244,10 +351,18 @@ download and buys nothing they can use.
 **Telemetry.** Not implemented and not scaffolded. This is a local developer
 tool; the burden of proof is on adding it.
 
-**App icon.** dodo ships no `.icns`. `assets/icons/` holds the in-app SVG icon
-set (`src/app_icon.rs`), not an application icon. `scripts/macos-app-bundle.sh`
-picks up `assets/macos/dodo.icns` automatically if one is ever added, and the
-same file would feed a Windows `.ico` and a Linux `.desktop` entry.
+**Embedding the Windows icon in the .exe.** See "Windows icon" under
+[Application icon](#application-icon); the `.ico` ships, the executable does
+not carry it.
+
+**An in-app window icon.** GPUI exposes `WindowOptions::icon`, documented in
+`crates/gpui/src/platform.rs` as *"Icon image (X11 only)"*. It does nothing on
+macOS (where the Dock and window icon come from the bundle's `CFBundleIconFile`
+instead) and nothing on Windows or Wayland, and it takes an
+`image::RgbaImage`, which would mean a direct `image` dependency and a PNG
+decode on the startup path. For a field that only affects a platform dodo has
+never been built on, that is not a trade worth making, so dodo does not set it.
+If Linux ever becomes a supported target, revisit it there.
 
 ---
 

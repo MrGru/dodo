@@ -2,3 +2,7 @@
 .claude/settings.local.json
 # Release archives produced by scripts/package.sh; regenerated, never committed.
 /dist
+# scripts/generate-icons.py imports scripts/make-icon-master.py as a module, so
+# running it leaves a bytecode cache behind. The icon artifacts themselves ARE
+# committed (docs/release.md, "Application icon"); only this is not.
+__pycache__/

@@ -51,10 +51,22 @@ collections. Persistence and initial load run on the background executor, never 
 **Build and release engineering lives in `docs/`**, and those two files are the authority for it:
 `docs/build-optimization.md` (release profile, the measured before/after size table, linker
 findings, the dependency report, startup review) and `docs/release.md` (CI, the release workflow,
-packaging, verification, future signing/notarisation placeholders). The rest is `Cargo.toml`'s
-`[profile.*]` comments, `build.rs`, `scripts/` and `.github/`.
+packaging, verification, the application icon, future signing/notarisation placeholders). The rest
+is `Cargo.toml`'s `[profile.*]` comments, `build.rs`, `scripts/` and `.github/`.
 
-Three things about it that catch people:
+**The application icon is a committed pipeline, not a file someone dropped in.** `assets/branding/`
+holds the original artwork and the 1024 RGBA master; `python3 scripts/generate-icons.py` derives
+the macOS `.icns`, the Windows `.ico` and the Linux hicolor PNGs from it, and all of those are
+committed because packaging must not depend on the host (`iconutil` is macOS-only). Read
+"Application icon" in `docs/release.md` before touching any of it — it records why the Windows
+`.exe` does not embed its icon, why GPUI's `WindowOptions::icon` is not set, and that a `.icns`
+`iconutil` accepted can still render blank. **Do not confuse `assets/{branding,macos,windows,
+linux}` with `assets/icons`**: only `icons/**/*.svg` and `themes/**/*.json` are embedded in the
+binary (the `#[include]` filters in `src/assets.rs`), which is why the branding artwork costs zero
+bytes. Anything new under `assets/` that must stay out of the binary has to stay outside those two
+filters — measure the binary, do not assume.
+
+Three things about build and release that catch people:
 
 - **`fmt` and `clippy` are blocking jobs; keep them green.** Run `cargo fmt --all` and
   `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
