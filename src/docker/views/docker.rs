@@ -8,9 +8,7 @@
 //! top-level tools. Rounds 1–3 implement all four pages; each is loaded lazily
 //! the first time it is shown.
 
-use gpui::{
-    AppContext as _, Context, Entity, IntoElement, Render, Window,
-};
+use gpui::{AppContext as _, Context, Entity, IntoElement, Render, Window};
 
 use crate::docker::views::containers::ContainersView;
 use crate::docker::views::images::ImagesView;
@@ -65,7 +63,8 @@ impl DockerView {
         self.section_active = true;
         match page {
             DockerPage::Containers => {
-                self.containers.update(cx, |view, cx| view.ensure_loaded(cx));
+                self.containers
+                    .update(cx, |view, cx| view.ensure_loaded(cx));
             }
             DockerPage::Images => {
                 self.images.update(cx, |view, cx| view.ensure_loaded(cx));
@@ -139,12 +138,28 @@ mod tests {
     #[test]
     fn only_the_active_visible_page_polls() {
         // Active section, Containers showing: only Containers polls.
-        assert!(should_poll(true, DockerPage::Containers, DockerPage::Containers));
-        assert!(!should_poll(true, DockerPage::Containers, DockerPage::Images));
-        assert!(!should_poll(true, DockerPage::Containers, DockerPage::Volumes));
+        assert!(should_poll(
+            true,
+            DockerPage::Containers,
+            DockerPage::Containers
+        ));
+        assert!(!should_poll(
+            true,
+            DockerPage::Containers,
+            DockerPage::Images
+        ));
+        assert!(!should_poll(
+            true,
+            DockerPage::Containers,
+            DockerPage::Volumes
+        ));
 
         // Section not visible (user is in another tool): nothing polls.
-        assert!(!should_poll(false, DockerPage::Containers, DockerPage::Containers));
+        assert!(!should_poll(
+            false,
+            DockerPage::Containers,
+            DockerPage::Containers
+        ));
         assert!(!should_poll(false, DockerPage::Images, DockerPage::Images));
     }
 }

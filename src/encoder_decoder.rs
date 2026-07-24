@@ -6,7 +6,7 @@ use gpui_component::select::{Select, SelectState};
 use gpui_component::{ActiveTheme, IndexPath, Sizable, StyledExt as _, h_flex, v_flex};
 
 use base64::alphabet;
-use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig, Engine as _};
+use base64::engine::{DecodePaddingMode, Engine as _, GeneralPurpose, GeneralPurposeConfig};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
 use crate::i18n::{JwtPart, Language, Str, t};
@@ -83,8 +83,7 @@ impl EncoderDecoder {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let language = Language::current(cx);
         let options = format_options(cx);
-        let format =
-            cx.new(|cx| SelectState::new(options, Some(IndexPath::default()), window, cx));
+        let format = cx.new(|cx| SelectState::new(options, Some(IndexPath::default()), window, cx));
 
         let input_placeholder = t(Str::EncoderInputPlaceholder, cx);
         let input = cx.new(|cx| {

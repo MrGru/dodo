@@ -43,9 +43,7 @@ impl JsonFormatter {
         });
 
         let options = indent_options(cx);
-        let indent = cx.new(|cx| {
-            SelectState::new(options, Some(IndexPath::default()), window, cx)
-        });
+        let indent = cx.new(|cx| SelectState::new(options, Some(IndexPath::default()), window, cx));
 
         Self {
             input,
@@ -173,20 +171,23 @@ impl Render for JsonFormatter {
                     .child(div().text_sm().child(t(Str::IndentLabel, cx)))
                     .child(Select::new(&self.indent).small().w(px(120.))),
             )
-            .when_some(self.error.clone().map(|error| t(error, cx)), |this, error| {
-                this.child(
-                    div()
-                        .rounded(cx.theme().radius)
-                        .border_1()
-                        .border_color(cx.theme().danger)
-                        .bg(cx.theme().danger.opacity(0.1))
-                        .text_color(cx.theme().danger)
-                        .text_sm()
-                        .px_3()
-                        .py_2()
-                        .child(error),
-                )
-            })
+            .when_some(
+                self.error.clone().map(|error| t(error, cx)),
+                |this, error| {
+                    this.child(
+                        div()
+                            .rounded(cx.theme().radius)
+                            .border_1()
+                            .border_color(cx.theme().danger)
+                            .bg(cx.theme().danger.opacity(0.1))
+                            .text_color(cx.theme().danger)
+                            .text_sm()
+                            .px_3()
+                            .py_2()
+                            .child(error),
+                    )
+                },
+            )
             .child(
                 div()
                     .flex_1()

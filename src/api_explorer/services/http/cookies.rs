@@ -71,7 +71,7 @@ pub fn cookies_from_headers(headers: &[(String, String)]) -> Vec<Cookie> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cookies_from_headers, parse_set_cookie, CookieAttribute};
+    use super::{CookieAttribute, cookies_from_headers, parse_set_cookie};
 
     #[test]
     fn a_bare_pair_parses_with_no_attributes() {
@@ -89,9 +89,18 @@ mod tests {
         assert_eq!(
             cookie.attributes,
             vec![
-                CookieAttribute { name: "Path".into(), value: Some("/".into()) },
-                CookieAttribute { name: "HttpOnly".into(), value: None },
-                CookieAttribute { name: "Max-Age".into(), value: Some("3600".into()) },
+                CookieAttribute {
+                    name: "Path".into(),
+                    value: Some("/".into())
+                },
+                CookieAttribute {
+                    name: "HttpOnly".into(),
+                    value: None
+                },
+                CookieAttribute {
+                    name: "Max-Age".into(),
+                    value: Some("3600".into())
+                },
             ]
         );
     }

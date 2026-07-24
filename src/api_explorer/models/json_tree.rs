@@ -123,7 +123,10 @@ pub enum RowLabel {
 /// What a visible row shows.
 #[derive(Clone, Debug)]
 pub enum RowContent {
-    Scalar { text: String, kind: ScalarKind },
+    Scalar {
+        text: String,
+        kind: ScalarKind,
+    },
     /// A container: the brackets to draw, how many children it has, and whether
     /// it is open.
     Container {
@@ -271,7 +274,11 @@ mod tests {
         assert!(matches!(rows[1].label, RowLabel::Field(ref f) if f == "a"));
         assert!(matches!(
             rows[2].content,
-            RowContent::Container { expanded: false, count: 1, .. }
+            RowContent::Container {
+                expanded: false,
+                count: 1,
+                ..
+            }
         ));
     }
 
@@ -309,12 +316,21 @@ mod tests {
 
     #[test]
     fn a_huge_array_is_capped_by_the_row_budget() {
-        let big = format!("[{}]", (0..10_000).map(|n| n.to_string()).collect::<Vec<_>>().join(","));
+        let big = format!(
+            "[{}]",
+            (0..10_000)
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
         // The root array is expanded by default, so its 10k scalar children are
         // what the budget has to cut off.
         let tree = JsonTree::parse(&big).expect("parses");
         let visible = tree.visible_rows();
-        assert!(visible.truncated, "the budget should cut a 10k-element array off");
+        assert!(
+            visible.truncated,
+            "the budget should cut a 10k-element array off"
+        );
         assert!(visible.rows.len() <= super::ROW_BUDGET + 1);
     }
 

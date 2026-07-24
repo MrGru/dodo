@@ -470,7 +470,10 @@ impl RequestState {
             let editor = self.bulk_editors[table.index()].clone();
             editor.update(cx, |state, cx| state.set_value(text, window, cx));
         } else {
-            let text = self.bulk_editors[table.index()].read(cx).value().to_string();
+            let text = self.bulk_editors[table.index()]
+                .read(cx)
+                .value()
+                .to_string();
             self.apply_bulk_text(table, &text, window, cx);
         }
         self.bulk_edit[table.index()] = bulk;
@@ -515,7 +518,8 @@ impl RequestState {
                 row
             });
             row.enabled = enabled;
-            row.key.update(cx, |state, cx| state.set_value(key, window, cx));
+            row.key
+                .update(cx, |state, cx| state.set_value(key, window, cx));
             row.value
                 .update(cx, |state, cx| state.set_value(value, window, cx));
             rows.push(row);
@@ -543,7 +547,10 @@ impl RequestState {
                 })
                 .collect()
         } else {
-            self.rows(table).iter().map(|row| row.snapshot(cx)).collect()
+            self.rows(table)
+                .iter()
+                .map(|row| row.snapshot(cx))
+                .collect()
         }
     }
 
@@ -674,7 +681,8 @@ impl RequestState {
     ) {
         self.method = snapshot.method;
         let url = snapshot.url.clone();
-        self.url.update(cx, |state, cx| state.set_value(url, window, cx));
+        self.url
+            .update(cx, |state, cx| state.set_value(url, window, cx));
 
         self.load_rows(RowTable::Params, &snapshot.params, window, cx);
         self.load_rows(RowTable::Headers, &snapshot.headers, window, cx);
@@ -728,7 +736,8 @@ impl RequestState {
             row.enabled = value.enabled;
             let key = value.key.clone();
             let val = value.value.clone();
-            row.key.update(cx, |state, cx| state.set_value(key, window, cx));
+            row.key
+                .update(cx, |state, cx| state.set_value(key, window, cx));
             row.value
                 .update(cx, |state, cx| state.set_value(val, window, cx));
             rows.push(row);

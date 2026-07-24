@@ -208,7 +208,10 @@ mod tests {
         state.set_rows(vec![volume("pgdata"), volume("cache")]);
 
         // Same rows, same (empty) usage: not a change.
-        assert!(!state.merge(vec![volume("pgdata"), volume("cache")], ContainerUsage::default()));
+        assert!(!state.merge(
+            vec![volume("pgdata"), volume("cache")],
+            ContainerUsage::default()
+        ));
 
         // A new usage entry (a container now mounts a volume) is a change even
         // though the row list is identical.

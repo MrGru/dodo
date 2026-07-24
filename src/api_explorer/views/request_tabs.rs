@@ -47,12 +47,7 @@ impl ApiExplorer {
                             .when(dirty, |this| {
                                 // The unsaved dot. Drawn rather than an icon so
                                 // it stays a dot at every font size.
-                                this.child(
-                                    div()
-                                        .size(px(6.))
-                                        .rounded_full()
-                                        .bg(cx.theme().primary),
-                                )
+                                this.child(div().size(px(6.)).rounded_full().bg(cx.theme().primary))
                             })
                             .child(
                                 Button::new(("close-request-tab", index))

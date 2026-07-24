@@ -107,8 +107,8 @@ impl CollectionStore for DiskCollectionStore {
             std::fs::create_dir_all(dir)
                 .map_err(|err| StoreError::new(format!("{}: {err}", dir.display())))?;
         }
-        let json = serde_json::to_vec_pretty(roots)
-            .map_err(|err| StoreError::new(err.to_string()))?;
+        let json =
+            serde_json::to_vec_pretty(roots).map_err(|err| StoreError::new(err.to_string()))?;
 
         // Write to a sibling temp file and rename over the target, so a crash
         // mid-write leaves the previous save intact rather than a half file.
@@ -132,7 +132,11 @@ pub struct InMemoryCollectionStore {
 
 impl CollectionStore for InMemoryCollectionStore {
     fn load(&self) -> Result<Vec<Node>, StoreError> {
-        Ok(self.roots.lock().map(|roots| roots.clone()).unwrap_or_default())
+        Ok(self
+            .roots
+            .lock()
+            .map(|roots| roots.clone())
+            .unwrap_or_default())
     }
 
     fn persist(&self, roots: &[Node]) -> Result<(), StoreError> {
@@ -160,7 +164,8 @@ mod tests {
     fn tree_with_a_collection() -> CollectionTree {
         let mut tree = CollectionTree::default();
         let c = tree.add_collection("APIs".into());
-        tree.add_request(c, "Ping".into(), Default::default()).expect("request");
+        tree.add_request(c, "Ping".into(), Default::default())
+            .expect("request");
         tree
     }
 

@@ -84,9 +84,7 @@ pub fn split_repo_tag(repo_tags: &[String]) -> (Option<String>, Option<String>) 
         return (None, None);
     };
     let (repo, tag) = match first.rfind(':') {
-        Some(index) if !first[index + 1..].contains('/') => {
-            (&first[..index], &first[index + 1..])
-        }
+        Some(index) if !first[index + 1..].contains('/') => (&first[..index], &first[index + 1..]),
         _ => (first.as_str(), NONE),
     };
     (none_if_placeholder(repo), none_if_placeholder(tag))

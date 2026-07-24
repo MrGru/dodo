@@ -5,7 +5,9 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
 use gpui_component::popover::Popover;
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
 
 use crate::api_explorer::components::key_value_table::key_value_table;
 use crate::api_explorer::models::method::HttpMethod;
@@ -29,12 +31,7 @@ impl ApiExplorer {
             .size_full()
             .child(self.request_bar(&tab, cx))
             .child(self.request_tab_bar(&tab, cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.request_pane(&tab, cx)),
-            )
+            .child(div().flex_1().min_h_0().child(self.request_pane(&tab, cx)))
             .into_any_element()
     }
 
@@ -241,9 +238,7 @@ impl ApiExplorer {
             .child(
                 TabBar::new("request-panes")
                     .selected_index(selected)
-                    .children(
-                        RequestTab::ALL.map(|pane| Tab::new().label(t(pane.label(), cx))),
-                    )
+                    .children(RequestTab::ALL.map(|pane| Tab::new().label(t(pane.label(), cx))))
                     .on_click(cx.listener(move |_, index: &usize, _, cx| {
                         let Some(pane) = RequestTab::ALL.get(*index).copied() else {
                             return;

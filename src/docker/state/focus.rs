@@ -49,8 +49,14 @@ mod tests {
 
     #[test]
     fn first_press_lands_on_an_end() {
-        assert_eq!(next_focus(&keys(), None, FocusMove::Down).as_deref(), Some("a"));
-        assert_eq!(next_focus(&keys(), None, FocusMove::Up).as_deref(), Some("c"));
+        assert_eq!(
+            next_focus(&keys(), None, FocusMove::Down).as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            next_focus(&keys(), None, FocusMove::Up).as_deref(),
+            Some("c")
+        );
     }
 
     #[test]

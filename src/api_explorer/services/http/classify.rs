@@ -153,7 +153,10 @@ mod tests {
     fn markers_are_non_empty() {
         // An empty marker would make `contains` true for every error.
         for marker in DNS_MARKERS.iter().chain(TLS_MARKERS.iter()) {
-            assert!(!marker.trim().is_empty(), "an empty marker matches anything");
+            assert!(
+                !marker.trim().is_empty(),
+                "an empty marker matches anything"
+            );
         }
     }
 }

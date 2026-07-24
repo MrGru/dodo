@@ -205,7 +205,10 @@ mod tests {
         let mut d = draft("https://example.com/search?existing=1");
         d.params = vec![row(true, "added", "2")];
         let prepared = prepare(&d).expect("should prepare");
-        assert_eq!(prepared.url, "https://example.com/search?existing=1&added=2");
+        assert_eq!(
+            prepared.url,
+            "https://example.com/search?existing=1&added=2"
+        );
     }
 
     #[test]
@@ -279,7 +282,10 @@ mod tests {
     fn a_json_body_reaches_the_wire_with_its_content_type() {
         let prepared = prepare(&json_post(r#"{"a":1}"#)).expect("should prepare");
         assert_eq!(prepared.body.as_deref(), Some(&br#"{"a":1}"#[..]));
-        assert_eq!(header_of(&prepared, "content-type"), Some("application/json"));
+        assert_eq!(
+            header_of(&prepared, "content-type"),
+            Some("application/json")
+        );
     }
 
     #[test]

@@ -150,10 +150,8 @@ fn method_of(method: HttpMethod) -> reqwest::Method {
 fn header_map(headers: &[(String, String)]) -> Result<HeaderMap, TransportError> {
     let mut map = HeaderMap::with_capacity(headers.len());
     for (name, value) in headers {
-        let name =
-            HeaderName::from_bytes(name.as_bytes()).map_err(|_| TransportError::InvalidHeader {
-                name: name.clone(),
-            })?;
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| TransportError::InvalidHeader { name: name.clone() })?;
         let value = HeaderValue::from_str(value).map_err(|_| TransportError::InvalidHeader {
             name: name.to_string(),
         })?;

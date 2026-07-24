@@ -93,11 +93,9 @@ impl ApiExplorer {
         let name_placeholder = t(Str::NameRequestPlaceholder, cx);
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder(name_placeholder));
         let search_placeholder = t(Str::SearchCollectionsPlaceholder, cx);
-        let search_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder));
         let rename_placeholder = t(Str::NamePlaceholder, cx);
-        let rename_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder(rename_placeholder));
+        let rename_input = cx.new(|cx| InputState::new(window, cx).placeholder(rename_placeholder));
 
         let collection_store: Arc<dyn CollectionStore> = Arc::new(DiskCollectionStore::new());
         Self::load_collections(collection_store.clone(), cx);
@@ -259,12 +257,7 @@ impl ApiExplorer {
     }
 
     /// Opens the rename popover for a node, seeding the field with its name.
-    pub(super) fn begin_rename(
-        &mut self,
-        id: NodeId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn begin_rename(&mut self, id: NodeId, window: &mut Window, cx: &mut Context<Self>) {
         let current = self
             .collections
             .tree()
@@ -300,15 +293,20 @@ impl ApiExplorer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let opened = self.collections.tree().snapshot(id).cloned().map(|snapshot| {
-            let name = self
-                .collections
-                .tree()
-                .roots()
-                .iter()
-                .find_map(|node| find_name(node, id));
-            (snapshot, name)
-        });
+        let opened = self
+            .collections
+            .tree()
+            .snapshot(id)
+            .cloned()
+            .map(|snapshot| {
+                let name = self
+                    .collections
+                    .tree()
+                    .roots()
+                    .iter()
+                    .find_map(|node| find_name(node, id));
+                (snapshot, name)
+            });
         if let Some((snapshot, name)) = opened {
             self.open_snapshot(snapshot, name.map(Into::into), window, cx);
         }
@@ -386,24 +384,14 @@ impl ApiExplorer {
 
     // ---- History -------------------------------------------------------------
 
-    pub(super) fn reopen_history(
-        &mut self,
-        id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn reopen_history(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(snapshot) = self.history.snapshot(id).cloned() {
             self.open_snapshot(snapshot, None, window, cx);
         }
     }
 
     /// Reopens a history entry and immediately sends it again.
-    pub(super) fn resend_history(
-        &mut self,
-        id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn resend_history(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(snapshot) = self.history.snapshot(id).cloned() {
             self.open_snapshot(snapshot, None, window, cx);
             self.send_active(window, cx);
@@ -606,7 +594,11 @@ impl ApiExplorer {
 
     /// Request editor over response viewer, with the draggable divider between
     /// them.
-    fn request_and_response(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn request_and_response(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         v_flex()
             .size_full()
             .min_w_0()

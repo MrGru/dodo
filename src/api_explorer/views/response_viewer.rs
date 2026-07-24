@@ -42,12 +42,8 @@ impl ApiExplorer {
             .border_color(cx.theme().border)
             .child(self.response_meta_row(&tab, cx))
             .when(!collapsed, |this| {
-                this.child(self.response_tab_bar(&tab, cx)).child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(self.response_pane(&tab, cx)),
-                )
+                this.child(self.response_tab_bar(&tab, cx))
+                    .child(div().flex_1().min_h_0().child(self.response_pane(&tab, cx)))
             })
             .into_any_element()
     }
@@ -150,7 +146,11 @@ impl ApiExplorer {
                     .child(t(class.label(), cx)),
             )
             .child(metric(AppIcon::Clock, format_duration(elapsed).into(), cx))
-            .child(metric(AppIcon::HardDrive, format_size(size_bytes).into(), cx))
+            .child(metric(
+                AppIcon::HardDrive,
+                format_size(size_bytes).into(),
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -195,36 +195,36 @@ impl ApiExplorer {
                 // `min_w_0`) and clips it. Without `overflow_hidden` it spills
                 // out of the slot and paints over the controls beside it.
                 div().flex_1().min_w_0().overflow_hidden().child(
-                // Denser than the request strip: this row also carries the
-                // Pretty/Raw/Copy controls, and both have to fit dodo's
-                // 900px-wide default window without either being clipped.
-                TabBar::new("response-panes")
-                    .xsmall()
-                    .selected_index(selected)
-                    .children(ResponseTab::ALL.map(|pane| {
-                        let tab = Tab::new().label(t(pane.label(), cx));
-                        // The count badge the reference shows beside Headers.
-                        if pane == ResponseTab::Headers && header_count > 0 {
-                            tab.suffix(
-                                Tag::secondary()
-                                    .small()
-                                    .rounded_full()
-                                    .child(format!("{header_count}")),
-                            )
-                        } else {
-                            tab
-                        }
-                    }))
-                    .on_click(cx.listener(move |_, index: &usize, _, cx| {
-                        let Some(pane) = ResponseTab::ALL.get(*index).copied() else {
-                            return;
-                        };
-                        switch_tab.update(cx, |state, cx| {
-                            state.response.active_tab = pane;
+                    // Denser than the request strip: this row also carries the
+                    // Pretty/Raw/Copy controls, and both have to fit dodo's
+                    // 900px-wide default window without either being clipped.
+                    TabBar::new("response-panes")
+                        .xsmall()
+                        .selected_index(selected)
+                        .children(ResponseTab::ALL.map(|pane| {
+                            let tab = Tab::new().label(t(pane.label(), cx));
+                            // The count badge the reference shows beside Headers.
+                            if pane == ResponseTab::Headers && header_count > 0 {
+                                tab.suffix(
+                                    Tag::secondary()
+                                        .small()
+                                        .rounded_full()
+                                        .child(format!("{header_count}")),
+                                )
+                            } else {
+                                tab
+                            }
+                        }))
+                        .on_click(cx.listener(move |_, index: &usize, _, cx| {
+                            let Some(pane) = ResponseTab::ALL.get(*index).copied() else {
+                                return;
+                            };
+                            switch_tab.update(cx, |state, cx| {
+                                state.response.active_tab = pane;
+                                cx.notify();
+                            });
                             cx.notify();
-                        });
-                        cx.notify();
-                    })),
+                        })),
                 ),
             )
             .when(active == ResponseTab::Body && has_body, |this| {
@@ -251,8 +251,22 @@ impl ApiExplorer {
         h_flex()
             .items_center()
             .gap_1()
-            .child(self.body_mode_button(tab, body_view, BodyView::Pretty, Str::BodyPretty, "body-pretty", cx))
-            .child(self.body_mode_button(tab, body_view, BodyView::Raw, Str::BodyRaw, "body-raw", cx))
+            .child(self.body_mode_button(
+                tab,
+                body_view,
+                BodyView::Pretty,
+                Str::BodyPretty,
+                "body-pretty",
+                cx,
+            ))
+            .child(self.body_mode_button(
+                tab,
+                body_view,
+                BodyView::Raw,
+                Str::BodyRaw,
+                "body-raw",
+                cx,
+            ))
             .when(kind == BodyKind::Html, |this| {
                 this.child(self.body_mode_button(
                     tab,
@@ -398,11 +412,7 @@ impl ApiExplorer {
         )
     }
 
-    fn body_pane(
-        &self,
-        tab: &Entity<RequestTabState>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn body_pane(&self, tab: &Entity<RequestTabState>, cx: &mut Context<Self>) -> impl IntoElement {
         let state = tab.read(cx);
         let body = state.response.body.clone();
         let shown = state.response.visible_lines.min(state.response.total_lines);
@@ -505,9 +515,10 @@ impl ApiExplorer {
         // A body that is not JSON, or is a bare scalar with no tree worth
         // showing, falls back to the plain text body.
         let visible = tab.update(cx, |state, _| {
-            state.response.json_tree(&source).and_then(|tree| {
-                tree.is_expandable().then(|| tree.visible_rows())
-            })
+            state
+                .response
+                .json_tree(&source)
+                .and_then(|tree| tree.is_expandable().then(|| tree.visible_rows()))
         });
 
         let Some(visible) = visible else {
@@ -709,27 +720,28 @@ impl ApiExplorer {
             .child(
                 v_flex()
                     .w_full()
-                    .children(headers.into_iter().enumerate().map(|(index, (name, value))| {
-                        h_flex()
-                            .w_full()
-                            .items_start()
-                            .gap_3()
-                            .px_3()
-                            .py_1p5()
-                            .border_b_1()
-                            .border_color(cx.theme().border.opacity(0.5))
-                            .text_xs()
-                            .font_family(cx.theme().mono_font_family.clone())
-                            .when(index % 2 == 1, |this| this.bg(cx.theme().list_even))
-                            .child(
-                                div()
-                                    .w(px(220.))
-                                    .flex_shrink_0()
-                                    .font_bold()
-                                    .child(name),
-                            )
-                            .child(div().flex_1().min_w_0().child(value))
-                    })),
+                    .children(
+                        headers
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (name, value))| {
+                                h_flex()
+                                    .w_full()
+                                    .items_start()
+                                    .gap_3()
+                                    .px_3()
+                                    .py_1p5()
+                                    .border_b_1()
+                                    .border_color(cx.theme().border.opacity(0.5))
+                                    .text_xs()
+                                    .font_family(cx.theme().mono_font_family.clone())
+                                    .when(index % 2 == 1, |this| this.bg(cx.theme().list_even))
+                                    .child(
+                                        div().w(px(220.)).flex_shrink_0().font_bold().child(name),
+                                    )
+                                    .child(div().flex_1().min_w_0().child(value))
+                            }),
+                    ),
             )
     }
 }
@@ -772,20 +784,33 @@ fn cookie_row(index: usize, cookie: Cookie, cx: &Context<ApiExplorer>) -> impl I
                 .text_xs()
                 .font_family(cx.theme().mono_font_family.clone())
                 .child(div().flex_shrink_0().font_bold().child(cookie.name.clone()))
-                .child(div().flex_shrink_0().text_color(cx.theme().muted_foreground).child("="))
-                .child(div().flex_1().min_w_0().overflow_hidden().child(cookie.value.clone())),
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("="),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(cookie.value.clone()),
+                ),
         )
         .when(!attributes.is_empty(), |this| {
             this.child(
-                h_flex().w_full().flex_wrap().gap_1().children(
-                    attributes.into_iter().map(|attribute| {
+                h_flex()
+                    .w_full()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(attributes.into_iter().map(|attribute| {
                         let text = match attribute.value {
                             Some(value) => format!("{}={value}", attribute.name),
                             None => attribute.name,
                         };
                         Tag::secondary().small().child(text)
-                    }),
-                ),
+                    })),
             )
         })
 }
