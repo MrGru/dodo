@@ -37,6 +37,10 @@ pub enum GroupKey {
 /// [`ContainerStatus::is_running`] — a paused or restarting container is not
 /// counted as up, matching what the per-row badge shows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+// The shared `Running` postfix is the subject of the enum, not noise: dropping it
+// as clippy suggests yields `GroupStatus::None`, which reads as "no status" and
+// shadows `Option::None` at a glance. Quantifier + subject is the clearer name.
+#[allow(clippy::enum_variant_names)]
 pub enum GroupStatus {
     AllRunning,
     PartiallyRunning,
@@ -104,7 +108,7 @@ pub fn group_containers(rows: Vec<Container>) -> Vec<ContainerGroup> {
     }
 
     // Projects alphabetically (case-insensitive), Ungrouped appended last.
-    groups.sort_by(|a, b| project_name(&a.key).cmp(&project_name(&b.key)));
+    groups.sort_by_key(|a| project_name(&a.key));
     if !ungrouped.is_empty() {
         groups.push(ContainerGroup {
             key: GroupKey::Ungrouped,

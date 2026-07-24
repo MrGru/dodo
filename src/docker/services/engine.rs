@@ -120,14 +120,14 @@ impl DockerEngine for BollardEngine {
                 // The Last Started time is not in the list summary; it comes from
                 // a per-container inspect. A failed inspect leaves the row with no
                 // start time (rendered "Never") rather than failing the whole page.
-                if !row.id.is_empty() {
-                    if let Ok(details) = docker.inspect_container(&row.id, None).await {
-                        row.started_at = details
-                            .state
-                            .and_then(|state| state.started_at)
-                            .as_deref()
-                            .and_then(parse_rfc3339_to_unix);
-                    }
+                if !row.id.is_empty()
+                    && let Ok(details) = docker.inspect_container(&row.id, None).await
+                {
+                    row.started_at = details
+                        .state
+                        .and_then(|state| state.started_at)
+                        .as_deref()
+                        .and_then(parse_rfc3339_to_unix);
                 }
                 rows.push(row);
             }
@@ -502,10 +502,7 @@ fn row_from_summary(summary: &ContainerSummary) -> Container {
         })
         .collect();
 
-    let compose_project = summary
-        .labels
-        .as_ref()
-        .and_then(|labels| compose_project(labels));
+    let compose_project = summary.labels.as_ref().and_then(compose_project);
 
     Container {
         id: summary.id.clone().unwrap_or_default(),
