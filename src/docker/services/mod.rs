@@ -34,8 +34,11 @@
 //! # Connection resolution
 //!
 //! [`engine::BollardEngine`] resolves a daemon the way the Docker CLI does:
-//! honour `DOCKER_HOST` if set, otherwise the standard Docker socket at
-//! `/var/run/docker.sock`, otherwise the Podman default socket. Building a
+//! honour `DOCKER_HOST` if set, otherwise fall back per platform — on unix the
+//! standard Docker socket at `/var/run/docker.sock` and then the Podman default
+//! socket, on Windows the default `//./pipe/docker_engine` named pipe (bollard
+//! has no Windows Podman probing; Podman there is reached via `DOCKER_HOST`).
+//! `engine::connect` is `#[cfg]`-split accordingly. Building a
 //! connection does not prove the daemon is up — that only shows on the first
 //! call — so an unreachable daemon surfaces as a [`DockerError::Unreachable`]
 //! from `list_containers`, which the page renders as its error state with a
