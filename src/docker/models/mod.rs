@@ -14,11 +14,25 @@
 //! - [`container`] — the [`Container`](container::Container) row itself, the
 //!   compose-project extraction, and the search predicate.
 //!
-//! Later rounds add `image`, `volume` and `network` siblings here; the
-//! `Container` row is the template they copy.
+//! Round 3 adds the sibling rows the Images/Volumes/Networks pages render, all
+//! copied from the `Container` template:
+//!
+//! - [`image`] — the [`Image`](image::Image) row, the repository/tag split and
+//!   its `<none>` handling, and the short id.
+//! - [`volume`] — the [`Volume`](volume::Volume) row, with its optional size.
+//! - [`network`] — the [`Network`](network::Network) row and the predefined-name
+//!   rule the Delete action keys off.
+//! - [`size`] — the shared human-readable byte formatting.
+//! - [`usage`] — [`ContainerUsage`](usage::ContainerUsage), the pure "containers
+//!   using" derivation the three pages count against.
 
 pub mod container;
+pub mod image;
+pub mod network;
 pub mod port;
+pub mod size;
 pub mod stats;
 pub mod status;
 pub mod time;
+pub mod usage;
+pub mod volume;

@@ -9,9 +9,10 @@
 use std::future::Future;
 use std::path::Path;
 
-use bollard::models::{ContainerStatsResponse, ContainerSummary};
+use bollard::models::{ContainerStatsResponse, ContainerSummary, ImageSummary};
 use bollard::query_parameters::{
-    ListContainersOptionsBuilder, RemoveContainerOptionsBuilder, RestartContainerOptionsBuilder,
+    ListContainersOptionsBuilder, ListImagesOptionsBuilder, RemoveContainerOptionsBuilder,
+    RemoveImageOptionsBuilder, RemoveVolumeOptionsBuilder, RestartContainerOptionsBuilder,
     StatsOptionsBuilder, StopContainerOptionsBuilder,
 };
 use bollard::{API_DEFAULT_VERSION, Docker};
@@ -19,10 +20,14 @@ use futures_util::StreamExt as _;
 use tokio::runtime::Runtime;
 
 use crate::docker::models::container::{Container, clean_name, compose_project};
+use crate::docker::models::image::{Image, split_repo_tag};
+use crate::docker::models::network::Network;
 use crate::docker::models::port::PortMapping;
 use crate::docker::models::stats::{CpuSample, cpu_percent};
 use crate::docker::models::status::ContainerStatus;
 use crate::docker::models::time::parse_rfc3339_to_unix;
+use crate::docker::models::usage::{ContainerUsage, ContainerUsageEntry};
+use crate::docker::models::volume::Volume;
 use crate::docker::services::{DockerEngine, DockerError};
 
 /// The standard Docker socket, tried when `DOCKER_HOST` is not set.
@@ -192,6 +197,162 @@ impl DockerEngine for BollardEngine {
                 .await
                 .map_err(operation)
         })
+    }
+
+    fn container_usage(&self) -> Result<ContainerUsage, DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            // No per-container inspect: the summary already carries the image id,
+            // the mounts and the network attachments the usage columns need.
+            let options = ListContainersOptionsBuilder::new().all(true).build();
+            let summaries = docker
+                .list_containers(Some(options))
+                .await
+                .map_err(unreachable)?;
+            let entries = summaries.iter().map(usage_entry).collect();
+            Ok(ContainerUsage::new(entries))
+        })
+    }
+
+    fn list_images(&self) -> Result<Vec<Image>, DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            // Default (`all(false)`): the top-level images `docker images` shows,
+            // including dangling `<none>` ones, but not intermediate layers.
+            let options = ListImagesOptionsBuilder::new().build();
+            let summaries = docker
+                .list_images(Some(options))
+                .await
+                .map_err(unreachable)?;
+            Ok(summaries.iter().map(image_from_summary).collect())
+        })
+    }
+
+    fn remove_image(&self, id: &str) -> Result<(), DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            // No `force`: an image still used by a container must be refused so
+            // the page can surface the "image in use" message rather than
+            // silently deleting a tag out from under a running container.
+            let options = RemoveImageOptionsBuilder::new().build();
+            docker
+                .remove_image(id, Some(options), None)
+                .await
+                .map(|_| ())
+                .map_err(operation)
+        })
+    }
+
+    fn list_volumes(&self) -> Result<Vec<Volume>, DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            let response = docker
+                .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
+                .await
+                .map_err(unreachable)?;
+            Ok(response
+                .volumes
+                .into_iter()
+                .flatten()
+                .map(volume_from_engine)
+                .collect())
+        })
+    }
+
+    fn remove_volume(&self, name: &str) -> Result<(), DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            // No `force`: a volume still mounted by a container is refused, and
+            // the refusal becomes the page's inline error.
+            let options = RemoveVolumeOptionsBuilder::new().build();
+            docker
+                .remove_volume(name, Some(options))
+                .await
+                .map_err(operation)
+        })
+    }
+
+    fn list_networks(&self) -> Result<Vec<Network>, DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            let networks = docker
+                .list_networks(None::<bollard::query_parameters::ListNetworksOptions>)
+                .await
+                .map_err(unreachable)?;
+            Ok(networks.iter().map(network_from_engine).collect())
+        })
+    }
+
+    fn remove_network(&self, id: &str) -> Result<(), DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            docker.remove_network(id).await.map_err(operation)
+        })
+    }
+}
+
+/// Reduces one container summary to its resource references for the usage
+/// columns: the resolved image id, its named-volume mounts, and its network
+/// attachments. Bind mounts (no name) are skipped so they do not inflate a
+/// volume's count.
+fn usage_entry(summary: &ContainerSummary) -> ContainerUsageEntry {
+    let volume_names = summary
+        .mounts
+        .iter()
+        .flatten()
+        .filter_map(|mount| mount.name.clone())
+        .filter(|name| !name.is_empty())
+        .collect();
+
+    let network_names = summary
+        .network_settings
+        .as_ref()
+        .and_then(|settings| settings.networks.as_ref())
+        .map(|networks| networks.keys().cloned().collect())
+        .unwrap_or_default();
+
+    ContainerUsageEntry {
+        image_id: summary.image_id.clone().unwrap_or_default(),
+        volume_names,
+        network_names,
+    }
+}
+
+/// Translates one engine image summary into a table row.
+fn image_from_summary(summary: &ImageSummary) -> Image {
+    let (repository, tag) = split_repo_tag(&summary.repo_tags);
+    Image {
+        id: summary.id.clone(),
+        repository,
+        tag,
+        size: summary.size,
+        created: summary.created,
+    }
+}
+
+/// Translates one engine volume into a table row. A size of `-1` (or a driver
+/// that reports none) becomes `None`, rendered as `N/A`.
+fn volume_from_engine(volume: bollard::models::Volume) -> Volume {
+    let size = volume
+        .usage_data
+        .map(|usage| usage.size)
+        .filter(|&size| size >= 0);
+    Volume {
+        name: volume.name,
+        driver: volume.driver,
+        mountpoint: volume.mountpoint,
+        size,
+    }
+}
+
+/// Translates one engine network into a table row.
+fn network_from_engine(network: &bollard::models::Network) -> Network {
+    Network {
+        id: network.id.clone().unwrap_or_default(),
+        name: network.name.clone().unwrap_or_default(),
+        driver: network.driver.clone().unwrap_or_default(),
+        scope: network.scope.clone().unwrap_or_default(),
+        created: network.created.as_deref().and_then(parse_rfc3339_to_unix),
     }
 }
 

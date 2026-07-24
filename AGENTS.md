@@ -17,12 +17,17 @@ phases plug in. `api_explorer` is also the only tool that registers a key bindin
 (`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
 `settings::init`).
 
-**`src/docker/`** is the Docker/Podman module. Containers is the built-out page (round 2 added
-compose grouping, the filter popover and bulk actions on top of round 1's table); Images/Volumes/
-Networks are still placeholder pages. Read `src/docker/mod.rs` — it is the authority — and note the
-round-2 pure-logic modules `state/grouping.rs` (compose partition + group status) and
-`state/filters.rs` (the multi-filter predicate), both unit-tested without GPUI. Two things unique
-to the module:
+**`src/docker/`** is the Docker/Podman module. All four pages are built out: Containers (round 2 —
+compose grouping, filter popover, bulk actions) and, since round 3, Images/Volumes/Networks — real
+list pages with search, Refresh, per-row Delete (confirm) and the loading/empty/error+retry states,
+sharing round 1–2's `components/`. Read `src/docker/mod.rs` — it is the authority. The three round-3
+pages share one generic store, `state/resource.rs`'s `ResourceState<T>` (only Containers needs the
+selection/grouping/filter machinery); their pure logic lives in `models/{image,volume,network,
+size,usage}.rs`, all unit-tested without GPUI — note `models/usage.rs`, the "containers using"
+derivation the three pages count against (from the container set, not the engine's own counters).
+The round-2 pure-logic modules `state/grouping.rs` (compose partition + group status) and
+`state/filters.rs` (the multi-filter predicate) remain Containers-only. Inspect and a Create/Build/
+Pull flow are still placeholders for a later round. Two things unique to the module:
 `services/` is the only place that may name `bollard` (the Docker Engine API client) and the only
 place a **tokio runtime** lives — `bollard` is async, so `BollardEngine` drives every call with
 `Runtime::block_on` on the background executor, keeping the blocking-by-contract discipline

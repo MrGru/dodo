@@ -37,6 +37,10 @@ pub mod engine;
 use std::sync::Arc;
 
 use crate::docker::models::container::Container;
+use crate::docker::models::image::Image;
+use crate::docker::models::network::Network;
+use crate::docker::models::usage::ContainerUsage;
+use crate::docker::models::volume::Volume;
 use crate::i18n::Str;
 
 /// A Docker operation that did not complete, in terms the UI can act on.
@@ -85,6 +89,33 @@ pub trait DockerEngine: Send + Sync + 'static {
     fn stop(&self, id: &str) -> Result<(), DockerError>;
     fn restart(&self, id: &str) -> Result<(), DockerError>;
     fn remove(&self, id: &str) -> Result<(), DockerError>;
+
+    /// The container set reduced to its resource references — the image each
+    /// runs, the volumes it mounts, the networks it is attached to. The
+    /// Images/Volumes/Networks pages count their "containers using" column
+    /// against this, deriving it from the live container list rather than
+    /// trusting the engine's own per-resource counters. Cheaper than
+    /// [`list_containers`](DockerEngine::list_containers): it needs no per-row
+    /// inspect.
+    fn container_usage(&self) -> Result<ContainerUsage, DockerError>;
+
+    /// Every image, as table rows. "Containers using" is not included — it is
+    /// derived from [`container_usage`](DockerEngine::container_usage).
+    fn list_images(&self) -> Result<Vec<Image>, DockerError>;
+    /// Removes an image by id. Refused by the engine (surfaced as a
+    /// [`DockerError::Operation`]) when a container still references it.
+    fn remove_image(&self, id: &str) -> Result<(), DockerError>;
+
+    /// Every volume, as table rows.
+    fn list_volumes(&self) -> Result<Vec<Volume>, DockerError>;
+    /// Removes a volume by name. Refused while a container still mounts it.
+    fn remove_volume(&self, name: &str) -> Result<(), DockerError>;
+
+    /// Every network, as table rows.
+    fn list_networks(&self) -> Result<Vec<Network>, DockerError>;
+    /// Removes a network by id. Refused for the predefined networks and while a
+    /// container is still attached.
+    fn remove_network(&self, id: &str) -> Result<(), DockerError>;
 }
 
 /// The engine the app runs with: `bollard` against the resolved local socket.

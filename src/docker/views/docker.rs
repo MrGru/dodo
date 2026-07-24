@@ -5,19 +5,17 @@
 //! [`DockerView::set_page`]; the entity and its sub-views are built once and
 //! kept, so navigating between pages — and away to another tool and back —
 //! preserves each page's state, the same lifetime rule `Layout` follows for the
-//! top-level tools. Round 1 implements Containers; the other three are the
-//! placeholder pages their real versions replace in a later round.
+//! top-level tools. Rounds 1–3 implement all four pages; each is loaded lazily
+//! the first time it is shown.
 
 use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    Window,
+    AppContext as _, Context, Entity, IntoElement, Render, Window,
 };
-use gpui_component::{ActiveTheme as _, v_flex};
 
-use crate::app_icon::AppIcon;
-use crate::docker::components::states::empty_state;
 use crate::docker::views::containers::ContainersView;
-use crate::i18n::{Str, t};
+use crate::docker::views::images::ImagesView;
+use crate::docker::views::networks::NetworksView;
+use crate::docker::views::volumes::VolumesView;
 
 /// Which Docker page is showing. The discriminants line up with the four
 /// sidebar children.
@@ -31,9 +29,12 @@ pub enum DockerPage {
 
 pub struct DockerView {
     page: DockerPage,
-    /// The Containers page, built once and kept so its rows, search and
-    /// selection survive navigation.
+    /// Each page is built once and kept so its rows, search and (Containers')
+    /// selection survive navigation between pages and tools.
     containers: Entity<ContainersView>,
+    images: Entity<ImagesView>,
+    volumes: Entity<VolumesView>,
+    networks: Entity<NetworksView>,
 }
 
 impl DockerView {
@@ -41,48 +42,42 @@ impl DockerView {
         Self {
             page: DockerPage::Containers,
             containers: cx.new(|cx| ContainersView::new(window, cx)),
+            images: cx.new(|cx| ImagesView::new(window, cx)),
+            volumes: cx.new(|cx| VolumesView::new(window, cx)),
+            networks: cx.new(|cx| NetworksView::new(window, cx)),
         }
     }
 
-    /// Shows `page`. Selecting Containers also triggers its first load — the load
-    /// is lazy so the engine is not touched until the page is actually opened,
-    /// and idempotent so returning to it does not reload.
+    /// Shows `page` and triggers its first load. Each load is lazy so the engine
+    /// is not touched until the page is actually opened, and idempotent so
+    /// returning to a page does not reload it.
     pub fn set_page(&mut self, page: DockerPage, cx: &mut Context<Self>) {
         self.page = page;
-        if matches!(page, DockerPage::Containers) {
-            self.containers
-                .update(cx, |view, cx| view.ensure_loaded(cx));
+        match page {
+            DockerPage::Containers => {
+                self.containers.update(cx, |view, cx| view.ensure_loaded(cx));
+            }
+            DockerPage::Images => {
+                self.images.update(cx, |view, cx| view.ensure_loaded(cx));
+            }
+            DockerPage::Volumes => {
+                self.volumes.update(cx, |view, cx| view.ensure_loaded(cx));
+            }
+            DockerPage::Networks => {
+                self.networks.update(cx, |view, cx| view.ensure_loaded(cx));
+            }
         }
         cx.notify();
     }
 }
 
 impl Render for DockerView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         match self.page {
             DockerPage::Containers => self.containers.clone().into_any_element(),
-            DockerPage::Images => placeholder(AppIcon::Layers, Str::Images, cx),
-            DockerPage::Volumes => placeholder(AppIcon::HardDrive, Str::Volumes, cx),
-            DockerPage::Networks => placeholder(AppIcon::Network, Str::Networks, cx),
+            DockerPage::Images => self.images.clone().into_any_element(),
+            DockerPage::Volumes => self.volumes.clone().into_any_element(),
+            DockerPage::Networks => self.networks.clone().into_any_element(),
         }
     }
-}
-
-/// A "coming soon" page: the nav shape is correct now; the real page lands in a
-/// later round. Framed like the Containers page so switching between them does
-/// not jump.
-fn placeholder(icon: AppIcon, title: Str, cx: &mut App) -> gpui::AnyElement {
-    v_flex()
-        .size_full()
-        .rounded(cx.theme().radius)
-        .border_1()
-        .border_color(cx.theme().border)
-        .overflow_hidden()
-        .child(empty_state(
-            icon,
-            t(title, cx),
-            Some(t(Str::DockerComingSoon, cx)),
-            cx,
-        ))
-        .into_any_element()
 }
