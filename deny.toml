@@ -6,21 +6,38 @@
 #
 #   zlog, ztracing and ztracing_macro (from zed-industries/zed) are
 #   GPL-3.0-or-later, and they are linked into the shipped binary through
-#   gpui -> sum_tree -> ztracing -> zlog. dodo itself carries no LICENSE file
-#   yet. Distributing binaries therefore has a licensing question attached to
-#   it that only a human can answer: adopt a GPL-3.0-compatible licence for
-#   dodo, or stop linking those crates (which currently means not using gpui).
-#   Adding an `exceptions` entry here would make the check green and make the
-#   question invisible, so it is not added. See "Licensing" in
-#   docs/build-optimization.md.
+#   gpui -> sum_tree -> ztracing -> zlog.
 #
-# Once that is resolved, delete `continue-on-error` from the deny job and this
-# file becomes a real gate.
+#   dodo's own source is now MIT (see LICENSE). That resolved half of what this
+#   note used to describe and half only. The remaining half — the terms under
+#   which a *built binary* combining MIT source with GPL-3.0-or-later object
+#   code may be distributed — is still undecided, and MIT-licensing the source
+#   did not decide it. THIRD-PARTY-NOTICES.md records it as an open question.
+#
+#   So GPL-3.0-or-later stays out of `allow` and out of `exceptions` below.
+#   Either entry would turn this check green and make the question invisible;
+#   the point of the finding is that it keeps being reported on every run.
+#
+# When the distribution question is answered, the change here is one of:
+#   * the answer permits it as-is -> add an `exceptions` entry per crate with
+#     the reason and the date, not a blanket `allow`;
+#   * the answer does not -> the dependency has to go, which today means not
+#     using gpui.
+# Either way, that is also when `continue-on-error` can come off the deny job
+# and this file becomes a real gate. See "Licensing" in
+# docs/build-optimization.md and THIRD-PARTY-NOTICES.md.
 #
 # Run it locally with:  cargo deny --all-features check
-# UNVERIFIED: cargo-deny is not installed in the environment where this file
-# was written, so the schema is per the 0.16+ documentation but has not been
-# executed. If it errors on a key, the key — not the policy — is wrong.
+#
+# VERIFIED with cargo-deny 0.20.2: the schema parses and the policy behaves as
+# intended. `check licenses` rejects exactly three crates — zlog, ztracing and
+# ztracing_macro, all GPL-3.0-or-later — and nothing else. The other sections
+# are not clean and are not expected to be: `bans` reports the wildcard
+# requirements and the ~15 duplicate pairs described below, and `advisories`
+# reports whatever RustSec currently holds against this graph. Three entries in
+# `allow` below (NCSA, OpenSSL, CDLA-Permissive-2.0) warn as
+# `license-not-encountered` under the target filter; they are kept rather than
+# trimmed because a feature or platform change can bring them back.
 
 [graph]
 # Check the platforms dodo actually ships to. Without this, cargo-deny
@@ -64,6 +81,10 @@ allow = [
     "CDLA-Permissive-2.0",
     # aws-lc-sys, reached through rustls' default crypto provider.
     "OpenSSL",
+    # libbz2-rs-sys, transitive via bzip2. A BSD-style permissive licence that
+    # SPDX names after the project; it is not copyleft. Listed so that the only
+    # thing this check reports is the GPL finding above, not noise around it.
+    "bzip2-1.0.6",
     # File-level copyleft, not viral across a binary: acceptable for a
     # dynamically-unmodified dependency. nucleo-matcher (dodo's own fuzzy
     # matcher), dwrote, option-ext.

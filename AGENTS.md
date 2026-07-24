@@ -66,7 +66,7 @@ binary (the `#[include]` filters in `src/assets.rs`), which is why the branding 
 bytes. Anything new under `assets/` that must stay out of the binary has to stay outside those two
 filters — measure the binary, do not assume.
 
-Four things about build and release that catch people:
+Five things about build and release that catch people:
 
 - **`fmt` and `clippy` are blocking jobs; keep them green.** Run `cargo fmt --all` and
   `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
@@ -83,6 +83,12 @@ Four things about build and release that catch people:
   accepted cost — release-only failures surface up to a week late — is stated at the top of both
   `ci.yml` and "CI architecture" in `docs/release.md`. Do not quietly re-add a release build to
   the push path.
+- **dodo's source is MIT (`LICENSE`), and that does not settle how binaries may be distributed.**
+  `gpui -> sum_tree -> ztracing -> zlog` pulls GPL-3.0-or-later into every build.
+  `THIRD-PARTY-NOTICES.md` is the authority: it records the verified chain and keeps the
+  distribution question explicitly **open**. `deny.toml` deliberately carries no `allow` or
+  `exceptions` entry for those crates so `cargo deny` keeps reporting them — do not silence it,
+  and do not write a conclusion about that question into the repo.
 - **`Cargo.lock` really is the only possible pin on the four git dependencies.** Explicit
   `rev = "…"` pins were tried and cannot work here — upstream depends on itself through unpinned
   default-branch refs, and the three resulting cargo errors are recorded in

@@ -8,7 +8,8 @@
 #
 #   1. the archive exists and its .sha256 sidecar matches
 #   2. the contents list (printed, so a reviewer sees what shipped)
-#   3. the binary is present and has its executable bit
+#   3. the binary is present and has its executable bit, and LICENSE and
+#      THIRD-PARTY-NOTICES.md shipped with it
 #   4. the binary runs: `dodo --build-info` (see the caveat below)
 #   5. the embedded metadata is real — version matches, commit is not
 #      `unknown` and not `-dirty`, and the tag matches when one was expected
@@ -42,7 +43,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --expect-version) expect_version="${2:?}"; shift 2 ;;
         --expect-tag) expect_tag="${2:?}"; shift 2 ;;
-        -h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,27p' "${BASH_SOURCE[0]}"; exit 0 ;;
         -*) die "unknown argument: $1" ;;
         *) archive="$1"; shift ;;
     esac
@@ -106,6 +107,20 @@ case "$archive_name" in
     *) [ -x "$bin" ] || die "the binary lost its executable bit in packaging" ;;
 esac
 ok "executable bit preserved"
+
+# --- 3b. licence files -----------------------------------------------------
+#
+# dodo's source is MIT, and the binary next to these files links
+# GPL-3.0-or-later crates through gpui (see THIRD-PARTY-NOTICES.md). Both files
+# must therefore be inside every archive. `find` rather than a fixed path
+# because the .app archive puts them under dodo.app/Contents/Resources/ while
+# the plain archives keep them at the top level.
+for doc in LICENSE THIRD-PARTY-NOTICES.md; do
+    found="$(find "$workdir" -type f -name "$doc" -print | head -1)"
+    [ -n "$found" ] || die "$doc is not in the archive"
+    [ -s "$found" ] || die "$doc is in the archive but empty"
+    ok "$doc present (${found#"$workdir"/})"
+done
 
 # --- 4/5. it runs, and says what it should ---------------------------------
 host_os="$(uname -s)"

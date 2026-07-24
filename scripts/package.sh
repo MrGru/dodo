@@ -98,9 +98,17 @@ install_binary() {
 }
 
 install_binary "$stage"
+
 # Docs travel with the binary so an unzipped archive is self-explanatory.
-for doc in README.md LICENSE LICENSE.md LICENSE.txt; do
-    [ -f "$repo_root/$doc" ] && cp "$repo_root/$doc" "$stage/"
+#
+# LICENSE and THIRD-PARTY-NOTICES.md are a HARD requirement, not a best-effort
+# glob: dodo's source is MIT but its binary links GPL-3.0-or-later crates
+# (see THIRD-PARTY-NOTICES.md), so an archive that ships the binary without
+# them is worse than no archive. README.md is nice-to-have by comparison, but
+# it has always been there, so a missing one means something is wrong too.
+for doc in README.md LICENSE THIRD-PARTY-NOTICES.md; do
+    [ -f "$repo_root/$doc" ] || die "missing $doc; it must ship inside the archive"
+    cp "$repo_root/$doc" "$stage/"
 done
 
 # --- desktop integration files --------------------------------------------

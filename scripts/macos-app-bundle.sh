@@ -8,7 +8,9 @@
 #
 #   dodo.app/Contents/Info.plist
 #   dodo.app/Contents/MacOS/dodo
-#   dodo.app/Contents/Resources/dodo.icns   (only if the icon exists)
+#   dodo.app/Contents/Resources/dodo.icns
+#   dodo.app/Contents/Resources/LICENSE
+#   dodo.app/Contents/Resources/THIRD-PARTY-NOTICES.md
 #
 # Signing and notarisation are deliberately NOT done here — see the block at
 # the bottom of this file and "Future readiness" in docs/release.md. This
@@ -32,7 +34,7 @@ while [ $# -gt 0 ]; do
         --binary) binary="${2:?--binary needs a value}"; shift 2 ;;
         --version) version="${2:?--version needs a value}"; shift 2 ;;
         --out) out_dir="${2:?--out needs a value}"; shift 2 ;;
-        -h|--help) sed -n '2,16p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
 done
@@ -51,6 +53,20 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
 cp "$binary" "$app/Contents/MacOS/dodo"
 chmod 755 "$app/Contents/MacOS/dodo"
+
+# The licence and the third-party notice, inside the bundle.
+#
+# The .app archive contains nothing but dodo.app — a bundle is a directory that
+# Finder presents as one object, so anything alongside it would be a second
+# thing to drag. Putting these in Contents/Resources/ is how a macOS app ships
+# its licence text, and it means the terms travel with the application even
+# after it has been dragged to /Applications and the archive thrown away. That
+# matters here: dodo's source is MIT but the binary links GPL-3.0-or-later
+# crates (see THIRD-PARTY-NOTICES.md). Missing either one is a hard error.
+for doc in LICENSE THIRD-PARTY-NOTICES.md; do
+    [ -f "$repo_root/$doc" ] || die "missing $doc; it must ship inside dodo.app"
+    cp "$repo_root/$doc" "$app/Contents/Resources/$doc"
+done
 
 # The application icon. Committed, not built here: `iconutil` only exists on
 # macOS, and regenerating it at package time would make the bundle depend on

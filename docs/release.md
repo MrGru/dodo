@@ -158,7 +158,8 @@ it, and checks, in order:
 
 1. the `.sha256` sidecar matches the archive;
 2. the archive unpacks, and its contents are printed into the log;
-3. the binary is present and kept its executable bit through packaging;
+3. the binary is present and kept its executable bit through packaging, and
+   `LICENSE` and `THIRD-PARTY-NOTICES.md` are inside the archive and non-empty;
 4. the binary **runs** — `dodo --build-info` exits 0;
 5. the embedded metadata is real: version equals the tag, the commit is not
    `unknown` and does not end in `-dirty`, `build_time` and `target` are set;
@@ -173,6 +174,38 @@ resolve, and that `build.rs` embedded the right metadata. **It does not prove
 the UI renders.** That check is manual: download the archive on a real desktop
 and open it. Do that before announcing a release.
 
+### Licence files in the packaged output
+
+Every archive ships `LICENSE` (dodo's own MIT terms) and
+`THIRD-PARTY-NOTICES.md` (the dependency licences, including the
+GPL-3.0-or-later crates reached through `gpui`, and the open question about
+distributing built binaries). Where they land:
+
+| Archive | Paths |
+|---|---|
+| `dodo-v<v>-<platform>-<arch>.tar.gz` | `<name>/LICENSE`, `<name>/THIRD-PARTY-NOTICES.md`, alongside `README.md` and the binary |
+| `dodo-v<v>-windows-<arch>.zip` | the same, written by `scripts/package.ps1` |
+| `dodo-v<v>-macos-<arch>-app.tar.gz` | `dodo.app/Contents/Resources/LICENSE` and `.../THIRD-PARTY-NOTICES.md` |
+
+Three things about that which are deliberate:
+
+- **The `.app` bundle carries them inside `Contents/Resources/`, not next to
+  the bundle.** That archive contains nothing but `dodo.app`; a file beside it
+  would be a second object to drag, and would be lost the moment the app was
+  moved to `/Applications`. Inside `Resources/` the terms travel with the
+  application.
+- **A missing file is a hard error, not a thinner archive.** `package.sh`,
+  `package.ps1` and `macos-app-bundle.sh` all `die`/`throw` rather than skipping
+  — the previous best-effort `for doc in README.md LICENSE LICENSE.md ...` glob
+  would have shipped a binary with no notice and said nothing.
+- **`verify-release.sh` re-checks it after the fact**, by `find`ing both names
+  in the unpacked archive (which is why the bundle's nested layout needs no
+  special case) and asserting they are non-empty. Packaging and verification
+  failing independently is the point.
+
+Neither file is embedded in the binary: `src/assets.rs`'s `#[include]` filters
+cover only `icons/**/*.svg` and `themes/**/*.json`, so these cost zero bytes.
+`dodo --build-info` does not print licence information.
 
 ### Checking a Windows fix without a Windows machine
 
