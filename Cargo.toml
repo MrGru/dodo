@@ -1,6 +1,6 @@
 [package]
 name = "dodo"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 # dodo's own source. It says nothing about the terms under which a *built*
 # binary may be distributed — the dependency graph contains GPL-3.0-or-later
