@@ -12,10 +12,14 @@
 //!   them. Kept free of GPUI so its sorting, filtering, grouping and single-row
 //!   CPU update are unit tested directly.
 //!
-//! Round 3's Images/Volumes/Networks stores are siblings here, over the model
-//! types added alongside `models::container`.
+//! Round 3's Images/Volumes/Networks pages share one store — [`resource`]'s
+//! generic [`ResourceState<T>`](resource::ResourceState) — because they need only
+//! the container store's spine (load status, rows, search query, the derived
+//! usage and an action-error banner), not its grouping/filter/selection
+//! machinery. The [`LoadStatus`](containers::LoadStatus) is reused across both.
 
 pub mod containers;
 pub mod filters;
 pub mod grouping;
+pub mod resource;
 pub mod selection;

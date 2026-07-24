@@ -15,22 +15,25 @@
 //!   and runs on GPUI's background executor.
 //! - [`state`] — the Containers store and the selection model, plain data.
 //! - [`components`] — the reusable `StatusBadge`, `SearchBar`, `Toolbar`,
-//!   `LoadingSkeleton`, `EmptyState` and `ErrorState`, generic so round 2's pages
-//!   reuse them.
+//!   `LoadingSkeleton`, `EmptyState` and `ErrorState`, generic so every page
+//!   reuses them.
 //! - [`views`] — [`DockerView`](views::DockerView), the four-page container the
-//!   sidebar drives, and the Containers page itself.
+//!   sidebar drives, and the four pages themselves.
 //!
-//! # Where later rounds plug in
+//! # What each round shipped, and where later ones plug in
 //!
 //! Rounds 1–2 ship Containers in full: the table, then compose grouping
 //! ([`state::grouping`]), the multi-filter popover ([`state::filters`]) and bulk
-//! actions over the selection. Images, Volumes and Networks are still placeholder
-//! pages so the nav shape and state preservation are correct now; their real
-//! pages are `models::{image,volume,network}` + `state::*` siblings + `views::*`
-//! pages, switched to by the same [`DockerPage`](views::DockerPage) already wired
-//! into the sidebar. Round 4's context menus and live auto-polling attach to the
-//! Containers store and view that exist here — the selection model and the per-row
-//! CPU seam are already in place for them.
+//! actions over the selection. Round 3 replaces the Images, Volumes and Networks
+//! placeholder pages with real list pages: `models::{image,volume,network}` rows
+//! (plus the shared `models::size` formatting and the `models::usage` "containers
+//! using" derivation), one generic store [`state::resource`], and the
+//! [`views`](views) siblings, all switched to by the same
+//! [`DockerPage`](views::DockerPage) wired into the sidebar. Each page's Inspect
+//! action, and a Create/Build/Pull flow, are the placeholders a later round
+//! fills in; its context menus and live auto-polling attach to the stores and
+//! views that exist here — the selection model and the per-row CPU seam are
+//! already in place for them.
 
 pub mod components;
 pub mod models;

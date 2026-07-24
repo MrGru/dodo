@@ -57,6 +57,9 @@ pub enum AppIcon {
     Play,
     Stop,
     Restart,
+    /// The Inspect placeholder action on the round-3 pages. Resolves through
+    /// `Assets`' fallback to `gpui_component_assets`.
+    Eye,
 }
 
 impl IconNamed for AppIcon {
@@ -100,6 +103,7 @@ impl IconNamed for AppIcon {
             Self::Play => "icons/play.svg",
             Self::Stop => "icons/square.svg",
             Self::Restart => "icons/rotate-ccw.svg",
+            Self::Eye => "icons/eye.svg",
         }
         .into()
     }

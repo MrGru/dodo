@@ -434,6 +434,11 @@ pub enum Str {
     // Docker module — selection and placeholder pages.
     DockerSelectAll,
     DockerSelectRow,
+    /// Retained for future placeholder pages: round 3 replaced the Images,
+    /// Volumes and Networks "coming soon" pages with real ones, so nothing draws
+    /// this today, but the string and its translations stay ready for the next
+    /// not-yet-built page rather than being deleted and re-added.
+    #[allow(dead_code)]
     DockerComingSoon,
 
     // Docker module — Last Started relative time.
@@ -472,6 +477,32 @@ pub enum Str {
     DockerBulkDeleteTitle,
     DockerBulkDeleteMessage(usize),
     DockerBulkFailures(usize),
+
+    // Docker module (round 3) — Images, Volumes and Networks pages: their extra
+    // column headers, per-resource search placeholders, empty states and the
+    // shared Inspect action / N/A / "<none>" tokens.
+    DockerColumnRepository,
+    DockerColumnTag,
+    DockerColumnImageId,
+    DockerColumnSize,
+    DockerColumnCreated,
+    DockerColumnContainersUsing,
+    DockerColumnDriver,
+    DockerColumnMountPoint,
+    DockerColumnScope,
+    DockerSearchImages,
+    DockerSearchVolumes,
+    DockerSearchNetworks,
+    NoImages,
+    NoImagesHint,
+    NoVolumes,
+    NoVolumesHint,
+    NoNetworks,
+    NoNetworksHint,
+    DockerNotAvailable,
+    DockerNone,
+    DockerInspect,
+    DockerNetworkPredefined,
 }
 
 impl Str {
@@ -1375,6 +1406,72 @@ impl Str {
             (Str::DockerBulkFailures(n), Language::Vietnamese) => {
                 format!("{n} container không thể cập nhật.").into()
             }
+
+            // Round 3 — Images, Volumes and Networks column headers.
+            (Str::DockerColumnRepository, Language::English) => "Repository".into(),
+            (Str::DockerColumnRepository, Language::Vietnamese) => "Kho ảnh".into(),
+            (Str::DockerColumnTag, Language::English) => "Tag".into(),
+            (Str::DockerColumnTag, Language::Vietnamese) => "Thẻ".into(),
+            (Str::DockerColumnImageId, Language::English) => "Image ID".into(),
+            (Str::DockerColumnImageId, Language::Vietnamese) => "Mã ảnh".into(),
+            (Str::DockerColumnSize, Language::English) => "Size".into(),
+            (Str::DockerColumnSize, Language::Vietnamese) => "Kích thước".into(),
+            (Str::DockerColumnCreated, Language::English) => "Created".into(),
+            (Str::DockerColumnCreated, Language::Vietnamese) => "Đã tạo".into(),
+            (Str::DockerColumnContainersUsing, Language::English) => "Containers using".into(),
+            (Str::DockerColumnContainersUsing, Language::Vietnamese) => "Container đang dùng".into(),
+            (Str::DockerColumnDriver, Language::English) => "Driver".into(),
+            (Str::DockerColumnDriver, Language::Vietnamese) => "Trình điều khiển".into(),
+            (Str::DockerColumnMountPoint, Language::English) => "Mount point".into(),
+            (Str::DockerColumnMountPoint, Language::Vietnamese) => "Điểm gắn kết".into(),
+            (Str::DockerColumnScope, Language::English) => "Scope".into(),
+            (Str::DockerColumnScope, Language::Vietnamese) => "Phạm vi".into(),
+
+            // Round 3 — per-resource search placeholders.
+            (Str::DockerSearchImages, Language::English) => "Search images".into(),
+            (Str::DockerSearchImages, Language::Vietnamese) => "Tìm ảnh".into(),
+            (Str::DockerSearchVolumes, Language::English) => "Search volumes".into(),
+            (Str::DockerSearchVolumes, Language::Vietnamese) => "Tìm volume".into(),
+            (Str::DockerSearchNetworks, Language::English) => "Search networks".into(),
+            (Str::DockerSearchNetworks, Language::Vietnamese) => "Tìm mạng".into(),
+
+            // Round 3 — empty states.
+            (Str::NoImages, Language::English) => "No images".into(),
+            (Str::NoImages, Language::Vietnamese) => "Không có ảnh".into(),
+            (Str::NoImagesHint, Language::English) => {
+                "Pull or build an image and it will appear here.".into()
+            }
+            (Str::NoImagesHint, Language::Vietnamese) => {
+                "Kéo về hoặc dựng một ảnh và nó sẽ xuất hiện ở đây.".into()
+            }
+            (Str::NoVolumes, Language::English) => "No volumes".into(),
+            (Str::NoVolumes, Language::Vietnamese) => "Không có volume".into(),
+            (Str::NoVolumesHint, Language::English) => {
+                "Create a volume and it will appear here.".into()
+            }
+            (Str::NoVolumesHint, Language::Vietnamese) => {
+                "Tạo một volume và nó sẽ xuất hiện ở đây.".into()
+            }
+            (Str::NoNetworks, Language::English) => "No networks".into(),
+            (Str::NoNetworks, Language::Vietnamese) => "Không có mạng".into(),
+            (Str::NoNetworksHint, Language::English) => {
+                "Create a network and it will appear here.".into()
+            }
+            (Str::NoNetworksHint, Language::Vietnamese) => {
+                "Tạo một mạng và nó sẽ xuất hiện ở đây.".into()
+            }
+
+            // Round 3 — shared tokens and the Inspect placeholder action.
+            (Str::DockerNotAvailable, _) => "N/A".into(),
+            (Str::DockerNone, _) => "<none>".into(),
+            (Str::DockerInspect, Language::English) => "Inspect".into(),
+            (Str::DockerInspect, Language::Vietnamese) => "Xem chi tiết".into(),
+            (Str::DockerNetworkPredefined, Language::English) => {
+                "Predefined networks cannot be removed".into()
+            }
+            (Str::DockerNetworkPredefined, Language::Vietnamese) => {
+                "Không thể xoá mạng định sẵn".into()
+            }
         }
     }
 }
@@ -1783,6 +1880,29 @@ mod tests {
             plain(Str::DockerBulkDeleteTitle),
             with(Str::DockerBulkDeleteMessage(NUMBER), &[NUMBER_TEXT]),
             with(Str::DockerBulkFailures(NUMBER), &[NUMBER_TEXT]),
+            // Round 3 — Images, Volumes and Networks pages.
+            plain(Str::DockerColumnRepository),
+            plain(Str::DockerColumnTag),
+            plain(Str::DockerColumnImageId),
+            plain(Str::DockerColumnSize),
+            plain(Str::DockerColumnCreated),
+            plain(Str::DockerColumnContainersUsing),
+            plain(Str::DockerColumnDriver),
+            plain(Str::DockerColumnMountPoint),
+            plain(Str::DockerColumnScope),
+            plain(Str::DockerSearchImages),
+            plain(Str::DockerSearchVolumes),
+            plain(Str::DockerSearchNetworks),
+            plain(Str::NoImages),
+            plain(Str::NoImagesHint),
+            plain(Str::NoVolumes),
+            plain(Str::NoVolumesHint),
+            plain(Str::NoNetworks),
+            plain(Str::NoNetworksHint),
+            term(Str::DockerNotAvailable),
+            term(Str::DockerNone),
+            plain(Str::DockerInspect),
+            plain(Str::DockerNetworkPredefined),
         ]
     }
 
@@ -2069,6 +2189,28 @@ mod tests {
             Str::DockerBulkDeleteTitle => 272,
             Str::DockerBulkDeleteMessage(_) => 273,
             Str::DockerBulkFailures(_) => 274,
+            Str::DockerColumnRepository => 275,
+            Str::DockerColumnTag => 276,
+            Str::DockerColumnImageId => 277,
+            Str::DockerColumnSize => 278,
+            Str::DockerColumnCreated => 279,
+            Str::DockerColumnContainersUsing => 280,
+            Str::DockerColumnDriver => 281,
+            Str::DockerColumnMountPoint => 282,
+            Str::DockerColumnScope => 283,
+            Str::DockerSearchImages => 284,
+            Str::DockerSearchVolumes => 285,
+            Str::DockerSearchNetworks => 286,
+            Str::NoImages => 287,
+            Str::NoImagesHint => 288,
+            Str::NoVolumes => 289,
+            Str::NoVolumesHint => 290,
+            Str::NoNetworks => 291,
+            Str::NoNetworksHint => 292,
+            Str::DockerNotAvailable => 293,
+            Str::DockerNone => 294,
+            Str::DockerInspect => 295,
+            Str::DockerNetworkPredefined => 296,
         }
     }
 
