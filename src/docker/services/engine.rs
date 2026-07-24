@@ -49,6 +49,13 @@ const DOCKER_SOCKET: &str = "/var/run/docker.sock";
 /// bollard's own 2-minute default, which is the same value.
 #[cfg(unix)]
 const CONNECT_TIMEOUT: u64 = 120;
+/// The socket `podman machine` exposes for the machine created by default, and
+/// the suffix every machine's Docker-compatible API socket carries. See
+/// [`podman_machine_socket`].
+#[cfg(target_os = "macos")]
+const PODMAN_MACHINE_DEFAULT_SOCKET: &str = "podman-machine-default-api.sock";
+#[cfg(target_os = "macos")]
+const PODMAN_MACHINE_API_SUFFIX: &str = "-api.sock";
 
 pub struct BollardEngine {
     /// One multi-threaded tokio runtime for the whole app's Docker IO. `None`
@@ -89,9 +96,10 @@ impl Default for BollardEngine {
 }
 
 /// Resolves a daemon the way the Docker CLI does, in the order the round-1 brief
-/// specifies: honour `DOCKER_HOST`, then the standard Docker socket, then the
-/// Podman default socket. Building the client does not contact the daemon, so a
-/// down engine is not caught here — the first call reports it.
+/// specifies: honour `DOCKER_HOST`, then the standard Docker socket, then — on
+/// macOS — a running `podman machine`, then the Podman default socket. Building
+/// the client does not contact the daemon, so a down engine is not caught here —
+/// the first call reports it.
 ///
 /// The socket steps are platform-specific, so the function is split per target:
 /// `connect_with_unix` and `connect_with_podman_defaults` only exist in bollard's
@@ -104,13 +112,70 @@ fn connect() -> Result<Docker, DockerError> {
     if let Some(docker) = connect_with_docker_host() {
         return docker;
     }
-    // 2. The standard Docker socket, if it is there.
+    // 2. The standard Docker socket, if it is there. `exists()` follows symlinks,
+    //    which is what we want: on a Mac that once ran Docker Desktop
+    //    `/var/run/docker.sock` survives as a symlink to a `~/.docker/run/…` target
+    //    that is gone, and a dangling link must not shadow the steps below.
     if Path::new(DOCKER_SOCKET).exists() {
         return Docker::connect_with_unix(DOCKER_SOCKET, CONNECT_TIMEOUT, API_DEFAULT_VERSION)
             .map_err(unreachable);
     }
-    // 3. Otherwise fall back to Podman's default socket probing.
+    // 3. macOS only: a running `podman machine`. Podman has no native macOS
+    //    daemon — it runs the engine inside a VM and publishes its
+    //    Docker-compatible API socket under `$TMPDIR/podman/`, a per-user path
+    //    like `/var/folders/…/T/podman/podman-machine-default-api.sock`.
+    //    `connect_with_podman_defaults` in step 4 cannot find it: it only probes
+    //    the Linux rootless/system locations (`$XDG_RUNTIME_DIR/podman/podman.sock`,
+    //    `/run/user/$UID/podman/podman.sock`, `/run/podman/podman.sock`) before
+    //    falling back to the Docker socket already ruled out in step 2. Hence the
+    //    explicit probe here, after step 2 so a real Docker Desktop socket still
+    //    wins. The socket speaks the Docker API, so the ordinary unix connector
+    //    applies; a stopped machine leaves the file behind, and connecting to it
+    //    surfaces the normal "engine unreachable" error on the first call.
+    #[cfg(target_os = "macos")]
+    if let Some(socket) = podman_machine_socket() {
+        return Docker::connect_with_unix(&socket, CONNECT_TIMEOUT, API_DEFAULT_VERSION)
+            .map_err(unreachable);
+    }
+    // 4. Otherwise fall back to Podman's default socket probing, which is what
+    //    finds a Linux user's Podman.
     Docker::connect_with_podman_defaults().map_err(unreachable)
+}
+
+/// The API socket of a `podman machine` on macOS, discovered by looking in
+/// `$TMPDIR/podman/` — never by shelling out to `podman`, which may not be on the
+/// PATH of an app launched from Finder.
+#[cfg(target_os = "macos")]
+fn podman_machine_socket() -> Option<String> {
+    let dir = Path::new(std::env::var_os("TMPDIR")?.as_os_str()).join("podman");
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .collect();
+    let name = select_podman_api_socket(&names)?;
+    Some(dir.join(name).to_str()?.to_string())
+}
+
+/// Picks one machine's API socket out of the names in `$TMPDIR/podman/`, which
+/// also holds gvproxy sockets, logs and a pid file.
+///
+/// The default machine wins outright. Otherwise a user with a single renamed
+/// machine is still served, by taking the lexicographically smallest
+/// `*-api.sock`: `read_dir` order is not defined, so an explicit sort is what
+/// makes the choice the same on every run instead of varying between launches.
+#[cfg(target_os = "macos")]
+fn select_podman_api_socket(names: &[String]) -> Option<&str> {
+    if names
+        .iter()
+        .any(|name| name == PODMAN_MACHINE_DEFAULT_SOCKET)
+    {
+        return Some(PODMAN_MACHINE_DEFAULT_SOCKET);
+    }
+    names
+        .iter()
+        .filter(|name| name.ends_with(PODMAN_MACHINE_API_SUFFIX))
+        .min()
+        .map(String::as_str)
 }
 
 #[cfg(windows)]
@@ -559,5 +624,53 @@ fn row_from_summary(summary: &ContainerSummary) -> Container {
         compose_project,
         started_at: None,
         cpu_percent: None,
+    }
+}
+
+/// Only the `$TMPDIR/podman/` name selection is unit tested: everything else in
+/// this file needs a live daemon.
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    fn names(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn ignores_the_non_api_sockets_podman_leaves_alongside() {
+        let entries = names(&[
+            "gvproxy.pid",
+            "podman-machine-default.log",
+            "podman-machine-default.sock",
+            "podman-machine-default-gvproxy.sock",
+            "podman-machine-default-api.sock",
+            "vfkit-15328-e4b4.sock",
+        ]);
+        assert_eq!(
+            select_podman_api_socket(&entries),
+            Some("podman-machine-default-api.sock")
+        );
+    }
+
+    #[test]
+    fn prefers_the_default_machine_over_a_named_one() {
+        let entries = names(&["aaa-api.sock", "podman-machine-default-api.sock"]);
+        assert_eq!(
+            select_podman_api_socket(&entries),
+            Some("podman-machine-default-api.sock")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_smallest_named_machine_deterministically() {
+        let entries = names(&["work-api.sock", "dev-api.sock"]);
+        assert_eq!(select_podman_api_socket(&entries), Some("dev-api.sock"));
+    }
+
+    #[test]
+    fn finds_nothing_when_no_machine_socket_is_present() {
+        assert_eq!(select_podman_api_socket(&names(&["gvproxy.pid"])), None);
+        assert_eq!(select_podman_api_socket(&[]), None);
     }
 }

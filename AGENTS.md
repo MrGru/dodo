@@ -26,8 +26,15 @@ and, for the features that are still deliberately disabled "Coming soon" placeho
 Terminal, Create/Pull/Build, Stats beyond live CPU%, Favorites), exactly where each one plugs in.
 Read it before changing anything here rather than inferring the structure from the files.
 
-Four things about the module that are not obvious from any one file:
+Five things about the module that are not obvious from any one file:
 
+- **Engine discovery is hand-rolled per platform because bollard's is not enough.**
+  `services/engine.rs::connect()` carries the numbered order (DOCKER_HOST → `/var/run/docker.sock`
+  → macOS `podman machine` → bollard's Podman defaults) and the reasons inline; read it before
+  touching connection behaviour. The two traps it encodes: `/var/run/docker.sock` is often a
+  *dangling* symlink on a Mac that once ran Docker Desktop, and `connect_with_podman_defaults()`
+  only probes Linux paths, so it never finds the per-user
+  `$TMPDIR/podman/podman-machine-default-api.sock` a macOS `podman machine` actually listens on.
 - **`services/` is the only place that may name `bollard`**, and the only place a **tokio runtime**
   lives. `bollard` is async, so `BollardEngine` drives every call with `Runtime::block_on` on the
   background executor, keeping the blocking-by-contract discipline `Transport` follows. Inspect
