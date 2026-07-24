@@ -38,11 +38,7 @@ enum View {
 
 impl View {
     /// The standalone tools, shown flat in the Tools group.
-    const TOOLS: [View; 3] = [
-        View::JsonFormatter,
-        View::EncoderDecoder,
-        View::ApiExplorer,
-    ];
+    const TOOLS: [View; 3] = [View::JsonFormatter, View::EncoderDecoder, View::ApiExplorer];
 
     /// The Docker section's children, shown under the expandable Docker item.
     const DOCKER: [View; 4] = [
@@ -117,8 +113,10 @@ impl Layout {
 
     /// The full sidebar menu: the flat Tools, then the expandable Docker section.
     fn menu(&self, cx: &mut Context<Self>) -> SidebarMenu {
-        let mut items: Vec<SidebarMenuItem> =
-            View::TOOLS.iter().map(|view| self.tool_item(*view, cx)).collect();
+        let mut items: Vec<SidebarMenuItem> = View::TOOLS
+            .iter()
+            .map(|view| self.tool_item(*view, cx))
+            .collect();
         items.push(self.docker_item(cx));
         SidebarMenu::new().children(items)
     }
@@ -146,8 +144,10 @@ impl Layout {
     /// open/collapsed state lives in the sidebar widget's keyed state, so it
     /// survives re-renders and which child is active is preserved independently.
     fn docker_item(&self, cx: &mut Context<Self>) -> SidebarMenuItem {
-        let children: Vec<SidebarMenuItem> =
-            View::DOCKER.iter().map(|view| self.docker_child(*view, cx)).collect();
+        let children: Vec<SidebarMenuItem> = View::DOCKER
+            .iter()
+            .map(|view| self.docker_child(*view, cx))
+            .collect();
         SidebarMenuItem::new(t(Str::Docker, cx))
             .icon(AppIcon::Container.view())
             // Active whenever any Docker page is showing, so the section reads as
@@ -170,7 +170,8 @@ impl Layout {
             .on_click(move |_, _, cx| {
                 layout.update(cx, |this, cx| {
                     this.active = view;
-                    this.docker.update(cx, |docker, cx| docker.set_page(page, cx));
+                    this.docker
+                        .update(cx, |docker, cx| docker.set_page(page, cx));
                     cx.notify();
                 });
             })
@@ -239,20 +240,15 @@ impl Render for Layout {
                             )
                             .child(div().font_bold().child(t(self.active.title(), cx))),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .map(|this| match self.active {
-                                View::JsonFormatter => this.child(self.json_formatter.clone()),
-                                View::EncoderDecoder => this.child(self.encoder_decoder.clone()),
-                                View::ApiExplorer => this.child(self.api_explorer.clone()),
-                                View::DockerContainers
-                                | View::DockerImages
-                                | View::DockerVolumes
-                                | View::DockerNetworks => this.child(self.docker.clone()),
-                            }),
-                    ),
+                    .child(div().flex_1().min_h_0().map(|this| match self.active {
+                        View::JsonFormatter => this.child(self.json_formatter.clone()),
+                        View::EncoderDecoder => this.child(self.encoder_decoder.clone()),
+                        View::ApiExplorer => this.child(self.api_explorer.clone()),
+                        View::DockerContainers
+                        | View::DockerImages
+                        | View::DockerVolumes
+                        | View::DockerNetworks => this.child(self.docker.clone()),
+                    })),
             )
     }
 }

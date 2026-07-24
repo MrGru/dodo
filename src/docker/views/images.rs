@@ -193,7 +193,12 @@ impl ImagesView {
     // ---- Keyboard navigation and context menu --------------------------------
 
     fn move_focus(&mut self, dir: FocusMove, cx: &mut Context<Self>) {
-        let keys: Vec<String> = self.state.visible().iter().map(|row| row.id.clone()).collect();
+        let keys: Vec<String> = self
+            .state
+            .visible()
+            .iter()
+            .map(|row| row.id.clone())
+            .collect();
         self.focused = next_focus(&keys, self.focused.as_deref(), dir);
         cx.notify();
     }
@@ -496,7 +501,11 @@ impl ImagesView {
                     .flex_1()
                     .min_w_0(),
             )
-            .child(header_cell(t(Str::DockerColumnTag, cx)).w(TAG_W).flex_shrink_0())
+            .child(
+                header_cell(t(Str::DockerColumnTag, cx))
+                    .w(TAG_W)
+                    .flex_shrink_0(),
+            )
             .child(
                 header_cell(t(Str::DockerColumnImageId, cx))
                     .w(ID_W)
@@ -583,7 +592,11 @@ impl ImagesView {
                     .font_family(cx.theme().mono_font_family.clone()),
             )
             .child(muted_cell(size, cx).w(SIZE_W).flex_shrink_0())
-            .child(muted_cell(t(created.label(), cx), cx).w(CREATED_W).flex_shrink_0())
+            .child(
+                muted_cell(t(created.label(), cx), cx)
+                    .w(CREATED_W)
+                    .flex_shrink_0(),
+            )
             .child(count_cell(using, cx).w(USING_W).flex_shrink_0())
             .child(
                 div()

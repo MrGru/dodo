@@ -502,7 +502,11 @@ impl VolumesView {
                     .truncate()
                     .child(SharedString::from(row.name.clone())),
             )
-            .child(muted_cell(SharedString::from(row.driver.clone()), cx).w(DRIVER_W).flex_shrink_0())
+            .child(
+                muted_cell(SharedString::from(row.driver.clone()), cx)
+                    .w(DRIVER_W)
+                    .flex_shrink_0(),
+            )
             .child(
                 muted_cell(SharedString::from(row.mountpoint.clone()), cx)
                     .flex_1()
@@ -539,16 +543,16 @@ impl VolumesView {
                 }),
             ))
             .child(action_button(
-            SharedString::from(format!("delete-{}", row.name)),
-            AppIcon::Trash,
-            t(Str::Delete, cx),
-            true,
-            ButtonVariant::Danger,
-            cx.listener({
-                let name = row.name.clone();
-                move |this, _, window, cx| this.confirm_delete(name.clone(), window, cx)
-            }),
-        ))
+                SharedString::from(format!("delete-{}", row.name)),
+                AppIcon::Trash,
+                t(Str::Delete, cx),
+                true,
+                ButtonVariant::Danger,
+                cx.listener({
+                    let name = row.name.clone();
+                    move |this, _, window, cx| this.confirm_delete(name.clone(), window, cx)
+                }),
+            ))
     }
 }
 

@@ -1375,8 +1375,16 @@ fn container_context_menu(
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     menu.action_context(focus)
-        .menu_with_icon(t(Str::DockerInspect, cx), AppIcon::Eye, Box::new(DockerContextInspect))
-        .menu_with_icon(t(Str::DockerViewLogs, cx), AppIcon::File, Box::new(DockerContextLogs))
+        .menu_with_icon(
+            t(Str::DockerInspect, cx),
+            AppIcon::Eye,
+            Box::new(DockerContextInspect),
+        )
+        .menu_with_icon(
+            t(Str::DockerViewLogs, cx),
+            AppIcon::File,
+            Box::new(DockerContextLogs),
+        )
         .separator()
         .menu_with_icon_and_disabled(
             t(Str::DockerStart, cx),
@@ -1397,7 +1405,11 @@ fn container_context_menu(
             !status.can_restart(),
         )
         .separator()
-        .menu_with_icon(t(Str::Delete, cx), AppIcon::Trash, Box::new(DockerContextDelete))
+        .menu_with_icon(
+            t(Str::Delete, cx),
+            AppIcon::Trash,
+            Box::new(DockerContextDelete),
+        )
         .separator()
         .label(t(Str::DockerComingSoonLabel, cx))
         .menu_with_icon_and_disabled(

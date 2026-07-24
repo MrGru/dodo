@@ -38,14 +38,12 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Entity, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
+    IntoElement, MouseButton, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Task, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
-use gpui_component::{
-    ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 
 use crate::app_icon::AppIcon;
 use crate::docker::components::skeleton::loading_skeleton;
@@ -382,12 +380,8 @@ impl DetailPanel {
             return loading_skeleton(6, cx).into_any_element();
         }
         if let Some(error) = open.status.error() {
-            return error_state(
-                t(Str::DockerDetailErrorTitle, cx),
-                t(error.clone(), cx),
-                cx,
-            )
-            .into_any_element();
+            return error_state(t(Str::DockerDetailErrorTitle, cx), t(error.clone(), cx), cx)
+                .into_any_element();
         }
         match open.status.ready() {
             Some(DetailContent::Inspect(detail)) => self.render_inspect(detail, cx),
@@ -429,9 +423,7 @@ impl DetailPanel {
                             .flex_1()
                             .min_w_0()
                             .font_family(cx.theme().mono_font_family.clone())
-                            .when(missing, |this| {
-                                this.text_color(cx.theme().muted_foreground)
-                            })
+                            .when(missing, |this| this.text_color(cx.theme().muted_foreground))
                             .child(value),
                     )
                     .into_any_element(),

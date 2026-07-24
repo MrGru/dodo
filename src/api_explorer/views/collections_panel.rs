@@ -15,9 +15,7 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
 use gpui_component::popover::Popover;
-use gpui_component::{
-    ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 
 use crate::api_explorer::components::empty_state::empty_state;
 use crate::api_explorer::models::collection::{Node, NodeId, NodeKind};
@@ -135,7 +133,12 @@ impl ApiExplorer {
             .bg(cx.theme().muted.opacity(0.4))
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(div().flex_1().min_w_0().child(Input::new(&self.rename_input).small()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&self.rename_input).small()),
+            )
             .child(
                 Button::new("rename-confirm")
                     .primary()
@@ -283,7 +286,12 @@ impl ApiExplorer {
                       icon: AppIcon,
                       key: &'static str,
                       cx: &mut Context<Self>,
-                      handler: fn(&mut ApiExplorer, NodeId, &mut gpui::Window, &mut Context<ApiExplorer>)| {
+                      handler: fn(
+            &mut ApiExplorer,
+            NodeId,
+            &mut gpui::Window,
+            &mut Context<ApiExplorer>,
+        )| {
             Button::new((key, id as usize))
                 .ghost()
                 .xsmall()

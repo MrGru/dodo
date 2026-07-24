@@ -178,7 +178,12 @@ impl NetworksView {
     // ---- Keyboard navigation and context menu --------------------------------
 
     fn move_focus(&mut self, dir: FocusMove, cx: &mut Context<Self>) {
-        let keys: Vec<String> = self.state.visible().iter().map(|row| row.id.clone()).collect();
+        let keys: Vec<String> = self
+            .state
+            .visible()
+            .iter()
+            .map(|row| row.id.clone())
+            .collect();
         self.focused = next_focus(&keys, self.focused.as_deref(), dir);
         cx.notify();
     }
@@ -526,10 +531,22 @@ impl NetworksView {
                     .truncate()
                     .child(SharedString::from(row.name.clone())),
             )
-            .child(muted_cell(SharedString::from(row.driver.clone()), cx).w(DRIVER_W).flex_shrink_0())
-            .child(muted_cell(SharedString::from(row.scope.clone()), cx).w(SCOPE_W).flex_shrink_0())
+            .child(
+                muted_cell(SharedString::from(row.driver.clone()), cx)
+                    .w(DRIVER_W)
+                    .flex_shrink_0(),
+            )
+            .child(
+                muted_cell(SharedString::from(row.scope.clone()), cx)
+                    .w(SCOPE_W)
+                    .flex_shrink_0(),
+            )
             .child(count_cell(attached, cx).w(CONTAINERS_W).flex_shrink_0())
-            .child(muted_cell(t(created.label(), cx), cx).w(CREATED_W).flex_shrink_0())
+            .child(
+                muted_cell(t(created.label(), cx), cx)
+                    .w(CREATED_W)
+                    .flex_shrink_0(),
+            )
             .child(
                 div()
                     .w(ACTIONS_W)

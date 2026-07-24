@@ -88,7 +88,9 @@ pub fn tail(mut lines: Vec<LogLine>, limit: usize) -> Vec<LogLine> {
 
 /// Drops a trailing `\n` and the `\r` a CRLF image leaves in front of it.
 fn trim_terminator(line: &str) -> String {
-    line.trim_end_matches('\n').trim_end_matches('\r').to_string()
+    line.trim_end_matches('\n')
+        .trim_end_matches('\r')
+        .to_string()
 }
 
 #[cfg(test)]
@@ -157,7 +159,10 @@ mod tests {
         let lines = lines_from_frames([out("1\n2\n3\n4\n")]);
         assert_eq!(texts(&tail(lines.clone(), 2)), ["3", "4"]);
         // A tail wider than the log keeps everything.
-        assert_eq!(texts(&tail(lines.clone(), LOG_TAIL_LIMIT)), ["1", "2", "3", "4"]);
+        assert_eq!(
+            texts(&tail(lines.clone(), LOG_TAIL_LIMIT)),
+            ["1", "2", "3", "4"]
+        );
         assert!(tail(lines, 0).is_empty());
     }
 }

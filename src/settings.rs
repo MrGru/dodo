@@ -280,21 +280,19 @@ impl ListDelegate for SearchDelegate {
         let setting = *self.matches.get(ix.row)?;
 
         Some(
-            ListItem::new(ix.row)
-                .h(px(36.))
-                .child(
-                    h_flex()
-                        .items_center()
-                        .justify_between()
-                        .w_full()
-                        .child(t(setting.label(), cx))
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t(setting.section(), cx)),
-                        ),
-                ),
+            ListItem::new(ix.row).h(px(36.)).child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .w_full()
+                    .child(t(setting.label(), cx))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(setting.section(), cx)),
+                    ),
+            ),
         )
     }
 
@@ -451,40 +449,35 @@ impl Render for SettingsView {
                 // The slot the search box occupies in the layout. It never grows:
                 // the box itself is drawn by the overlay below, so results float
                 // over the settings panel rather than pushing it down.
-                div()
-                    .relative()
-                    .w_full()
-                    .flex_none()
-                    .h(collapsed)
-                    .child(
-                        // `deferred` paints after the rest of the dialog, which is
-                        // what puts the results on top of the panel; `left_0` +
-                        // `right_0` size the box from the slot's own edges, so the
-                        // input inside it gets a real width to lay text out in.
-                        deferred(
-                            v_flex()
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .right_0()
-                                .h(if searching {
-                                    px(RESULTS_HEIGHT)
-                                } else {
-                                    collapsed
-                                })
-                                .overflow_hidden()
-                                .bg(cx.theme().background)
-                                .border_1()
-                                .border_color(cx.theme().border)
-                                .rounded(cx.theme().radius)
-                                .when(searching, |this| this.shadow_md())
-                                .child(
-                                    List::new(&self.search)
-                                        .search_placeholder(t(Str::SearchSettingsPlaceholder, cx)),
-                                ),
-                        )
-                        .with_priority(1),
-                    ),
+                div().relative().w_full().flex_none().h(collapsed).child(
+                    // `deferred` paints after the rest of the dialog, which is
+                    // what puts the results on top of the panel; `left_0` +
+                    // `right_0` size the box from the slot's own edges, so the
+                    // input inside it gets a real width to lay text out in.
+                    deferred(
+                        v_flex()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .h(if searching {
+                                px(RESULTS_HEIGHT)
+                            } else {
+                                collapsed
+                            })
+                            .overflow_hidden()
+                            .bg(cx.theme().background)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .rounded(cx.theme().radius)
+                            .when(searching, |this| this.shadow_md())
+                            .child(
+                                List::new(&self.search)
+                                    .search_placeholder(t(Str::SearchSettingsPlaceholder, cx)),
+                            ),
+                    )
+                    .with_priority(1),
+                ),
             )
             .child(
                 div().flex_1().min_h_0().child(

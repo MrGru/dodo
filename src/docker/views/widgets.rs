@@ -59,7 +59,12 @@ pub fn action_button(
 /// A disabled placeholder button for a feature that is not built yet, tooltipped
 /// "Coming soon" so it reads as a future feature rather than something broken.
 /// The toolbar's Pull and Build are these.
-pub fn coming_soon_button(id: SharedString, icon: AppIcon, label: SharedString, cx: &App) -> Button {
+pub fn coming_soon_button(
+    id: SharedString,
+    icon: AppIcon,
+    label: SharedString,
+    cx: &App,
+) -> Button {
     Button::new(id)
         .small()
         .icon(icon)
@@ -87,7 +92,11 @@ pub fn resource_context_menu(
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     menu.action_context(focus)
-        .menu_with_icon(t(Str::DockerInspect, cx), AppIcon::Eye, Box::new(DockerContextInspect))
+        .menu_with_icon(
+            t(Str::DockerInspect, cx),
+            AppIcon::Eye,
+            Box::new(DockerContextInspect),
+        )
         .separator()
         .menu_with_icon_and_disabled(
             t(Str::Delete, cx),

@@ -105,17 +105,32 @@ fn container_fields(value: &Value) -> Vec<InspectField> {
     vec![
         field(Str::DockerFieldId, id_value(value, "/Id")),
         field(Str::DockerColumnName, opt_text(container_name(value))),
-        field(Str::DockerColumnImage, value_or_missing(value, "/Config/Image")),
-        field(Str::DockerColumnStatus, value_or_missing(value, "/State/Status")),
+        field(
+            Str::DockerColumnImage,
+            value_or_missing(value, "/Config/Image"),
+        ),
+        field(
+            Str::DockerColumnStatus,
+            value_or_missing(value, "/State/Status"),
+        ),
         field(Str::DockerFieldExitCode, number(value, "/State/ExitCode")),
-        field(Str::DockerColumnCreated, value_or_missing(value, "/Created")),
-        field(Str::DockerFieldStarted, value_or_missing(value, "/State/StartedAt")),
+        field(
+            Str::DockerColumnCreated,
+            value_or_missing(value, "/Created"),
+        ),
+        field(
+            Str::DockerFieldStarted,
+            value_or_missing(value, "/State/StartedAt"),
+        ),
         field(Str::DockerFieldCommand, opt_text(command(value))),
         field(
             Str::DockerFieldRestartPolicy,
             value_or_missing(value, "/HostConfig/RestartPolicy/Name"),
         ),
-        field(Str::Networks, opt_text(keys(value, "/NetworkSettings/Networks").join(", "))),
+        field(
+            Str::Networks,
+            opt_text(keys(value, "/NetworkSettings/Networks").join(", ")),
+        ),
         field(Str::DockerFieldIpAddress, opt_text(ip_address(value))),
         field(Str::DockerColumnPorts, opt_text(ports(value))),
         field(Str::DockerFieldMounts, opt_text(mounts(value).join(", "))),
@@ -125,18 +140,32 @@ fn container_fields(value: &Value) -> Vec<InspectField> {
 fn image_fields(value: &Value) -> Vec<InspectField> {
     vec![
         field(Str::DockerFieldId, id_value(value, "/Id")),
-        field(Str::DockerFieldTags, opt_text(strings(value, "/RepoTags").join(", "))),
+        field(
+            Str::DockerFieldTags,
+            opt_text(strings(value, "/RepoTags").join(", ")),
+        ),
         field(
             Str::DockerFieldDigest,
             opt_text(first_string(value, "/RepoDigests").unwrap_or_default()),
         ),
-        field(Str::DockerColumnCreated, value_or_missing(value, "/Created")),
+        field(
+            Str::DockerColumnCreated,
+            value_or_missing(value, "/Created"),
+        ),
         field(Str::DockerColumnSize, size(value, "/Size")),
-        field(Str::DockerFieldArchitecture, value_or_missing(value, "/Architecture")),
+        field(
+            Str::DockerFieldArchitecture,
+            value_or_missing(value, "/Architecture"),
+        ),
         field(Str::DockerFieldOs, value_or_missing(value, "/Os")),
         field(
             Str::DockerFieldLayers,
-            count(value.pointer("/RootFS/Layers").and_then(Value::as_array).map(Vec::len)),
+            count(
+                value
+                    .pointer("/RootFS/Layers")
+                    .and_then(Value::as_array)
+                    .map(Vec::len),
+            ),
         ),
         field(
             Str::DockerFieldCommand,
@@ -149,12 +178,24 @@ fn volume_fields(value: &Value) -> Vec<InspectField> {
     vec![
         field(Str::DockerColumnName, value_or_missing(value, "/Name")),
         field(Str::DockerColumnDriver, value_or_missing(value, "/Driver")),
-        field(Str::DockerColumnMountPoint, value_or_missing(value, "/Mountpoint")),
-        field(Str::DockerColumnCreated, value_or_missing(value, "/CreatedAt")),
+        field(
+            Str::DockerColumnMountPoint,
+            value_or_missing(value, "/Mountpoint"),
+        ),
+        field(
+            Str::DockerColumnCreated,
+            value_or_missing(value, "/CreatedAt"),
+        ),
         field(Str::DockerColumnScope, value_or_missing(value, "/Scope")),
         field(Str::DockerColumnSize, size(value, "/UsageData/Size")),
-        field(Str::DockerFieldLabels, opt_text(pairs(value, "/Labels").join(", "))),
-        field(Str::DockerFieldOptions, opt_text(pairs(value, "/Options").join(", "))),
+        field(
+            Str::DockerFieldLabels,
+            opt_text(pairs(value, "/Labels").join(", ")),
+        ),
+        field(
+            Str::DockerFieldOptions,
+            opt_text(pairs(value, "/Options").join(", ")),
+        ),
     ]
 }
 
@@ -164,7 +205,10 @@ fn network_fields(value: &Value) -> Vec<InspectField> {
         field(Str::DockerColumnName, value_or_missing(value, "/Name")),
         field(Str::DockerColumnDriver, value_or_missing(value, "/Driver")),
         field(Str::DockerColumnScope, value_or_missing(value, "/Scope")),
-        field(Str::DockerColumnCreated, value_or_missing(value, "/Created")),
+        field(
+            Str::DockerColumnCreated,
+            value_or_missing(value, "/Created"),
+        ),
         field(Str::DockerFieldInternal, flag(value, "/Internal")),
         field(Str::DockerFieldAttachable, flag(value, "/Attachable")),
         field(
@@ -177,7 +221,12 @@ fn network_fields(value: &Value) -> Vec<InspectField> {
         ),
         field(
             Str::Containers,
-            count(value.pointer("/Containers").and_then(Value::as_object).map(|map| map.len())),
+            count(
+                value
+                    .pointer("/Containers")
+                    .and_then(Value::as_object)
+                    .map(|map| map.len()),
+            ),
         ),
     ]
 }
@@ -463,8 +512,14 @@ mod tests {
         assert_eq!(text(&detail, Str::DockerColumnName), "web");
         assert_eq!(text(&detail, Str::DockerColumnImage), "nginx:latest");
         assert_eq!(text(&detail, Str::DockerColumnStatus), "running");
-        assert_eq!(text(&detail, Str::DockerFieldCommand), "nginx -g daemon off;");
-        assert_eq!(text(&detail, Str::DockerFieldRestartPolicy), "unless-stopped");
+        assert_eq!(
+            text(&detail, Str::DockerFieldCommand),
+            "nginx -g daemon off;"
+        );
+        assert_eq!(
+            text(&detail, Str::DockerFieldRestartPolicy),
+            "unless-stopped"
+        );
         assert_eq!(text(&detail, Str::Networks), "app_default");
     }
 
@@ -514,7 +569,10 @@ mod tests {
         });
         let detail = InspectDetail::from_value(InspectKind::Image, &value);
         assert_eq!(detail.title, "nginx:1.27");
-        assert_eq!(text(&detail, Str::DockerFieldTags), "nginx:1.27, nginx:latest");
+        assert_eq!(
+            text(&detail, Str::DockerFieldTags),
+            "nginx:1.27, nginx:latest"
+        );
         assert_eq!(text(&detail, Str::DockerFieldDigest), "nginx@sha256:aaaa");
         assert_eq!(text(&detail, Str::DockerColumnSize), "187.0MB");
         assert_eq!(text(&detail, Str::DockerFieldLayers), "3");
@@ -559,8 +617,14 @@ mod tests {
             "Containers": { "abc": {}, "def": {} }
         });
         let detail = InspectDetail::from_value(InspectKind::Network, &value);
-        assert_eq!(field(&detail, Str::DockerFieldInternal), FieldValue::Flag(false));
-        assert_eq!(field(&detail, Str::DockerFieldAttachable), FieldValue::Flag(true));
+        assert_eq!(
+            field(&detail, Str::DockerFieldInternal),
+            FieldValue::Flag(false)
+        );
+        assert_eq!(
+            field(&detail, Str::DockerFieldAttachable),
+            FieldValue::Flag(true)
+        );
         assert_eq!(text(&detail, Str::DockerFieldSubnet), "10.89.0.0/24");
         assert_eq!(text(&detail, Str::DockerFieldGateway), "10.89.0.1");
         assert_eq!(text(&detail, Str::Containers), "2");

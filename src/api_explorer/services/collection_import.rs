@@ -91,10 +91,7 @@ fn postman_item(item: &Value) -> Node {
         };
     }
 
-    let snapshot = item
-        .get("request")
-        .map(postman_request)
-        .unwrap_or_default();
+    let snapshot = item.get("request").map(postman_request).unwrap_or_default();
 
     Node {
         id: 0,
@@ -142,9 +139,20 @@ fn postman_request(request: &Value) -> RequestSnapshot {
 fn postman_header(header: &Value) -> KeyValue {
     KeyValue {
         // Postman's `disabled` flag is the inverse of dodo's `enabled`.
-        enabled: !header.get("disabled").and_then(Value::as_bool).unwrap_or(false),
-        key: header.get("key").and_then(Value::as_str).unwrap_or_default().to_string(),
-        value: header.get("value").and_then(Value::as_str).unwrap_or_default().to_string(),
+        enabled: !header
+            .get("disabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        key: header
+            .get("key")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        value: header
+            .get("value")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
     }
 }
 
@@ -171,7 +179,10 @@ mod tests {
         let roots = parse_import(json.as_bytes()).expect("imports");
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].name, "APIs");
-        assert_eq!(roots[0].children[0].snapshot().map(|s| s.url.as_str()), Some("https://x/ping"));
+        assert_eq!(
+            roots[0].children[0].snapshot().map(|s| s.url.as_str()),
+            Some("https://x/ping")
+        );
     }
 
     #[test]

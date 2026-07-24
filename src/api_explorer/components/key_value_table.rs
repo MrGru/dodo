@@ -147,11 +147,7 @@ fn table_pane(
 }
 
 /// The Bulk Edit view: one multiline text area of `Key: Value` lines.
-fn bulk_pane(
-    table: RowTable,
-    tab: &Entity<RequestTabState>,
-    cx: &App,
-) -> impl IntoElement {
+fn bulk_pane(table: RowTable, tab: &Entity<RequestTabState>, cx: &App) -> impl IntoElement {
     let editor = tab.read(cx).request.bulk_editor(table).clone();
     div().flex_1().min_h_0().p_2().child(
         div()

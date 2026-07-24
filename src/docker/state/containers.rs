@@ -112,7 +112,8 @@ impl ContainersState {
         let rows_differ = crate::docker::state::diff::rows_changed(&self.rows, &incoming);
         let was_not_ready = !matches!(self.status, LoadStatus::Ready);
         if rows_differ {
-            self.selection.retain(incoming.iter().map(|row| row.id.as_str()));
+            self.selection
+                .retain(incoming.iter().map(|row| row.id.as_str()));
             self.rows = incoming;
         }
         self.status = LoadStatus::Ready;
@@ -461,7 +462,12 @@ mod tests {
         ];
         assert!(!state.merge_rows(same));
         assert_eq!(
-            state.visible().iter().find(|r| r.id == "1").unwrap().cpu_percent,
+            state
+                .visible()
+                .iter()
+                .find(|r| r.id == "1")
+                .unwrap()
+                .cpu_percent,
             Some(42.0)
         );
 
@@ -480,7 +486,13 @@ mod tests {
         // Re-list without row "2": its selection is pruned, "1" survives.
         let incoming = vec![
             full("1", "web", ContainerStatus::Running, "nginx", Some("app")),
-            full("3", "cache", ContainerStatus::Running, "redis", Some("infra")),
+            full(
+                "3",
+                "cache",
+                ContainerStatus::Running,
+                "redis",
+                Some("infra"),
+            ),
             full("4", "lonely", ContainerStatus::Exited, "alpine", None),
         ];
         assert!(state.merge_rows(incoming));

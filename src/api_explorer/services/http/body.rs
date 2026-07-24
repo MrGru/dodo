@@ -183,7 +183,7 @@ fn decode_entities(text: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode, kind_of, preview, prettify};
+    use super::{decode, kind_of, prettify, preview};
     use crate::api_explorer::models::exchange::BodyKind;
 
     #[test]
@@ -235,7 +235,10 @@ mod tests {
     fn charset_is_read_case_and_quote_insensitively() {
         // Quoted, upper-cased, extra parameters: still latin-1.
         let bytes = b"\xe9";
-        assert_eq!(decode(bytes, Some("text/plain; CharSet=\"iso-8859-1\"")), "é");
+        assert_eq!(
+            decode(bytes, Some("text/plain; CharSet=\"iso-8859-1\"")),
+            "é"
+        );
         // No charset falls back to lossy UTF-8, so the same byte is replaced.
         assert_eq!(decode(bytes, Some("text/plain")), "\u{fffd}");
     }

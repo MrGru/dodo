@@ -79,7 +79,11 @@ impl Node {
             id,
             name: self.name.clone(),
             kind: self.kind.clone(),
-            children: self.children.iter().map(|child| child.deep_copy(next)).collect(),
+            children: self
+                .children
+                .iter()
+                .map(|child| child.deep_copy(next))
+                .collect(),
             expanded: self.expanded,
         }
     }
@@ -96,7 +100,11 @@ impl CollectionTree {
     /// Rebuilds a tree from nodes loaded off disk, resuming id allocation above
     /// the highest id any of them already carries.
     pub fn from_roots(roots: Vec<Node>) -> Self {
-        let next_id = roots.iter().map(Node::max_id).max().map_or(0, |max| max + 1);
+        let next_id = roots
+            .iter()
+            .map(Node::max_id)
+            .max()
+            .map_or(0, |max| max + 1);
         Self { roots, next_id }
     }
 
@@ -319,12 +327,17 @@ mod tests {
     fn requests_nest_under_a_collection_and_a_folder() {
         let mut tree = CollectionTree::default();
         let collection = tree.add_collection("APIs".into());
-        let folder = tree.add_folder(collection, "Auth".into()).expect("folder added");
+        let folder = tree
+            .add_folder(collection, "Auth".into())
+            .expect("folder added");
         let request = tree
             .add_request(folder, "Login".into(), snapshot("https://x/login"))
             .expect("request added");
 
-        assert_eq!(tree.snapshot(request).map(|s| s.url.as_str()), Some("https://x/login"));
+        assert_eq!(
+            tree.snapshot(request).map(|s| s.url.as_str()),
+            Some("https://x/login")
+        );
         // The saved node is a request, not a container.
         assert!(tree.snapshot(request).is_some());
         assert!(tree.snapshot(collection).is_none());
@@ -365,7 +378,8 @@ mod tests {
         let mut tree = CollectionTree::default();
         let collection = tree.add_collection("APIs".into());
         let folder = tree.add_folder(collection, "F".into()).expect("folder");
-        tree.add_request(folder, "R".into(), snapshot("https://x")).expect("request");
+        tree.add_request(folder, "R".into(), snapshot("https://x"))
+            .expect("request");
 
         let removed = tree.remove(folder).expect("folder removed");
         assert_eq!(removed.children.len(), 1);
@@ -377,7 +391,8 @@ mod tests {
         let mut tree = CollectionTree::default();
         let collection = tree.add_collection("APIs".into());
         let folder = tree.add_folder(collection, "F".into()).expect("folder");
-        tree.add_request(folder, "R".into(), snapshot("https://x")).expect("request");
+        tree.add_request(folder, "R".into(), snapshot("https://x"))
+            .expect("request");
 
         let copy = tree.duplicate(folder).expect("duplicated");
         assert_ne!(copy, folder);
@@ -388,7 +403,12 @@ mod tests {
         let original_request = root.children[0].children[0].id;
         let copied_request = root.children[1].children[0].id;
         assert_ne!(original_request, copied_request);
-        assert_eq!(root.children[1].children[0].snapshot().map(|s| s.url.as_str()), Some("https://x"));
+        assert_eq!(
+            root.children[1].children[0]
+                .snapshot()
+                .map(|s| s.url.as_str()),
+            Some("https://x")
+        );
     }
 
     #[test]
@@ -420,7 +440,8 @@ mod tests {
         let mut tree = CollectionTree::default();
         let collection = tree.add_collection("APIs".into());
         tree.set_expanded(collection, false);
-        tree.add_request(collection, "R".into(), snapshot("https://x")).expect("request");
+        tree.add_request(collection, "R".into(), snapshot("https://x"))
+            .expect("request");
         assert!(tree.roots()[0].expanded, "adding a child reveals it");
     }
 }

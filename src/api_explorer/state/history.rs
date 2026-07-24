@@ -145,7 +145,10 @@ mod tests {
         let mut history = History::default();
         history.record(record("https://a", Some(200)));
         let id = history.entries()[0].id;
-        assert_eq!(history.snapshot(id).map(|s| s.url.as_str()), Some("https://a"));
+        assert_eq!(
+            history.snapshot(id).map(|s| s.url.as_str()),
+            Some("https://a")
+        );
         history.remove(id);
         assert!(history.is_empty());
         assert!(history.snapshot(id).is_none());
