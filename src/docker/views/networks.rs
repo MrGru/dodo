@@ -206,16 +206,16 @@ impl NetworksView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(id) = self.context_target.clone() {
-            if let Some(row) = self.state.visible().into_iter().find(|row| row.id == id) {
-                // A predefined network's Delete is disabled in the menu, but guard
-                // here too so a keybind or race cannot route around it.
-                if row.is_predefined() {
-                    return;
-                }
-                let name = row.name.clone();
-                self.confirm_delete(id, name, window, cx);
+        if let Some(id) = self.context_target.clone()
+            && let Some(row) = self.state.visible().into_iter().find(|row| row.id == id)
+        {
+            // A predefined network's Delete is disabled in the menu, but guard
+            // here too so a keybind or race cannot route around it.
+            if row.is_predefined() {
+                return;
             }
+            let name = row.name.clone();
+            self.confirm_delete(id, name, window, cx);
         }
     }
 
@@ -662,6 +662,6 @@ impl Render for NetworksView {
 
 /// Networks in display order: by name, case-insensitively.
 fn sorted(mut rows: Vec<Network>) -> Vec<Network> {
-    rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    rows.sort_by_key(|a| a.name.to_lowercase());
     rows
 }

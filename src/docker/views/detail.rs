@@ -121,6 +121,11 @@ impl DetailPanel {
     }
 
     /// Opens the Inspect panel on one resource and starts its fetch.
+    // Eight parameters, but three of them (`&mut self`, `window`, `cx`) are the
+    // GPUI calling convention every view method carries, and `access` is the
+    // re-entrancy hook. That leaves three real arguments; bundling them into a
+    // struct would add a type without removing anything from the call sites.
+    #[allow(clippy::too_many_arguments)]
     pub fn open_inspect<V: 'static>(
         &mut self,
         engine: Arc<dyn DockerEngine>,

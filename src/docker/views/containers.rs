@@ -364,11 +364,11 @@ impl ContainersView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(id) = self.context_target.clone() {
-            if let Some(row) = self.state.row(&id) {
-                let name = row.name.clone();
-                self.confirm_delete(id, name, window, cx);
-            }
+        if let Some(id) = self.context_target.clone()
+            && let Some(row) = self.state.row(&id)
+        {
+            let name = row.name.clone();
+            self.confirm_delete(id, name, window, cx);
         }
     }
 

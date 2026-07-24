@@ -342,7 +342,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 
 fn decode_hex(source: &str) -> Result<String, Str> {
     let digits: Vec<char> = source.chars().filter(|c| !c.is_whitespace()).collect();
-    if digits.len() % 2 != 0 {
+    if !digits.len().is_multiple_of(2) {
         return Err(Str::InvalidHexOddLength(digits.len()));
     }
 

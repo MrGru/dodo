@@ -89,11 +89,11 @@ impl ContainersState {
     /// no-op (returning `false`) if the row is gone (a refresh raced the stats
     /// fetch).
     pub fn set_cpu(&mut self, id: &str, percent: Option<f64>) -> bool {
-        if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
-            if row.cpu_percent != percent {
-                row.cpu_percent = percent;
-                return true;
-            }
+        if let Some(row) = self.rows.iter_mut().find(|row| row.id == id)
+            && row.cpu_percent != percent
+        {
+            row.cpu_percent = percent;
+            return true;
         }
         false
     }

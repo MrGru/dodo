@@ -221,11 +221,11 @@ impl ImagesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(id) = self.context_target.clone() {
-            if let Some(row) = self.state.visible().into_iter().find(|row| row.id == id) {
-                let name = row.confirm_label();
-                self.confirm_delete(id, name, window, cx);
-            }
+        if let Some(id) = self.context_target.clone()
+            && let Some(row) = self.state.visible().into_iter().find(|row| row.id == id)
+        {
+            let name = row.confirm_label();
+            self.confirm_delete(id, name, window, cx);
         }
     }
 
