@@ -1,0 +1,147 @@
+# The full four-platform `cargo build --release --locked` matrix — the thing
+# `ci.yml` used to do on every push.
+#
+# WHY THIS IS A SEPARATE FILE rather than event conditions inside ci.yml. The
+# three things a workflow file fixes are its trigger set, its concurrency group
+# and its cancellation policy, and this job disagrees with CI on all three: it
+# runs on a weekly `schedule` and on demand, it must never be cancelled by a
+# newer commit (a weekly run's whole purpose is to finish and tell you), and its
+# runs are not attached to a pull request. Expressing that as `if:` conditions
+# on a matrix inside ci.yml would leave every reader of ci.yml working out which
+# jobs actually run for the event in front of them, and would put `schedule:` in
+# the file whose job list is meant to describe "what happens when I push".
+#
+# WHAT COVERS A TAG. Nothing here fires on a tag, deliberately:
+# `.github/workflows/release.yml` already builds the same four targets with the
+# same profile and the same `--locked` on `v*`, then packages and verifies them.
+# That is strictly stronger than this workflow, so running both on a tag would
+# pay twice for the weaker answer. If you want the release-profile signal
+# *before* tagging, run `release.yml` with `dry_run: true`, or dispatch this one.
+#
+# WHAT THIS CATCHES THAT CI NO LONGER DOES: anything that only exists under the
+# release profile — an LTO miscompile or ICE, `codegen-units = 1` exposing a
+# bad `unsafe`, a linker flag that only the release profile passes, `strip`
+# misbehaving on one platform, code guarded by `debug_assertions`. Those now
+# surface here, up to a week after the commit that caused them, instead of on
+# the push. That is the accepted cost of not paying for a four-platform LTO
+# build on every commit; see the note at the top of ci.yml.
+#
+# UNVERIFIED: this workflow has never been executed. Its build steps are lifted
+# verbatim from the `build` job ci.yml carried through run 30106478178, where
+# `macos-arm64` and `linux-x64` passed and `windows-x64` failed on a compile
+# error that has since been fixed.
+
+name: Release profile build
+
+on:
+  # Monday morning UTC, an hour after analysis.yml so the two do not contend
+  # for runners. Weekly is the cadence the trade-off was priced at: it bounds
+  # how long a release-only breakage can sit undetected at seven days.
+  schedule:
+    - cron: "0 7 * * 1"
+  # Before tagging, after touching Cargo.toml's [profile.*], or whenever a
+  # release-profile answer is wanted now.
+  workflow_dispatch:
+
+# Never cancel: a scheduled run exists to produce an answer, and a superseded
+# one is not an improvement over no answer at all.
+concurrency:
+  group: release-profile-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The real build, once per shipped platform. This is the job that tells you
+  # whether a release would succeed; it uses the same profile and the same
+  # `--locked` flag the release workflow does.
+  # ---------------------------------------------------------------------------
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    # Unverified platforms must not block. Flip `experimental` to false per row
+    # once that row has passed on a real runner. Same flags as ci.yml's `check`
+    # matrix, and for the same reasons — keep the two in step.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            experimental: false
+          - name: macos-x64
+            os: macos-13
+            target: x86_64-apple-darwin
+            experimental: true
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            experimental: true
+          - name: windows-x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            experimental: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-build-deps
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: ${{ matrix.target }}
+          # The cache namespace ci.yml's release matrix used to own. Kept, so
+          # the first scheduled run can still hit warm entries, and separate
+          # from `check-*` and from `release-*`.
+          cache-key: build-${{ matrix.target }}
+
+      - name: cargo build --release
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # Prove the artifact executes. dodo is a GUI app and a runner has no
+      # display, so `--build-info` — which returns before any window code runs —
+      # is the strongest launch check CI can make. It does establish that the
+      # binary is valid for the platform, that its dynamic libraries resolve,
+      # and that build.rs embedded real metadata.
+      - name: Smoke test the binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/dodo --build-info
+      # `shell: pwsh` is stated rather than left to the runner default, so the
+      # backslash paths below are unambiguously PowerShell and not a bash
+      # script full of escape sequences.
+      - name: Smoke test the binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\target\${{ matrix.target }}\release\dodo.exe --build-info
+
+  # ---------------------------------------------------------------------------
+  # A scheduled run nobody looks at is not a signal. This writes the per-target
+  # outcome into the run summary so the weekly result is readable at a glance
+  # without opening four job logs.
+  # ---------------------------------------------------------------------------
+  summary:
+    name: summary
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - shell: bash
+        run: |
+          {
+            echo "### Release-profile build: ${{ needs.build.result }}"
+            echo
+            echo "Four targets, \`cargo build --release --locked\` plus a"
+            echo "\`--build-info\` smoke test. Experimental rows do not fail the"
+            echo "run; open the matrix to see which of them passed."
+            echo
+            echo "Triggered by \`${{ github.event_name }}\` on \`${{ github.sha }}\`."
+          } >> "$GITHUB_STEP_SUMMARY"

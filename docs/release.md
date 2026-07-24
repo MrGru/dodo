@@ -13,6 +13,10 @@ that is actually worth.
 > guess. Jobs in that category are marked `experimental: true` in the matrices
 > and are non-blocking; `linux-x64` has now gone green once and is a candidate
 > for having its flag flipped.
+>
+> Those job names are from the old CI shape. `ci.yml`'s release matrix has since
+> become a `check` matrix plus a single debug build, and the release-profile
+> matrix moved to `release-profile.yml`; neither of those has run yet either.
 
 ---
 
@@ -25,9 +29,30 @@ that is actually worth.
 | `fmt` | ubuntu | `cargo fmt --all --check` | Yes |
 | `clippy` | macos-14 | `cargo clippy --all-targets -- -D warnings` | Yes |
 | `test` | macos-14 | `cargo test --all-features`, plus `cargo check --no-default-features` | Yes |
-| `build` | 4 platforms | `cargo build --release --locked` and a `--build-info` smoke test | macOS arm64 only |
+| `check` | 4 platforms | `cargo check --locked --all-features --target <triple>`, natively | macOS arm64 only |
+| `build-debug` | macos-14 | `cargo build --locked` and a `--build-info` smoke test | Yes |
 
-Three deliberate choices:
+**No `--release` build runs on a push.** That is a change from how this
+repository started, and the reasoning is worth keeping:
+
+- The four-platform `cargo build --release --locked` matrix was the most
+  expensive thing this project did — fat LTO plus `codegen-units = 1` over
+  ~800 crates, on the highest-billing runners — and it ran on every push.
+- The signal it produced is almost never profile-dependent. The one real
+  cross-platform failure so far (run 30106478178, `build (windows-x64)`) was a
+  plain missing-function type error: `cargo check` catches that identically.
+- So the per-push path is now `cargo check` per platform, which is what finds
+  portability breaks, plus one debug build on macOS arm64, which is what proves
+  the crate still links and the binary still runs.
+
+**The accepted cost.** A failure that exists only under the release profile —
+an LTO miscompile or ICE, `codegen-units = 1` exposing a bad `unsafe`, a linker
+flag only that profile passes, `strip` misbehaving on one platform, code behind
+`debug_assertions` — is **not** caught on the push that introduces it. It
+surfaces later: see "Release-profile builds" below. Before tagging, run one on
+purpose rather than discovering it mid-release.
+
+Three further deliberate choices:
 
 - **`fmt` and `clippy` are blocking.** They shipped advisory because 34 files
   predated `.rustfmt.toml` and 12 clippy warnings predated the workflow, all in
@@ -43,9 +68,42 @@ Three deliberate choices:
   full dependency graph, and macOS is the only platform dodo is known to build
   on. A lint job that fails because a system library is missing tells you
   nothing about the lint.
-- **Non-macOS builds do not block a merge.** They are there to *find out*
-  whether dodo builds on Linux and Windows. Until one of them has passed, a
-  failure is information, not a regression.
+- **Non-macOS checks do not block a merge.** They are there to *find out*
+  whether dodo compiles on Linux and Windows. Until one of them has passed, a
+  failure is information, not a regression. The `check` matrix carries the same
+  `experimental` flags the old `build` matrix did, unchanged: a `cargo check` is
+  strictly weaker than the release build those runs performed, so no evidence
+  was gained or lost when the job changed shape.
+- **Each `check` row runs natively.** Cross-checking from macOS is not
+  equivalent and does not work here anyway — see "Checking a Windows fix without
+  a Windows machine" below, where `aws-lc-sys` needs the Windows SDK headers.
+  On a real `windows-latest`/`windows-2022` runner those headers are present
+  and a native `cargo check` is fine. Linux still needs
+  `.github/actions/linux-build-deps` (build scripts compile C and call
+  pkg-config even when nothing is linked), but it is invoked with `lld: "false"`
+  there, since `cargo check` never runs a linker.
+
+### Release-profile builds
+
+`.github/workflows/release-profile.yml` is where the four-platform
+`cargo build --release --locked` matrix went. It runs:
+
+| Event | What happens |
+|---|---|
+| `schedule`, Mondays 07:00 UTC | full matrix + `--build-info` smoke test, result written to the run summary |
+| `workflow_dispatch` | the same, on demand — do this before tagging |
+| a `v*` tag | **not this workflow.** `release.yml` already builds the same four targets with the same profile and then packages and verifies them, which is strictly stronger; running both would pay twice for the weaker answer |
+
+It is a separate file rather than event conditions inside `ci.yml` because the
+three things a workflow fixes — its trigger set, its concurrency group and its
+cancellation policy — all differ from CI's. It must never be cancelled by a
+newer commit (a scheduled run exists to finish and report), it is not attached
+to a pull request, and putting `schedule:` in `ci.yml` would make the file whose
+job list answers "what happens when I push" answer several other questions too.
+
+Weekly bounds how long a release-only breakage can sit undetected at seven days.
+That is the number the trade-off above was priced at; change the cron and you
+change the trade-off.
 
 `.github/workflows/analysis.yml` is separate and entirely advisory:
 `cargo-audit`, `cargo-deny`, `cargo tree -d` and `cargo-bloat`, on a weekly
@@ -114,6 +172,7 @@ the file is a valid executable for its platform, that its dynamic libraries
 resolve, and that `build.rs` embedded the right metadata. **It does not prove
 the UI renders.** That check is manual: download the archive on a real desktop
 and open it. Do that before announcing a release.
+
 
 ### Checking a Windows fix without a Windows machine
 
