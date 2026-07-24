@@ -274,12 +274,13 @@ noticing a *new* duplicate introduced by something dodo added.
 zlog (GPL-3.0-or-later) ← ztracing (GPL-3.0-or-later) ← sum_tree ← gpui ← dodo
 ```
 
-`zlog`, `ztracing` and `ztracing_macro` come from `zed-industries/zed`. dodo
-itself has no `LICENSE` file. This is not a build question and is not fixed
-here, but it has to be answered before binaries are distributed: either dodo
-adopts a GPL-3.0-compatible licence, or it stops linking those crates (which
-today means not using gpui). `deny.toml` deliberately does **not** carry an
-exception for them, so `cargo deny` keeps reporting it.
+`zlog`, `ztracing` and `ztracing_macro` come from `zed-industries/zed`. dodo's
+own source is now MIT (`LICENSE`), which settles what dodo's source is and
+nothing more: **the terms under which a built binary combining it with
+GPL-3.0-or-later object code may be distributed remain undecided.** That open
+question, and the verified chain above, are recorded in
+`THIRD-PARTY-NOTICES.md`. `deny.toml` deliberately carries no `allow` entry and
+no exception for those three crates, so `cargo deny` keeps reporting them.
 
 **4. Nothing unused to remove.** Every direct dependency in `Cargo.toml` is
 referenced from `src/`. The one to keep an eye on is `futures-util`, used at a

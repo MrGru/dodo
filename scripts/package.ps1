@@ -73,9 +73,13 @@ New-Item -ItemType Directory -Force -Path $Out | Out-Null
 Copy-Item $bin (Join-Path $stage "dodo.exe")
 # NTFS has no executable bit, so nothing to preserve here — the .exe extension
 # is what makes it runnable. Mentioned because the Unix script has to chmod.
-foreach ($doc in @("README.md", "LICENSE", "LICENSE.md", "LICENSE.txt")) {
+# LICENSE and THIRD-PARTY-NOTICES.md are required, matching package.sh: dodo's
+# source is MIT but the binary links GPL-3.0-or-later crates, so the notice has
+# to travel with it. A missing one is a hard error, not a quietly thinner ZIP.
+foreach ($doc in @("README.md", "LICENSE", "THIRD-PARTY-NOTICES.md")) {
     $p = Join-Path $repoRoot $doc
-    if (Test-Path $p) { Copy-Item $p $stage }
+    if (-not (Test-Path $p)) { throw "missing $doc; it must ship inside the archive" }
+    Copy-Item $p $stage
 }
 
 # The multi-resolution application icon, shipped as a loose file next to the

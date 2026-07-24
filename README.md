@@ -49,6 +49,17 @@ See [`Cargo.toml`](Cargo.toml) for exact dependency sources. Note that `gpui`,
 `gpui_platform`, and `gpui-component` are all fetched from git rather than
 crates.io.
 
+## Licence
+
+dodo's own source is [MIT](LICENSE).
+
+The binary is statically linked and contains third-party code under other
+licences, including **GPL-3.0-or-later** crates reached through `gpui`
+(`ztracing`, `zlog`, `ztracing_macro`). What that means for distributing a built
+binary is an **open question that has not been decided**.
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) records both the dependency
+licences and that open question; read it before redistributing a build.
+
 ## Prerequisites
 
 - A recent Rust toolchain that supports **edition 2024** (Rust 1.85 or newer).

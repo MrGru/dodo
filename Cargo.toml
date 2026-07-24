@@ -2,6 +2,11 @@
 name = "dodo"
 version = "0.1.0"
 edition = "2024"
+# dodo's own source. It says nothing about the terms under which a *built*
+# binary may be distributed — the dependency graph contains GPL-3.0-or-later
+# crates that link into every build. THIRD-PARTY-NOTICES.md records which, and
+# records that question as open.
+license = "MIT"
 
 # Only features that switch real code off are listed here. `production` /
 # `development` / `profiling` marker flags were considered and deliberately not
