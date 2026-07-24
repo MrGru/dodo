@@ -5,13 +5,14 @@ that is actually worth.
 
 > **Read this first.** Everything in `.github/workflows/` is
 > **written but never executed**. This repository is developed on macOS arm64
-> with no remote configured; at the time of writing nobody has run a GitHub
-> Actions job for it, and nobody has built dodo on Linux or Windows at all.
-> The macOS path — the profile, the build, `--version`, the packaging scripts,
-> the verification script — has been run locally and works. The Linux and
-> Windows paths are informed guesses. Jobs that fall in that category are
-> marked `experimental: true` in the matrices and are non-blocking; the first
-> real run will find things, and when a row goes green, flip its flag.
+> with no remote configured for most of its life. CI has since run for real
+> (first run: 30106478178): `test`, `build (macos-arm64)` and
+> `build (linux-x64)` passed, `build (windows-x64)` failed. The macOS path —
+> the profile, the build, `--version`, the packaging scripts, the verification
+> script — also runs locally and works. The Windows path is still an informed
+> guess. Jobs in that category are marked `experimental: true` in the matrices
+> and are non-blocking; `linux-x64` has now gone green once and is a candidate
+> for having its flag flipped.
 
 ---
 
@@ -21,22 +22,23 @@ that is actually worth.
 
 | Job | Runner | What it establishes | Blocking |
 |---|---|---|---|
-| `fmt` | ubuntu | `cargo fmt --all --check` | **No** — see below |
-| `clippy` | macos-14 | `cargo clippy --all-targets -- -D warnings` | **No** — see below |
+| `fmt` | ubuntu | `cargo fmt --all --check` | Yes |
+| `clippy` | macos-14 | `cargo clippy --all-targets -- -D warnings` | Yes |
 | `test` | macos-14 | `cargo test --all-features`, plus `cargo check --no-default-features` | Yes |
 | `build` | 4 platforms | `cargo build --release --locked` and a `--build-info` smoke test | macOS arm64 only |
 
 Three deliberate choices:
 
-- **`fmt` and `clippy` are non-blocking today**, and both should stop being so.
-  `cargo fmt --check` reports diffs in 34 files, and `cargo clippy` reports 15
-  warnings (in `src/docker/` and `src/encoder_decoder.rs`) — every one of them
-  predates this workflow. Making either job blocking now would paint every PR
-  red for reasons unrelated to the change under review. Each fix is one
-  self-contained commit (`style: cargo fmt`, `refactor: clear clippy
-  warnings`); the moment one lands, delete `continue-on-error` from that job.
-  The strict settings (`--check`, `-D warnings`) are already in place so that
-  flipping the switch is a one-line change.
+- **`fmt` and `clippy` are blocking.** They shipped advisory because 34 files
+  predated `.rustfmt.toml` and 12 clippy warnings predated the workflow, all in
+  `src/docker/` and `src/encoder_decoder.rs`. Both debts were paid off in their
+  own commits (`style: apply cargo fmt --all`, `fix(lint): clear the 12
+  outstanding clippy warnings`) and `continue-on-error` was removed from both
+  jobs. Two clippy lints remain deliberately suppressed —
+  `enum_variant_names` on `GroupStatus` and `too_many_arguments` on
+  `DetailPanel::open_inspect` — each `#[allow]`ed at its definition with the
+  reason written beside it. There is no crate-level allow, so a new warning
+  fails the build; keep it that way rather than re-adding `continue-on-error`.
 - **`clippy` and `test` run on macOS, not ubuntu.** Both have to compile the
   full dependency graph, and macOS is the only platform dodo is known to build
   on. A lint job that fails because a system library is missing tells you

@@ -56,9 +56,13 @@ packaging, verification, future signing/notarisation placeholders). The rest is 
 
 Three things about it that catch people:
 
-- **Everything under `.github/workflows/` is written but never executed**, and dodo has never been
-  built on Linux or Windows. Matrix rows for those platforms are marked `experimental` and are
-  non-blocking on purpose; `cargo fmt --check` is non-blocking too, because 34 files predate it.
+- **`fmt` and `clippy` are blocking jobs; keep them green.** Run `cargo fmt --all` and
+  `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
+  (34 unformatted files, 12 warnings) is paid off; there is no crate-level `allow`, and the two
+  surviving suppressions are `#[allow]`ed at their definition with the reason inline.
+  `build (windows-x64)` still fails and `build (macos-x64)` is unverified — those rows are
+  `experimental` and non-blocking on purpose. See the honesty note atop `.github/workflows/ci.yml`
+  for what has actually run.
 - **`Cargo.lock` really is the only possible pin on the four git dependencies.** Explicit
   `rev = "…"` pins were tried and cannot work here — upstream depends on itself through unpinned
   default-branch refs, and the three resulting cargo errors are recorded in
