@@ -66,7 +66,7 @@ binary (the `#[include]` filters in `src/assets.rs`), which is why the branding 
 bytes. Anything new under `assets/` that must stay out of the binary has to stay outside those two
 filters — measure the binary, do not assume.
 
-Three things about build and release that catch people:
+Four things about build and release that catch people:
 
 - **`fmt` and `clippy` are blocking jobs; keep them green.** Run `cargo fmt --all` and
   `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
@@ -77,6 +77,12 @@ Three things about build and release that catch people:
   `build (macos-x64)` is unverified — those rows are
   `experimental` and non-blocking on purpose. See the honesty note atop `.github/workflows/ci.yml`
   for what has actually run.
+- **No `--release` build runs on a push any more.** `ci.yml` does `cargo check` per platform plus
+  one debug build; the four-platform release matrix lives in
+  `.github/workflows/release-profile.yml` (weekly + manual) and, for a tag, in `release.yml`. The
+  accepted cost — release-only failures surface up to a week late — is stated at the top of both
+  `ci.yml` and "CI architecture" in `docs/release.md`. Do not quietly re-add a release build to
+  the push path.
 - **`Cargo.lock` really is the only possible pin on the four git dependencies.** Explicit
   `rev = "…"` pins were tried and cannot work here — upstream depends on itself through unpinned
   default-branch refs, and the three resulting cargo errors are recorded in
