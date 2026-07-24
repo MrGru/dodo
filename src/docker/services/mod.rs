@@ -22,6 +22,15 @@
 //! called `block_on` simply parks until the call returns. No async runtime ever
 //! touches the render path.
 //!
+//! # Where the remaining features plug in
+//!
+//! An Exec/terminal session and a Create/Build/Pull flow are the two things the
+//! module still stubs, and both land here first: `bollard` already has
+//! `create_exec`/`start_exec` (a bidirectional stream, so the trait would need a
+//! non-blocking shape for that one — see `docker/mod.rs`) and
+//! `create_container` / `build_image` / `create_image`, which are ordinary
+//! blocking-by-contract additions like the methods below.
+//!
 //! # Connection resolution
 //!
 //! [`engine::BollardEngine`] resolves a daemon the way the Docker CLI does:
@@ -38,6 +47,8 @@ use std::sync::Arc;
 
 use crate::docker::models::container::Container;
 use crate::docker::models::image::Image;
+use crate::docker::models::inspect::InspectDetail;
+use crate::docker::models::logs::LogLine;
 use crate::docker::models::network::Network;
 use crate::docker::models::usage::ContainerUsage;
 use crate::docker::models::volume::Volume;
@@ -116,6 +127,29 @@ pub trait DockerEngine: Send + Sync + 'static {
     /// Removes a network by id. Refused for the predefined networks and while a
     /// container is still attached.
     fn remove_network(&self, id: &str) -> Result<(), DockerError>;
+
+    // ---- Read-only detail (round 5) -----------------------------------------
+    //
+    // One method per resource because the Engine API has one endpoint per
+    // resource; each returns the same
+    // [`InspectDetail`](crate::docker::models::inspect::InspectDetail), so the
+    // panel above is written once. The engine's own response is what the model
+    // reduces, and the pretty-printed JSON travels inside the detail.
+
+    /// A container's full inspect: key fields plus the raw JSON.
+    fn inspect_container(&self, id: &str) -> Result<InspectDetail, DockerError>;
+    /// An image's full inspect.
+    fn inspect_image(&self, id: &str) -> Result<InspectDetail, DockerError>;
+    /// A volume's full inspect, by name.
+    fn inspect_volume(&self, name: &str) -> Result<InspectDetail, DockerError>;
+    /// A network's full inspect.
+    fn inspect_network(&self, id: &str) -> Result<InspectDetail, DockerError>;
+
+    /// The last `tail` lines a container wrote to stdout and stderr, oldest
+    /// first. Not a follow: the call returns once the engine has replayed the
+    /// requested window. A container that has never started, or has written
+    /// nothing, is not an error — it yields no lines.
+    fn container_logs(&self, id: &str, tail: usize) -> Result<Vec<LogLine>, DockerError>;
 }
 
 /// The engine the app runs with: `bollard` against the resolved local socket.

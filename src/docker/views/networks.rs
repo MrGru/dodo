@@ -5,7 +5,8 @@
 //! confirmed then refused sanely while a container is still attached — and for
 //! the predefined `bridge`/`host`/`none` networks it is *disabled* outright
 //! ([`Network::is_predefined`]), since the engine would only reject it. Inspect
-//! is a disabled placeholder for a later round.
+//! opens the shared read-only
+//! [`DetailPanel`](crate::docker::views::detail::DetailPanel).
 
 use std::sync::Arc;
 
@@ -28,19 +29,20 @@ use crate::docker::components::search_bar::search_bar;
 use crate::docker::components::skeleton::loading_skeleton;
 use crate::docker::components::states::{empty_state, error_state};
 use crate::docker::components::toolbar::toolbar;
+use crate::docker::models::inspect::InspectKind;
 use crate::docker::models::network::Network;
 use crate::docker::models::time::RelativeTime;
 use crate::docker::services::{DockerEngine, default_engine};
 use crate::docker::state::containers::LoadStatus;
 use crate::docker::state::focus::{FocusMove, next_focus};
 use crate::docker::state::resource::ResourceState;
+use crate::docker::views::detail::DetailPanel;
 use crate::docker::views::widgets::{
-    action_button, count_cell, header_cell, muted_cell, now_unix, placeholder_button,
-    resource_context_menu,
+    action_button, count_cell, header_cell, muted_cell, now_unix, resource_context_menu,
 };
 use crate::docker::{
-    DockerContextDelete, DockerMoveDown, DockerMoveUp, DockerRefreshList, KEY_CONTEXT,
-    POLL_INTERVAL,
+    DockerCloseDetail, DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp,
+    DockerRefreshList, KEY_CONTEXT, POLL_INTERVAL,
 };
 use crate::i18n::{Language, Str, t};
 
@@ -64,8 +66,11 @@ pub struct NetworksView {
     focus_handle: FocusHandle,
     /// The keyboard-highlighted row (a network id). `None` until the first arrow.
     focused: Option<String>,
-    /// The row a right-click opened the menu on; the Delete action reads it.
+    /// The row a right-click opened the menu on; the Delete and Inspect actions
+    /// read it.
     context_target: Option<String>,
+    /// The read-only Inspect overlay, closed until a row action opens it.
+    detail: DetailPanel,
     /// Set when the page becomes active so `render` focuses the list once.
     needs_focus: bool,
     loaded_once: bool,
@@ -94,10 +99,17 @@ impl NetworksView {
             focus_handle: cx.focus_handle(),
             focused: None,
             context_target: None,
+            detail: DetailPanel::new(window, cx),
             needs_focus: false,
             loaded_once: false,
             language: Language::current(cx),
         }
+    }
+
+    /// How the detail panel's background fetch finds its way back to itself
+    /// through this view; see [`DetailPanel`].
+    fn detail_mut(&mut self) -> &mut DetailPanel {
+        &mut self.detail
     }
 
     pub fn ensure_loaded(&mut self, cx: &mut Context<Self>) {
@@ -200,6 +212,55 @@ impl NetworksView {
                 self.confirm_delete(id, name, window, cx);
             }
         }
+    }
+
+    fn on_context_inspect(
+        &mut self,
+        _: &DockerContextInspect,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.context_target.clone() {
+            let title = self.row_name(&id);
+            self.open_inspect(id, title, window, cx);
+        }
+    }
+
+    fn on_close_detail(&mut self, _: &DockerCloseDetail, _: &mut Window, cx: &mut Context<Self>) {
+        if self.detail.is_open() {
+            self.detail.close();
+            cx.notify();
+        }
+    }
+
+    /// Opens the read-only Inspect panel on one network.
+    fn open_inspect(
+        &mut self,
+        id: String,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let engine = self.engine.clone();
+        self.detail.open_inspect(
+            engine,
+            InspectKind::Network,
+            id,
+            title,
+            Self::detail_mut,
+            window,
+            cx,
+        );
+    }
+
+    /// The name of the row with this id, for the panel's header.
+    fn row_name(&self, id: &str) -> String {
+        self.state
+            .visible()
+            .into_iter()
+            .find(|row| row.id == id)
+            .map(|row| row.name.clone())
+            .unwrap_or_else(|| id.to_string())
     }
 
     /// Reloads the network list and the container usage together on the
@@ -493,10 +554,19 @@ impl NetworksView {
         };
         h_flex()
             .gap_1()
-            .child(placeholder_button(
+            .child(action_button(
                 SharedString::from(format!("inspect-{}", row.id)),
                 AppIcon::Eye,
                 t(Str::DockerInspect, cx),
+                true,
+                ButtonVariant::Ghost,
+                cx.listener({
+                    let id = row.id.clone();
+                    let name = row.name.clone();
+                    move |this, _, window, cx| {
+                        this.open_inspect(id.clone(), name.clone(), window, cx)
+                    }
+                }),
             ))
             .child(action_button(
                 SharedString::from(format!("delete-{}", row.id)),
@@ -535,14 +605,30 @@ impl Render for NetworksView {
             .action_error()
             .map(|message| t(message.clone(), cx));
 
+        let engine = self.engine.clone();
+        let detail = self.detail.render(
+            cx.listener(|this, _, _, cx| {
+                this.detail.close();
+                cx.notify();
+            }),
+            cx.listener(move |this, _, window, cx| {
+                this.detail
+                    .reload(engine.clone(), Self::detail_mut, window, cx);
+            }),
+            cx,
+        );
+
         v_flex()
             .size_full()
+            .relative()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_move_up))
             .on_action(cx.listener(Self::on_move_down))
             .on_action(cx.listener(Self::on_refresh_action))
             .on_action(cx.listener(Self::on_context_delete))
+            .on_action(cx.listener(Self::on_context_inspect))
+            .on_action(cx.listener(Self::on_close_detail))
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
@@ -553,6 +639,7 @@ impl Render for NetworksView {
                 this.child(self.render_action_banner(message, cx))
             })
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
+            .children(detail)
     }
 }
 

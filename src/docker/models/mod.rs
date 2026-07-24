@@ -25,9 +25,20 @@
 //! - [`size`] — the shared human-readable byte formatting.
 //! - [`usage`] — [`ContainerUsage`](usage::ContainerUsage), the pure "containers
 //!   using" derivation the three pages count against.
+//!
+//! Round 5 adds the two read-only detail surfaces' data:
+//!
+//! - [`inspect`] — [`InspectDetail`](inspect::InspectDetail): the key fields the
+//!   Inspect panel lists, extracted from the engine's inspect response as plain
+//!   JSON, plus that JSON pretty-printed. One field set per resource type, all
+//!   tested against literal documents.
+//! - [`logs`] — the reassembly of the engine's log *frames* into whole lines and
+//!   the bounded tail the viewer keeps.
 
 pub mod container;
 pub mod image;
+pub mod inspect;
+pub mod logs;
 pub mod network;
 pub mod port;
 pub mod size;

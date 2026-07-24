@@ -17,6 +17,10 @@
 //!   them. Kept free of GPUI so its sorting, filtering, grouping and single-row
 //!   CPU update are unit tested directly.
 //!
+//! - [`detail`] — the load status of round 5's read-only detail surfaces (the
+//!   Inspect panel, the Logs viewer), which is deliberately *not* the table's
+//!   [`LoadStatus`](containers::LoadStatus); the module doc says why.
+//!
 //! Round 3's Images/Volumes/Networks pages share one store — [`resource`]'s
 //! generic [`ResourceState<T>`](resource::ResourceState) — because they need only
 //! the container store's spine (load status, rows, search query, the derived
@@ -24,6 +28,7 @@
 //! machinery. The [`LoadStatus`](containers::LoadStatus) is reused across both.
 
 pub mod containers;
+pub mod detail;
 pub mod diff;
 pub mod filters;
 pub mod focus;

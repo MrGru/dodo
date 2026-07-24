@@ -34,6 +34,7 @@ use crate::docker::components::states::{empty_state, error_state};
 use crate::docker::components::status_badge::status_badge;
 use crate::docker::components::toolbar::toolbar;
 use crate::docker::models::container::Container;
+use crate::docker::models::inspect::InspectKind;
 use crate::docker::models::port::format_ports;
 use crate::docker::models::status::ContainerStatus;
 use crate::docker::models::time::RelativeTime;
@@ -42,10 +43,13 @@ use crate::docker::state::containers::{ContainersState, LoadStatus};
 use crate::docker::state::filters::FILTERABLE_STATUSES;
 use crate::docker::state::focus::{FocusMove, next_focus};
 use crate::docker::state::grouping::{ContainerGroup, GroupKey, GroupStatus};
+use crate::docker::views::detail::DetailPanel;
+use crate::docker::views::widgets::coming_soon_button;
 use crate::docker::{
-    DockerContextDelete, DockerContextInspect, DockerContextLogs, DockerContextRestart,
-    DockerContextStart, DockerContextStop, DockerContextTerminal, DockerMoveDown, DockerMoveUp,
-    DockerRefreshList, DockerToggleSelect, KEY_CONTEXT, POLL_INTERVAL,
+    DockerCloseDetail, DockerContextDelete, DockerContextInspect, DockerContextLogs,
+    DockerContextRestart, DockerContextStart, DockerContextStats, DockerContextStop,
+    DockerContextTerminal, DockerMoveDown, DockerMoveUp, DockerRefreshList, DockerToggleSelect,
+    KEY_CONTEXT, POLL_INTERVAL,
 };
 use crate::i18n::{Language, Str, t};
 
@@ -55,12 +59,13 @@ const SELECT_W: Pixels = px(36.);
 const STATUS_W: Pixels = px(116.);
 const CPU_W: Pixels = px(72.);
 const STARTED_W: Pixels = px(140.);
-const ACTIONS_W: Pixels = px(156.);
+/// Six xsmall buttons: Inspect, Logs, Start, Stop, Restart, Delete.
+const ACTIONS_W: Pixels = px(220.);
 const SEARCH_W: Pixels = px(240.);
 /// The table's minimum width. Below it the table scrolls horizontally rather
 /// than crushing the flex columns (Name, Image, Ports) to nothing — so at a
 /// narrow window Name stays readable and the row is scrolled to reach Actions.
-const TABLE_MIN_W: Pixels = px(900.);
+const TABLE_MIN_W: Pixels = px(964.);
 
 /// Which lifecycle call a per-row button triggers.
 #[derive(Clone, Copy)]
@@ -92,6 +97,8 @@ pub struct ContainersView {
     /// The row a right-click opened the context menu on; the menu's lifecycle
     /// actions read this. Set on right mouse-down, before the menu builds.
     context_target: Option<String>,
+    /// The read-only Inspect / Logs overlay, closed until a row action opens it.
+    detail: DetailPanel,
     /// Set when the page becomes active so `render` moves focus to the list once,
     /// letting keyboard navigation work without a click first.
     needs_focus: bool,
@@ -126,10 +133,17 @@ impl ContainersView {
             focus_handle: cx.focus_handle(),
             focused: None,
             context_target: None,
+            detail: DetailPanel::new(window, cx),
             needs_focus: false,
             loaded_once: false,
             language: Language::current(cx),
         }
+    }
+
+    /// How the detail panel's background fetch finds its way back to itself
+    /// through this view; see [`DetailPanel`].
+    fn detail_mut(&mut self) -> &mut DetailPanel {
+        &mut self.detail
     }
 
     /// Loads the list the first time the page is shown, once.
@@ -358,6 +372,72 @@ impl ContainersView {
         }
     }
 
+    fn on_context_inspect(
+        &mut self,
+        _: &DockerContextInspect,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.context_target.clone() {
+            self.open_inspect(id, window, cx);
+        }
+    }
+
+    fn on_context_logs(
+        &mut self,
+        _: &DockerContextLogs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.context_target.clone() {
+            self.open_logs(id, window, cx);
+        }
+    }
+
+    /// Escape closes an open panel; with nothing open it does nothing, leaving
+    /// the key free for whatever else claims it.
+    fn on_close_detail(&mut self, _: &DockerCloseDetail, _: &mut Window, cx: &mut Context<Self>) {
+        if self.detail.is_open() {
+            self.detail.close();
+            cx.notify();
+        }
+    }
+
+    // ---- The read-only detail panel ------------------------------------------
+
+    /// Opens Inspect on one container. The fetch runs on the background
+    /// executor; the row's name labels the panel until the engine's own does.
+    fn open_inspect(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self.row_name(&id);
+        let engine = self.engine.clone();
+        self.detail.open_inspect(
+            engine,
+            InspectKind::Container,
+            id,
+            title,
+            Self::detail_mut,
+            window,
+            cx,
+        );
+    }
+
+    /// Opens the log viewer on one container.
+    fn open_logs(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self.row_name(&id);
+        let engine = self.engine.clone();
+        self.detail
+            .open_logs(engine, id, title, Self::detail_mut, window, cx);
+    }
+
+    /// The name of the row with this id, or the id itself if it has gone (a poll
+    /// can remove a row between the right-click and the action).
+    fn row_name(&self, id: &str) -> String {
+        self.state
+            .row(id)
+            .map(|row| row.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    }
+
     /// Runs a lifecycle call, then reloads so the table reflects the change.
     /// A failure surfaces as the inline action banner, keeping the rows.
     fn run_lifecycle(&mut self, id: String, action: Lifecycle, cx: &mut Context<Self>) {
@@ -530,14 +610,14 @@ impl ContainersView {
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
             .child(self.render_filter(cx))
-            // Create is still a future placeholder — present but disabled.
-            .child(
-                Button::new("docker-create")
-                    .small()
-                    .icon(AppIcon::Plus)
-                    .label(t(Str::DockerCreate, cx))
-                    .disabled(true),
-            )
+            // Create is still a future placeholder — present, disabled and
+            // tooltipped so it reads as a planned feature (see `docker/mod.rs`).
+            .child(coming_soon_button(
+                "docker-create".into(),
+                AppIcon::Plus,
+                t(Str::DockerCreate, cx),
+                cx,
+            ))
     }
 
     /// The Filter button and its popover. The button reads "Filter" normally and
@@ -791,11 +871,12 @@ impl ContainersView {
         )
         .child(
             // The empty state's own Create button — a placeholder like the toolbar's.
-            Button::new("docker-empty-create")
-                .small()
-                .icon(AppIcon::Plus)
-                .label(t(Str::DockerCreate, cx))
-                .disabled(true),
+            coming_soon_button(
+                "docker-empty-create".into(),
+                AppIcon::Plus,
+                t(Str::DockerCreate, cx),
+                cx,
+            ),
         )
         .into_any_element()
     }
@@ -1092,6 +1173,30 @@ impl ContainersView {
         let status = row.status;
         h_flex()
             .gap_1()
+            // The two read-only actions come first: they are always valid, for
+            // any container, in any state.
+            .child(action_button(
+                SharedString::from(format!("inspect-{}", row.id)),
+                AppIcon::Eye,
+                t(Str::DockerInspect, cx),
+                true,
+                ButtonVariant::Ghost,
+                cx.listener({
+                    let id = row.id.clone();
+                    move |this, _, window, cx| this.open_inspect(id.clone(), window, cx)
+                }),
+            ))
+            .child(action_button(
+                SharedString::from(format!("logs-{}", row.id)),
+                AppIcon::File,
+                t(Str::DockerViewLogs, cx),
+                true,
+                ButtonVariant::Ghost,
+                cx.listener({
+                    let id = row.id.clone();
+                    move |this, _, window, cx| this.open_logs(id.clone(), window, cx)
+                }),
+            ))
             .child(action_button(
                 SharedString::from(format!("start-{}", row.id)),
                 AppIcon::Play,
@@ -1165,8 +1270,23 @@ impl Render for ContainersView {
             .map(|message| t(message.clone(), cx));
         let has_selection = !self.state.selection.is_empty();
 
+        let engine = self.engine.clone();
+        let detail = self.detail.render(
+            cx.listener(|this, _, _, cx| {
+                this.detail.close();
+                cx.notify();
+            }),
+            cx.listener(move |this, _, window, cx| {
+                this.detail
+                    .reload(engine.clone(), Self::detail_mut, window, cx);
+            }),
+            cx,
+        );
+
         v_flex()
             .size_full()
+            // `relative` so the detail overlay positions against this page.
+            .relative()
             // The Docker list's key-binding scope: arrow/space/x/refresh actions
             // fire only while this page holds focus, and a focused search box
             // (a deeper context) still takes the arrows for text editing.
@@ -1180,6 +1300,9 @@ impl Render for ContainersView {
             .on_action(cx.listener(Self::on_context_stop))
             .on_action(cx.listener(Self::on_context_restart))
             .on_action(cx.listener(Self::on_context_delete))
+            .on_action(cx.listener(Self::on_context_inspect))
+            .on_action(cx.listener(Self::on_context_logs))
+            .on_action(cx.listener(Self::on_close_detail))
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
@@ -1191,6 +1314,7 @@ impl Render for ContainersView {
                 this.child(self.render_action_banner(message, cx))
             })
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
+            .children(detail)
     }
 }
 
@@ -1237,11 +1361,13 @@ fn action_button(
         .on_click(on_click)
 }
 
-/// Builds the per-row right-click menu. The lifecycle four mirror the row
-/// buttons and are enabled by the same status predicates; a separator sets off
-/// Delete; a "Coming soon" label heads the three disabled placeholders (Inspect,
-/// View Logs, Open Terminal) a later round implements. `action_context` points
-/// the actions at the view's focus handle so its `on_action` handlers catch them.
+/// Builds the per-row right-click menu. Inspect and View Logs open the
+/// read-only detail panel and are always available; the lifecycle three are
+/// enabled by the same status predicates as the row buttons; a separator sets
+/// off Delete; and a "Coming soon" label heads what the module still stubs
+/// (Open Terminal, Stats), disabled so they read as future features rather than
+/// broken controls. `action_context` points the actions at the view's focus
+/// handle so its `on_action` handlers catch them.
 fn container_context_menu(
     menu: PopupMenu,
     status: ContainerStatus,
@@ -1249,6 +1375,9 @@ fn container_context_menu(
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     menu.action_context(focus)
+        .menu_with_icon(t(Str::DockerInspect, cx), AppIcon::Eye, Box::new(DockerContextInspect))
+        .menu_with_icon(t(Str::DockerViewLogs, cx), AppIcon::File, Box::new(DockerContextLogs))
+        .separator()
         .menu_with_icon_and_disabled(
             t(Str::DockerStart, cx),
             AppIcon::Play,
@@ -1272,21 +1401,15 @@ fn container_context_menu(
         .separator()
         .label(t(Str::DockerComingSoonLabel, cx))
         .menu_with_icon_and_disabled(
-            t(Str::DockerInspect, cx),
-            AppIcon::Eye,
-            Box::new(DockerContextInspect),
-            true,
-        )
-        .menu_with_icon_and_disabled(
-            t(Str::DockerViewLogs, cx),
-            AppIcon::File,
-            Box::new(DockerContextLogs),
-            true,
-        )
-        .menu_with_icon_and_disabled(
             t(Str::DockerOpenTerminal, cx),
             AppIcon::SquareCode,
             Box::new(DockerContextTerminal),
+            true,
+        )
+        .menu_with_icon_and_disabled(
+            t(Str::DockerStats, cx),
+            AppIcon::Sliders,
+            Box::new(DockerContextStats),
             true,
         )
 }

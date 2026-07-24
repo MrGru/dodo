@@ -1,11 +1,13 @@
-//! Small render helpers the round-3 list pages (Images, Volumes, Networks)
-//! share, factored out so the three views do not each re-declare them.
+//! Small render helpers the list pages share, factored out so the views do not
+//! each re-declare them. Most are used by the round-3 three (Images, Volumes,
+//! Networks); [`coming_soon_button`] is used by Containers as well.
 //!
 //! These are the container view's private helpers generalised: a header cell, a
-//! per-row action button, the "now" clock for relative times, and the count cell
-//! the "containers using" column renders. Anything that depends on a specific
-//! view's `Self` (its refresh listener, its delete confirmation) stays in that
-//! view; only the `Self`-free pieces live here.
+//! per-row action button, the "now" clock for relative times, the count cell the
+//! "containers using" column renders, the shared right-click menu, and the
+//! disabled button a not-yet-built feature shows. Anything that depends on a
+//! specific view's `Self` (its refresh listener, its delete confirmation) stays
+//! in that view; only the `Self`-free pieces live here.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,14 +56,15 @@ pub fn action_button(
         .on_click(on_click)
 }
 
-/// A disabled placeholder button — the Inspect action later rounds fill in. Kept
-/// present but inert so the row's action set does not shift when it lands.
-pub fn placeholder_button(id: SharedString, icon: AppIcon, tooltip: SharedString) -> Button {
+/// A disabled placeholder button for a feature that is not built yet, tooltipped
+/// "Coming soon" so it reads as a future feature rather than something broken.
+/// The toolbar's Pull and Build are these.
+pub fn coming_soon_button(id: SharedString, icon: AppIcon, label: SharedString, cx: &App) -> Button {
     Button::new(id)
-        .xsmall()
-        .ghost()
+        .small()
         .icon(icon)
-        .tooltip(tooltip)
+        .label(label)
+        .tooltip(t(Str::DockerComingSoonLabel, cx))
         .disabled(true)
 }
 
@@ -71,12 +74,12 @@ pub fn muted_cell(text: SharedString, cx: &App) -> Div {
     div().text_color(cx.theme().muted_foreground).child(text)
 }
 
-/// The right-click menu the Images, Volumes and Networks pages share: a Delete
-/// (disabled where the resource cannot be removed, e.g. a predefined network),
-/// then a "Coming soon" label heading the disabled Inspect placeholder a later
-/// round fills in. `action_context` points the actions at the view's focus handle
-/// so its `on_action` handlers catch them; the view records which row was
-/// right-clicked before the menu builds.
+/// The right-click menu the Images, Volumes and Networks pages share: Inspect,
+/// which opens the read-only detail panel and is always available, then Delete
+/// (disabled where the resource cannot be removed, e.g. a predefined network).
+/// `action_context` points the actions at the view's focus handle so its
+/// `on_action` handlers catch them; the view records which row was right-clicked
+/// before the menu builds.
 pub fn resource_context_menu(
     menu: PopupMenu,
     focus: FocusHandle,
@@ -84,19 +87,13 @@ pub fn resource_context_menu(
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     menu.action_context(focus)
+        .menu_with_icon(t(Str::DockerInspect, cx), AppIcon::Eye, Box::new(DockerContextInspect))
+        .separator()
         .menu_with_icon_and_disabled(
             t(Str::Delete, cx),
             AppIcon::Trash,
             Box::new(DockerContextDelete),
             !delete_enabled,
-        )
-        .separator()
-        .label(t(Str::DockerComingSoonLabel, cx))
-        .menu_with_icon_and_disabled(
-            t(Str::DockerInspect, cx),
-            AppIcon::Eye,
-            Box::new(DockerContextInspect),
-            true,
         )
 }
 
