@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    Anchor, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
     Task, Window, div, px,
 };
@@ -20,8 +20,9 @@ use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::input::{InputEvent, InputState};
+use gpui_component::popover::Popover;
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, WindowExt as _, h_flex,
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex,
     v_flex,
 };
 
@@ -36,6 +37,8 @@ use crate::docker::models::port::format_ports;
 use crate::docker::models::time::RelativeTime;
 use crate::docker::services::{DockerEngine, default_engine};
 use crate::docker::state::containers::{ContainersState, LoadStatus};
+use crate::docker::state::filters::FILTERABLE_STATUSES;
+use crate::docker::state::grouping::{ContainerGroup, GroupKey, GroupStatus};
 use crate::i18n::{Language, Str, t};
 
 /// Fixed column widths shared by the header and every row so they line up. Name,
@@ -239,6 +242,80 @@ impl ContainersView {
         cx.notify();
     }
 
+    /// Runs one lifecycle call across a set of containers on the background
+    /// executor, then reloads. Each call is independent: one failure does not
+    /// abort the rest, and the count that failed surfaces in the action banner
+    /// after the refresh (which would otherwise clear it). `ids` is pre-filtered
+    /// to those the action is valid for, so invalid rows are simply skipped.
+    fn run_bulk(&mut self, ids: Vec<String>, action: Lifecycle, cx: &mut Context<Self>) {
+        if ids.is_empty() {
+            return;
+        }
+        let engine = self.engine.clone();
+        cx.spawn(async move |this, cx| {
+            let failures = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut failed = 0usize;
+                    for id in ids {
+                        let result = match action {
+                            Lifecycle::Start => engine.start(&id),
+                            Lifecycle::Stop => engine.stop(&id),
+                            Lifecycle::Restart => engine.restart(&id),
+                            Lifecycle::Remove => engine.remove(&id),
+                        };
+                        if result.is_err() {
+                            failed += 1;
+                        }
+                    }
+                    failed
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                // Refresh first (it clears any prior banner), then post the
+                // partial-failure count so it survives the reload.
+                this.refresh(cx);
+                if failures > 0 {
+                    this.state
+                        .set_action_error(Str::DockerBulkFailures(failures));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Confirms then bulk-deletes the whole selection. Destructive, so it always
+    /// routes through the alert, mirroring the per-row Delete.
+    fn confirm_bulk_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ids = self.state.selected_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let count = ids.len();
+        let entity = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _window, cx| {
+            let entity = entity.clone();
+            let ids = ids.clone();
+            alert
+                .title(t(Str::DockerBulkDeleteTitle, cx))
+                .description(t(Str::DockerBulkDeleteMessage(count), cx))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t(Str::Delete, cx))
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(t(Str::DockerCancel, cx))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.run_bulk(ids.clone(), Lifecycle::Remove, cx)
+                    });
+                    true
+                })
+        });
+    }
+
     /// Re-pushes the search placeholder when the language changes, the same sweep
     /// the API Explorer does for its widget-held strings.
     fn sync_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -266,21 +343,136 @@ impl ContainersView {
                     .label(t(Str::DockerRefresh, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
-            // Filter and Create are future placeholders — present but disabled so
-            // the toolbar's final shape is visible now.
-            .child(
-                Button::new("docker-filter")
-                    .small()
-                    .ghost()
-                    .icon(AppIcon::Filter)
-                    .label(t(Str::DockerFilter, cx))
-                    .disabled(true),
-            )
+            .child(self.render_filter(cx))
+            // Create is still a future placeholder — present but disabled.
             .child(
                 Button::new("docker-create")
                     .small()
                     .icon(AppIcon::Plus)
                     .label(t(Str::DockerCreate, cx))
+                    .disabled(true),
+            )
+    }
+
+    /// The Filter button and its popover. The button reads "Filter" normally and
+    /// "Filter (N)" in the primary tone when N filter types are active, so the
+    /// toolbar shows at a glance that the list is narrowed.
+    fn render_filter(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.state.filters().active_count();
+        let label = if active > 0 {
+            t(Str::DockerFilterWithCount(active), cx)
+        } else {
+            t(Str::DockerFilter, cx)
+        };
+        let trigger = Button::new("docker-filter")
+            .small()
+            .icon(AppIcon::Filter)
+            .label(label)
+            .when(active > 0, |button| button.primary())
+            .when(active == 0, |button| button.ghost());
+
+        Popover::new("docker-filter-popover")
+            .anchor(Anchor::TopRight)
+            .trigger(trigger)
+            .child(self.render_filter_panel(cx))
+    }
+
+    /// The filter popover's body: a Status section, a Compose-project section and
+    /// an Image section (each shown only when it has options), the Has-published-
+    /// ports toggle, the Favorites placeholder, and Clear filters. Built eagerly
+    /// with this view's `cx`, so each checkbox toggles the store directly.
+    fn render_filter_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let filters = self.state.filters();
+        let projects = self.state.available_projects();
+        let images = self.state.available_images();
+
+        v_flex()
+            .w(px(240.))
+            .gap_3()
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_medium()
+                            .child(t(Str::DockerFilterTitle, cx)),
+                    )
+                    .when(filters.is_active(), |row| {
+                        row.child(
+                            Button::new("docker-filter-clear")
+                                .xsmall()
+                                .ghost()
+                                .label(t(Str::DockerFilterClear, cx))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.state.filters_mut().clear();
+                                    cx.notify();
+                                })),
+                        )
+                    }),
+            )
+            // Status — always present; the five filterable lifecycle states.
+            .child(filter_section_title(t(Str::DockerColumnStatus, cx), cx))
+            .children(FILTERABLE_STATUSES.map(|status| {
+                Checkbox::new(SharedString::from(format!("filter-status-{status:?}")))
+                    .label(t(status.label(), cx))
+                    .checked(filters.is_status_selected(status))
+                    .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                        this.state.filters_mut().toggle_status(status, *checked);
+                        cx.notify();
+                    }))
+            }))
+            // Compose project — only when at least one project exists.
+            .when(!projects.is_empty(), |panel| {
+                panel
+                    .child(filter_section_title(t(Str::DockerFilterProject, cx), cx))
+                    .children(projects.into_iter().map(|project| {
+                        let checked = filters.is_project_selected(&project);
+                        Checkbox::new(SharedString::from(format!("filter-project-{project}")))
+                            .label(SharedString::from(project.clone()))
+                            .checked(checked)
+                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                this.state
+                                    .filters_mut()
+                                    .toggle_project(project.clone(), *checked);
+                                cx.notify();
+                            }))
+                    }))
+            })
+            // Image — only when there is something to pick.
+            .when(!images.is_empty(), |panel| {
+                panel
+                    .child(filter_section_title(t(Str::DockerColumnImage, cx), cx))
+                    .children(images.into_iter().map(|image| {
+                        let checked = filters.is_image_selected(&image);
+                        Checkbox::new(SharedString::from(format!("filter-image-{image}")))
+                            .label(SharedString::from(image.clone()))
+                            .checked(checked)
+                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                this.state
+                                    .filters_mut()
+                                    .toggle_image(image.clone(), *checked);
+                                cx.notify();
+                            }))
+                    }))
+            })
+            // Has published ports (boolean) and the Favorites placeholder.
+            .child(filter_section_title(t(Str::DockerColumnPorts, cx), cx))
+            .child(
+                Checkbox::new("filter-published-ports")
+                    .label(t(Str::DockerFilterPublishedPorts, cx))
+                    .checked(filters.published_ports_only())
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.state.filters_mut().set_published_ports_only(*checked);
+                        cx.notify();
+                    })),
+            )
+            // Favorites is a future feature: a clearly-labelled, disabled stub.
+            .child(
+                Checkbox::new("filter-favorites")
+                    .label(t(Str::DockerFilterFavorites, cx))
+                    .checked(false)
                     .disabled(true),
             )
     }
@@ -300,6 +492,77 @@ impl ContainersView {
             .text_xs()
             .text_color(cx.theme().danger)
             .child(message)
+    }
+
+    /// The bulk-action bar, shown only while something is selected. Start and
+    /// Stop enable only when the selection contains a container the action is
+    /// valid for; Delete enables whenever anything is selected.
+    fn render_bulk_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let count = self.state.selection.count();
+        let startable = self.state.bulk_startable_ids();
+        let stoppable = self.state.bulk_stoppable_ids();
+
+        h_flex()
+            .w_full()
+            .flex_shrink_0()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().accent.opacity(0.3))
+            .text_sm()
+            .child(
+                div()
+                    .font_medium()
+                    .child(t(Str::DockerBulkSelected(count), cx)),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("bulk-start")
+                    .xsmall()
+                    .ghost()
+                    .icon(AppIcon::Play)
+                    .label(t(Str::DockerBulkStart, cx))
+                    .disabled(startable.is_empty())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let ids = this.state.bulk_startable_ids();
+                        this.run_bulk(ids, Lifecycle::Start, cx);
+                    })),
+            )
+            .child(
+                Button::new("bulk-stop")
+                    .xsmall()
+                    .ghost()
+                    .icon(AppIcon::Stop)
+                    .label(t(Str::DockerBulkStop, cx))
+                    .disabled(stoppable.is_empty())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let ids = this.state.bulk_stoppable_ids();
+                        this.run_bulk(ids, Lifecycle::Stop, cx);
+                    })),
+            )
+            .child(
+                Button::new("bulk-delete")
+                    .xsmall()
+                    .danger()
+                    .icon(AppIcon::Trash)
+                    .label(t(Str::DockerBulkDelete, cx))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.confirm_bulk_delete(window, cx)),
+                    ),
+            )
+            .child(
+                Button::new("bulk-clear")
+                    .xsmall()
+                    .ghost()
+                    .label(t(Str::DockerBulkClear, cx))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.state.selection.clear();
+                        cx.notify();
+                    })),
+            )
     }
 
     fn render_body(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -349,29 +612,40 @@ impl ContainersView {
     }
 
     fn render_table(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let rows: Vec<Container> = self.state.visible().into_iter().cloned().collect();
+        let groups = self.state.visible_groups();
 
-        // Rows exist but the search hides them all: a centred empty note.
-        if rows.is_empty() {
+        // Rows exist but the search/filters hide them all: a centred empty note.
+        if groups.is_empty() {
             return empty_state(AppIcon::Inbox, t(Str::NoContainers, cx), None, cx)
                 .into_any_element();
         }
 
-        let visible_ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
-        let all_selected = self.state.selection.all_selected(visible_ids.into_iter());
+        let all_selected = self
+            .state
+            .selection
+            .all_selected(self.state.visible_ids().iter().map(String::as_str));
         let now = now_unix();
 
-        // Materialise each row before building the list: `render_row`'s return
-        // borrows `cx`, so it cannot be produced from inside a `map` closure.
-        let mut row_elements = Vec::with_capacity(rows.len());
-        for row in rows {
-            row_elements.push(self.render_row(row, now, cx).into_any_element());
+        // Materialise each group as its header row plus, when expanded, its
+        // container rows. `render_*`'s return borrows `cx`, so this cannot be a
+        // `map` closure.
+        let mut blocks: Vec<gpui::AnyElement> = Vec::new();
+        for group in groups {
+            let collapsed = self.state.is_collapsed(&group.key);
+            blocks.push(
+                self.render_group_header(&group, collapsed, cx)
+                    .into_any_element(),
+            );
+            if !collapsed {
+                for row in &group.containers {
+                    blocks.push(self.render_row(row.clone(), now, cx).into_any_element());
+                }
+            }
         }
 
-        // One scroll container over both axes, with the header and the rows as
-        // siblings sharing the minimum width — so a narrow window scrolls the
-        // whole table sideways with the columns staying aligned. (Round 2 can pin
-        // the header; keeping it in the same scroll keeps the alignment simple.)
+        // One scroll container over both axes, with the header, the group headers
+        // and the rows all sharing the minimum width — so a narrow window scrolls
+        // the whole table sideways with the columns staying aligned.
         div()
             .id("docker-table-scroll")
             .size_full()
@@ -380,9 +654,68 @@ impl ContainersView {
                 v_flex()
                     .min_w(TABLE_MIN_W)
                     .child(self.render_header(all_selected, cx))
-                    .children(row_elements),
+                    .children(blocks),
             )
             .into_any_element()
+    }
+
+    /// A compose-group header row: a chevron that toggles the group, the project
+    /// name (or "Ungrouped"), the container count and a running summary coloured
+    /// by the group's rolled-up status. Clicking anywhere on it collapses or
+    /// expands the group.
+    fn render_group_header(
+        &self,
+        group: &ContainerGroup,
+        collapsed: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let key = group.key.clone();
+        let title = match &group.key {
+            GroupKey::Project(name) => SharedString::from(name.clone()),
+            GroupKey::Ungrouped => t(Str::DockerUngrouped, cx),
+        };
+        let chevron = if collapsed {
+            AppIcon::ChevronRight
+        } else {
+            AppIcon::ChevronDown
+        };
+        let summary_color = group_status_color(group.status(), cx);
+
+        h_flex()
+            .id(SharedString::from(format!("group-{title}")))
+            .w_full()
+            .min_w(TABLE_MIN_W)
+            .flex_shrink_0()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().muted.opacity(0.5))
+            .text_sm()
+            .cursor_pointer()
+            .hover(|this| this.bg(cx.theme().muted.opacity(0.8)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.state.toggle_group(key.clone());
+                cx.notify();
+            }))
+            .child(
+                Icon::new(chevron)
+                    .size(px(14.))
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .child(div().font_medium().child(title))
+            .child(status_badge(
+                t(Str::DockerGroupContainers(group.total()), cx),
+                cx.theme().muted_foreground,
+                cx,
+            ))
+            .child(status_badge(
+                t(Str::DockerGroupRunning(group.running_count()), cx),
+                summary_color,
+                cx,
+            ))
     }
 
     fn render_header(&self, all_selected: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -595,6 +928,7 @@ impl Render for ContainersView {
             .state
             .action_error()
             .map(|message| t(message.clone(), cx));
+        let has_selection = !self.state.selection.is_empty();
 
         v_flex()
             .size_full()
@@ -604,6 +938,7 @@ impl Render for ContainersView {
             .overflow_hidden()
             .bg(cx.theme().background)
             .child(self.render_toolbar(cx))
+            .when(has_selection, |this| this.child(self.render_bulk_bar(cx)))
             .when_some(action_error, |this, message| {
                 this.child(self.render_action_banner(message, cx))
             })
@@ -614,6 +949,26 @@ impl Render for ContainersView {
 /// A header cell: a `div` carrying the caption, ready for width refinements.
 fn header_cell(label: SharedString) -> gpui::Div {
     div().truncate().child(label)
+}
+
+/// A small section heading inside the filter popover.
+fn filter_section_title(label: SharedString, cx: &App) -> impl IntoElement {
+    div()
+        .text_xs()
+        .font_medium()
+        .text_color(cx.theme().muted_foreground)
+        .child(label)
+}
+
+/// The colour of a group's running summary: success when all up, muted when all
+/// stopped, warning for a partial mix — the same semantic tones the per-row
+/// status badge uses.
+fn group_status_color(status: GroupStatus, cx: &App) -> gpui::Hsla {
+    match status {
+        GroupStatus::AllRunning => cx.theme().success,
+        GroupStatus::PartiallyRunning => cx.theme().warning,
+        GroupStatus::NoneRunning => cx.theme().muted_foreground,
+    }
 }
 
 /// One small, tooltip-bearing action button, disabled when the action is invalid.
