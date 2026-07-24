@@ -1,0 +1,77 @@
+# Installs the system libraries a GPUI application needs to build on Linux.
+#
+# UNVERIFIED. dodo is developed on macOS and has never been built on Linux by
+# anyone. This list is derived from what Zed's own Linux build requires (GPUI
+# links against Vulkan, Wayland, X11/xkbcommon, fontconfig and ALSA) plus what
+# `gpui-component` pulls in. Expect the first real Linux run to add one or two
+# packages; when it does, fix the list here and delete this paragraph.
+#
+# macOS and Windows runners need nothing equivalent: GPUI uses the system
+# frameworks (Metal, CoreText) and DirectX/DirectWrite, which ship with the
+# runner images.
+
+name: Install Linux build dependencies
+description: Install the apt packages GPUI needs to compile and link on Linux runners.
+
+inputs:
+  lld:
+    description: >
+      Also install the lld linker. Linking a binary of dodo's size with GNU ld
+      is slow; lld is several times faster. The caller opts in, because the
+      repository's .cargo/config.toml deliberately does not require a linker
+      that a fresh clone might not have.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: apt-get install
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+
+        packages=(
+          # Toolchain for the C/C++ sources in the dependency tree: the
+          # tree-sitter grammars are generated C, and several -sys crates
+          # build with cmake.
+          build-essential
+          cmake
+          clang
+          pkg-config
+          # GPUI's renderer.
+          libvulkan-dev
+          mesa-vulkan-drivers
+          # Windowing: both backends, because gpui-component enables the x11
+          # and wayland features of gpui_platform and cargo unions features.
+          libwayland-dev
+          libxkbcommon-x11-dev
+          libx11-dev
+          libxcb1-dev
+          # Text: font enumeration and shaping.
+          libfontconfig-dev
+          libfreetype-dev
+          # Audio device enumeration, linked unconditionally by gpui_platform.
+          libasound2-dev
+          # Misc -sys crates in the zed dependency graph.
+          libssl-dev
+          libzstd-dev
+          libgit2-dev
+        )
+
+        if [ "${{ inputs.lld }}" = "true" ]; then
+          packages+=(lld)
+        fi
+
+        sudo apt-get install -y --no-install-recommends "${packages[@]}"
+
+    - name: Select lld for this job
+      if: ${{ inputs.lld == 'true' }}
+      shell: bash
+      run: |
+        # Set as an environment variable rather than in .cargo/config.toml, so
+        # a developer without lld can still `cargo build` a fresh clone. The
+        # target-specific form leaves any RUSTFLAGS the job already set alone.
+        echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=lld -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--as-needed" \
+          >> "$GITHUB_ENV"

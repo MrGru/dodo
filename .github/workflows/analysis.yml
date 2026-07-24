@@ -1,0 +1,172 @@
+# Advisory analysis: binary size, dependency hygiene, security advisories.
+#
+# Deliberately separate from ci.yml and non-blocking. These tools answer
+# "should someone look at this?", not "is this commit correct?" — and two of
+# them (cargo-audit, cargo-deny) depend on an advisory database that changes
+# without anyone touching this repository, so wiring them into the merge gate
+# would mean a green PR turning red overnight for reasons the author cannot
+# fix.
+#
+# Every job below sets `continue-on-error: true` and writes its findings to the
+# run summary. To make one of them blocking — the usual first candidate is
+# `cargo deny advisories` once the list of accepted advisories is curated —
+# delete that line from the job, and say so in docs/release.md.
+
+name: Analysis
+
+on:
+  # Weekly, so an advisory published against a dependency surfaces without
+  # anyone pushing. Monday morning UTC.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  # Also on any change to the dependency graph itself, where the answer is
+  # immediately actionable.
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - deny.toml
+      - .github/workflows/analysis.yml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Known vulnerabilities in the locked dependency graph.
+  # ---------------------------------------------------------------------------
+  audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: audit
+          save-cache: "false"
+      # Installs a prebuilt binary instead of `cargo install`, which would
+      # spend several minutes compiling the tool itself. NOTE: keep this at a
+      # recent version — an older cargo-audit cannot parse advisories that use
+      # CVSS 4.0 and fails while *loading* the database, which looks like a
+      # tooling crash rather than a finding.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit
+        run: |
+          set -o pipefail
+          cargo audit | tee audit.txt
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "### cargo-audit"
+            echo '```'
+            cat audit.txt 2>/dev/null || echo "cargo-audit did not produce output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Licences, duplicate versions, banned crates, advisory database — the policy
+  # in deny.toml. That file is written advisory-first: see its header.
+  # ---------------------------------------------------------------------------
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: deny
+          save-cache: "false"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny --all-features check
+
+  # ---------------------------------------------------------------------------
+  # Duplicate versions of the same crate. Mostly informational here: nearly all
+  # of dodo's duplicates come from inside the zed dependency graph and cannot
+  # be fixed from this repository — the value is noticing when a *new* one
+  # appears because of something we added.
+  # ---------------------------------------------------------------------------
+  duplicates:
+    name: duplicate dependencies
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: tree
+          save-cache: "false"
+      - name: cargo tree -d
+        run: |
+          set -o pipefail
+          # `--edges normal` drops build-dependencies and dev-dependencies:
+          # a duplicate that only exists at build time costs compile time, not
+          # binary size, and would drown out the ones that matter.
+          cargo tree --locked -d --edges normal | tee duplicates.txt || true
+          count="$(grep -cE '^[a-z0-9_-]+ v' duplicates.txt || true)"
+          {
+            echo "### Duplicate dependencies: ${count:-0}"
+            echo '```'
+            cat duplicates.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Where the binary's bytes go. Runs on macOS: it has to actually build the
+  # release binary, and macOS is the platform dodo is known to build on.
+  # ---------------------------------------------------------------------------
+  bloat:
+    name: cargo-bloat
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: bloat
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-bloat
+      - name: cargo bloat
+        env:
+          # cargo-bloat attributes bytes through the symbol table, and the
+          # release profile strips it. Overriding just `strip` gives it what it
+          # needs while keeping every optimisation identical to what ships —
+          # notably cheaper than the `release-debug` profile, which also emits
+          # full DWARF for ~500 crates and takes far longer to build.
+          CARGO_PROFILE_RELEASE_STRIP: none
+        run: |
+          set -o pipefail
+          {
+            echo "### Largest functions"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cargo bloat --release --locked -n 30 | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo '```'
+            echo "### Largest crates"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cargo bloat --release --locked --crates -n 30 \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      # The number that actually matters for a download, reported on every run
+      # so a jump is visible in the log without any extra tooling. No `strip`
+      # override here — this must be the binary as shipped.
+      - name: Report shipped binary size
+        run: |
+          cargo build --release --locked
+          bytes="$(wc -c < target/release/dodo | tr -d ' ')"
+          printf '### Shipped binary: %s bytes (%.1f MiB)\n' \
+            "$bytes" "$(echo "$bytes/1048576" | bc -l)" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,367 @@
+# Release: turn a `v*` tag into published, checksummed, verified archives.
+#
+#   tag pushed
+#      │
+#      ├─ meta      validate the tag against Cargo.toml, pin SOURCE_DATE_EPOCH
+#      │
+#      ├─ build     one job per platform: build → package → verify → upload
+#      │
+#      └─ publish   collect artifacts, write SHA256SUMS, create the Release
+#
+# Everything a human has to do is in docs/release.md. The two rules encoded
+# here that are easy to get wrong by hand:
+#
+#   * `--locked` on every cargo invocation. Cargo.lock is the only thing
+#     pinning the four git dependencies (gpui/gpui_platform from zed,
+#     gpui-component/-assets); without it a release could silently be built
+#     against a different upstream commit than the one that was tested.
+#   * `SOURCE_DATE_EPOCH` is the tagged commit's own committer timestamp, not
+#     "now", so re-running this workflow for the same tag embeds the same
+#     build_time. See "Reproducibility" in docs/build-optimization.md for what
+#     that does and does not buy.
+#
+# UNVERIFIED: this workflow has never been executed. It is written against the
+# GitHub Actions documentation and the local behaviour of the scripts it calls
+# (which have been run on macOS). The Linux and Windows paths in particular
+# have no green run behind them.
+
+name: Release
+
+on:
+  push:
+    tags:
+      # v1.2.3, and pre-releases like v1.2.3-rc.1.
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  # Lets you exercise the whole pipeline on a branch without tagging: it
+  # builds, packages and verifies, and stops before publishing.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and verify without creating a GitHub Release.
+        type: boolean
+        default: true
+
+# A tag is immutable; two concurrent runs for one tag would race on the same
+# Release object.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Everything the later jobs need to agree on, computed once.
+  # ---------------------------------------------------------------------------
+  meta:
+    name: resolve release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+      source_date_epoch: ${{ steps.resolve.outputs.source_date_epoch }}
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      # Full history: `git log` on the tagged commit needs the commit object,
+      # and a default shallow checkout of a tag does not always carry it.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Version according to the crate — the single source of truth for
+          # archive names and for what `dodo --version` will print.
+          version="$(awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version *=/{gsub(/[",]/,"",$3); print $3; exit}' Cargo.toml)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${{ github.ref_name }}"
+            # A tag that disagrees with Cargo.toml would produce archives named
+            # after one version containing a binary that reports another. Fail
+            # here, before anything is built.
+            if [ "$tag" != "v$version" ]; then
+              echo "::error::tag $tag does not match Cargo.toml version $version (expected v$version)"
+              exit 1
+            fi
+            # Anything after the patch number (-rc.1, -beta) marks a
+            # pre-release, per semver.
+            case "$tag" in
+              v[0-9]*.[0-9]*.[0-9]*-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+              *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+            esac
+            echo "publish=${{ github.event_name == 'push' }}" >> "$GITHUB_OUTPUT"
+          else
+            # workflow_dispatch on a branch: build the pipeline, name the
+            # archives after the crate version, never publish.
+            tag="v$version"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          # The committer timestamp of the commit being released. Using this
+          # rather than the current time is what makes a re-run of the same tag
+          # embed the same build_time (build.rs honours SOURCE_DATE_EPOCH).
+          epoch="$(git log -1 --pretty=%ct)"
+          echo "source_date_epoch=$epoch" >> "$GITHUB_OUTPUT"
+
+          echo "releasing $tag (version $version, epoch $epoch)"
+
+  # ---------------------------------------------------------------------------
+  # Build, package and verify — once per platform, on its own runner.
+  # ---------------------------------------------------------------------------
+  build:
+    name: ${{ matrix.name }}
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    # Same honesty as ci.yml: only macos-arm64 has ever been produced by hand.
+    # A failing experimental platform must not stop the others from shipping;
+    # the publish job below records which artifacts actually arrived.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            experimental: false
+          - name: macos-x64
+            os: macos-13
+            target: x86_64-apple-darwin
+            experimental: true
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            experimental: true
+          - name: windows-x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            experimental: true
+    env:
+      SOURCE_DATE_EPOCH: ${{ needs.meta.outputs.source_date_epoch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # build.rs reads git for the commit and tag. It falls back to the
+          # GITHUB_* variables, but full history keeps `git describe` honest.
+          fetch-depth: 0
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-build-deps
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: ${{ matrix.target }}
+          # Deliberately a different cache namespace from CI's build jobs:
+          # release builds are rarer, and should not be evicted by PR traffic.
+          cache-key: release-${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # --- packaging ---------------------------------------------------------
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--target "${{ matrix.target }}" --version "${{ needs.meta.outputs.version }}")
+          # The .app bundle is macOS-only and is a second archive, not a
+          # replacement for the plain binary one.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            args+=(--app-bundle)
+          fi
+          scripts/package.sh "${args[@]}"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh scripts/package.ps1 `
+            -Target "${{ matrix.target }}" `
+            -Version "${{ needs.meta.outputs.version }}"
+
+      # --- verification ------------------------------------------------------
+      #
+      # Section 10's "release verification" in one place: the archive unpacks,
+      # keeps its executable bit, contains a binary that runs, reports the
+      # version and tag we think it does, was built from a clean checkout, and
+      # its SHA256 sidecar matches. `verify-release.sh` prints the contents and
+      # both sizes as it goes, so the log is the record of what shipped.
+      - name: Verify archives (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for archive in dist/*.tar.gz; do
+            scripts/verify-release.sh "$archive" \
+              --expect-version "${{ needs.meta.outputs.version }}" \
+              --expect-tag "${{ needs.meta.outputs.tag }}"
+          done
+
+      # The bash script is not reused here: a windows runner has no `unzip`,
+      # and Expand-Archive/Get-FileHash are the native equivalents. Kept
+      # deliberately short — it checks the same five things.
+      - name: Verify archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archive = Get-ChildItem dist\*.zip | Select-Object -First 1
+          Write-Output "verifying $($archive.Name)"
+
+          # 1. checksum sidecar
+          $expected = (Get-Content "$($archive.FullName).sha256").Split(" ")[0]
+          $actual = (Get-FileHash -Algorithm SHA256 $archive.FullName).Hash.ToLower()
+          if ($expected -ne $actual) { throw "SHA256 mismatch for $($archive.Name)" }
+
+          # 2. contents
+          $dest = Join-Path $env:RUNNER_TEMP "verify"
+          Expand-Archive -Path $archive.FullName -DestinationPath $dest -Force
+          Get-ChildItem -Recurse $dest | ForEach-Object { Write-Output "  $($_.FullName)" }
+
+          # 3/4. it runs and reports the expected metadata
+          $exe = Get-ChildItem -Recurse -Filter dodo.exe $dest | Select-Object -First 1
+          if (-not $exe) { throw "no dodo.exe in the archive" }
+          $info = & $exe.FullName --build-info
+          Write-Output $info
+          $version = ($info | Select-String '^version:').ToString().Split()[-1]
+          if ($version -ne "${{ needs.meta.outputs.version }}") {
+            throw "version mismatch: binary says $version"
+          }
+          if ($info | Select-String '^commit: *unknown') { throw "commit is unknown" }
+          if ($info | Select-String -- '-dirty') { throw "built from a dirty tree" }
+
+          # 5. size
+          Write-Output "archive size: $($archive.Length) bytes"
+          Write-Output "sha256: $actual"
+
+      # --- future: signing ---------------------------------------------------
+      #
+      # Not implemented — no certificates exist for this project. The hooks go
+      # exactly here, between packaging and upload, guarded so the workflow
+      # keeps working while the secrets are absent:
+      #
+      #   - name: Sign (macOS)
+      #     if: runner.os == 'macOS' && secrets.MACOS_CERTIFICATE != ''
+      #     run: scripts/macos-app-bundle.sh ...   # see that file's footer
+      #
+      #   - name: Sign (Windows)
+      #     if: runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE != ''
+      #     run: signtool sign ...                 # see scripts/package.ps1
+      #
+      # docs/release.md lists the secrets each one needs.
+
+      - name: Upload archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: dodo-${{ matrix.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Publish. Runs even if an experimental platform failed, so a macOS-only
+  # release is still possible; it publishes exactly the artifacts that arrived.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: publish release
+    needs: [meta, build]
+    # `needs.build.result` is `success` when every non-`continue-on-error`
+    # matrix row passed — an experimental platform failing does not block the
+    # release, a failing macOS build does.
+    if: ${{ needs.meta.outputs.publish == 'true' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      # The only place in either workflow that needs write access.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Collect checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          ls -la
+          # One SHA256SUMS file covering every asset, in addition to the
+          # per-archive sidecars, because that is what people expect to find
+          # and what `sha256sum -c SHA256SUMS` consumes directly.
+          cat ./*.sha256 > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes_file="$(mktemp)"
+          {
+            echo "## dodo ${TAG}"
+            echo
+            echo "### Verifying a download"
+            echo
+            echo '```sh'
+            echo "sha256sum -c SHA256SUMS   # or: shasum -a 256 -c SHA256SUMS"
+            echo '```'
+            echo
+            echo "Every archive also ships its own \`.sha256\` sidecar."
+            echo
+            echo "### macOS"
+            echo
+            echo "The binaries are **not code-signed or notarised** yet, so Gatekeeper"
+            echo "will quarantine them. Clear it with:"
+            echo
+            echo '```sh'
+            echo "xattr -dr com.apple.quarantine dodo.app   # or the extracted binary"
+            echo '```'
+            echo
+            echo "### Build provenance"
+            echo
+            echo "Run \`dodo --build-info\` — every binary records the commit, tag,"
+            echo "build time, target and rustc version it was produced from."
+          } > "$notes_file"
+
+          flags=(--title "dodo ${TAG}" --notes-file "$notes_file")
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+
+          # `--verify-tag` refuses to invent a tag that does not exist.
+          gh release create "$TAG" "${flags[@]}" --verify-tag artifacts/*
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "### Released ${{ needs.meta.outputs.tag }}"
+            echo
+            echo '| asset | bytes |'
+            echo '|---|---|'
+            for f in artifacts/*; do
+              printf '| %s | %s |\n' "$(basename "$f")" "$(wc -c < "$f" | tr -d ' ')"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

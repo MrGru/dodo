@@ -1,0 +1,177 @@
+# Continuous integration: everything that must be true of a commit before it
+# reaches `main`, and nothing that takes longer than a coffee.
+#
+# Layout of the pipeline:
+#
+#   fmt ─┐
+#   clippy ─┼─ fast feedback, single runner each
+#   test ─┘
+#   build ── the real compile, one job per shipped platform
+#
+# The jobs are independent on purpose: a formatting mistake should not hide a
+# compile error on Windows. `analysis.yml` runs the slow, advisory tooling
+# (bloat, audit, deny) on its own schedule so CI stays interactive.
+#
+# HONESTY NOTE, please keep it accurate: this repository is developed on macOS
+# arm64 and, at the time these workflows were written, had never been built on
+# Linux or Windows, and these workflows had never been executed. Every job
+# below that says `experimental` is written-but-unverified. When one of them
+# goes green for real, flip its flag and delete the note.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# One run per branch. A new push to a PR cancels the previous run — nobody
+# needs the results of a superseded commit — but pushes to `main` are never
+# cancelled, because their results are what release decisions are based on.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Formatting. Cheap enough to run on ubuntu even though nothing else does:
+  # rustfmt parses, it does not compile, so it needs no GPUI system libraries.
+  # ---------------------------------------------------------------------------
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    # NOT BLOCKING YET. `cargo fmt --check` currently reports diffs in 34 files
+    # that predate this workflow; making it blocking today would paint every
+    # build red for reasons unrelated to the change under review. Reformatting
+    # them belongs in its own commit — a `style:` commit that touches nothing
+    # else — and the moment that lands, delete this line so a regression fails
+    # the build.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt
+          cache-key: fmt
+          # Nothing is compiled here, so there is no cache worth saving.
+          save-cache: "false"
+      - run: cargo fmt --all --check
+
+  # ---------------------------------------------------------------------------
+  # Lints. Runs on macOS because that is the only platform dodo is known to
+  # compile on; clippy has to build the whole dependency graph, so a job on an
+  # unverified platform would fail for reasons that are not lint findings.
+  # ---------------------------------------------------------------------------
+  clippy:
+    name: clippy
+    runs-on: macos-14
+    # NOT BLOCKING YET, for the same reason as `fmt`: `cargo clippy` reports 15
+    # warnings on the tree as it stands (collapsible_if, redundant_closure,
+    # sort_by_key, too_many_arguments and friends), all in `src/docker/` and
+    # `src/encoder_decoder.rs`, all predating this workflow. `-D warnings` is
+    # kept because it is the right setting once they are cleaned up — the job
+    # is advisory until then. Fix them in their own commit and delete this.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: clippy
+          cache-key: clippy
+      # `--all-targets` covers the test harness too. `--locked` everywhere: see
+      # the note in .cargo/config.toml about Cargo.lock being the only pin on
+      # the git dependencies.
+      - run: cargo clippy --all-targets --locked -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # Tests. dodo's suite is the i18n guards (src/i18n.rs, src/i18n_lint.rs), the
+  # pure model logic under api_explorer/ and docker/, and the build-metadata
+  # checks in src/build_info.rs. None of them opens a window, so a headless
+  # runner is fine.
+  # ---------------------------------------------------------------------------
+  test:
+    name: test
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: test
+      - run: cargo test --locked --all-features
+
+      # The default feature set is what ships; the empty one is what makes the
+      # `syntax-highlighting` feature meaningful. Checking (not building) is
+      # enough to catch a `cfg` that only compiles one way, and costs a
+      # fraction of a full build.
+      - name: cargo check --no-default-features
+        run: cargo check --locked --no-default-features
+
+  # ---------------------------------------------------------------------------
+  # The real build, once per shipped platform. This is the job that tells you
+  # whether a release would succeed; it uses the same profile and the same
+  # `--locked` flag the release workflow does.
+  # ---------------------------------------------------------------------------
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    # Unverified platforms must not block a merge. Flip `experimental` to false
+    # per row once that row has passed on a real runner.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            experimental: false
+          - name: macos-x64
+            os: macos-13
+            target: x86_64-apple-darwin
+            experimental: true
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            experimental: true
+          - name: windows-x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            experimental: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-build-deps
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: ${{ matrix.target }}
+          cache-key: build-${{ matrix.target }}
+
+      - name: cargo build --release
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # Prove the artifact executes. dodo is a GUI app and a runner has no
+      # display, so `--version` — which returns before any window code runs —
+      # is the strongest launch check CI can make. It does establish that the
+      # binary is valid for the platform, that its dynamic libraries resolve,
+      # and that build.rs embedded real metadata.
+      - name: Smoke test the binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/dodo --build-info
+      # `shell: pwsh` is stated rather than left to the runner default, so the
+      # backslash paths below are unambiguously PowerShell and not a bash
+      # script full of escape sequences.
+      - name: Smoke test the binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\target\${{ matrix.target }}\release\dodo.exe --build-info

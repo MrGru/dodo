@@ -1,0 +1,61 @@
+# Cargo configuration for this checkout.
+#
+# THE RULE FOR THIS FILE: a fresh clone must build with a plain `cargo build`
+# and nothing else installed. Anything that needs a tool which may be absent —
+# lld, mold, a cross linker — belongs in CI or in an environment variable a
+# developer opts into, never here. A `.cargo/config.toml` that requires an
+# optional linker turns "clone and build" into "clone, read the error, install
+# a linker, build".
+#
+# Linker flags that were considered and deliberately left out are recorded at
+# the bottom, with what measuring them actually showed.
+
+[net]
+# Fetch git dependencies with the `git` binary instead of cargo's bundled
+# libgit2. dodo depends on `gpui`/`gpui_platform` from zed-industries/zed, a
+# repository large enough that the built-in fetcher is markedly slower and less
+# resilient; the git CLI also reuses any credential helper and proxy the
+# developer already has configured. `git` is required to work on this project
+# anyway, so this adds no new prerequisite.
+git-fetch-with-cli = true
+
+[alias]
+# The exact command that produces a shippable binary. `--locked` is the point:
+# `Cargo.lock` is the *only* thing pinning the four git dependencies (none of
+# them names a rev — see docs/build-optimization.md for why an explicit rev pin
+# does not work here), so a build that is allowed to update the lock is a build
+# of unreviewed upstream code.
+dist = "build --release --locked"
+# The same, with debug info kept in a separate .dSYM for profiling or
+# symbolicating a crash. See [profile.release-debug] in Cargo.toml.
+dist-debug = "build --profile release-debug --locked"
+
+# ---------------------------------------------------------------------------
+# Linker flags: what was tried, and why nothing is set here
+#
+# macOS — `-Wl,-dead_strip` is NOT set below because rustc already passes it.
+#   Verified with `rustc --print link-args -O`, which lists `"-Wl,-dead_strip"`
+#   in the default Apple link line, and confirmed by measurement: relinking
+#   dodo with `cargo rustc --release -- -C link-arg=-Wl,-dead_strip` produced a
+#   byte-for-byte identically sized binary (22,370,896 both ways). Adding it
+#   would be decoration. `strip = "symbols"` in Cargo.toml is what actually
+#   removes the symbol table.
+#
+# Linux — lld is a large win on link time for a binary this size, but it is not
+#   installed by default anywhere, so requiring it here would break a fresh
+#   clone. CI opts in (.github/actions/linux-build-deps) by exporting:
+#
+#     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-fuse-ld=lld \
+#       -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--as-needed"
+#
+#   Put the same line in your shell profile if you have lld locally. Untested
+#   on real hardware: nobody has built dodo on Linux yet.
+#
+# Windows (MSVC) — nothing set. The flags usually suggested (`/OPT:REF`,
+#   `/OPT:ICF`) are ones rustc's MSVC target already passes for an optimized
+#   build, and this project has never been built on Windows, so anything here
+#   would be guesswork. Measure on a real runner before adding.
+#
+# `-C target-cpu=native` is deliberately absent everywhere: it produces a
+# binary that crashes on any machine older than the one that built it, which is
+# exactly the wrong trade for a downloadable desktop app.
