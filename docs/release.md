@@ -115,6 +115,29 @@ resolve, and that `build.rs` embedded the right metadata. **It does not prove
 the UI renders.** That check is manual: download the archive on a real desktop
 and open it. Do that before announcing a release.
 
+### Checking a Windows fix without a Windows machine
+
+`build (windows-x64)` is the row most likely to break from a macOS-only desk, so
+it is worth knowing exactly how far a local cross-check can go.
+
+`cargo check --target x86_64-pc-windows-msvc` **cannot** be run on the whole
+crate here. It gets as far as `aws-lc-sys`, whose build script compiles C that
+`#include`s `<windows.h>`; without the Windows SDK headers (an `xwin`-style
+setup) that fails, and the failure has nothing to do with dodo's own code.
+Note also that on a machine where `rustc` is Homebrew's, cargo picks `rustc` off
+`PATH` even under `rustup run`, so a cross-check needs the rustup toolchain
+forced explicitly (`RUSTC=~/.rustup/toolchains/<tc>/bin/rustc`) or it fails with
+a misleading "can't find crate for `core`".
+
+What does work, and is what proved the `#[cfg(unix)]` / `#[cfg(windows)]` split
+in `src/docker/services/engine.rs`: copy the platform-split function into a
+throwaway crate that depends only on the crate in question (here `bollard`), and
+`cargo check --target x86_64-pc-windows-msvc` that. It compiles the real
+dependency's real Windows `impl` blocks, so it catches a connector that does not
+exist on the target and any `unused` warning the inactive `cfg` arm leaves
+behind — run it with `RUSTFLAGS="-D warnings"`, since clippy is blocking. It
+does not prove the rest of the crate builds on Windows; only CI does that.
+
 ---
 
 ## Application icon

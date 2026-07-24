@@ -7,8 +7,10 @@
 //! module doc in `services/mod.rs` for why the runtime lives here.
 
 use std::future::Future;
+#[cfg(unix)]
 use std::path::Path;
 
+use bollard::Docker;
 use bollard::container::LogOutput;
 use bollard::models::{ContainerStatsResponse, ContainerSummary, ImageSummary};
 use bollard::query_parameters::{
@@ -16,7 +18,10 @@ use bollard::query_parameters::{
     RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder, RemoveVolumeOptionsBuilder,
     RestartContainerOptionsBuilder, StatsOptionsBuilder, StopContainerOptionsBuilder,
 };
-use bollard::{API_DEFAULT_VERSION, Docker};
+// Only the unix connector is handed a client version explicitly; the named-pipe
+// default applies bollard's own.
+#[cfg(unix)]
+use bollard::API_DEFAULT_VERSION;
 use futures_util::StreamExt as _;
 use serde::Serialize;
 use tokio::runtime::Runtime;
@@ -34,9 +39,15 @@ use crate::docker::models::usage::{ContainerUsage, ContainerUsageEntry};
 use crate::docker::models::volume::Volume;
 use crate::docker::services::{DockerEngine, DockerError};
 
-/// The standard Docker socket, tried when `DOCKER_HOST` is not set.
+/// The standard Docker socket, tried when `DOCKER_HOST` is not set. Unix only:
+/// on Windows the equivalent step is a named pipe, whose default path bollard
+/// supplies itself.
+#[cfg(unix)]
 const DOCKER_SOCKET: &str = "/var/run/docker.sock";
-/// The read/write timeout, in seconds, for a single connection.
+/// The read/write timeout, in seconds, for a single connection. Only the unix
+/// connector takes one explicitly; `connect_with_named_pipe_defaults` applies
+/// bollard's own 2-minute default, which is the same value.
+#[cfg(unix)]
 const CONNECT_TIMEOUT: u64 = 120;
 
 pub struct BollardEngine {
@@ -81,11 +92,17 @@ impl Default for BollardEngine {
 /// specifies: honour `DOCKER_HOST`, then the standard Docker socket, then the
 /// Podman default socket. Building the client does not contact the daemon, so a
 /// down engine is not caught here — the first call reports it.
+///
+/// The socket steps are platform-specific, so the function is split per target:
+/// `connect_with_unix` and `connect_with_podman_defaults` only exist in bollard's
+/// `#[cfg(unix)]` impl, and `connect_with_named_pipe_defaults` only in its
+/// `#[cfg(windows)]` one. Step 1 is identical on both and stays shared.
+#[cfg(unix)]
 fn connect() -> Result<Docker, DockerError> {
     // 1. An explicit DOCKER_HOST wins; `connect_with_defaults` reads it and picks
     //    the right connector (unix socket / named pipe / http) itself.
-    if std::env::var_os("DOCKER_HOST").is_some_and(|value| !value.is_empty()) {
-        return Docker::connect_with_defaults().map_err(unreachable);
+    if let Some(docker) = connect_with_docker_host() {
+        return docker;
     }
     // 2. The standard Docker socket, if it is there.
     if Path::new(DOCKER_SOCKET).exists() {
@@ -94,6 +111,35 @@ fn connect() -> Result<Docker, DockerError> {
     }
     // 3. Otherwise fall back to Podman's default socket probing.
     Docker::connect_with_podman_defaults().map_err(unreachable)
+}
+
+#[cfg(windows)]
+fn connect() -> Result<Docker, DockerError> {
+    // 1. An explicit DOCKER_HOST wins; `connect_with_defaults` reads it and picks
+    //    the right connector (named pipe / http) itself.
+    if let Some(docker) = connect_with_docker_host() {
+        return docker;
+    }
+    // 2. Otherwise the default Docker named pipe (`//./pipe/docker_engine`),
+    //    which is what Docker Desktop listens on. This is the Windows counterpart
+    //    of the unix-socket step, and it needs no existence check — bollard fails
+    //    the connection if the pipe is absent.
+    //
+    // There is no step 3 here: bollard has no Windows equivalent of
+    // `connect_with_podman_defaults`, whose probing is entirely about unix socket
+    // paths (`$XDG_RUNTIME_DIR/podman/podman.sock` and friends). Podman on Windows
+    // runs in a WSL machine and is reached through DOCKER_HOST, i.e. step 1.
+    Docker::connect_with_named_pipe_defaults().map_err(unreachable)
+}
+
+/// Step 1 of [`connect`], shared by both platforms: `DOCKER_HOST`, if set and
+/// non-empty, wins over any socket probing. `None` means it was not set, so the
+/// caller should carry on with its own platform's fallbacks.
+fn connect_with_docker_host() -> Option<Result<Docker, DockerError>> {
+    if std::env::var_os("DOCKER_HOST").is_some_and(|value| !value.is_empty()) {
+        return Some(Docker::connect_with_defaults().map_err(unreachable));
+    }
+    None
 }
 
 fn unreachable(error: bollard::errors::Error) -> DockerError {

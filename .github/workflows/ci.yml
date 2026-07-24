@@ -18,6 +18,13 @@
 # `build (windows-x64)` failed. So `linux-x64` is green once and could have its
 # `experimental` flag flipped; that is a deliberate call, not a formality.
 # Every other job that says `experimental` is still written-but-unverified.
+#
+# That Windows failure was one compile error — `Docker::connect_with_podman_
+# defaults` is `#[cfg(unix)]` in bollard — and `docker::services::engine::connect`
+# is now `#[cfg]`-split per platform. The fix was verified by cross-compiling that
+# connector chain for `x86_64-pc-windows-msvc` on macOS; the full app could not be
+# cross-checked (`aws-lc-sys` needs the Windows SDK headers), so whether
+# `build (windows-x64)` now goes green is still unproven until CI says so.
 
 name: CI
 

@@ -72,7 +72,9 @@ Three things about build and release that catch people:
   `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
   (34 unformatted files, 12 warnings) is paid off; there is no crate-level `allow`, and the two
   surviving suppressions are `#[allow]`ed at their definition with the reason inline.
-  `build (windows-x64)` still fails and `build (macos-x64)` is unverified — those rows are
+  `build (windows-x64)` failed on its one real run (a `#[cfg(unix)]`-only bollard connector; fixed
+  by the platform split in `docker/services/engine.rs`, not yet confirmed green) and
+  `build (macos-x64)` is unverified — those rows are
   `experimental` and non-blocking on purpose. See the honesty note atop `.github/workflows/ci.yml`
   for what has actually run.
 - **`Cargo.lock` really is the only possible pin on the four git dependencies.** Explicit
