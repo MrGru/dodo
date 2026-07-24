@@ -13,10 +13,11 @@
 # (bloat, audit, deny) on its own schedule so CI stays interactive.
 #
 # HONESTY NOTE, please keep it accurate: this repository is developed on macOS
-# arm64 and, at the time these workflows were written, had never been built on
-# Linux or Windows, and these workflows had never been executed. Every job
-# below that says `experimental` is written-but-unverified. When one of them
-# goes green for real, flip its flag and delete the note.
+# arm64. These workflows have now run for real (first run: 30106478178) —
+# `test`, `build (macos-arm64)` and `build (linux-x64)` passed,
+# `build (windows-x64)` failed. So `linux-x64` is green once and could have its
+# `experimental` flag flipped; that is a deliberate call, not a formality.
+# Every other job that says `experimental` is still written-but-unverified.
 
 name: CI
 
@@ -47,13 +48,10 @@ jobs:
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
-    # NOT BLOCKING YET. `cargo fmt --check` currently reports diffs in 34 files
-    # that predate this workflow; making it blocking today would paint every
-    # build red for reasons unrelated to the change under review. Reformatting
-    # them belongs in its own commit — a `style:` commit that touches nothing
-    # else — and the moment that lands, delete this line so a regression fails
-    # the build.
-    continue-on-error: true
+    # BLOCKING. This job shipped advisory because 34 files predated
+    # `.rustfmt.toml`; they were reformatted wholesale in a `style:` commit, so
+    # the tree is clean and any new diff is a real regression. Do not re-add
+    # `continue-on-error` — run `cargo fmt --all` instead.
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
@@ -72,13 +70,12 @@ jobs:
   clippy:
     name: clippy
     runs-on: macos-14
-    # NOT BLOCKING YET, for the same reason as `fmt`: `cargo clippy` reports 15
-    # warnings on the tree as it stands (collapsible_if, redundant_closure,
-    # sort_by_key, too_many_arguments and friends), all in `src/docker/` and
-    # `src/encoder_decoder.rs`, all predating this workflow. `-D warnings` is
-    # kept because it is the right setting once they are cleaned up — the job
-    # is advisory until then. Fix them in their own commit and delete this.
-    continue-on-error: true
+    # BLOCKING, for the same reason as `fmt`: the 12 warnings that predated this
+    # workflow (collapsible_if, unnecessary_sort_by, redundant_closure and
+    # friends, in `src/docker/` and `src/encoder_decoder.rs`) were cleared in
+    # their own commit. The two that survive are `#[allow]`ed at their
+    # definition with the reason written next to them; there is no crate-level
+    # allow, so a new warning fails the build. Keep it that way.
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
