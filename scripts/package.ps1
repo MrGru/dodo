@@ -78,6 +78,17 @@ foreach ($doc in @("README.md", "LICENSE", "LICENSE.md", "LICENSE.txt")) {
     if (Test-Path $p) { Copy-Item $p $stage }
 }
 
+# The multi-resolution application icon, shipped as a loose file next to the
+# .exe. It is NOT embedded in the executable: doing that needs a Windows-only
+# build-dependency and a build.rs branch that this project cannot build or
+# test on any machine it has ever run on. The consequence, deliberately
+# accepted, is that Explorer and the taskbar show the generic executable icon;
+# the .ico is here so a shortcut, an installer or an MSI can use the real one.
+# See "Windows icon" in docs/release.md for the change that would embed it.
+$ico = Join-Path $repoRoot "assets\windows\dodo.ico"
+if (-not (Test-Path $ico)) { throw "missing $ico; run: python3 scripts/generate-icons.py" }
+Copy-Item $ico $stage
+
 $archive = Join-Path $Out "$name.zip"
 if (Test-Path $archive) { Remove-Item -Force $archive }
 Compress-Archive -Path $stage -DestinationPath $archive -CompressionLevel Optimal

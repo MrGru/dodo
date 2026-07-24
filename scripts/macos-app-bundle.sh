@@ -52,17 +52,22 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$binary" "$app/Contents/MacOS/dodo"
 chmod 755 "$app/Contents/MacOS/dodo"
 
-# dodo ships no .icns today (assets/icons holds the in-app SVG icon set, not an
-# application icon — see src/app_icon.rs). Drop one at the path below and it is
-# picked up with no further change; without it macOS shows the generic icon.
+# The application icon. Committed, not built here: `iconutil` only exists on
+# macOS, and regenerating it at package time would make the bundle depend on
+# the host. `scripts/generate-icons.py` rebuilds it from the 1024 master in
+# assets/branding/ whenever the artwork changes.
+#
+# Not to be confused with assets/icons, which is the in-app SVG set behind
+# src/app_icon.rs and is embedded in the binary. This one is not embedded.
 icon_source="$repo_root/assets/macos/dodo.icns"
-icon_entry=""
-if [ -f "$icon_source" ]; then
-    cp "$icon_source" "$app/Contents/Resources/dodo.icns"
-    icon_entry='
+[ -f "$icon_source" ] || die "missing $icon_source; run: scripts/generate-icons.py"
+cp "$icon_source" "$app/Contents/Resources/dodo.icns"
+# CFBundleIconFile names the file in Resources/ without its extension. Getting
+# this wrong is silent: the bundle builds and Finder shows the generic app
+# icon, so any change here needs a look at the built bundle, not just exit 0.
+icon_entry='
     <key>CFBundleIconFile</key>
     <string>dodo</string>'
-fi
 
 # CFBundleIdentifier must stay stable forever: it is the key macOS uses for
 # preferences, keychain items and — once signing exists — the App ID the
