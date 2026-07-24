@@ -104,7 +104,7 @@ jobs:
   # ---------------------------------------------------------------------------
   clippy:
     name: clippy
-    runs-on: macos-14
+    runs-on: macos-15
     # BLOCKING, for the same reason as `fmt`: the 12 warnings that predated this
     # workflow (collapsible_if, unnecessary_sort_by, redundant_closure and
     # friends, in `src/docker/` and `src/encoder_decoder.rs`) were cleared in
@@ -130,7 +130,7 @@ jobs:
   # ---------------------------------------------------------------------------
   test:
     name: test
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
@@ -168,11 +168,11 @@ jobs:
       matrix:
         include:
           - name: macos-arm64
-            os: macos-14
+            os: macos-15
             target: aarch64-apple-darwin
             experimental: false
           - name: macos-x64
-            os: macos-13
+            os: macos-15-intel
             target: x86_64-apple-darwin
             experimental: true
           - name: linux-x64
@@ -216,7 +216,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-debug:
     name: build (macos-arm64, debug)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
