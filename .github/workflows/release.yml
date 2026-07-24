@@ -136,7 +136,7 @@ jobs:
             target: aarch64-apple-darwin
             experimental: false
           - name: macos-x64
-            os: macos-15
+            os: macos-15-intel
             target: x86_64-apple-darwin
             experimental: true
           - name: linux-x64
