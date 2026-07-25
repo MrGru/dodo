@@ -8,6 +8,12 @@ use gpui_component::{Icon, IconNamed};
 /// the equivalent `IconName` (which resolves to the same `icons/<name>.svg`).
 #[derive(Clone, Copy)]
 pub enum AppIcon {
+    /// The product mark, shown in the sidebar header. A flat silhouette rather
+    /// than a Lucide outline on purpose: gpui paints an SVG as an alpha mask
+    /// tinted with the element's text colour, so a brand mark reads at 16px
+    /// only as solid coverage. Derived from `assets/branding`, which is
+    /// packaged but never embedded — see `src/assets.rs`.
+    Dodo,
     Binary,
     Json,
     Palette,
@@ -65,6 +71,7 @@ pub enum AppIcon {
 impl IconNamed for AppIcon {
     fn path(self) -> SharedString {
         match self {
+            Self::Dodo => "icons/dodo.svg",
             Self::Binary => "icons/binary.svg",
             Self::Json => "icons/json.svg",
             Self::Palette => "icons/palatte.svg",

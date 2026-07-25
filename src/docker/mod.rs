@@ -18,9 +18,10 @@
 //! - [`components`] — the reusable `StatusBadge`, `SearchBar`, `Toolbar`,
 //!   `LoadingSkeleton`, `EmptyState` and `ErrorState`, generic so every page
 //!   reuses them.
-//! - [`views`] — [`DockerView`](views::DockerView), the four-page container the
-//!   sidebar drives, the four pages themselves, and the read-only detail overlay
-//!   they share.
+//! - [`views`] — [`DockerView`](views::DockerView), which owns the vertical tab
+//!   rail down the page's left edge and the four pages it switches between, the
+//!   four pages themselves, and the read-only detail overlay they share. The
+//!   sidebar has one flat Docker row; the rail is the module's own navigation.
 //!
 //! # What each round shipped
 //!
@@ -31,7 +32,7 @@
 //! (plus the shared `models::size` formatting and the `models::usage` "containers
 //! using" derivation), one generic store [`state::resource`], and the
 //! [`views`](views) siblings, all switched to by the same
-//! [`DockerPage`](views::DockerPage) wired into the sidebar. Round 4 adds
+//! [`DockerPage`](views::DockerPage) the rail drives. Round 4 adds
 //! background polling ([`POLL_INTERVAL`], the incremental merges in
 //! [`state::diff`]), keyboard row navigation ([`state::focus`]) and the row
 //! context menus, both routed through the actions below.

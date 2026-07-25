@@ -46,8 +46,13 @@ Five things about the module that are not obvious from any one file:
 - **`docker::POLL_INTERVAL` is a constant, not a setting, on purpose** (5s). Exactly one visible
   page polls (`DockerView::should_poll`), and leaving the section calls `set_section_active(false)`
   (wired in `layout.rs`), so an idle cadence never runs.
-- The sidebar's Docker section is dodo's only expandable/nested `SidebarMenuItem` group;
-  `src/layout.rs` shows the `View` variants and page routing.
+- **The sidebar is flat — every tool, Docker included, is one top-level `SidebarMenuItem` with
+  no children.** Docker used to be a nested group, and that made its four pages unreachable:
+  an icon-collapsed sidebar renders no children at all. The four pages now live on Docker's own
+  vertical tab rail (`DockerView::render_rail`), so `View` has a single `View::Docker` variant and
+  `DockerPage` owns the page identity — its `title`/`icon`/`ALL`/`DEFAULT`. Do not reintroduce
+  nesting here. `layout.rs::pane_title` is why the main-pane heading still names the page
+  ("Containers") while the sidebar row names the tool ("Docker").
 
 **dodo now persists one thing across restarts:** the API Explorer's collections, written by
 `services::collection_store::DiskCollectionStore` to `~/Library/Application Support/dodo/`

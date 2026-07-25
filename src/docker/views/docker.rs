@@ -1,28 +1,101 @@
-//! The Docker module's top view: it owns the four pages and shows the selected
-//! one.
+//! The Docker module's top view: the in-page tab rail, the four pages it
+//! switches between, and the selected page's body.
 //!
-//! The sidebar's four Docker children switch [`DockerPage`] through
-//! [`DockerView::set_page`]; the entity and its sub-views are built once and
-//! kept, so navigating between pages — and away to another tool and back —
-//! preserves each page's state, the same lifetime rule `Layout` follows for the
-//! top-level tools. Rounds 1–3 implement all four pages; each is loaded lazily
-//! the first time it is shown.
+//! The sidebar has one flat Docker row; everything below it is this view's own
+//! navigation. [`DockerView::render`] draws a vertical rail down the left edge —
+//! one tab per [`DockerPage`], icon above label — and the selected page beside
+//! it. Tabs call [`DockerView::set_page`]; the sidebar calls
+//! [`DockerView::activate`] on the way in and
+//! [`DockerView::set_section_active`] on the way out, which is what starts and
+//! stops the background polling.
+//!
+//! The entity and its sub-views are built once and kept, so navigating between
+//! pages — and away to another tool and back — preserves each page's state, the
+//! same lifetime rule `Layout` follows for the top-level tools. Each page is
+//! loaded lazily the first time it is shown.
 
-use gpui::{AppContext as _, Context, Entity, IntoElement, Render, Window};
+use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    Pixels, Render, StatefulInteractiveElement as _, Styled as _, Window, div, px,
+};
+use gpui_component::{ActiveTheme as _, Icon, h_flex, v_flex};
 
+use crate::app_icon::AppIcon;
 use crate::docker::views::containers::ContainersView;
 use crate::docker::views::images::ImagesView;
 use crate::docker::views::networks::NetworksView;
 use crate::docker::views::volumes::VolumesView;
+use crate::i18n::{Str, t};
 
-/// Which Docker page is showing. The discriminants line up with the four
-/// sidebar children.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// The rail's width. Wide enough for the longest page name at `text_xs` on one
+/// line — the four names are terms of art and identical in every language, so
+/// this never has to grow — and narrow enough that it reads as a rail rather
+/// than a second sidebar.
+const RAIL_WIDTH: Pixels = px(84.);
+
+/// The accent bar down the left edge of the selected tab. It occupies its width
+/// on every tab, transparent when unselected, so selecting one never shifts the
+/// icon or the label sideways.
+const RAIL_ACCENT_WIDTH: Pixels = px(2.);
+
+/// Which Docker page is showing. The four are the rail's tabs, in the order
+/// [`DockerPage::ALL`] lists them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DockerPage {
     Containers,
     Images,
     Volumes,
     Networks,
+}
+
+impl DockerPage {
+    /// The pages the rail shows, top to bottom. `ALL[0]` is also the page a
+    /// freshly opened Docker section starts on — see [`DockerView::new`].
+    pub const ALL: [DockerPage; 4] = [
+        DockerPage::Containers,
+        DockerPage::Images,
+        DockerPage::Volumes,
+        DockerPage::Networks,
+    ];
+
+    /// The page a freshly opened Docker section shows.
+    pub const DEFAULT: DockerPage = DockerPage::ALL[0];
+
+    /// The localized page name. It labels the rail tab and is the title
+    /// `Layout` shows above the main pane while Docker is the active view, so
+    /// the header keeps naming the page rather than the section.
+    pub fn title(self) -> Str {
+        match self {
+            DockerPage::Containers => Str::Containers,
+            DockerPage::Images => Str::Images,
+            DockerPage::Volumes => Str::Volumes,
+            DockerPage::Networks => Str::Networks,
+        }
+    }
+
+    /// The page's icon, drawn above its label on the rail. These are the same
+    /// four icons the sidebar's Docker children carried before the pages moved
+    /// in here, so nothing a user recognises changed.
+    pub fn icon(self) -> AppIcon {
+        match self {
+            DockerPage::Containers => AppIcon::Container,
+            DockerPage::Images => AppIcon::Layers,
+            DockerPage::Volumes => AppIcon::HardDrive,
+            DockerPage::Networks => AppIcon::Network,
+        }
+    }
+
+    /// The rail tab's element id. Stable per page, so gpui keeps each tab's
+    /// hover and click state across re-renders.
+    fn rail_id(self) -> &'static str {
+        match self {
+            DockerPage::Containers => "docker-rail-containers",
+            DockerPage::Images => "docker-rail-images",
+            DockerPage::Volumes => "docker-rail-volumes",
+            DockerPage::Networks => "docker-rail-networks",
+        }
+    }
 }
 
 pub struct DockerView {
@@ -43,15 +116,21 @@ pub struct DockerView {
 impl DockerView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
-            page: DockerPage::Containers,
+            page: DockerPage::DEFAULT,
             // The window opens on another tool, so the Docker section is inactive
-            // until the sidebar selects one of its pages.
+            // until the sidebar selects it.
             section_active: false,
             containers: cx.new(|cx| ContainersView::new(window, cx)),
             images: cx.new(|cx| ImagesView::new(window, cx)),
             volumes: cx.new(|cx| VolumesView::new(window, cx)),
             networks: cx.new(|cx| NetworksView::new(window, cx)),
         }
+    }
+
+    /// The page the rail currently has selected. `Layout` reads it to title the
+    /// main pane after the page rather than after the section.
+    pub fn page(&self) -> DockerPage {
+        self.page
     }
 
     /// Shows `page` and triggers its first load. Selecting a Docker page always
@@ -80,9 +159,17 @@ impl DockerView {
         cx.notify();
     }
 
+    /// Enters the section from the sidebar: shows whichever page the rail last
+    /// had selected — [`DockerPage::DEFAULT`] the first time — and resumes its
+    /// polling. Routing through [`set_page`] keeps the lazy load and the polling
+    /// sync in one place.
+    pub fn activate(&mut self, cx: &mut Context<Self>) {
+        self.set_page(self.page, cx);
+    }
+
     /// Tells the section whether it is the visible view. The sidebar calls this
     /// with `false` when the user leaves for another tool, pausing all polling,
-    /// and it resumes through [`set_page`] on return.
+    /// and it resumes through [`activate`] on return.
     pub fn set_section_active(&mut self, active: bool, cx: &mut Context<Self>) {
         if self.section_active == active {
             return;
@@ -110,6 +197,66 @@ impl DockerView {
             view.set_polling(should_poll(active, page, DockerPage::Networks), cx)
         });
     }
+
+    /// The vertical tab rail down the left edge. Always visible and always
+    /// showing all four tabs — it is a tab strip, not the API Explorer's
+    /// collapsible panel switcher, which is otherwise the same idea.
+    fn render_rail(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        v_flex()
+            .h_full()
+            .flex_shrink_0()
+            .w(RAIL_WIDTH)
+            .py_1()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .overflow_hidden()
+            .children(DockerPage::ALL.map(|page| self.render_rail_tab(page, cx)))
+            .into_any_element()
+    }
+
+    /// One rail tab: the accent bar, then the page's icon above its label,
+    /// centred. The selected tab is marked twice over — the bar and a raised
+    /// background — so it reads at a glance without relying on colour alone.
+    fn render_rail_tab(&self, page: DockerPage, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let selected = self.page == page;
+        let accent = if selected {
+            cx.theme().primary
+        } else {
+            cx.theme().transparent
+        };
+
+        h_flex()
+            .id(page.rail_id())
+            .items_stretch()
+            .w_full()
+            .flex_shrink_0()
+            .cursor_pointer()
+            .when(selected, |this| this.bg(cx.theme().accent))
+            .when(!selected, |this| {
+                this.hover(|this| this.bg(cx.theme().accent.opacity(0.5)))
+            })
+            .child(div().w(RAIL_ACCENT_WIDTH).flex_shrink_0().bg(accent))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .items_center()
+                    .gap_1()
+                    .px_1()
+                    .py_2()
+                    .text_color(if selected {
+                        cx.theme().foreground
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .child(Icon::new(page.icon()).size_5())
+                    .child(div().text_xs().text_center().child(t(page.title(), cx))),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.set_page(page, cx)))
+            .into_any_element()
+    }
 }
 
 /// Whether a given `page` should be polling, given whether the Docker section is
@@ -121,19 +268,29 @@ pub fn should_poll(section_active: bool, active_page: DockerPage, page: DockerPa
 }
 
 impl Render for DockerView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        match self.page {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let body = match self.page {
             DockerPage::Containers => self.containers.clone().into_any_element(),
             DockerPage::Images => self.images.clone().into_any_element(),
             DockerPage::Volumes => self.volumes.clone().into_any_element(),
             DockerPage::Networks => self.networks.clone().into_any_element(),
-        }
+        };
+
+        h_flex()
+            .items_stretch()
+            .size_full()
+            .gap_2()
+            .child(self.render_rail(cx))
+            .child(div().flex_1().min_w_0().h_full().child(body))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::mem::{Discriminant, discriminant};
+
     use super::{DockerPage, should_poll};
+    use crate::i18n::Str;
 
     #[test]
     fn only_the_active_visible_page_polls() {
@@ -161,5 +318,53 @@ mod tests {
             DockerPage::Containers
         ));
         assert!(!should_poll(false, DockerPage::Images, DockerPage::Images));
+    }
+
+    #[test]
+    fn rail_lists_every_page_containers_first() {
+        assert_eq!(
+            DockerPage::ALL,
+            [
+                DockerPage::Containers,
+                DockerPage::Images,
+                DockerPage::Volumes,
+                DockerPage::Networks,
+            ]
+        );
+        assert_eq!(DockerPage::DEFAULT, DockerPage::Containers);
+    }
+
+    #[test]
+    fn every_page_has_its_own_title_icon_and_tab_id() {
+        // `Str` carries runtime values in some variants and so derives no
+        // `PartialEq`; the discriminant is what identifies a plain one.
+        let titles: Vec<Discriminant<Str>> = DockerPage::ALL
+            .iter()
+            .map(|page| discriminant(&page.title()))
+            .collect();
+        assert_eq!(
+            titles,
+            vec![
+                discriminant(&Str::Containers),
+                discriminant(&Str::Images),
+                discriminant(&Str::Volumes),
+                discriminant(&Str::Networks),
+            ]
+        );
+
+        // Distinct icon paths and distinct element ids: two tabs sharing either
+        // would make the rail unreadable or swallow a click.
+        let mut icons: Vec<String> = DockerPage::ALL
+            .iter()
+            .map(|page| gpui_component::IconNamed::path(page.icon()).to_string())
+            .collect();
+        icons.sort();
+        icons.dedup();
+        assert_eq!(icons.len(), DockerPage::ALL.len());
+
+        let mut ids: Vec<&str> = DockerPage::ALL.iter().map(|page| page.rail_id()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), DockerPage::ALL.len());
     }
 }
