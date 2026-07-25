@@ -5,9 +5,9 @@
 //! background executor — over the volume columns. Size is `N/A` whenever the
 //! engine did not report it (the common case), rather than blocking the page on a
 //! size scan; "containers using" counts the container mounts. Delete is confirmed
-//! then refused sanely while a container still mounts the volume; Inspect opens
-//! the shared read-only
-//! [`DetailPanel`](crate::docker::views::detail::DetailPanel).
+//! then refused sanely while a container still mounts the volume; clicking a
+//! row's Name cell opens the shared read-only detail dialog
+//! ([`views::detail`](crate::docker::views::detail)).
 
 use std::sync::Arc;
 
@@ -37,12 +37,12 @@ use crate::docker::services::{DockerEngine, default_engine};
 use crate::docker::state::containers::LoadStatus;
 use crate::docker::state::focus::{FocusMove, next_focus};
 use crate::docker::state::resource::ResourceState;
-use crate::docker::views::detail::DetailPanel;
+use crate::docker::views::detail::{self, DetailRequest};
 use crate::docker::views::widgets::{
-    action_button, count_cell, header_cell, muted_cell, resource_context_menu,
+    action_button, count_cell, header_cell, muted_cell, name_cell, resource_context_menu,
 };
 use crate::docker::{
-    DockerCloseDetail, DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp,
+    DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp, DockerOpenDetail,
     DockerRefreshList, KEY_CONTEXT, POLL_INTERVAL,
 };
 use crate::i18n::{Language, Str, t};
@@ -52,9 +52,11 @@ use crate::i18n::{Language, Str, t};
 const DRIVER_W: Pixels = px(120.);
 const SIZE_W: Pixels = px(96.);
 const USING_W: Pixels = px(132.);
-const ACTIONS_W: Pixels = px(84.);
+/// One xsmall button: Delete. Inspect used to sit beside it; the detail dialog is
+/// opened from the Name cell now.
+const ACTIONS_W: Pixels = px(48.);
 const SEARCH_W: Pixels = px(240.);
-const TABLE_MIN_W: Pixels = px(820.);
+const TABLE_MIN_W: Pixels = px(784.);
 
 pub struct VolumesView {
     engine: Arc<dyn DockerEngine>,
@@ -70,8 +72,6 @@ pub struct VolumesView {
     /// The row a right-click opened the menu on; the Delete and Inspect actions
     /// read it.
     context_target: Option<String>,
-    /// The read-only Inspect overlay, closed until a row action opens it.
-    detail: DetailPanel,
     /// Set when the page becomes active so `render` focuses the list once.
     needs_focus: bool,
     loaded_once: bool,
@@ -100,17 +100,10 @@ impl VolumesView {
             focus_handle: cx.focus_handle(),
             focused: None,
             context_target: None,
-            detail: DetailPanel::new(window, cx),
             needs_focus: false,
             loaded_once: false,
             language: Language::current(cx),
         }
-    }
-
-    /// How the detail panel's background fetch finds its way back to itself
-    /// through this view; see [`DetailPanel`].
-    fn detail_mut(&mut self) -> &mut DetailPanel {
-        &mut self.detail
     }
 
     pub fn ensure_loaded(&mut self, cx: &mut Context<Self>) {
@@ -219,28 +212,43 @@ impl VolumesView {
         cx: &mut Context<Self>,
     ) {
         if let Some(name) = self.context_target.clone() {
-            self.open_inspect(name, window, cx);
+            self.open_detail(name, window, cx);
         }
     }
 
-    fn on_close_detail(&mut self, _: &DockerCloseDetail, _: &mut Window, cx: &mut Context<Self>) {
-        if self.detail.is_open() {
-            self.detail.close();
-            cx.notify();
+    /// `enter` on the highlighted row: the keyboard equivalent of clicking its
+    /// Name. Only for the list itself — a focused search box propagates `enter`
+    /// up to this context.
+    fn on_open_detail(
+        &mut self,
+        _: &DockerOpenDetail,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A focused search box propagates `enter` up to this context; opening a
+        // dialog on it would be a surprise, so hand the key back.
+        if self
+            .search
+            .read(cx)
+            .focus_handle(cx)
+            .contains_focused(window, cx)
+        {
+            cx.propagate();
+            return;
+        }
+        if let Some(name) = self.focused.clone() {
+            self.open_detail(name, window, cx);
         }
     }
 
-    /// Opens the read-only Inspect panel on one volume. A volume is addressed by
-    /// name, which is also what labels the panel.
-    fn open_inspect(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
-        let engine = self.engine.clone();
+    /// Opens the shared detail dialog on one volume. A volume is addressed by
+    /// name, which is also what labels the dialog.
+    fn open_detail(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
         let title = name.clone();
-        self.detail.open_inspect(
-            engine,
-            InspectKind::Volume,
-            name,
-            title,
-            Self::detail_mut,
+        detail::open(
+            self.engine.clone(),
+            DetailRequest::inspect(InspectKind::Volume, name, title),
+            self.focus_handle.clone(),
             window,
             cx,
         );
@@ -494,13 +502,20 @@ impl VolumesView {
                     move |this, _, _, _| this.context_target = Some(name.clone())
                 }),
             )
+            // The Name cell is the detail dialog's click target.
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .font_medium()
-                    .truncate()
-                    .child(SharedString::from(row.name.clone())),
+                name_cell(
+                    SharedString::from(format!("vname-{}", row.name)),
+                    SharedString::from(row.name.clone()),
+                    t(Str::DockerOpenDetails, cx),
+                    cx.listener({
+                        let name = row.name.clone();
+                        move |this, _, window, cx| this.open_detail(name.clone(), window, cx)
+                    }),
+                    cx,
+                )
+                .flex_1()
+                .min_w_0(),
             )
             .child(
                 muted_cell(SharedString::from(row.driver.clone()), cx)
@@ -529,30 +544,19 @@ impl VolumesView {
     }
 
     fn render_actions(&self, row: &Volume, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .gap_1()
-            .child(action_button(
-                SharedString::from(format!("inspect-{}", row.name)),
-                AppIcon::Eye,
-                t(Str::DockerInspect, cx),
-                true,
-                ButtonVariant::Ghost,
-                cx.listener({
-                    let name = row.name.clone();
-                    move |this, _, window, cx| this.open_inspect(name.clone(), window, cx)
-                }),
-            ))
-            .child(action_button(
-                SharedString::from(format!("delete-{}", row.name)),
-                AppIcon::Trash,
-                t(Str::Delete, cx),
-                true,
-                ButtonVariant::Danger,
-                cx.listener({
-                    let name = row.name.clone();
-                    move |this, _, window, cx| this.confirm_delete(name.clone(), window, cx)
-                }),
-            ))
+        // Delete only. Inspect was removed from here in round 6 — the Name cell
+        // and the right-click menu open the detail dialog.
+        h_flex().gap_1().child(action_button(
+            SharedString::from(format!("delete-{}", row.name)),
+            AppIcon::Trash,
+            t(Str::Delete, cx),
+            true,
+            ButtonVariant::Danger,
+            cx.listener({
+                let name = row.name.clone();
+                move |this, _, window, cx| this.confirm_delete(name.clone(), window, cx)
+            }),
+        ))
     }
 }
 
@@ -576,30 +580,16 @@ impl Render for VolumesView {
             .action_error()
             .map(|message| t(message.clone(), cx));
 
-        let engine = self.engine.clone();
-        let detail = self.detail.render(
-            cx.listener(|this, _, _, cx| {
-                this.detail.close();
-                cx.notify();
-            }),
-            cx.listener(move |this, _, window, cx| {
-                this.detail
-                    .reload(engine.clone(), Self::detail_mut, window, cx);
-            }),
-            cx,
-        );
-
         v_flex()
             .size_full()
-            .relative()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_move_up))
             .on_action(cx.listener(Self::on_move_down))
+            .on_action(cx.listener(Self::on_open_detail))
             .on_action(cx.listener(Self::on_refresh_action))
             .on_action(cx.listener(Self::on_context_delete))
             .on_action(cx.listener(Self::on_context_inspect))
-            .on_action(cx.listener(Self::on_close_detail))
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
@@ -610,7 +600,6 @@ impl Render for VolumesView {
                 this.child(self.render_action_banner(message, cx))
             })
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
-            .children(detail)
     }
 }
 

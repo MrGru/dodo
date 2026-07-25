@@ -192,6 +192,29 @@ cx.subscribe(&self.choice, |this, state, event: &SelectEvent<Vec<SharedString>>,
 `gpui_component::setting` is a complete settings UI — sidebar, search box, right pane. Do not
 hand-roll one. `Dialog` already provides a close button, Escape, and overlay-click dismissal.
 
+**`Dialog` is also the only correct way to be modal.** It paints an `anchored().snap_to_window()`
+layer that is `.occlude()`d and `cx.stop_propagation()`s the backdrop, binds `escape` in its own
+`Dialog` key context, `focus_trap`s the card, and restores the previously focused handle on close.
+A hand-rolled `div().absolute().inset_0()` scrim does **none** of that: it covers only its
+positioned ancestor, and an empty `on_mouse_down` closure registers a listener that swallows
+nothing, so clicks and hovers still reach whatever is behind it. `src/docker/views/detail.rs`'s
+module doc is the worked example.
+
+Two things bite when the dialog body is your own view:
+
+- **The body must be an entity**, not a struct rendered by the page. `Root::render_dialog_layer`
+  builds the dialog from its own closure, so nothing there observes the page entity and a page
+  `cx.notify()` does not repaint the dialog. Hand `open_dialog` an `Entity<YourView>` (as
+  `settings::open` does) and let *its* `cx.notify()` do the work.
+- **State the body's width; do not use `w_full`.** A percentage width only resolves against an
+  ancestor with a *definite* width, and inside the dialog's nested wrappers it resolves to `auto`
+  — which content-sizes the body to its widest child, leaving section headings, rules and code
+  editors short. Use `.content(|content, _, _| content.child(div().w(card_w - px(32.))…))`:
+  `.content()` avoids the `overflow_y_scrollbar` box that plain `.child()` children are wrapped
+  in, and `px(32.)` is `Dialog`'s own default `Edges::all(16)` padding. `Dialog` also computes
+  `left` from the width it was given, so an over-wide card is pushed off-centre rather than
+  clipped — shrink the width against `window.viewport_size()` *before* building the dialog.
+
 ```rust
 use gpui_component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_component::WindowExt as _;

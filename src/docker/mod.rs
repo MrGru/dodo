@@ -20,7 +20,7 @@
 //!   reuses them.
 //! - [`views`] — [`DockerView`](views::DockerView), which owns the vertical tab
 //!   rail down the page's left edge and the four pages it switches between, the
-//!   four pages themselves, and the read-only detail overlay they share. The
+//!   four pages themselves, and the read-only detail *dialog* they share. The
 //!   sidebar has one flat Docker row; the rail is the module's own navigation.
 //!
 //! # What each round shipped
@@ -37,18 +37,35 @@
 //! [`state::diff`]), keyboard row navigation ([`state::focus`]) and the row
 //! context menus, both routed through the actions below.
 //!
-//! Round 5 — the last — turns the two highest-value placeholders into real,
-//! read-only surfaces:
+//! Round 5 turns the two highest-value placeholders into real, read-only
+//! surfaces:
 //!
 //! - **Inspect**, for all four resource types. Four engine endpoints
 //!   ([`services::DockerEngine::inspect_container`] and its three siblings), one
 //!   model ([`models::inspect`], which reduces the response *as JSON* so every
-//!   field rule is testable without a daemon), one overlay
-//!   ([`views::detail::DetailPanel`]) shared by the four pages: key fields plus
+//!   field rule is testable without a daemon), one surface
+//!   ([`views::detail`]) shared by the four pages: key fields plus
 //!   the engine's own JSON in the highlighted code editor.
 //! - **Container logs**, a bounded non-following tail
 //!   ([`services::DockerEngine::container_logs`], reassembled by [`models::logs`])
-//!   in the same overlay.
+//!   on the same surface.
+//!
+//! Round 6 — the last — reshapes how that surface is reached and makes it
+//! properly modal:
+//!
+//! - **The row's identifying cell opens it.** The per-row eye icon (all four
+//!   pages) and logs icon (Containers) are gone; the Name / Repository cell is
+//!   the click target ([`views::widgets::name_cell`]), `enter` on the highlighted
+//!   row is the keyboard route ([`DockerOpenDetail`]), and both context menus
+//!   keep their Inspect / View Logs items. Only the detail-opening icons went —
+//!   the lifecycle icons, checkboxes and bulk actions are untouched.
+//! - **Inspect and Logs are two tabs of one dialog** for a container, each
+//!   fetched the first time it is shown ([`state::detail::DetailTabs`]). The
+//!   three single-surface kinds render no tab strip at all.
+//! - **It is a `window.open_dialog`, not an overlay in the page.** The old
+//!   in-page scrim could not block clicks — read
+//!   [`views::detail`]'s module doc for why, and for why
+//!   `settings::open`'s pattern is the one followed here.
 //!
 //! # What is still a placeholder, and where it plugs in
 //!
@@ -111,10 +128,13 @@ actions!(
         DockerMoveDown,
         DockerToggleSelect,
         DockerRefreshList,
+        // The highlighted row's activate key: opens the detail dialog, the
+        // keyboard equivalent of clicking the row's name.
+        DockerOpenDetail,
         // Right-click context-menu actions. The lifecycle four mirror the row
         // buttons and act on the right-clicked row; Inspect and Logs open the
-        // round-5 detail panel; Terminal and Stats are the disabled "coming
-        // soon" placeholders (see the module doc).
+        // detail dialog on their respective tabs; Terminal and Stats are the
+        // disabled "coming soon" placeholders (see the module doc).
         DockerContextStart,
         DockerContextStop,
         DockerContextRestart,
@@ -123,8 +143,6 @@ actions!(
         DockerContextLogs,
         DockerContextTerminal,
         DockerContextStats,
-        // Closes an open Inspect/Logs panel (escape).
-        DockerCloseDetail,
     ]
 );
 
@@ -132,21 +150,29 @@ actions!(
 ///
 /// - `up` / `down` — move the highlighted row.
 /// - `space` / `x` — toggle the highlighted row's selection (Containers only).
+/// - `enter` — open the highlighted row's detail dialog.
 /// - `cmd-r` — refresh the active page (manual Refresh, from the keyboard).
-/// - `escape` — close an open Inspect / Logs panel.
+///
+/// There is deliberately no `escape` binding here. The detail surface is now a
+/// `gpui_component` [`Dialog`](gpui_component::dialog::Dialog), which binds
+/// `escape` to its own `CancelDialog` in a context of its own and holds focus
+/// while it is open — so dismissing it is the library's job, not this module's,
+/// and a second binding would only be a way for the two to disagree.
 ///
 /// Must run after `gpui_component::init`, so a binding registered here wins the
 /// tie at equal context depth — the same ordering rule `api_explorer::init` and
 /// `settings::init` depend on. The arrow and space keys are only claimed by a
 /// focused text input (the search box), whose deeper context takes them first, so
-/// they drive row navigation everywhere else on the page.
+/// they drive row navigation everywhere else on the page. `enter` is *not* one of
+/// those: a single-line `Input` propagates it, so each page's handler checks that
+/// the list itself holds focus before acting on it.
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("up", DockerMoveUp, Some(KEY_CONTEXT)),
         KeyBinding::new("down", DockerMoveDown, Some(KEY_CONTEXT)),
         KeyBinding::new("space", DockerToggleSelect, Some(KEY_CONTEXT)),
         KeyBinding::new("x", DockerToggleSelect, Some(KEY_CONTEXT)),
+        KeyBinding::new("enter", DockerOpenDetail, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-r", DockerRefreshList, Some(KEY_CONTEXT)),
-        KeyBinding::new("escape", DockerCloseDetail, Some(KEY_CONTEXT)),
     ]);
 }

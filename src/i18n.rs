@@ -508,7 +508,6 @@ pub enum Str {
     // Docker module (round 5) — the read-only Inspect panel and Logs viewer:
     // their chrome, and the field labels the Inspect field list uses that no
     // table column already names.
-    DockerClose,
     DockerDetails,
     DockerRawJson,
     DockerDetailErrorTitle,
@@ -541,6 +540,11 @@ pub enum Str {
     DockerPull,
     DockerBuild,
     DockerStats,
+
+    // Docker module (round 6) — the tooltip on a row's identifying cell, which
+    // is now the click target that opens the detail dialog. The dialog's own
+    // tab labels reuse `DockerInspect` and `DockerViewLogs`.
+    DockerOpenDetails,
 }
 
 impl Str {
@@ -1513,8 +1517,6 @@ impl Str {
             (Str::DockerComingSoonLabel, Language::Vietnamese) => "Sắp có".into(),
 
             // Round 5 — the Inspect panel and the Logs viewer.
-            (Str::DockerClose, Language::English) => "Close".into(),
-            (Str::DockerClose, Language::Vietnamese) => "Đóng".into(),
             (Str::DockerDetails, Language::English) => "Details".into(),
             (Str::DockerDetails, Language::Vietnamese) => "Chi tiết".into(),
             (Str::DockerRawJson, Language::English) => "Raw JSON".into(),
@@ -1584,6 +1586,8 @@ impl Str {
             (Str::DockerBuild, Language::Vietnamese) => "Dựng image".into(),
             (Str::DockerStats, Language::English) => "Stats".into(),
             (Str::DockerStats, Language::Vietnamese) => "Thống kê".into(),
+            (Str::DockerOpenDetails, Language::English) => "Open details".into(),
+            (Str::DockerOpenDetails, Language::Vietnamese) => "Mở chi tiết".into(),
         }
     }
 }
@@ -2019,7 +2023,6 @@ mod tests {
             plain(Str::DockerOpenTerminal),
             plain(Str::DockerComingSoonLabel),
             // Round 5 — the Inspect panel, the Logs viewer and their field labels.
-            plain(Str::DockerClose),
             plain(Str::DockerDetails),
             plain(Str::DockerRawJson),
             plain(Str::DockerDetailErrorTitle),
@@ -2049,6 +2052,7 @@ mod tests {
             plain(Str::DockerPull),
             plain(Str::DockerBuild),
             plain(Str::DockerStats),
+            plain(Str::DockerOpenDetails),
         ]
     }
 
@@ -2360,36 +2364,36 @@ mod tests {
             Str::DockerOpenTerminal => 297,
             Str::DockerComingSoonLabel => 298,
 
-            Str::DockerClose => 299,
-            Str::DockerDetails => 300,
-            Str::DockerRawJson => 301,
-            Str::DockerDetailErrorTitle => 302,
-            Str::DockerNoLogs => 303,
-            Str::DockerNoLogsHint => 304,
-            Str::DockerLogsTail(_) => 305,
-            Str::DockerYes => 306,
-            Str::DockerNo => 307,
-            Str::DockerFieldId => 308,
-            Str::DockerFieldCommand => 309,
-            Str::DockerFieldStarted => 310,
-            Str::DockerFieldExitCode => 311,
-            Str::DockerFieldRestartPolicy => 312,
-            Str::DockerFieldIpAddress => 313,
-            Str::DockerFieldMounts => 314,
-            Str::DockerFieldTags => 315,
-            Str::DockerFieldDigest => 316,
-            Str::DockerFieldArchitecture => 317,
-            Str::DockerFieldOs => 318,
-            Str::DockerFieldLayers => 319,
-            Str::DockerFieldLabels => 320,
-            Str::DockerFieldOptions => 321,
-            Str::DockerFieldInternal => 322,
-            Str::DockerFieldAttachable => 323,
-            Str::DockerFieldSubnet => 324,
-            Str::DockerFieldGateway => 325,
-            Str::DockerPull => 326,
-            Str::DockerBuild => 327,
-            Str::DockerStats => 328,
+            Str::DockerDetails => 299,
+            Str::DockerRawJson => 300,
+            Str::DockerDetailErrorTitle => 301,
+            Str::DockerNoLogs => 302,
+            Str::DockerNoLogsHint => 303,
+            Str::DockerLogsTail(_) => 304,
+            Str::DockerYes => 305,
+            Str::DockerNo => 306,
+            Str::DockerFieldId => 307,
+            Str::DockerFieldCommand => 308,
+            Str::DockerFieldStarted => 309,
+            Str::DockerFieldExitCode => 310,
+            Str::DockerFieldRestartPolicy => 311,
+            Str::DockerFieldIpAddress => 312,
+            Str::DockerFieldMounts => 313,
+            Str::DockerFieldTags => 314,
+            Str::DockerFieldDigest => 315,
+            Str::DockerFieldArchitecture => 316,
+            Str::DockerFieldOs => 317,
+            Str::DockerFieldLayers => 318,
+            Str::DockerFieldLabels => 319,
+            Str::DockerFieldOptions => 320,
+            Str::DockerFieldInternal => 321,
+            Str::DockerFieldAttachable => 322,
+            Str::DockerFieldSubnet => 323,
+            Str::DockerFieldGateway => 324,
+            Str::DockerPull => 325,
+            Str::DockerBuild => 326,
+            Str::DockerStats => 327,
+            Str::DockerOpenDetails => 328,
         }
     }
 

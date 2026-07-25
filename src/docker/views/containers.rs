@@ -40,15 +40,16 @@ use crate::docker::models::status::ContainerStatus;
 use crate::docker::models::time::RelativeTime;
 use crate::docker::services::{DockerEngine, default_engine};
 use crate::docker::state::containers::{ContainersState, LoadStatus};
+use crate::docker::state::detail::DetailTab;
 use crate::docker::state::filters::FILTERABLE_STATUSES;
 use crate::docker::state::focus::{FocusMove, next_focus};
 use crate::docker::state::grouping::{ContainerGroup, GroupKey, GroupStatus};
-use crate::docker::views::detail::DetailPanel;
-use crate::docker::views::widgets::coming_soon_button;
+use crate::docker::views::detail::{self, DetailRequest};
+use crate::docker::views::widgets::{coming_soon_button, name_cell};
 use crate::docker::{
-    DockerCloseDetail, DockerContextDelete, DockerContextInspect, DockerContextLogs,
-    DockerContextRestart, DockerContextStart, DockerContextStats, DockerContextStop,
-    DockerContextTerminal, DockerMoveDown, DockerMoveUp, DockerRefreshList, DockerToggleSelect,
+    DockerContextDelete, DockerContextInspect, DockerContextLogs, DockerContextRestart,
+    DockerContextStart, DockerContextStats, DockerContextStop, DockerContextTerminal,
+    DockerMoveDown, DockerMoveUp, DockerOpenDetail, DockerRefreshList, DockerToggleSelect,
     KEY_CONTEXT, POLL_INTERVAL,
 };
 use crate::i18n::{Language, Str, t};
@@ -59,13 +60,14 @@ const SELECT_W: Pixels = px(36.);
 const STATUS_W: Pixels = px(116.);
 const CPU_W: Pixels = px(72.);
 const STARTED_W: Pixels = px(140.);
-/// Six xsmall buttons: Inspect, Logs, Start, Stop, Restart, Delete.
-const ACTIONS_W: Pixels = px(220.);
+/// Four xsmall buttons: Start, Stop, Restart, Delete. Inspect and View Logs
+/// used to sit here too; the detail dialog is opened from the Name cell now.
+const ACTIONS_W: Pixels = px(152.);
 const SEARCH_W: Pixels = px(240.);
 /// The table's minimum width. Below it the table scrolls horizontally rather
 /// than crushing the flex columns (Name, Image, Ports) to nothing — so at a
 /// narrow window Name stays readable and the row is scrolled to reach Actions.
-const TABLE_MIN_W: Pixels = px(964.);
+const TABLE_MIN_W: Pixels = px(896.);
 
 /// Which lifecycle call a per-row button triggers.
 #[derive(Clone, Copy)]
@@ -97,8 +99,6 @@ pub struct ContainersView {
     /// The row a right-click opened the context menu on; the menu's lifecycle
     /// actions read this. Set on right mouse-down, before the menu builds.
     context_target: Option<String>,
-    /// The read-only Inspect / Logs overlay, closed until a row action opens it.
-    detail: DetailPanel,
     /// Set when the page becomes active so `render` moves focus to the list once,
     /// letting keyboard navigation work without a click first.
     needs_focus: bool,
@@ -133,17 +133,10 @@ impl ContainersView {
             focus_handle: cx.focus_handle(),
             focused: None,
             context_target: None,
-            detail: DetailPanel::new(window, cx),
             needs_focus: false,
             loaded_once: false,
             language: Language::current(cx),
         }
-    }
-
-    /// How the detail panel's background fetch finds its way back to itself
-    /// through this view; see [`DetailPanel`].
-    fn detail_mut(&mut self) -> &mut DetailPanel {
-        &mut self.detail
     }
 
     /// Loads the list the first time the page is shown, once.
@@ -379,7 +372,7 @@ impl ContainersView {
         cx: &mut Context<Self>,
     ) {
         if let Some(id) = self.context_target.clone() {
-            self.open_inspect(id, window, cx);
+            self.open_detail(DetailTab::Inspect, id, window, cx);
         }
     }
 
@@ -390,43 +383,61 @@ impl ContainersView {
         cx: &mut Context<Self>,
     ) {
         if let Some(id) = self.context_target.clone() {
-            self.open_logs(id, window, cx);
+            self.open_detail(DetailTab::Logs, id, window, cx);
         }
     }
 
-    /// Escape closes an open panel; with nothing open it does nothing, leaving
-    /// the key free for whatever else claims it.
-    fn on_close_detail(&mut self, _: &DockerCloseDetail, _: &mut Window, cx: &mut Context<Self>) {
-        if self.detail.is_open() {
-            self.detail.close();
-            cx.notify();
+    /// `enter` on the highlighted row: the keyboard equivalent of clicking its
+    /// Name. It only fires for the list itself — a focused search box propagates
+    /// `enter` up to this context, and opening a dialog on it would be a
+    /// surprise — and does nothing until an arrow key has highlighted a row.
+    fn on_open_detail(
+        &mut self,
+        _: &DockerOpenDetail,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A focused search box propagates `enter` up to this context; opening a
+        // dialog on it would be a surprise, so hand the key back.
+        if self
+            .search
+            .read(cx)
+            .focus_handle(cx)
+            .contains_focused(window, cx)
+        {
+            cx.propagate();
+            return;
+        }
+        if let Some(id) = self.focused.clone() {
+            self.open_detail(DetailTab::Inspect, id, window, cx);
         }
     }
 
-    // ---- The read-only detail panel ------------------------------------------
+    // ---- The read-only detail dialog -----------------------------------------
 
-    /// Opens Inspect on one container. The fetch runs on the background
-    /// executor; the row's name labels the panel until the engine's own does.
-    fn open_inspect(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// Opens the shared detail dialog on one container, on `tab`. The fetch runs
+    /// on the background executor; the row's name labels the dialog until the
+    /// engine's own does, and the list's focus handle is what the dialog restores
+    /// focus to when it closes.
+    fn open_detail(
+        &mut self,
+        tab: DetailTab,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let title = self.row_name(&id);
-        let engine = self.engine.clone();
-        self.detail.open_inspect(
-            engine,
-            InspectKind::Container,
-            id,
-            title,
-            Self::detail_mut,
+        let request = match tab {
+            DetailTab::Inspect => DetailRequest::inspect(InspectKind::Container, id, title),
+            DetailTab::Logs => DetailRequest::logs(id, title),
+        };
+        detail::open(
+            self.engine.clone(),
+            request,
+            self.focus_handle.clone(),
             window,
             cx,
         );
-    }
-
-    /// Opens the log viewer on one container.
-    fn open_logs(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
-        let title = self.row_name(&id);
-        let engine = self.engine.clone();
-        self.detail
-            .open_logs(engine, id, title, Self::detail_mut, window, cx);
     }
 
     /// The name of the row with this id, or the id itself if it has gone (a poll
@@ -1106,13 +1117,23 @@ impl ContainersView {
                         })),
                 ),
             )
+            // The Name cell is the detail dialog's click target: it reads as a
+            // link and carries the same tooltip on every page.
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .font_medium()
-                    .truncate()
-                    .child(SharedString::from(row.name.clone())),
+                name_cell(
+                    SharedString::from(format!("cname-{}", row.id)),
+                    SharedString::from(row.name.clone()),
+                    t(Str::DockerOpenDetails, cx),
+                    cx.listener({
+                        let id = row.id.clone();
+                        move |this, _, window, cx| {
+                            this.open_detail(DetailTab::Inspect, id.clone(), window, cx)
+                        }
+                    }),
+                    cx,
+                )
+                .flex_1()
+                .min_w_0(),
             )
             .child(
                 div()
@@ -1171,32 +1192,11 @@ impl ContainersView {
 
     fn render_actions(&self, row: &Container, cx: &mut Context<Self>) -> impl IntoElement {
         let status = row.status;
+        // Lifecycle only. Inspect and View Logs were removed from here in round
+        // 6: the Name cell and the right-click menu open the detail dialog, so a
+        // misplaced click can no longer land on Delete instead.
         h_flex()
             .gap_1()
-            // The two read-only actions come first: they are always valid, for
-            // any container, in any state.
-            .child(action_button(
-                SharedString::from(format!("inspect-{}", row.id)),
-                AppIcon::Eye,
-                t(Str::DockerInspect, cx),
-                true,
-                ButtonVariant::Ghost,
-                cx.listener({
-                    let id = row.id.clone();
-                    move |this, _, window, cx| this.open_inspect(id.clone(), window, cx)
-                }),
-            ))
-            .child(action_button(
-                SharedString::from(format!("logs-{}", row.id)),
-                AppIcon::File,
-                t(Str::DockerViewLogs, cx),
-                true,
-                ButtonVariant::Ghost,
-                cx.listener({
-                    let id = row.id.clone();
-                    move |this, _, window, cx| this.open_logs(id.clone(), window, cx)
-                }),
-            ))
             .child(action_button(
                 SharedString::from(format!("start-{}", row.id)),
                 AppIcon::Play,
@@ -1270,23 +1270,8 @@ impl Render for ContainersView {
             .map(|message| t(message.clone(), cx));
         let has_selection = !self.state.selection.is_empty();
 
-        let engine = self.engine.clone();
-        let detail = self.detail.render(
-            cx.listener(|this, _, _, cx| {
-                this.detail.close();
-                cx.notify();
-            }),
-            cx.listener(move |this, _, window, cx| {
-                this.detail
-                    .reload(engine.clone(), Self::detail_mut, window, cx);
-            }),
-            cx,
-        );
-
         v_flex()
             .size_full()
-            // `relative` so the detail overlay positions against this page.
-            .relative()
             // The Docker list's key-binding scope: arrow/space/x/refresh actions
             // fire only while this page holds focus, and a focused search box
             // (a deeper context) still takes the arrows for text editing.
@@ -1295,6 +1280,7 @@ impl Render for ContainersView {
             .on_action(cx.listener(Self::on_move_up))
             .on_action(cx.listener(Self::on_move_down))
             .on_action(cx.listener(Self::on_toggle_select))
+            .on_action(cx.listener(Self::on_open_detail))
             .on_action(cx.listener(Self::on_refresh_action))
             .on_action(cx.listener(Self::on_context_start))
             .on_action(cx.listener(Self::on_context_stop))
@@ -1302,7 +1288,6 @@ impl Render for ContainersView {
             .on_action(cx.listener(Self::on_context_delete))
             .on_action(cx.listener(Self::on_context_inspect))
             .on_action(cx.listener(Self::on_context_logs))
-            .on_action(cx.listener(Self::on_close_detail))
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
@@ -1314,7 +1299,6 @@ impl Render for ContainersView {
                 this.child(self.render_action_banner(message, cx))
             })
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
-            .children(detail)
     }
 }
 

@@ -17,16 +17,17 @@ phases plug in. `api_explorer` is also the only tool that registers a key bindin
 (`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
 `settings::init`).
 
-**`src/docker/`** is the Docker/Podman module, and it is **feature-complete as of round 5**: four
+**`src/docker/`** is the Docker/Podman module, and it is **feature-complete as of round 6**: four
 list pages (Containers with compose grouping, filters, bulk actions; Images/Volumes/Networks),
 background polling with incremental merges, keyboard navigation, row context menus, and a
-read-only Inspect panel for all four resource types plus a basic container log viewer.
-**`src/docker/mod.rs` is the authority** — it documents the layer split, what each round shipped,
-and, for the features that are still deliberately disabled "Coming soon" placeholders (Exec/
-Terminal, Create/Pull/Build, Stats beyond live CPU%, Favorites), exactly where each one plugs in.
-Read it before changing anything here rather than inferring the structure from the files.
+read-only detail dialog — Inspect for all four resource types plus a container log viewer behind
+a second tab. **`src/docker/mod.rs` is the authority** — it documents the layer split, what each
+round shipped, and, for the features that are still deliberately disabled "Coming soon"
+placeholders (Exec/Terminal, Create/Pull/Build, Stats beyond live CPU%, Favorites), exactly where
+each one plugs in. Read it before changing anything here rather than inferring the structure from
+the files.
 
-Five things about the module that are not obvious from any one file:
+Six things about the module that are not obvious from any one file:
 
 - **Engine discovery is hand-rolled per platform because bollard's is not enough.**
   `services/engine.rs::connect()` carries the numbered order (DOCKER_HOST → `/var/run/docker.sock`
@@ -53,6 +54,17 @@ Five things about the module that are not obvious from any one file:
   `DockerPage` owns the page identity — its `title`/`icon`/`ALL`/`DEFAULT`. Do not reintroduce
   nesting here. `layout.rs::pane_title` is why the main-pane heading still names the page
   ("Containers") while the sidebar row names the tool ("Docker").
+- **A modal overlay is a `window.open_dialog`, never a scrim in the page's own tree.** The Docker
+  detail surface was the second attempt at hand-rolling one and it could not block clicks: a
+  `div().absolute().inset_0()` scrim only covers the *page* (not the rail or the sidebar), and a
+  no-op `on_mouse_down` closure registers a listener that swallows nothing — gpui keeps
+  dispatching to every hitbox under the cursor unless a listener calls `cx.stop_propagation()` or
+  the element sets `HitboxBehavior::BlockMouse` (`.occlude()`). `settings::open` had it right all
+  along; `views/detail.rs`'s module doc records the diagnosis, and `docker::init` deliberately
+  binds no `escape` because the library `Dialog` owns dismissal. Two costs of following that
+  pattern are written down there too: the dialog body must be an **entity** (a dialog layer does
+  not repaint on the page's `cx.notify()`), and its width must be **stated** rather than `w_full`
+  (a percentage width resolves to `auto` inside the dialog's wrappers and content-sizes the body).
 
 **dodo now persists one thing across restarts:** the API Explorer's collections, written by
 `services::collection_store::DiskCollectionStore` to `~/Library/Application Support/dodo/`

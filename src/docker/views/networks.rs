@@ -4,9 +4,9 @@
 //! "Containers" counts the attachments derived from the container set. Delete is
 //! confirmed then refused sanely while a container is still attached — and for
 //! the predefined `bridge`/`host`/`none` networks it is *disabled* outright
-//! ([`Network::is_predefined`]), since the engine would only reject it. Inspect
-//! opens the shared read-only
-//! [`DetailPanel`](crate::docker::views::detail::DetailPanel).
+//! ([`Network::is_predefined`]), since the engine would only reject it. Clicking
+//! a row's Name cell opens the shared read-only detail dialog
+//! ([`views::detail`](crate::docker::views::detail)).
 
 use std::sync::Arc;
 
@@ -36,12 +36,12 @@ use crate::docker::services::{DockerEngine, default_engine};
 use crate::docker::state::containers::LoadStatus;
 use crate::docker::state::focus::{FocusMove, next_focus};
 use crate::docker::state::resource::ResourceState;
-use crate::docker::views::detail::DetailPanel;
+use crate::docker::views::detail::{self, DetailRequest};
 use crate::docker::views::widgets::{
-    action_button, count_cell, header_cell, muted_cell, now_unix, resource_context_menu,
+    action_button, count_cell, header_cell, muted_cell, name_cell, now_unix, resource_context_menu,
 };
 use crate::docker::{
-    DockerCloseDetail, DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp,
+    DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp, DockerOpenDetail,
     DockerRefreshList, KEY_CONTEXT, POLL_INTERVAL,
 };
 use crate::i18n::{Language, Str, t};
@@ -51,9 +51,11 @@ const DRIVER_W: Pixels = px(120.);
 const SCOPE_W: Pixels = px(100.);
 const CONTAINERS_W: Pixels = px(116.);
 const CREATED_W: Pixels = px(132.);
-const ACTIONS_W: Pixels = px(84.);
+/// One xsmall button: Delete. Inspect used to sit beside it; the detail dialog is
+/// opened from the Name cell now.
+const ACTIONS_W: Pixels = px(48.);
 const SEARCH_W: Pixels = px(240.);
-const TABLE_MIN_W: Pixels = px(760.);
+const TABLE_MIN_W: Pixels = px(724.);
 
 pub struct NetworksView {
     engine: Arc<dyn DockerEngine>,
@@ -69,8 +71,6 @@ pub struct NetworksView {
     /// The row a right-click opened the menu on; the Delete and Inspect actions
     /// read it.
     context_target: Option<String>,
-    /// The read-only Inspect overlay, closed until a row action opens it.
-    detail: DetailPanel,
     /// Set when the page becomes active so `render` focuses the list once.
     needs_focus: bool,
     loaded_once: bool,
@@ -99,17 +99,10 @@ impl NetworksView {
             focus_handle: cx.focus_handle(),
             focused: None,
             context_target: None,
-            detail: DetailPanel::new(window, cx),
             needs_focus: false,
             loaded_once: false,
             language: Language::current(cx),
         }
-    }
-
-    /// How the detail panel's background fetch finds its way back to itself
-    /// through this view; see [`DetailPanel`].
-    fn detail_mut(&mut self) -> &mut DetailPanel {
-        &mut self.detail
     }
 
     pub fn ensure_loaded(&mut self, cx: &mut Context<Self>) {
@@ -226,33 +219,42 @@ impl NetworksView {
         cx: &mut Context<Self>,
     ) {
         if let Some(id) = self.context_target.clone() {
-            let title = self.row_name(&id);
-            self.open_inspect(id, title, window, cx);
+            self.open_detail(id, window, cx);
         }
     }
 
-    fn on_close_detail(&mut self, _: &DockerCloseDetail, _: &mut Window, cx: &mut Context<Self>) {
-        if self.detail.is_open() {
-            self.detail.close();
-            cx.notify();
-        }
-    }
-
-    /// Opens the read-only Inspect panel on one network.
-    fn open_inspect(
+    /// `enter` on the highlighted row: the keyboard equivalent of clicking its
+    /// Name. Only for the list itself — a focused search box propagates `enter`
+    /// up to this context.
+    fn on_open_detail(
         &mut self,
-        id: String,
-        title: String,
+        _: &DockerOpenDetail,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let engine = self.engine.clone();
-        self.detail.open_inspect(
-            engine,
-            InspectKind::Network,
-            id,
-            title,
-            Self::detail_mut,
+        // A focused search box propagates `enter` up to this context; opening a
+        // dialog on it would be a surprise, so hand the key back.
+        if self
+            .search
+            .read(cx)
+            .focus_handle(cx)
+            .contains_focused(window, cx)
+        {
+            cx.propagate();
+            return;
+        }
+        if let Some(id) = self.focused.clone() {
+            self.open_detail(id, window, cx);
+        }
+    }
+
+    /// Opens the shared detail dialog on one network.
+    fn open_detail(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self.row_name(&id);
+        detail::open(
+            self.engine.clone(),
+            DetailRequest::inspect(InspectKind::Network, id, title),
+            self.focus_handle.clone(),
             window,
             cx,
         );
@@ -523,13 +525,20 @@ impl NetworksView {
                     move |this, _, _, _| this.context_target = Some(id.clone())
                 }),
             )
+            // The Name cell is the detail dialog's click target.
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .font_medium()
-                    .truncate()
-                    .child(SharedString::from(row.name.clone())),
+                name_cell(
+                    SharedString::from(format!("nname-{}", row.id)),
+                    SharedString::from(row.name.clone()),
+                    t(Str::DockerOpenDetails, cx),
+                    cx.listener({
+                        let id = row.id.clone();
+                        move |this, _, window, cx| this.open_detail(id.clone(), window, cx)
+                    }),
+                    cx,
+                )
+                .flex_1()
+                .min_w_0(),
             )
             .child(
                 muted_cell(SharedString::from(row.driver.clone()), cx)
@@ -569,36 +578,20 @@ impl NetworksView {
         } else {
             t(Str::Delete, cx)
         };
-        h_flex()
-            .gap_1()
-            .child(action_button(
-                SharedString::from(format!("inspect-{}", row.id)),
-                AppIcon::Eye,
-                t(Str::DockerInspect, cx),
-                true,
-                ButtonVariant::Ghost,
-                cx.listener({
-                    let id = row.id.clone();
-                    let name = row.name.clone();
-                    move |this, _, window, cx| {
-                        this.open_inspect(id.clone(), name.clone(), window, cx)
-                    }
-                }),
-            ))
-            .child(action_button(
-                SharedString::from(format!("delete-{}", row.id)),
-                AppIcon::Trash,
-                delete_tooltip,
-                !predefined,
-                ButtonVariant::Danger,
-                cx.listener({
-                    let id = row.id.clone();
-                    let name = row.name.clone();
-                    move |this, _, window, cx| {
-                        this.confirm_delete(id.clone(), name.clone(), window, cx)
-                    }
-                }),
-            ))
+        // Delete only. Inspect was removed from here in round 6 — the Name cell
+        // and the right-click menu open the detail dialog.
+        h_flex().gap_1().child(action_button(
+            SharedString::from(format!("delete-{}", row.id)),
+            AppIcon::Trash,
+            delete_tooltip,
+            !predefined,
+            ButtonVariant::Danger,
+            cx.listener({
+                let id = row.id.clone();
+                let name = row.name.clone();
+                move |this, _, window, cx| this.confirm_delete(id.clone(), name.clone(), window, cx)
+            }),
+        ))
     }
 }
 
@@ -622,30 +615,16 @@ impl Render for NetworksView {
             .action_error()
             .map(|message| t(message.clone(), cx));
 
-        let engine = self.engine.clone();
-        let detail = self.detail.render(
-            cx.listener(|this, _, _, cx| {
-                this.detail.close();
-                cx.notify();
-            }),
-            cx.listener(move |this, _, window, cx| {
-                this.detail
-                    .reload(engine.clone(), Self::detail_mut, window, cx);
-            }),
-            cx,
-        );
-
         v_flex()
             .size_full()
-            .relative()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_move_up))
             .on_action(cx.listener(Self::on_move_down))
+            .on_action(cx.listener(Self::on_open_detail))
             .on_action(cx.listener(Self::on_refresh_action))
             .on_action(cx.listener(Self::on_context_delete))
             .on_action(cx.listener(Self::on_context_inspect))
-            .on_action(cx.listener(Self::on_close_detail))
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
@@ -656,7 +635,6 @@ impl Render for NetworksView {
                 this.child(self.render_action_banner(message, cx))
             })
             .child(div().flex_1().min_h_0().child(self.render_body(cx)))
-            .children(detail)
     }
 }
 
