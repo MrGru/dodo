@@ -12,12 +12,13 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::{
-    App, ClickEvent, Context, Div, FocusHandle, ParentElement as _, SharedString, Styled as _,
-    Window, div,
+    App, ClickEvent, Context, Div, FocusHandle, InteractiveElement as _, ParentElement as _,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Window, div,
 };
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::menu::PopupMenu;
-use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _};
+use gpui_component::tooltip::Tooltip;
+use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _};
 
 use crate::app_icon::AppIcon;
 use crate::docker::{DockerContextDelete, DockerContextInspect};
@@ -27,6 +28,44 @@ use crate::i18n::{Str, t};
 /// squeezed. The caller sets the width.
 pub fn header_cell(label: SharedString) -> Div {
     div().truncate().child(label)
+}
+
+/// A row's identifying cell — Name on Containers, Networks and Volumes,
+/// Repository on Images — as the click target that opens the row's detail dialog.
+///
+/// This replaced the per-row eye and logs icons, so the affordance has to be
+/// *visible*: it takes the theme's link colour with an underline on hover, a
+/// pointer cursor throughout, and a tooltip naming what a click does. The same
+/// dialog is reachable from the row's `enter` key (see
+/// [`DockerOpenDetail`](crate::docker::DockerOpenDetail)) and from the row's
+/// right-click menu, so nothing here is the only route to it.
+///
+/// Left mouse-down is deliberately *not* stopped: it has to reach the page root's
+/// `track_focus`, so the list is the focused handle when the dialog opens and is
+/// therefore the handle `Root::close_dialog` restores.
+///
+/// The caller sets the width (every page's identifying column is `flex_1`).
+pub fn name_cell(
+    id: SharedString,
+    text: SharedString,
+    tooltip: SharedString,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> Stateful<Div> {
+    let link = cx.theme().link;
+    div()
+        .id(id)
+        .font_medium()
+        .truncate()
+        .cursor_pointer()
+        .hover(|this| {
+            this.text_color(link)
+                .text_decoration_1()
+                .text_decoration_color(link)
+        })
+        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .on_click(on_click)
+        .child(text)
 }
 
 /// A muted cell rendering a "containers using" count as plain text. The number

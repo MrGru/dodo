@@ -26,9 +26,9 @@ pub enum AppIcon {
     PanelLeftClose,
     PanelLeftOpen,
 
-    // API Explorer. The five below ship as our own SVGs; the rest resolve
-    // through `Assets`' fallback to `gpui_component_assets`, which already
-    // carries them — see `src/assets.rs`.
+    // API Explorer. The five below, plus `trash`, ship as our own SVGs; the
+    // rest resolve through `Assets`' fallback to `gpui_component_assets`, which
+    // already carries them — see `src/assets.rs`.
     Clock,
     Import,
     Save,
@@ -48,6 +48,11 @@ pub enum AppIcon {
     HardDrive,
     PanelBottom,
     Plus,
+    /// The Delete action on every Docker list page (and the API Explorer's
+    /// collection deletes). Ships as our own `icons/trash.svg`: the library's
+    /// `delete.svg` — which this used to resolve to through `Assets`' fallback —
+    /// draws a backspace key, not a waste bin, so a destructive row action read
+    /// as "clear the field".
     Trash,
 
     // Docker module. `container`, `layers`, `refresh-cw`, `filter`, `square`
@@ -99,7 +104,7 @@ impl IconNamed for AppIcon {
             Self::HardDrive => "icons/hard-drive.svg",
             Self::PanelBottom => "icons/panel-bottom.svg",
             Self::Plus => "icons/plus.svg",
-            Self::Trash => "icons/delete.svg",
+            Self::Trash => "icons/trash.svg",
             Self::Container => "icons/container.svg",
             Self::Layers => "icons/layers.svg",
             Self::Network => "icons/network.svg",
