@@ -17,18 +17,30 @@ phases plug in. `api_explorer` is also the only tool that registers a key bindin
 (`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
 `settings::init`).
 
-Seven things about **`src/api_explorer/`** that no single file makes obvious:
+Eleven things about **`src/api_explorer/`** that no single file makes obvious:
 
 - **The whole send pipeline lives in `services/send.rs`, in this order:**
-  `pre-request script → resolve {{name}} → prepare → Transport::execute`. It is one blocking
-  function over trait objects, which is what makes the *ordering* unit-testable with a fake
-  transport and a fake engine and no `Window`. Its module doc records why the script runs
-  **before** substitution (the scripting plan said the opposite and was wrong: the shipped
+  `pre-request script → resolve {{name}} → prepare → Transport::execute → post-response script`.
+  It is one blocking function over trait objects, which is what makes the *ordering* unit-testable
+  with a fake transport and a fake engine and no `Window`. Its module doc records why the script
+  runs **before** substitution (the scripting plan said the opposite and was wrong: the shipped
   `pm.variables.set("timestamp", …)` template promises the value resolves in that same request)
   and why `prepare` nonetheless stays **last** (a header or URL a script wrote still goes through
   dodo's own validation). `models/interpolate.rs` owns substitution itself — the escape rule
   (`\{{`), the recursion guard and the decision that an unresolved reference *fails* the request
   rather than being sent literally or blanked; it is pure and exhaustively table-tested.
+- **The two hooks fail in opposite directions, deliberately.** A failed *pre-request* script stops
+  the send (a half-configured request produces a response nobody can reason about). A failed
+  *post-response* script **must not lose the response** — the request already happened, and the
+  response is the evidence the user needs to fix the script — so it becomes a Console line plus the
+  Tests tab's error banner while `SendOutcome::result` stays `Ok`. Both are argued in
+  `services/send.rs`'s module doc and both are tested.
+- **Test results attach to `ResponseState`, never to `Exchange`** (`models/test_result.rs`).
+  `Exchange` is protocol-neutral and must not learn about scripting; and a *pre-request* script can
+  define tests for a request that then never got a response, which `Exchange` could not hold at
+  all. History keeps only a `TestSummary` — it is capped by count, not bytes, and a row has space
+  for one badge. `Failed` and `Errored` stay distinct because they tell the user whether their API
+  or their script is wrong.
 - **Sending is one background job — script, `prepare` and the request together.** `prepare` used
   to run on the UI thread; it does not any more, because encoding a body may read a file (a
   multipart file part, a binary body), and a script may loop for its whole 2 s budget.
@@ -50,8 +62,24 @@ Seven things about **`src/api_explorer/`** that no single file makes obvious:
   `RequestSnapshot::script_origin` is set to `Imported` by `services/collection_import.rs` and
   never changed by editing, so an imported script cannot be laundered past the consent gate.
   Editing changes the *content hash*, which re-arms the gate — the two halves of a
-  `models/script_consent.rs::ConsentKey`. That module owns the whole policy; approvals persist in
-  a third `data_dir()` file.
+  `models/script_consent.rs::ConsentKey`. **One key covers both hooks** (they are hashed together):
+  an approval given when only the pre-request hook ran said nothing about a post-response script,
+  so honouring it for one would be exactly the laundering the gate exists to stop. That module owns
+  the whole policy; approvals persist in a third `data_dir()` file.
+- **`pm.test` and `pm.expect` are written in JavaScript, not in Rust bindings** — `PRELUDE` in
+  `services/script/quickjs.rs`, handed its two host functions as *arguments* so no `__`-prefixed
+  global exists for a script to find. Chai's chain words are self-references and `.not` is a getter
+  (a plain property would recurse forever). The matcher set is exactly `report.md` §3.2's and no
+  more: an unsupported matcher must fail as a missing function rather than quietly pass.
+- **The script editors' syntax check uses the engine that will run the script**
+  (`ScriptEngine::check` → `Module::declare`, QuickJS's compile-only flag), debounced in
+  `state/tab.rs`. That is the whole point: a second parser could underline code the engine then
+  runs happily. Module goal accepts a little more than script goal (top-level `await`, `import`),
+  which makes the residual disagreements *false negatives* — the safe direction. The **Format**
+  action beside it is deliberately *not* a JavaScript formatter: `models/script_format.rs` only
+  re-indents and normalises blank lines, and its doc records why (a real one, `dprint-plugin-
+  typescript`, measured at +2.8 MB — 12.7% — on a binary that had already grown for the engine).
+  Lines inside a template literal or block comment are emitted byte-for-byte.
 - **Pasting a cURL command into the URL box rebuilds the whole request** (`services/curl.rs`,
   which is pure and heavily table-tested). Two guards keep it from firing while somebody types the
   word "curl": `state::request::is_bulk_change` (a paste is not a keystroke) and a parse that must

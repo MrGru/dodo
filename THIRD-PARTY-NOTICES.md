@@ -73,13 +73,13 @@ Facts about this chain, stated without inference:
 ## The rest of the graph
 
 Over the locked graph as resolved for a macOS arm64 host with `--all-features`,
-following normal (non-dev, non-build) dependency edges — 465 distinct packages
+following normal (non-dev, non-build) dependency edges — 466 distinct packages
 including dodo itself:
 
 | Licence (as declared) | Packages |
 |---|---|
 | MIT / Apache-2.0 dual, in its various spellings | 266 |
-| MIT only | 96 |
+| MIT only | 97 |
 | Apache-2.0 only | 22 |
 | Unicode-3.0 (and one `(MIT OR Apache-2.0) AND Unicode-3.0`) | 19 |
 | Other permissive: BSD-2/3-Clause, ISC, Zlib, 0BSD, Unlicense, BSL-1.0, CC0-1.0, Apache-2.0 WITH LLVM-exception, in dual or combined expressions | 54 |
