@@ -17,8 +17,16 @@ phases plug in. `api_explorer` is also the only tool that registers a key bindin
 (`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
 `settings::init`).
 
-Three things about **`src/api_explorer/`** that no single file makes obvious:
+Four things about **`src/api_explorer/`** that no single file makes obvious:
 
+- **`{{name}}` is substituted *before* `prepare`, and an unresolved one fails the request.**
+  `services/http/resolve.rs` runs over the whole draft first, so everything `prepare` validates is
+  the final text — a variable holding `ftp://…` fails as the scheme error it is. The
+  unresolved-variable policy is a **decision, not an oversight**: `models/interpolate.rs`'s module
+  doc argues it against sending the token literally and against substituting empty, and a later
+  scripting round only moves the check to after the pre-request hook. That module also owns the
+  escape rule (`\{{`) and the recursion guard, and is where any change to substitution belongs —
+  it is pure and exhaustively table-tested.
 - **Sending is one background job, `prepare` included.** `prepare` used to run on the UI thread;
   it does not any more, because encoding a body may read a file (a multipart file part, a binary
   body). `state/tab.rs::send` spawns `prepare` → `Transport::execute` together, so a validation
@@ -85,11 +93,19 @@ Six things about the module that are not obvious from any one file:
   not repaint on the page's `cx.notify()`), and its width must be **stated** rather than `w_full`
   (a percentage width resolves to `auto` inside the dialog's wrappers and content-sizes the body).
 
-**dodo now persists one thing across restarts:** the API Explorer's collections, written by
-`services::collection_store::DiskCollectionStore` to `~/Library/Application Support/dodo/`
-(`data_dir()`). This is the first user data dodo saves, so the `dodo-theming-settings` skill's
-"nothing is persisted across restarts" is now scoped to appearance/language settings only, not
-collections. Persistence and initial load run on the background executor, never the UI thread.
+**dodo persists two things across restarts**, both under `~/Library/Application Support/dodo/`
+(`data_dir()`) and both behind a trait so the state layer never learns where they live:
+`collections.json` (`services::collection_store`) and `environments.json`
+(`services::variable_store`). The `dodo-theming-settings` skill's "nothing is persisted across
+restarts" is therefore scoped to appearance/language settings only. Persistence and initial load
+run on the background executor, never the UI thread.
+
+The two files version differently, and the difference is deliberate. A `RequestSnapshot` inside
+`collections.json` is versioned only by `#[serde(default)]`, which copes with *added* fields and
+nothing else. `environments.json` carries an explicit `"version"` from its very first write
+(`models::variables::SCHEMA_VERSION`), and `variable_store::parse_document` **refuses** a file
+whose version is higher rather than half-reading it. Copy that pattern for any new file; do not
+copy `collections.json`'s.
 
 **Build and release engineering lives in `docs/`**, and those two files are the authority for it:
 `docs/build-optimization.md` (release profile, the measured before/after size table, linker

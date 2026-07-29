@@ -206,6 +206,15 @@ Two things bite when the dialog body is your own view:
   builds the dialog from its own closure, so nothing there observes the page entity and a page
   `cx.notify()` does not repaint the dialog. Hand `open_dialog` an `Entity<YourView>` (as
   `settings::open` does) and let *its* `cx.notify()` do the work.
+- **That body entity may not read the page entity while it is being constructed.** `open` is
+  reached from a click listener, so the page is *leased* for the whole call; a
+  `page.read(cx)` inside the body's `new` — even indirectly, via a helper that later works fine —
+  panics at runtime with `cannot read <Page> while it is already being updated`. There is no
+  compile error and no warning. Seed the body with **plain data the caller reads for it**
+  (`environments_editor::open` takes the scope's name and variables; `docker::views::detail` takes
+  a `DetailRequest`), and read the page only from the body's own later listeners, where the lease
+  is gone. Deferring does not help: `cx.defer_in`'s closure is handed `&mut Self`, so the page is
+  leased there too.
 - **State the body's width; do not use `w_full`.** A percentage width only resolves against an
   ancestor with a *definite* width, and inside the dialog's nested wrappers it resolves to `auto`
   — which content-sizes the body to its widest child, leaving section headings, rules and code
