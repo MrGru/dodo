@@ -203,12 +203,23 @@ impl ApiExplorer {
 
     /// Opens the editor on the environment currently active, or on the
     /// collection scope when there is none.
+    ///
+    /// The starting scope's name and variables are read **here** and handed
+    /// over: this runs inside a click listener, so the page entity is leased
+    /// and the editor cannot read it back during construction.
     pub(super) fn open_environments_editor(
         &mut self,
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        environments_editor::open(cx.entity(), self.environments.active_id(), window, cx);
+        let scope = self.environments.active_id();
+        let name = self
+            .environments
+            .active()
+            .map(|environment| environment.name.clone())
+            .unwrap_or_default();
+        let variables = self.environments.variables(scope).to_vec();
+        environments_editor::open(cx.entity(), scope, name, variables, window, cx);
     }
 
     /// The "Resolves to …" line, drawn only when the URL holds a reference.

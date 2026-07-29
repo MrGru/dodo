@@ -63,8 +63,15 @@ const PANEL_MARGIN: Pixels = px(24.);
 /// `Dialog`'s own left and right padding (`Edges::all(16)`), subtracted to get
 /// the body's width from the card's.
 const DIALOG_PADDING_X: Pixels = px(32.);
-/// The scope list down the left.
+/// The scope list down the left: its preferred width, and the width below
+/// which it will not shrink.
+///
+/// It gives way rather than holding 184px, because at a narrow window the card
+/// itself shrinks ([`card_size`]) and a fixed list would take that width out of
+/// the KEY and VALUE cells — which is where it hurts, since an environment name
+/// truncates gracefully and a variable value does not.
 const SCOPE_LIST_W: Pixels = px(184.);
+const SCOPE_LIST_MIN_W: Pixels = px(112.);
 /// The enable checkbox column, matching the request tables' own.
 const ENABLE_COLUMN: Pixels = px(24.);
 /// The SECRET column: a checkbox and the reveal toggle beside it.
@@ -115,8 +122,22 @@ pub struct EnvironmentsEditor {
 }
 
 /// Opens the editor over the whole window, starting on `scope`.
-pub fn open(page: Entity<ApiExplorer>, scope: Scope, window: &mut Window, cx: &mut App) {
-    let view = cx.new(|cx| EnvironmentsEditor::new(page, scope, window, cx));
+///
+/// `name` and `variables` are the starting scope's contents, read by the
+/// **caller**. They cannot be read here: `open` is reached from a click
+/// listener on the page, so the page entity is already leased and reading it
+/// again panics with "cannot read … while it is already being updated". Every
+/// later scope switch goes through [`EnvironmentsEditor::select`], which runs
+/// in the editor's own context where the page is free.
+pub fn open(
+    page: Entity<ApiExplorer>,
+    scope: Scope,
+    name: String,
+    variables: Vec<Variable>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let view = cx.new(|cx| EnvironmentsEditor::new(page, scope, name, variables, window, cx));
 
     window.open_dialog(cx, move |dialog, window, cx| {
         let view = view.clone();
@@ -149,6 +170,8 @@ impl EnvironmentsEditor {
     fn new(
         page: Entity<ApiExplorer>,
         scope: Scope,
+        name: String,
+        variables: Vec<Variable>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -176,7 +199,10 @@ impl EnvironmentsEditor {
             language: Language::current(cx),
             focus_handle: cx.focus_handle(),
         };
-        editor.select(scope, window, cx);
+        editor
+            .name_input
+            .update(cx, |state, cx| state.set_value(name, window, cx));
+        editor.load_rows(&variables, window, cx);
         editor
     }
 
@@ -204,8 +230,15 @@ impl EnvironmentsEditor {
             .update(cx, |state, cx| state.set_value(name, window, cx));
 
         let variables = self.page.read(cx).environments.variables(scope).to_vec();
+        self.load_rows(&variables, window, cx);
+    }
+
+    /// Rebuilds the row list from plain data. Split out of [`Self::select`] so
+    /// that construction — which may not read the page, see [`open`] — and a
+    /// later scope switch share one path.
+    fn load_rows(&mut self, variables: &[Variable], window: &mut Window, cx: &mut Context<Self>) {
         self.rows = Vec::with_capacity(variables.len().max(1));
-        for variable in &variables {
+        for variable in variables {
             let row = self.build_row(variable, window, cx);
             self.rows.push(row);
         }
@@ -311,7 +344,17 @@ impl EnvironmentsEditor {
     }
 
     /// Pushes the rows into the page's state, without touching the disk.
+    ///
+    /// Refuses while the page's own load has not landed: the rows would have
+    /// been built from an empty placeholder document, and writing them back
+    /// would erase the file that is still being read. See
+    /// [`EnvironmentState::is_loaded`].
+    ///
+    /// [`EnvironmentState::is_loaded`]: crate::api_explorer::state::environment::EnvironmentState::is_loaded
     fn commit(&mut self, cx: &mut Context<Self>) {
+        if !self.page.read(cx).environments.is_loaded() {
+            return;
+        }
         let variables = self.harvest(cx);
         let scope = self.scope;
         self.page.update(cx, |page, cx| {
@@ -322,6 +365,9 @@ impl EnvironmentsEditor {
     }
 
     fn persist(&mut self, cx: &mut Context<Self>) {
+        if !self.page.read(cx).environments.is_loaded() {
+            return;
+        }
         self.page.update(cx, |page, cx| {
             page.persist_environments(cx);
         });
@@ -505,7 +551,13 @@ impl EnvironmentsEditor {
             .collect();
 
         v_flex()
-            .w(SCOPE_LIST_W)
+            // A share of the card rather than a fixed width, clamped both ways.
+            // `flex_shrink` alone does nothing here: the pane beside this one is
+            // `flex_1` with `min_w_0`, so it absorbs every pixel of shrinking
+            // and this would never give any back.
+            .w(gpui::relative(0.32))
+            .min_w(SCOPE_LIST_MIN_W)
+            .max_w(SCOPE_LIST_W)
             .flex_shrink_0()
             .h_full()
             .gap_1()
