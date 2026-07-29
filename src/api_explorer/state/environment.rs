@@ -12,6 +12,7 @@
 //! without a `Window`. Persisting is the view's job, because it is the view
 //! that owns the background executor and the store handle.
 
+use crate::api_explorer::models::script::{VariableWrite, WriteScope};
 use crate::api_explorer::models::variables::{
     Environment, Variable, VariableDocument, VariableSet,
 };
@@ -123,6 +124,54 @@ impl EnvironmentState {
         }
     }
 
+    /// Applies one variable a pre-request script wrote, and says whether
+    /// anything changed.
+    ///
+    /// A write to the environment scope with **no environment active** is
+    /// dropped: creating one as a side effect of a script would be a surprise
+    /// nobody asked for, and picking an arbitrary existing one would be worse.
+    /// The collection scope always exists, so it always takes the write.
+    ///
+    /// A value written here is never marked `secret` and never un-marks an
+    /// existing one: `secret` is the user's classification of a name, and a
+    /// script overwriting the value of a token must not quietly reveal it.
+    pub fn apply_script_write(&mut self, write: &VariableWrite) -> bool {
+        let scope = match write.scope {
+            WriteScope::Collection => None,
+            WriteScope::Environment => match self.active_id() {
+                Some(id) => Some(id),
+                None => return false,
+            },
+        };
+
+        let key = write.key.trim();
+        if key.is_empty() {
+            return false;
+        }
+
+        let mut variables = self.variables(scope).to_vec();
+        match &write.value {
+            Some(value) => {
+                match variables
+                    .iter_mut()
+                    .find(|variable| variable.key.trim() == key)
+                {
+                    Some(variable) => variable.value = value.clone(),
+                    None => variables.push(Variable {
+                        key: key.to_string(),
+                        value: value.clone(),
+                        enabled: true,
+                        secret: false,
+                    }),
+                }
+            }
+            None => variables.retain(|variable| variable.key.trim() != key),
+        }
+
+        self.set_variables(scope, variables);
+        true
+    }
+
     /// Adds an environment and returns its id. A new environment does *not*
     /// become active on its own: switching is the user's decision, and doing it
     /// for them would silently re-resolve every open request.
@@ -212,6 +261,7 @@ impl EnvironmentState {
 #[cfg(test)]
 mod tests {
     use super::EnvironmentState;
+    use crate::api_explorer::models::script::{VariableWrite, WriteScope};
     use crate::api_explorer::models::variables::{
         Environment, Variable, VariableDocument, VariableScope,
     };
@@ -354,6 +404,95 @@ mod tests {
             state.variable_set().lookup("version").map(|(_, v)| v),
             Some("v2")
         );
+    }
+
+    // ---- what a pre-request script wrote ------------------------------------
+
+    fn write(scope: WriteScope, key: &str, value: Option<&str>) -> VariableWrite {
+        VariableWrite {
+            scope,
+            key: key.into(),
+            value: value.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_script_write_updates_the_active_environment_in_place() {
+        let mut state = state();
+        assert!(state.apply_script_write(&write(
+            WriteScope::Environment,
+            "host",
+            Some("prod.example.com")
+        )));
+        assert_eq!(
+            state.variable_set().lookup("host"),
+            Some((VariableScope::Environment, "prod.example.com"))
+        );
+        assert_eq!(
+            state.variables(state.active_id()).len(),
+            1,
+            "the write duplicated the row instead of updating it"
+        );
+    }
+
+    #[test]
+    fn a_script_write_of_a_new_name_adds_an_enabled_row() {
+        let mut state = state();
+        assert!(state.apply_script_write(&write(WriteScope::Environment, "token", Some("abc"))));
+        let added = state
+            .variables(state.active_id())
+            .iter()
+            .find(|variable| variable.key == "token")
+            .expect("the variable was added");
+        assert!(added.enabled);
+        assert!(!added.secret);
+    }
+
+    #[test]
+    fn a_script_write_does_not_reveal_a_secret_it_overwrites() {
+        let mut state = state();
+        let active = state.active_id().expect("one is active");
+        state.set_variables(Some(active), vec![Variable::secret("token", "old")]);
+
+        state.apply_script_write(&write(WriteScope::Environment, "token", Some("new")));
+
+        let token = &state.variables(Some(active))[0];
+        assert_eq!(token.value, "new");
+        assert!(token.secret, "a script write unmasked a secret variable");
+    }
+
+    #[test]
+    fn a_script_unset_removes_the_row() {
+        let mut state = state();
+        assert!(state.apply_script_write(&write(WriteScope::Environment, "host", None)));
+        assert!(state.variables(state.active_id()).is_empty());
+    }
+
+    #[test]
+    fn an_environment_write_with_nothing_active_is_dropped() {
+        // Not "create an environment": that would be a side effect of running
+        // somebody else's script.
+        let mut state = state();
+        state.set_active(None);
+        assert!(!state.apply_script_write(&write(WriteScope::Environment, "token", Some("abc"))));
+        assert_eq!(state.environments()[0].variables.len(), 1);
+    }
+
+    #[test]
+    fn a_collection_write_always_lands_because_that_scope_always_exists() {
+        let mut state = state();
+        state.set_active(None);
+        assert!(state.apply_script_write(&write(WriteScope::Collection, "version", Some("v9"))));
+        assert_eq!(
+            state.variable_set().lookup("version"),
+            Some((VariableScope::Collection, "v9"))
+        );
+    }
+
+    #[test]
+    fn a_write_with_no_name_changes_nothing() {
+        let mut state = state();
+        assert!(!state.apply_script_write(&write(WriteScope::Collection, "  ", Some("x"))));
     }
 
     #[test]

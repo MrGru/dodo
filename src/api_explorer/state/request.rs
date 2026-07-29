@@ -10,9 +10,11 @@ use gpui_component::input::InputState;
 
 use crate::api_explorer::models::auth::{ApiKeyLocation, AuthDraft, AuthType};
 use crate::api_explorer::models::body::{BodyDraft, BodyType};
+use crate::api_explorer::models::collection::NodeId;
 use crate::api_explorer::models::key_value::{FieldKind, KeyValue};
 use crate::api_explorer::models::method::HttpMethod;
 use crate::api_explorer::models::request::RequestDraft;
+use crate::api_explorer::models::script::ScriptOrigin;
 use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::api_explorer::models::tab_title;
 use crate::i18n::{Str, t};
@@ -285,10 +287,18 @@ pub struct RequestState {
     pub auth_key_value: Entity<InputState>,
     pub auth_key_location: ApiKeyLocation,
 
-    // Scripts tab. Edited and kept for the session; nothing runs them, which
-    // the tab states on screen rather than leaving to be discovered.
+    // Scripts tab.
     pub pre_request_script: Entity<InputState>,
     pub post_response_script: Entity<InputState>,
+    /// Where this request's scripts came from, which is what the consent gate
+    /// reads. Set once — by an import, or by whatever snapshot the tab was
+    /// opened from — and deliberately **not** changed by editing: see
+    /// [`ScriptOrigin`].
+    pub script_origin: ScriptOrigin,
+    /// The collection node this tab was opened from, when it was opened from
+    /// one. The other half of a consent key, and `None` for a new tab, a
+    /// history reopen or a pasted cURL command.
+    pub origin_node: Option<NodeId>,
 
     /// The tab's display name. `None` means "not named yet", and the strip
     /// shows the method and path instead.
@@ -388,6 +398,8 @@ impl RequestState {
 
             pre_request_script: code_editor("text", pre_placeholder, window, cx),
             post_response_script: code_editor("text", post_placeholder, window, cx),
+            script_origin: ScriptOrigin::default(),
+            origin_node: None,
 
             name: None,
             dirty: false,
@@ -759,6 +771,7 @@ impl RequestState {
             auth: draft.auth,
             pre_request_script: self.pre_request_script.read(cx).value().to_string(),
             post_response_script: self.post_response_script.read(cx).value().to_string(),
+            script_origin: self.script_origin,
         }
     }
 
@@ -813,6 +826,9 @@ impl RequestState {
         let post = snapshot.post_response_script.clone();
         self.post_response_script
             .update(cx, |state, cx| state.set_value(post, window, cx));
+        // Provenance travels with the request: restoring an imported request
+        // into a tab does not make its script one the user wrote.
+        self.script_origin = snapshot.script_origin;
 
         self.name = name;
         // A freshly restored request matches what is saved, so no unsaved dot.

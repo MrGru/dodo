@@ -9,12 +9,16 @@ use std::sync::Arc;
 use gpui::{Context, EventEmitter, Task, Window};
 
 use crate::api_explorer::models::exchange::{BodyKind, Exchange};
+use crate::api_explorer::models::script::VariableWrite;
 use crate::api_explorer::models::variables::VariableSet;
-use crate::api_explorer::services::http::{body, prepare, resolve};
-use crate::api_explorer::services::{Transport, TransportError};
+use crate::api_explorer::services::Transport;
+use crate::api_explorer::services::http::body;
+use crate::api_explorer::services::script::ScriptEngine;
+use crate::api_explorer::services::send::{ScriptJob, SendJob, send};
 use crate::api_explorer::state::history::HistoryRecord;
 use crate::api_explorer::state::request::RequestState;
 use crate::api_explorer::state::response::{Outcome, ResponseState, window_lines};
+use crate::i18n::Str;
 
 pub struct RequestTabState {
     pub request: RequestState,
@@ -32,6 +36,17 @@ pub struct RequestTabState {
 /// completed, which is the seam phase 1 described.
 impl EventEmitter<HistoryRecord> for RequestTabState {}
 
+/// Variables a pre-request script wrote, on their way to the page.
+///
+/// A second event rather than a field on [`HistoryRecord`], because variables
+/// are **cross-tab** state: the tab is not allowed to write them, so it says
+/// what happened and `ApiExplorer::watch_tab` — which owns the environments and
+/// the store — applies and persists them. That reuses the one ownership seam
+/// that already exists rather than adding a rule.
+pub struct ScriptWrites(pub Vec<VariableWrite>);
+
+impl EventEmitter<ScriptWrites> for RequestTabState {}
+
 impl RequestTabState {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
@@ -45,47 +60,59 @@ impl RequestTabState {
     ///
     /// Reading the editors out into a [`RequestDraft`] is the only part that
     /// happens here: it needs the entities, which live on the UI thread.
-    /// **Substitution, validation and assembly go to the background executor
-    /// with the request itself**, because building the body may read a file the
-    /// Body tab points at (a multipart file part, a binary body), and a file on
-    /// a slow volume must never stall a frame. The cost is that a mistyped URL
+    /// **The script, substitution, validation and assembly all go to the
+    /// background executor with the request itself.** Building the body may
+    /// read a file the Body tab points at, and a script may loop for its whole
+    /// 2 s budget; neither may stall a frame. The cost is that a mistyped URL
     /// is reported one task hop later than the keystroke — invisible, and the
     /// right trade.
     ///
-    /// `variables` is the page's [`VariableSet`], read on the UI thread at the
-    /// moment Send is pressed and moved into the task with the draft: a request
-    /// in flight resolves against the environment that was active when it
-    /// started, whatever the user switches to while it runs.
+    /// `variables` is the page's [`VariableSet`] and `script` the decision the
+    /// page's consent ledger already made, both read on the UI thread at the
+    /// moment Send is pressed and moved into the task: a request in flight
+    /// resolves against the environment that was active when it started,
+    /// whatever the user switches to while it runs.
     ///
     /// [`RequestDraft`]: crate::api_explorer::models::request::RequestDraft
     pub fn send(
         &mut self,
         transport: Arc<dyn Transport>,
+        engine: Arc<dyn ScriptEngine>,
         variables: VariableSet,
+        script: ScriptJob,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let draft = self.request.draft(cx);
+        let summary = self.request.snapshot(cx).summary();
 
+        self.response.console.begin_run(summary);
         self.response.outcome = Outcome::InFlight;
         cx.notify();
 
+        let job = SendJob {
+            draft,
+            variables,
+            script,
+        };
+
         self.send_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = cx
+            let outcome = cx
                 .background_executor()
-                .spawn(async move {
-                    // `resolve` before `prepare`, so everything `prepare`
-                    // validates is the text that actually goes on the wire.
-                    let resolved = resolve::resolve(&draft, &variables)?;
-                    transport.execute(prepare::prepare(&resolved)?)
-                })
+                .spawn(async move { send(job, engine.as_ref(), transport.as_ref()) })
                 .await;
 
             // The window or the tab can be gone by the time this lands; both
             // are ordinary shutdown paths, not errors.
-            let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok(exchange) => this.receive(exchange, window, cx),
-                Err(error) => this.fail(error, cx),
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.response.console.extend(outcome.logs);
+                if !outcome.writes.is_empty() {
+                    cx.emit(ScriptWrites(outcome.writes));
+                }
+                match outcome.result {
+                    Ok(exchange) => this.receive(exchange, window, cx),
+                    Err(error) => this.fail(error, cx),
+                }
             });
         }));
     }
@@ -123,8 +150,11 @@ impl RequestTabState {
         cx.notify();
     }
 
-    fn fail(&mut self, error: TransportError, cx: &mut Context<Self>) {
-        self.response.outcome = Outcome::Failed(error.message());
+    /// No response arrived. `error` is already the message: a transport failure
+    /// and a failed pre-request script both end here, and the banner should not
+    /// have to know which.
+    fn fail(&mut self, error: Str, cx: &mut Context<Self>) {
+        self.response.outcome = Outcome::Failed(error);
         self.send_task = None;
         // A failed request is still history: no status, no timing.
         let snapshot = self.request.snapshot(cx);
@@ -168,7 +198,6 @@ impl RequestTabState {
             return;
         };
 
-        use crate::api_explorer::services::http::body;
         use crate::api_explorer::state::response::BodyView;
 
         let kind = exchange.kind;
