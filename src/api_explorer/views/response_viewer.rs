@@ -16,7 +16,6 @@ use gpui_component::{
 };
 
 use crate::api_explorer::components::empty_state::empty_state;
-use crate::api_explorer::components::later_step::later_step;
 use crate::api_explorer::components::status_tag::{metric, status_tag};
 use crate::api_explorer::models::exchange::{BodyKind, StatusClass, format_duration, format_size};
 use crate::api_explorer::models::json_tree::{RowContent, RowLabel, ScalarKind};
@@ -166,6 +165,7 @@ impl ApiExplorer {
         let active = state.response.active_tab;
         let header_count = state.response.header_count();
         let console_errors = state.response.console.unread_errors();
+        let tests = state.response.test_summary();
         let body_view = state.response.body_view;
         let has_body = state.response.exchange().is_some();
         let kind = state
@@ -216,6 +216,21 @@ impl ApiExplorer {
                                         .rounded_full()
                                         .child(format!("{header_count}")),
                                 ),
+                                // Passed over total, in the colour of the worst
+                                // outcome — one fraction reads better than a
+                                // green/red pair in a strip that already has to
+                                // fit five tabs plus the body controls.
+                                ResponseTab::Tests if tests.is_some() => {
+                                    let summary = tests.expect("checked");
+                                    let tone = if summary.all_passed() {
+                                        Tag::success()
+                                    } else if summary.failed > 0 {
+                                        Tag::danger()
+                                    } else {
+                                        Tag::warning()
+                                    };
+                                    tab.suffix(tone.small().rounded_full().child(summary.badge()))
+                                }
                                 // Errors a script logged while the user was
                                 // looking at another pane. Cleared by opening
                                 // the Console, not by the next send.
@@ -389,20 +404,14 @@ impl ApiExplorer {
         }
 
         // Read before the immutable borrow of `cx` is needed mutably below.
+        // Every response tab renders something real now; the placeholder branch
+        // that used to stand here is gone with the last of them.
         let body_view = state.response.body_view;
-        if !pane.is_implemented() {
-            return later_step(
-                AppIcon::SquareCode,
-                t(pane.label(), cx),
-                t(Str::ArrivesLater, cx),
-                cx,
-            )
-            .into_any_element();
-        }
 
         match pane {
             ResponseTab::Headers => self.headers_pane(tab, cx).into_any_element(),
             ResponseTab::Cookies => self.cookies_pane(tab, cx).into_any_element(),
+            ResponseTab::Tests => self.tests_pane(tab, cx),
             ResponseTab::Console => self.console_pane(tab, cx),
             // Body is the default pane. In Tree mode it renders the parsed JSON
             // tree; every other mode renders through the shared editor.

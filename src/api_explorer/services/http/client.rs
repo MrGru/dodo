@@ -119,6 +119,11 @@ impl Transport for HttpTransport {
 
         Ok(Exchange {
             status: status.as_u16(),
+            // `reqwest` does not surface the server's own phrase, so this is
+            // the registered one for the code. That is what Postman shows too,
+            // and it is honest: a server sending a custom phrase gets the
+            // standard name rather than a wrong one.
+            reason: status.canonical_reason().unwrap_or_default().to_string(),
             headers,
             body: text,
             kind,

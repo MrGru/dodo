@@ -17,17 +17,22 @@
 //! - [`components`] — the few small elements the widget library does not have.
 //! - [`views`] — rendering only.
 //!
-//! Scripts run. The **pre-request** hook executes on every send, in a QuickJS
-//! sandbox that [`services::script`] is the only module allowed to name, behind
-//! a consent gate for anything that arrived by import
-//! ([`models::script_consent`]); its output lands in the Console response tab.
+//! Scripts run, **both hooks**. The pre-request hook executes before every send
+//! and the post-response hook after every response, in a QuickJS sandbox that
+//! [`services::script`] is the only module allowed to name, behind one consent
+//! gate covering both ([`models::script_consent`]). Their `console` output lands
+//! in the Console response tab and their `pm.test` results in the Tests tab
+//! ([`models::test_result`]), with a `passed/total` badge on the tab and another
+//! in history. The two script editors are JavaScript-highlighted, re-parsed as
+//! they are typed by the same engine that will run them, and have a Format
+//! action whose deliberately narrow scope [`models::script_format`] argues.
 //!
 //! What is deliberately still absent, each said out loud where a user would look
 //! for it rather than left to be discovered: OAuth 2.0 (needs a redirect flow
-//! and a token store), the **post-response** hook and the Tests tab (`pm.response`,
-//! `pm.test` and `pm.expect` are the next round — the Scripts tab says so, and
-//! the editor keeps what is typed there meanwhile), and drag-and-drop reordering
-//! of collections (the model supports it; the gesture is future work).
+//! and a token store), `pm.sendRequest` (denied outright — see
+//! `decision-pm-sendrequest-scope`; a script has no network), and drag-and-drop
+//! reordering of collections (the model supports it; the gesture is future
+//! work).
 //!
 //! Uploads are here, and there is one rule about them worth stating at this
 //! level: **no file is read on the UI thread.** Choosing one goes through

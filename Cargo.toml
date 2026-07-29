@@ -15,7 +15,7 @@ license = "MIT"
 # which is real but not worth the ~550 `Str` variants it would have to gate.
 [features]
 default = ["syntax-highlighting"]
-# The three tree-sitter grammars the code editor highlights with. Turning this
+# The four tree-sitter grammars the code editor highlights with. Turning this
 # off (`--no-default-features`) drops the grammar crates and their generated C
 # parsers entirely and the editor falls back to plain, unhighlighted text —
 # which is exactly what the library does when none of the features is set. It
@@ -25,6 +25,11 @@ syntax-highlighting = [
     "gpui-component/tree-sitter",
     "gpui-component/tree-sitter-html",
     "gpui-component/tree-sitter-yaml",
+    # JavaScript, for the Scripts tab's two editors and the consent dialog's
+    # read-only view of an imported script. Measured on its own in
+    # `docs/build-optimization.md`; it is the only grammar here that colours
+    # something the user *writes* rather than something a server sent.
+    "gpui-component/tree-sitter-javascript",
 ]
 
 [dependencies]

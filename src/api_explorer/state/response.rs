@@ -6,6 +6,7 @@ use gpui_component::input::InputState;
 use crate::api_explorer::models::console::{ConsoleLevel, ConsoleLog};
 use crate::api_explorer::models::exchange::Exchange;
 use crate::api_explorer::models::json_tree::JsonTree;
+use crate::api_explorer::models::test_result::{TestReport, TestSummary};
 use crate::i18n::Str;
 
 /// How many lines of a body are put into the editor at once.
@@ -43,13 +44,6 @@ impl ResponseTab {
             ResponseTab::Tests => Str::ResponseTabTests,
             ResponseTab::Console => Str::ResponseTabConsole,
         }
-    }
-
-    pub fn is_implemented(self) -> bool {
-        matches!(
-            self,
-            ResponseTab::Body | ResponseTab::Headers | ResponseTab::Cookies | ResponseTab::Console
-        )
     }
 
     /// Whether this tab has something to show before any response has arrived.
@@ -112,6 +106,15 @@ pub struct ResponseState {
     /// The quietest level the Console is showing. Everything at or above it is
     /// on screen.
     pub console_level: ConsoleLevel,
+    /// What this tab's last send's scripts asserted.
+    ///
+    /// Here rather than inside [`Outcome::Received`] for the reason
+    /// [`test_result`] gives at length: `Exchange` is protocol-neutral and must
+    /// not learn about scripting, and a pre-request script can define tests for
+    /// a request that then never got a response.
+    ///
+    /// [`test_result`]: crate::api_explorer::models::test_result
+    pub tests: TestReport,
     /// The parsed JSON tree for Tree mode, built lazily the first time it is
     /// shown and dropped when a new response arrives. `None` after an attempt
     /// means the body did not parse as JSON.
@@ -138,6 +141,7 @@ impl ResponseState {
             collapsed: false,
             console: ConsoleLog::default(),
             console_level: ConsoleLevel::Debug,
+            tests: TestReport::default(),
             json_tree: None,
             json_tree_attempted: false,
         }
@@ -174,6 +178,13 @@ impl ResponseState {
     /// How many response headers arrived — the count badge on the Headers tab.
     pub fn header_count(&self) -> usize {
         self.exchange().map_or(0, |exchange| exchange.headers.len())
+    }
+
+    /// The Tests tab's `3/4` badge, or `None` when there is nothing to count.
+    /// Uses the same `Tag`-in-`Tab::suffix` mechanism the Headers count does.
+    pub fn test_summary(&self) -> Option<TestSummary> {
+        let summary = self.tests.summary();
+        (!summary.is_empty()).then_some(summary)
     }
 
     /// Whether any of the body is still being withheld by the line window.

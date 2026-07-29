@@ -33,7 +33,10 @@ mod quickjs;
 
 use std::collections::BTreeMap;
 
-use crate::api_explorer::models::script::{ScriptError, ScriptRequest, ScriptRun};
+use crate::api_explorer::models::script::{
+    ScriptError, ScriptRequest, ScriptResponse, ScriptRun, ScriptSyntaxError,
+};
+use crate::api_explorer::models::test_result::ScriptPhase;
 use crate::api_explorer::models::variables::{Variable, VariableSet};
 
 pub use quickjs::QuickJsEngine;
@@ -44,11 +47,21 @@ pub use quickjs::QuickJsEngine;
 /// with the draft it belongs to — the same rule
 /// [`VariableSet`] already follows.
 pub struct ScriptContext {
+    /// Which hook this is. Decides `pm.info.eventName`, and which phase the
+    /// run's [`TestResult`]s are stamped with.
+    ///
+    /// [`TestResult`]: crate::api_explorer::models::test_result::TestResult
+    pub phase: ScriptPhase,
     /// The request as the script first sees it. A pre-request script sees it
     /// **before** `{{name}}` substitution, which is what makes
     /// `pm.variables.set("timestamp", …)` followed by `{{timestamp}}` in the
     /// URL work the way the shipped template promises.
     pub request: ScriptRequest,
+    /// What came back, for a post-response run. `None` in the pre-request
+    /// phase, where `pm.response` is genuinely absent rather than an object
+    /// full of zeroes — reaching for it must fail, not quietly read as a 0
+    /// status.
+    pub response: Option<ScriptResponse>,
     /// The layers `pm.variables.get` falls through to.
     pub variables: VariableSet,
     /// The environment scope as `pm.environment` sees it: enabled, named
@@ -91,6 +104,19 @@ impl ScriptContext {
 /// Blocking; see this module's threading note.
 pub trait ScriptEngine: Send + Sync + 'static {
     fn run(&self, script: &str, context: ScriptContext) -> ScriptRun;
+
+    /// Compiles `script` without running any of it, so the editor can underline
+    /// a syntax error before the user presses Send.
+    ///
+    /// **The same engine answers both questions**, which is the point: a check
+    /// that used a second parser could disagree with the thing that actually
+    /// runs, and an editor that contradicts the Console is worse than an editor
+    /// that says nothing. `None` means "nothing to report" — never "this
+    /// script is correct".
+    ///
+    /// Cheap enough to run on every (debounced) keystroke: it builds a bare
+    /// runtime with no bindings, compiles, and drops it.
+    fn check(&self, script: &str) -> Option<ScriptSyntaxError>;
 }
 
 /// An engine that runs nothing, and says so.
@@ -110,17 +136,27 @@ impl ScriptEngine for NullEngine {
     fn run(&self, _script: &str, _context: ScriptContext) -> ScriptRun {
         ScriptRun::failed(ScriptError::NoEngine)
     }
+
+    /// Reports nothing rather than guessing. With no engine there is no parser,
+    /// and inventing a second one here would be the contradiction
+    /// [`ScriptEngine::check`] exists to avoid.
+    fn check(&self, _script: &str) -> Option<ScriptSyntaxError> {
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{NullEngine, ScriptContext, ScriptEngine};
     use crate::api_explorer::models::script::{ScriptError, ScriptRequest};
+    use crate::api_explorer::models::test_result::ScriptPhase;
     use crate::api_explorer::models::variables::{Variable, VariableSet};
 
     fn context() -> ScriptContext {
         ScriptContext {
+            phase: ScriptPhase::PreRequest,
             request: ScriptRequest::default(),
+            response: None,
             variables: VariableSet::default(),
             environment: Default::default(),
             collection: Default::default(),

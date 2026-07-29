@@ -14,7 +14,7 @@ use crate::api_explorer::models::collection::NodeId;
 use crate::api_explorer::models::key_value::{FieldKind, KeyValue};
 use crate::api_explorer::models::method::HttpMethod;
 use crate::api_explorer::models::request::RequestDraft;
-use crate::api_explorer::models::script::ScriptOrigin;
+use crate::api_explorer::models::script::{ScriptOrigin, ScriptSyntaxError};
 use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::api_explorer::models::tab_title;
 use crate::i18n::{Str, t};
@@ -46,6 +46,44 @@ impl RequestTab {
             RequestTab::Body => Str::RequestTabBody,
             RequestTab::Auth => Str::RequestTabAuth,
             RequestTab::Scripts => Str::RequestTabScripts,
+        }
+    }
+}
+
+/// Which of the two script editors an operation is about.
+///
+/// Here rather than in the view because three layers need the same distinction:
+/// the Scripts tab (which editor a templates menu or a Format button belongs
+/// to), the tab state (which check task to replace) and the send path (which
+/// hook a script is).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ScriptSlot {
+    Pre,
+    Post,
+}
+
+impl ScriptSlot {
+    pub const ALL: [ScriptSlot; 2] = [ScriptSlot::Pre, ScriptSlot::Post];
+
+    /// The prefix element ids in this slot are built from.
+    pub fn id_prefix(self) -> &'static str {
+        match self {
+            ScriptSlot::Pre => "pre-script",
+            ScriptSlot::Post => "post-script",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            ScriptSlot::Pre => 0,
+            ScriptSlot::Post => 1,
+        }
+    }
+
+    pub fn label(self) -> Str {
+        match self {
+            ScriptSlot::Pre => Str::PreRequestScriptLabel,
+            ScriptSlot::Post => Str::PostResponseScriptLabel,
         }
     }
 }
@@ -290,6 +328,13 @@ pub struct RequestState {
     // Scripts tab.
     pub pre_request_script: Entity<InputState>,
     pub post_response_script: Entity<InputState>,
+    /// The last parse failure in each editor, or `None` when it parses.
+    ///
+    /// Kept beside the editor as well as inside it: the wavy underline says
+    /// *where*, and the strip under the header says *what*. A syntax error a
+    /// user has to hover to read is one they will discover by pressing Send.
+    pub pre_script_error: Option<ScriptSyntaxError>,
+    pub post_script_error: Option<ScriptSyntaxError>,
     /// Where this request's scripts came from, which is what the consent gate
     /// reads. Set once — by an import, or by whatever snapshot the tab was
     /// opened from — and deliberately **not** changed by editing: see
@@ -396,8 +441,13 @@ impl RequestState {
             auth_key_value: single_line(key_value_placeholder, window, cx),
             auth_key_location: ApiKeyLocation::default(),
 
-            pre_request_script: code_editor("text", pre_placeholder, window, cx),
-            post_response_script: code_editor("text", post_placeholder, window, cx),
+            // `"javascript"`, not `"text"`: these are the two editors where the
+            // user writes code rather than reads a payload, and the grammar is
+            // compiled in (`Cargo.toml`'s `syntax-highlighting` feature).
+            pre_request_script: code_editor("javascript", pre_placeholder, window, cx),
+            post_response_script: code_editor("javascript", post_placeholder, window, cx),
+            pre_script_error: None,
+            post_script_error: None,
             script_origin: ScriptOrigin::default(),
             origin_node: None,
 
@@ -676,6 +726,29 @@ impl RequestState {
         self.body_editor.update(cx, |state, cx| {
             state.set_highlighter(language, cx);
         });
+    }
+
+    /// The editor behind one script slot.
+    pub fn script_editor(&self, slot: ScriptSlot) -> &Entity<InputState> {
+        match slot {
+            ScriptSlot::Pre => &self.pre_request_script,
+            ScriptSlot::Post => &self.post_response_script,
+        }
+    }
+
+    /// The last parse failure in one script slot.
+    pub fn script_error(&self, slot: ScriptSlot) -> Option<&ScriptSyntaxError> {
+        match slot {
+            ScriptSlot::Pre => self.pre_script_error.as_ref(),
+            ScriptSlot::Post => self.post_script_error.as_ref(),
+        }
+    }
+
+    pub fn set_script_error(&mut self, slot: ScriptSlot, error: Option<ScriptSyntaxError>) {
+        match slot {
+            ScriptSlot::Pre => self.pre_script_error = error,
+            ScriptSlot::Post => self.post_script_error = error,
+        }
     }
 
     /// Re-pushes every placeholder the widgets hold internally after a language

@@ -170,6 +170,24 @@ impl ApiExplorer {
                         .child(elapsed),
                 )
             })
+            // A `3/4` badge, coloured by the worst outcome — the one thing a
+            // history row has space for. The results themselves are not kept:
+            // see `HistoryRecord::tests`.
+            .when_some(entry.tests, |this, summary| {
+                let tone = if summary.all_passed() {
+                    cx.theme().success
+                } else if summary.failed > 0 {
+                    cx.theme().danger
+                } else {
+                    cx.theme().warning
+                };
+                this.child(
+                    Tag::custom(tone.opacity(0.15), tone, tone.opacity(0.4))
+                        .small()
+                        .rounded(cx.theme().radius)
+                        .child(summary.badge()),
+                )
+            })
             .child(div().flex_1().min_w_0())
             .child(
                 Button::new(("history-reopen", id as usize))

@@ -6,6 +6,19 @@
 //! will run, and the two answers are stated as what they do — run it, or send
 //! the request without it.
 //!
+//! **Every script that will run is shown**, which since the post-response hook
+//! landed means up to two editors under their own headings. A prompt that showed
+//! one of the two would be asking the user to approve code they were not
+//! offered.
+//!
+//! # The prompt says which situation this is
+//!
+//! There are two, and they are not the same sentence. Either nothing here has
+//! ever been approved, or an approval existed and an edit invalidated it — see
+//! `models::script_consent::ConsentDecision::Ask`. The first version of this
+//! dialog said "has not run before" in both cases, which was simply untrue in
+//! the second and undermined the one thing the prompt is for.
+//!
 //! Dismissing the dialog (Escape, the close button, a click on the backdrop)
 //! does **neither**: the send simply does not start. "I did not mean to press
 //! that" is the one answer a modal must always have, and silently choosing one
@@ -16,6 +29,7 @@
 //! consequences those record: the body is an **entity**, and its width is
 //! **stated** rather than `w_full`.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement as _,
     Pixels, Render, Styled as _, Window, div, px,
@@ -24,6 +38,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::{ActiveTheme as _, StyledExt as _, WindowExt as _, h_flex, v_flex};
 
+use crate::api_explorer::models::script::is_runnable;
 use crate::api_explorer::models::script_consent::ConsentKey;
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
@@ -35,11 +50,22 @@ use crate::i18n::{Str, t};
 /// pushed off-centre rather than clipped.
 const PANEL_W: Pixels = px(560.);
 const SCRIPT_H: Pixels = px(220.);
+/// A floor under each editor when two share the space, so neither collapses to
+/// a line on a short window.
+const MIN_SCRIPT_H: Pixels = px(88.);
 const PANEL_MARGIN: Pixels = px(24.);
 /// `Dialog`'s own left and right padding (`Edges::all(16)`).
 const DIALOG_PADDING_X: Pixels = px(32.);
 
-/// Opens the prompt for one request's pre-request script.
+/// What the prompt is about: the scripts that will run, and whether this is a
+/// first sight of them or an approval an edit has invalidated.
+pub struct Scripts {
+    pub pre: String,
+    pub post: String,
+    pub re_armed: bool,
+}
+
+/// Opens the prompt for one request's scripts.
 ///
 /// Everything the body needs is passed in as plain data. It must not read the
 /// page entity while being constructed: this is reached from a click listener,
@@ -49,13 +75,13 @@ pub fn open(
     page: Entity<ApiExplorer>,
     tab: Entity<RequestTabState>,
     request_name: String,
-    script: String,
+    scripts: Scripts,
     key: ConsentKey,
     window: &mut Window,
     cx: &mut App,
 ) {
     let view =
-        cx.new(|cx| ScriptConsentDialog::new(page, tab, request_name, script, key, window, cx));
+        cx.new(|cx| ScriptConsentDialog::new(page, tab, request_name, scripts, key, window, cx));
 
     window.open_dialog(cx, move |dialog, window, cx| {
         let view = view.clone();
@@ -80,10 +106,14 @@ struct ScriptConsentDialog {
     tab: Entity<RequestTabState>,
     request_name: String,
     key: ConsentKey,
-    /// The script, in a read-only code editor: the same widget the Scripts tab
-    /// edits it in, so the text the user approves looks exactly like the text
-    /// they would have read there.
-    script: Entity<InputState>,
+    /// One read-only code editor per script that will run, with the heading it
+    /// is shown under: the same widget the Scripts tab edits them in, so the
+    /// text the user approves looks exactly like the text they would have read
+    /// there — highlighted the same way, too.
+    scripts: Vec<(Str, Entity<InputState>)>,
+    /// Whether an earlier version of these scripts was approved and has since
+    /// been edited.
+    re_armed: bool,
     focus_handle: FocusHandle,
 }
 
@@ -92,26 +122,41 @@ impl ScriptConsentDialog {
         page: Entity<ApiExplorer>,
         tab: Entity<RequestTabState>,
         request_name: String,
-        script: String,
+        scripts: Scripts,
         key: ConsentKey,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("text")
-                .multi_line(true)
-                .line_number(true)
-                .soft_wrap(true)
-                .default_value(script)
-        });
+        let mut editors = Vec::new();
+        for (label, source) in [
+            (Str::PreRequestScriptLabel, scripts.pre),
+            (Str::PostResponseScriptLabel, scripts.post),
+        ] {
+            // A hook with no script is not shown at all: an empty editor under
+            // a heading reads as "and this one runs too".
+            if !is_runnable(&source) {
+                continue;
+            }
+            editors.push((
+                label,
+                cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .code_editor("javascript")
+                        .multi_line(true)
+                        .line_number(true)
+                        .soft_wrap(true)
+                        .default_value(source)
+                }),
+            ));
+        }
 
         Self {
             page,
             tab,
             request_name,
             key,
-            script: editor,
+            scripts: editors,
+            re_armed: scripts.re_armed,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -125,10 +170,25 @@ impl Focusable for ScriptConsentDialog {
 
 impl Render for ScriptConsentDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let script_h = SCRIPT_H.min(window.viewport_size().height / 3.);
+        // Two editors share the space one used to have, so neither is a slot.
+        let available = SCRIPT_H.min(window.viewport_size().height / 3.);
+        let script_h = if self.scripts.len() > 1 {
+            (available / 2.).max(MIN_SCRIPT_H)
+        } else {
+            available
+        };
 
         let approve = (self.page.clone(), self.tab.clone(), self.key.clone());
         let decline = (self.page.clone(), self.tab.clone());
+        // The honest sentence for this situation. "Has not run before" is false
+        // once an earlier version has.
+        let explanation = if self.re_armed {
+            Str::ScriptConsentExplainChanged
+        } else {
+            Str::ScriptConsentExplain
+        };
+        // Only worth naming the hooks when there is more than one to tell apart.
+        let labelled = self.scripts.len() > 1;
 
         v_flex()
             .w_full()
@@ -137,7 +197,7 @@ impl Render for ScriptConsentDialog {
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::ScriptConsentExplain, cx)),
+                    .child(t(explanation, cx)),
             )
             .child(
                 div()
@@ -146,20 +206,34 @@ impl Render for ScriptConsentDialog {
                     .text_color(cx.theme().muted_foreground)
                     .child(t(Str::ScriptConsentRequest(self.request_name.clone()), cx)),
             )
-            .child(
-                div()
-                    .h(script_h)
+            .children(self.scripts.iter().map(|(label, editor)| {
+                v_flex()
                     .w_full()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
+                    .gap_1()
+                    .when(labelled, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .font_bold()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t(label.clone(), cx)),
+                        )
+                    })
                     .child(
-                        Input::new(&self.script)
-                            .font_family(cx.theme().mono_font_family.clone())
-                            .text_size(cx.theme().mono_font_size)
-                            .size_full(),
-                    ),
-            )
+                        div()
+                            .h(script_h)
+                            .w_full()
+                            .rounded(cx.theme().radius)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                Input::new(editor)
+                                    .font_family(cx.theme().mono_font_family.clone())
+                                    .text_size(cx.theme().mono_font_size)
+                                    .size_full(),
+                            ),
+                    )
+            }))
             .child(
                 h_flex()
                     .w_full()

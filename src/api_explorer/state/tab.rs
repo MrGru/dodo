@@ -5,20 +5,25 @@
 //! scroll positions untouched.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use gpui::{Context, EventEmitter, Task, Window};
+use gpui::{Context, Entity, EventEmitter, Task, Window};
+use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
+use gpui_component::input::{InputState, Position};
 
 use crate::api_explorer::models::exchange::{BodyKind, Exchange};
-use crate::api_explorer::models::script::VariableWrite;
+use crate::api_explorer::models::script::{ScriptSyntaxError, VariableWrite};
+use crate::api_explorer::models::script_format;
+use crate::api_explorer::models::test_result::TestReport;
 use crate::api_explorer::models::variables::VariableSet;
 use crate::api_explorer::services::Transport;
 use crate::api_explorer::services::http::body;
 use crate::api_explorer::services::script::ScriptEngine;
 use crate::api_explorer::services::send::{ScriptJob, SendJob, send};
 use crate::api_explorer::state::history::HistoryRecord;
-use crate::api_explorer::state::request::RequestState;
+use crate::api_explorer::state::request::{RequestState, ScriptSlot};
 use crate::api_explorer::state::response::{Outcome, ResponseState, window_lines};
-use crate::i18n::Str;
+use crate::i18n::{Str, t};
 
 pub struct RequestTabState {
     pub request: RequestState,
@@ -29,7 +34,21 @@ pub struct RequestTabState {
     /// Send twice replaces the first task rather than racing it: assigning a
     /// new `Task` drops the old one, which cancels it.
     send_task: Option<Task<()>>,
+    /// The pending syntax check for each script editor, indexed by
+    /// [`ScriptSlot::index`].
+    ///
+    /// The debounce *is* this field: a keystroke assigns a new task, which drops
+    /// the one still sleeping. Nothing else is needed, and it cancels with the
+    /// tab for free.
+    script_checks: [Option<Task<()>>; 2],
 }
+
+/// How long a script editor must be quiet before it is parsed.
+///
+/// Long enough that ordinary typing never triggers a check, short enough that
+/// pausing to think shows the answer. The check itself runs off the UI thread,
+/// so this is about noise rather than about cost.
+const CHECK_DEBOUNCE: Duration = Duration::from_millis(350);
 
 /// A finished request is emitted so the page can record it in history. The page
 /// subscribes to every tab; the tab is the one place that knows a request
@@ -53,7 +72,82 @@ impl RequestTabState {
             request: RequestState::new(window, cx),
             response: ResponseState::new(window, cx),
             send_task: None,
+            script_checks: [None, None],
         }
+    }
+
+    /// Re-parses one script editor after a pause, and underlines where it does
+    /// not parse.
+    ///
+    /// **The engine that will run the script is the one that answers**, so the
+    /// editor and the Console can never disagree about whether something
+    /// parses; see [`ScriptEngine::check`]. The parse runs on the background
+    /// executor for the same reason everything else does — a pathological source
+    /// gets the engine's full 2 s budget, and a frame must not wait for it.
+    pub fn check_script(
+        &mut self,
+        slot: ScriptSlot,
+        engine: Arc<dyn ScriptEngine>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editor = self.request.script_editor(slot).clone();
+        self.script_checks[slot.index()] = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(CHECK_DEBOUNCE).await;
+
+            let source = editor.read_with(cx, |state, _| state.value().to_string());
+            let found = cx
+                .background_executor()
+                .spawn(async move { engine.check(&source) })
+                .await;
+
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.apply_script_check(slot, found, window, cx);
+            });
+        }));
+    }
+
+    /// Puts one check's answer on screen: the underline in the editor, the
+    /// message beside it.
+    fn apply_script_check(
+        &mut self,
+        slot: ScriptSlot,
+        found: Option<ScriptSyntaxError>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editor = self.request.script_editor(slot).clone();
+        let message = found
+            .as_ref()
+            .map(|error| t(Str::ScriptSyntaxError(error.detail.clone()), cx));
+
+        editor.update(cx, |state, cx| {
+            let text = state.text().clone();
+            let Some(diagnostics) = state.diagnostics_mut() else {
+                return;
+            };
+            match (&found, message) {
+                (Some(error), Some(message)) => {
+                    // `reset(&rope)` rather than `clear()`: the diagnostics are
+                    // anchored into the text, which has just changed.
+                    diagnostics.reset(&text);
+                    let line = error.line as u32;
+                    let column = error.column as u32;
+                    diagnostics.push(
+                        Diagnostic::new(
+                            Position::new(line, column)..Position::new(line, column + 1),
+                            message,
+                        )
+                        .with_severity(DiagnosticSeverity::Error),
+                    );
+                }
+                _ => diagnostics.clear(),
+            }
+            cx.notify();
+        });
+
+        self.request.set_script_error(slot, found);
+        cx.notify();
     }
 
     /// Sends the request this tab currently describes.
@@ -79,21 +173,27 @@ impl RequestTabState {
         transport: Arc<dyn Transport>,
         engine: Arc<dyn ScriptEngine>,
         variables: VariableSet,
-        script: ScriptJob,
+        scripts: (ScriptJob, ScriptJob),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let draft = self.request.draft(cx);
         let summary = self.request.snapshot(cx).summary();
+        let (pre, post) = scripts;
 
         self.response.console.begin_run(summary);
         self.response.outcome = Outcome::InFlight;
+        // The previous send's results describe the previous send. Leaving them
+        // beside a new response would be the kind of stale green a test pane
+        // must never show.
+        self.response.tests = TestReport::default();
         cx.notify();
 
         let job = SendJob {
             draft,
             variables,
-            script,
+            pre,
+            post,
         };
 
         self.send_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -106,6 +206,7 @@ impl RequestTabState {
             // are ordinary shutdown paths, not errors.
             let _ = this.update_in(cx, |this, window, cx| {
                 this.response.console.extend(outcome.logs);
+                this.response.tests = outcome.tests;
                 if !outcome.writes.is_empty() {
                     cx.emit(ScriptWrites(outcome.writes));
                 }
@@ -150,18 +251,47 @@ impl RequestTabState {
         cx.notify();
     }
 
+    /// Re-indents one of the two script editors in place.
+    ///
+    /// The same bargain [`format_body`](Self::format_body) makes: an explicit
+    /// action, `replace_all` so it can be undone, and nothing at all when the
+    /// text is already in shape — so pressing Format twice does not stack two
+    /// undo steps. What "format" means here is deliberately narrow; see
+    /// [`script_format`](crate::api_explorer::models::script_format).
+    pub fn format_script(
+        &mut self,
+        editor: Entity<InputState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = editor.read(cx).value().to_string();
+        let formatted = script_format::format(&current);
+        if formatted == current {
+            return;
+        }
+
+        editor.update(cx, |state, cx| {
+            state.replace_all(formatted, window, cx);
+        });
+        self.request.dirty = true;
+        cx.notify();
+    }
+
     /// No response arrived. `error` is already the message: a transport failure
     /// and a failed pre-request script both end here, and the banner should not
     /// have to know which.
     fn fail(&mut self, error: Str, cx: &mut Context<Self>) {
         self.response.outcome = Outcome::Failed(error);
         self.send_task = None;
-        // A failed request is still history: no status, no timing.
+        // A failed request is still history: no status, no timing. Any tests a
+        // pre-request script managed to define still travel with it.
         let snapshot = self.request.snapshot(cx);
+        let tests = self.response.tests.summary();
         cx.emit(HistoryRecord {
             snapshot,
             status: None,
             elapsed: None,
+            tests: (!tests.is_empty()).then_some(tests),
         });
         cx.notify();
     }
@@ -179,10 +309,15 @@ impl RequestTabState {
         self.refresh_body(window, cx);
 
         let snapshot = self.request.snapshot(cx);
+        // A summary, not the results: history is capped by count, so 200
+        // unbounded result lists would be an unbounded footprint on a
+        // session-scoped convenience, and a history row has space for one badge.
+        let tests = self.response.tests.summary();
         cx.emit(HistoryRecord {
             snapshot,
             status: Some(status),
             elapsed: Some(elapsed),
+            tests: (!tests.is_empty()).then_some(tests),
         });
         cx.notify();
     }

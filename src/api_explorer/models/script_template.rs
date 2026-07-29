@@ -1,11 +1,15 @@
 //! Insertable snippets for the Scripts tab.
 //!
-//! These are editing conveniences, not executable behaviour: this build has no
-//! script engine, which the Scripts tab states plainly. A template's *name* is a
-//! label the user reads, so it is a [`Str`]; its *body* is script source in the
-//! familiar `pm.*` shape and is kept verbatim, like any code the editor holds
-//! (the same reason a code-editor language id or a header token is not
-//! translated).
+//! A template's *name* is a label the user reads, so it is a [`Str`]; its *body*
+//! is script source in the familiar `pm.*` shape and is kept verbatim, like any
+//! code the editor holds (the same reason a code-editor language id or a header
+//! token is not translated).
+//!
+//! **Every snippet here runs**, which two tests hold it to: the engine's own
+//! suite evaluates each one, and
+//! [`script_format`](crate::api_explorer::models::script_format) asserts each is
+//! already in the shape Format would put it in — a template that needed
+//! reformatting the moment it was inserted would mean one of the two is wrong.
 
 use crate::i18n::Str;
 
@@ -51,8 +55,8 @@ impl ScriptTemplate {
     }
 
     /// The script source inserted into the editor. Written in Postman's `pm.*`
-    /// shape because that is what a user reaching for a template expects;
-    /// nothing in this build runs it.
+    /// shape because that is what a user reaching for a template expects — and
+    /// it is the shape dodo's own engine runs.
     pub fn snippet(self) -> &'static str {
         match self {
             ScriptTemplate::SetHeader => {

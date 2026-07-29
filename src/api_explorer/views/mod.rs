@@ -15,6 +15,7 @@ pub mod request_editor;
 pub mod request_scripts;
 pub mod request_tabs;
 pub mod response_console;
+pub mod response_tests;
 pub mod response_viewer;
 pub mod script_consent;
 

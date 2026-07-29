@@ -1,4 +1,5 @@
-//! One send, start to finish: script → `{{name}}` → `prepare` → the wire.
+//! One send, start to finish: script → `{{name}}` → `prepare` → the wire →
+//! script.
 //!
 //! Everything a send does after the editors have been read lives here, as one
 //! blocking function over trait objects. That is what makes the *ordering*
@@ -8,7 +9,7 @@
 //! # The order, and the one place it departs from the plan
 //!
 //! ```text
-//! pre-request script → resolve {{name}} → prepare → execute
+//! pre-request script → resolve {{name}} → prepare → execute → post-response script
 //! ```
 //!
 //! `report.md` §4.1 drew this the other way round — substitute first, then run
@@ -38,6 +39,20 @@
 //! through has done some of its work — set one header of two, written one
 //! variable of three — and sending that half-configured request would produce a
 //! response nobody can reason about. The error names the script.
+//!
+//! # A failed post-response script does **not** lose the response
+//!
+//! The mirror image, and the asymmetry is the point. By the time the
+//! post-response hook runs the request has already happened: the response is a
+//! fact, and throwing it away because a script had a typo would destroy the one
+//! piece of evidence the user needs to fix that typo. So a post-response failure
+//! becomes a Console line and a message on the Tests tab, and
+//! `SendOutcome::result` stays `Ok`.
+//!
+//! The same reasoning is why the hook cannot change the response: `Exchange` is
+//! what arrived, and a mutated one would make the Body and Headers tabs lie.
+//! It may still write variables, which is how `pm.environment.set("id",
+//! pm.response.json().id)` — the whole point of the hook — works.
 
 use std::collections::BTreeMap;
 
@@ -46,7 +61,10 @@ use crate::api_explorer::models::exchange::Exchange;
 use crate::api_explorer::models::key_value::KeyValue;
 use crate::api_explorer::models::method::HttpMethod;
 use crate::api_explorer::models::request::RequestDraft;
-use crate::api_explorer::models::script::{ScriptRequest, SkipReason, VariableWrite};
+use crate::api_explorer::models::script::{
+    ScriptRequest, ScriptResponse, SkipReason, VariableWrite,
+};
+use crate::api_explorer::models::test_result::{ScriptPhase, TestReport};
 use crate::api_explorer::models::variables::{Variable, VariableScope, VariableSet};
 use crate::api_explorer::services::Transport;
 use crate::api_explorer::services::http::{prepare, resolve};
@@ -75,7 +93,12 @@ pub enum ScriptJob {
 pub struct SendJob {
     pub draft: RequestDraft,
     pub variables: VariableSet,
-    pub script: ScriptJob,
+    /// The hook that runs before the request.
+    pub pre: ScriptJob,
+    /// The hook that runs after it. Decided on the UI thread at the same moment
+    /// as `pre`, under the same consent key, so the background job never has to
+    /// ask a second question halfway through.
+    pub post: ScriptJob,
 }
 
 /// Everything one send produced, owned so it can cross back. No `Entity`, no
@@ -88,6 +111,10 @@ pub struct SendOutcome {
     /// first attempt for no visible reason.
     pub writes: Vec<VariableWrite>,
     pub result: Result<Exchange, Str>,
+    /// What `pm.test` produced, from both hooks. Attached to `ResponseState`,
+    /// never to [`Exchange`] — see
+    /// [`test_result`](crate::api_explorer::models::test_result).
+    pub tests: TestReport,
 }
 
 /// Runs one send. Blocking; always called from the background executor.
@@ -95,12 +122,14 @@ pub fn send(job: SendJob, engine: &dyn ScriptEngine, transport: &dyn Transport) 
     let SendJob {
         mut draft,
         mut variables,
-        script,
+        pre,
+        post,
     } = job;
     let mut logs = Vec::new();
     let mut writes = Vec::new();
+    let mut tests = TestReport::default();
 
-    match script {
+    match pre {
         ScriptJob::None => {}
         ScriptJob::Skipped(reason) => {
             logs.push(ConsoleEntry::runtime(ConsoleLevel::Warn, reason.message()));
@@ -112,7 +141,9 @@ pub fn send(job: SendJob, engine: &dyn ScriptEngine, transport: &dyn Transport) 
             request_name,
         } => {
             let context = ScriptContext {
+                phase: ScriptPhase::PreRequest,
                 request: view(&draft),
+                response: None,
                 variables: variables.clone(),
                 environment,
                 collection,
@@ -127,6 +158,9 @@ pub fn send(job: SendJob, engine: &dyn ScriptEngine, transport: &dyn Transport) 
                     Str::ConsoleRunTruncated(run.dropped_logs),
                 ));
             }
+            // Kept even when the run then failed: a test that ran is a fact.
+            tests.results.extend(run.tests);
+            tests.dropped += run.dropped_tests;
 
             if let Some(error) = run.error {
                 logs.push(ConsoleEntry::runtime(ConsoleLevel::Error, error.message()));
@@ -136,13 +170,14 @@ pub fn send(job: SendJob, engine: &dyn ScriptEngine, transport: &dyn Transport) 
                     logs,
                     writes: run.writes,
                     result: Err(error.message()),
+                    tests,
                 };
             }
 
             logs.push(ConsoleEntry::runtime(
                 ConsoleLevel::Debug,
                 Str::ScriptFinished {
-                    millis: run.duration.as_millis().min(u128::from(u64::MAX)) as u64,
+                    millis: millis(run.duration),
                 },
             ));
             if !run.writes.is_empty() {
@@ -173,11 +208,114 @@ pub fn send(job: SendJob, engine: &dyn ScriptEngine, transport: &dyn Transport) 
         .and_then(|prepared| transport.execute(prepared))
         .map_err(|error| error.message());
 
+    // Nothing to run the post-response hook against when nothing came back —
+    // and no `pm.response` to hand it if we tried.
+    if let Ok(exchange) = &result {
+        run_post(
+            post,
+            exchange,
+            &draft,
+            &variables,
+            engine,
+            &mut logs,
+            &mut writes,
+            &mut tests,
+        );
+    }
+
     SendOutcome {
         logs,
         writes,
         result,
+        tests,
     }
+}
+
+/// The post-response hook. Everything it can change is a `&mut` argument, and
+/// the response is not among them.
+#[allow(clippy::too_many_arguments)]
+fn run_post(
+    job: ScriptJob,
+    exchange: &Exchange,
+    draft: &RequestDraft,
+    variables: &VariableSet,
+    engine: &dyn ScriptEngine,
+    logs: &mut Vec<ConsoleEntry>,
+    writes: &mut Vec<VariableWrite>,
+    tests: &mut TestReport,
+) {
+    let ScriptJob::Run {
+        source,
+        environment,
+        collection,
+        request_name,
+    } = job
+    else {
+        // A skipped pre-request script has already said so once; saying it
+        // again for the other hook would be noise.
+        return;
+    };
+
+    tests.ran = true;
+    let context = ScriptContext {
+        phase: ScriptPhase::PostResponse,
+        request: view(draft),
+        response: Some(ScriptResponse {
+            code: exchange.status,
+            status: exchange.reason.clone(),
+            headers: exchange.headers.clone(),
+            body: exchange.body.clone(),
+            elapsed_millis: millis(exchange.elapsed),
+            size_bytes: exchange.size_bytes,
+        }),
+        variables: variables.clone(),
+        environment,
+        collection,
+        request_name,
+    };
+
+    let run = engine.run(&source, context);
+    logs.extend(run.logs);
+    if run.dropped_logs > 0 {
+        logs.push(ConsoleEntry::runtime(
+            ConsoleLevel::Warn,
+            Str::ConsoleRunTruncated(run.dropped_logs),
+        ));
+    }
+
+    tests.results.extend(run.tests);
+    tests.dropped += run.dropped_tests;
+    tests.elapsed = run.duration;
+    writes.extend(run.writes.iter().cloned());
+
+    match run.error {
+        Some(error) => {
+            // The failure is reported, twice over — the Console keeps the
+            // sequence, the Tests tab makes it the headline — and the response
+            // is untouched.
+            logs.push(ConsoleEntry::runtime(ConsoleLevel::Error, error.message()));
+            tests.error = Some(error.message());
+        }
+        None => {
+            logs.push(ConsoleEntry::runtime(
+                ConsoleLevel::Debug,
+                Str::TestScriptFinished {
+                    millis: millis(run.duration),
+                },
+            ));
+            if !run.writes.is_empty() {
+                logs.push(ConsoleEntry::runtime(
+                    ConsoleLevel::Debug,
+                    Str::ScriptWroteVariables(run.writes.len()),
+                ));
+            }
+        }
+    }
+}
+
+/// A duration as whole milliseconds, saturating rather than wrapping.
+fn millis(duration: std::time::Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 /// The request as a script first sees it.
@@ -260,18 +398,33 @@ mod tests {
     use crate::api_explorer::models::method::HttpMethod;
     use crate::api_explorer::models::request::RequestDraft;
     use crate::api_explorer::models::script::{
-        ScriptError, ScriptRequest, ScriptRun, SkipReason, VariableWrite, WriteScope,
+        ScriptError, ScriptRequest, ScriptRun, ScriptSyntaxError, SkipReason, VariableWrite,
+        WriteScope,
     };
+    use crate::api_explorer::models::test_result::{ScriptPhase, TestOutcome, TestResult};
     use crate::api_explorer::models::variables::{Variable, VariableScope, VariableSet};
     use crate::api_explorer::services::script::{QuickJsEngine, ScriptContext, ScriptEngine};
     use crate::api_explorer::services::{PreparedRequest, Protocol, Transport, TransportError};
     use std::collections::BTreeMap;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     /// A transport that records what it was asked to send and answers 200.
     #[derive(Default)]
     struct Recorder {
         seen: Mutex<Option<PreparedRequest>>,
+        /// The body it answers with, so a post-response test has something to
+        /// read.
+        body: &'static str,
+    }
+
+    impl Recorder {
+        fn answering(body: &'static str) -> Self {
+            Self {
+                body,
+                ..Self::default()
+            }
+        }
     }
 
     impl Transport for Recorder {
@@ -283,23 +436,52 @@ mod tests {
             *self.seen.lock().expect("lock") = Some(request);
             Ok(Exchange {
                 status: 200,
-                headers: Vec::new(),
-                body: String::new(),
+                reason: "OK".into(),
+                headers: vec![("Content-Type".into(), "application/json".into())],
+                body: self.body.to_string(),
                 kind: BodyKind::Text,
-                size_bytes: 0,
+                size_bytes: self.body.len(),
                 truncated: false,
-                elapsed: std::time::Duration::ZERO,
+                elapsed: Duration::from_millis(12),
             })
         }
     }
 
-    /// An engine that returns a canned run without evaluating anything, so the
-    /// pipeline can be tested apart from the language.
-    struct Canned(Mutex<Option<ScriptRun>>);
+    /// An engine that returns canned runs without evaluating anything, so the
+    /// pipeline can be tested apart from the language. Each `run` takes the next
+    /// canned outcome, so a pre-request and a post-response hook can be scripted
+    /// independently.
+    #[derive(Default)]
+    struct Canned {
+        queue: Mutex<Vec<ScriptRun>>,
+        /// Every phase it was asked to run, in order.
+        phases: Mutex<Vec<ScriptPhase>>,
+        /// Whether the last run could see a response.
+        saw_response: Mutex<Vec<bool>>,
+    }
+
+    impl Canned {
+        fn of(runs: Vec<ScriptRun>) -> Self {
+            Self {
+                // Reversed so `pop` hands them back in order.
+                queue: Mutex::new(runs.into_iter().rev().collect()),
+                ..Self::default()
+            }
+        }
+    }
 
     impl ScriptEngine for Canned {
-        fn run(&self, _script: &str, _context: ScriptContext) -> ScriptRun {
-            self.0.lock().expect("lock").take().unwrap_or_default()
+        fn run(&self, _script: &str, context: ScriptContext) -> ScriptRun {
+            self.phases.lock().expect("lock").push(context.phase);
+            self.saw_response
+                .lock()
+                .expect("lock")
+                .push(context.response.is_some());
+            self.queue.lock().expect("lock").pop().unwrap_or_default()
+        }
+
+        fn check(&self, _script: &str) -> Option<ScriptSyntaxError> {
+            None
         }
     }
 
@@ -318,15 +500,27 @@ mod tests {
         SendJob {
             draft: draft(),
             variables: VariableSet::default(),
-            script,
+            pre: script,
+            post: ScriptJob::None,
         }
     }
 
     fn run_job(job: SendJob, run: ScriptRun) -> (SendOutcome, Recorder) {
         let transport = Recorder::default();
-        let engine = Canned(Mutex::new(Some(run)));
+        let engine = Canned::of(vec![run]);
         let outcome = send(job, &engine, &transport);
         (outcome, transport)
+    }
+
+    fn test(name: &str, outcome: TestOutcome) -> TestResult {
+        TestResult {
+            name: name.into(),
+            outcome,
+            elapsed: Duration::from_millis(1),
+            // Overwritten by the real engine; the canned one reports what it is
+            // given, and the send path never rewrites it.
+            phase: ScriptPhase::PostResponse,
+        }
     }
 
     #[test]
@@ -530,5 +724,176 @@ mod tests {
             "the template left {{timestamp}} unresolved: {}",
             seen.url
         );
+    }
+
+    // ---- the post-response hook ---------------------------------------------
+
+    /// A job with both hooks armed.
+    fn both(pre: &str, post: &str) -> SendJob {
+        SendJob {
+            pre: running(pre),
+            post: running(post),
+            ..job(ScriptJob::None)
+        }
+    }
+
+    #[test]
+    fn the_post_response_hook_runs_after_the_request_and_can_see_it() {
+        let engine = Canned::of(vec![
+            ScriptRun::default(),
+            ScriptRun {
+                tests: vec![test("Status is 200", TestOutcome::Passed)],
+                ..ScriptRun::default()
+            },
+        ]);
+        let transport = Recorder::answering("{\"id\":7}");
+        let outcome = send(both("…", "…"), &engine, &transport);
+
+        assert!(outcome.result.is_ok());
+        assert_eq!(
+            *engine.phases.lock().expect("lock"),
+            vec![ScriptPhase::PreRequest, ScriptPhase::PostResponse]
+        );
+        assert_eq!(
+            *engine.saw_response.lock().expect("lock"),
+            vec![false, true],
+            "only the post-response hook may see a response"
+        );
+        assert_eq!(outcome.tests.results.len(), 1);
+        assert!(outcome.tests.ran);
+    }
+
+    #[test]
+    fn a_throwing_post_response_script_keeps_the_response() {
+        // The asymmetry this module's doc argues: the request already happened,
+        // so the response is a fact and a script bug must not erase it.
+        let engine = Canned::of(vec![
+            ScriptRun::default(),
+            ScriptRun {
+                error: Some(ScriptError::Threw {
+                    detail: "TypeError: null has no property 'id'".into(),
+                }),
+                tests: vec![test("First check", TestOutcome::Passed)],
+                ..ScriptRun::default()
+            },
+        ]);
+        let outcome = send(both("…", "…"), &engine, &Recorder::answering("{}"));
+
+        let exchange = outcome.result.expect("the response survived the script");
+        assert_eq!(exchange.status, 200);
+        assert!(
+            outcome.tests.error.is_some(),
+            "the failure is still reported"
+        );
+        assert_eq!(
+            outcome.tests.results.len(),
+            1,
+            "a test that ran before the throw is still a result"
+        );
+        assert!(
+            outcome
+                .logs
+                .iter()
+                .any(|entry| entry.level == ConsoleLevel::Error)
+        );
+    }
+
+    #[test]
+    fn a_failing_assertion_is_a_failed_result_rather_than_an_aborted_run() {
+        let engine = Canned::of(vec![
+            ScriptRun::default(),
+            ScriptRun {
+                tests: vec![
+                    test("Status is 200", TestOutcome::Passed),
+                    test(
+                        "Body has an id",
+                        TestOutcome::Failed {
+                            message: "expected {} to have property 'id'".into(),
+                        },
+                    ),
+                ],
+                ..ScriptRun::default()
+            },
+        ]);
+        let outcome = send(both("…", "…"), &engine, &Recorder::answering("{}"));
+
+        assert!(outcome.result.is_ok());
+        assert!(outcome.tests.error.is_none(), "the run itself did not fail");
+        let summary = outcome.tests.summary();
+        assert_eq!(summary.passed, 1);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.badge(), "1/2");
+    }
+
+    #[test]
+    fn a_post_response_script_writes_variables_back() {
+        // `pm.environment.set("id", pm.response.json().id)` — the whole point.
+        let engine = Canned::of(vec![
+            ScriptRun::default(),
+            ScriptRun {
+                writes: vec![VariableWrite {
+                    scope: WriteScope::Environment,
+                    key: "id".into(),
+                    value: Some("7".into()),
+                }],
+                ..ScriptRun::default()
+            },
+        ]);
+        let outcome = send(both("…", "…"), &engine, &Recorder::answering("{\"id\":7}"));
+        assert_eq!(outcome.writes.len(), 1);
+        assert_eq!(outcome.writes[0].key, "id");
+    }
+
+    #[test]
+    fn a_request_that_never_returned_runs_no_post_response_script() {
+        let mut job = both("…", "…");
+        job.draft.url = "https://example.com/{{missing}}".into();
+
+        let engine = Canned::of(vec![ScriptRun::default(), ScriptRun::default()]);
+        let outcome = send(job, &engine, &Recorder::default());
+
+        assert!(outcome.result.is_err());
+        assert_eq!(
+            *engine.phases.lock().expect("lock"),
+            vec![ScriptPhase::PreRequest],
+            "there is no response for the hook to read"
+        );
+        assert!(!outcome.tests.ran);
+    }
+
+    #[test]
+    fn a_request_with_no_post_response_script_reports_that_none_ran() {
+        let (outcome, _) = run_job(job(ScriptJob::None), ScriptRun::default());
+        assert!(!outcome.tests.ran);
+        assert!(outcome.tests.is_empty());
+    }
+
+    /// End to end with the real engine, through the whole pipeline.
+    #[test]
+    fn the_shipped_assertion_template_passes_against_a_real_response() {
+        let job = SendJob {
+            pre: ScriptJob::None,
+            post: running(
+                "pm.test(\"Status is 200\", function () {\n\
+                     pm.response.to.have.status(200);\n\
+                 });\n\
+                 pm.test(\"Body has an id\", function () {\n\
+                     pm.expect(pm.response.json()).to.have.property(\"id\", 7);\n\
+                 });\n\
+                 pm.environment.set(\"id\", pm.response.json().id);",
+            ),
+            ..job(ScriptJob::None)
+        };
+
+        let outcome = send(job, &QuickJsEngine, &Recorder::answering("{\"id\":7}"));
+        assert!(outcome.result.is_ok());
+        assert!(outcome.tests.error.is_none(), "{:?}", outcome.tests.error);
+        assert!(
+            outcome.tests.summary().all_passed(),
+            "{:?}",
+            outcome.tests.results
+        );
+        assert_eq!(outcome.writes.len(), 1);
+        assert_eq!(outcome.writes[0].value.as_deref(), Some("7"));
     }
 }
