@@ -196,11 +196,14 @@ syntax-highlighting = [
     "gpui-component/tree-sitter",
     "gpui-component/tree-sitter-html",
     "gpui-component/tree-sitter-yaml",
+    "gpui-component/tree-sitter-javascript",
 ]
 ```
 
-Turning it off drops three tree-sitter grammar crates and their generated C
-parsers: **515,168 bytes, 2.5%** of the shipped binary. The code editor then
+Turning it off drops four tree-sitter grammar crates and their generated C
+parsers. The three that were there before the JavaScript grammar were measured
+at **515,168 bytes, 2.5%** of the shipped binary; the JavaScript grammar's own
+cost is measured below. The code editor then
 renders plain unhighlighted text, which is exactly what gpui-component's
 highlighter does when no grammar feature is set — so the degraded state is one
 the library already supports, not one this project has to maintain.
@@ -230,6 +233,58 @@ send path, and the i18n guard tests exist to make that surface hard to get
 wrong. `services/script/` is nonetheless the only module that names `rquickjs`,
 so a build without an engine is a `NullEngine` swap in one line rather than a
 refactor.
+
+### What the post-response hook and the editor polish cost
+
+The round after that one added the post-response hook and the Tests tab, and
+made the two script editors habitable: JavaScript syntax highlighting, a
+debounced parse check that underlines errors in place, and a Format action.
+Measured on the same machine and profile, against the same control the table
+above ends on:
+
+| Configuration | Bytes | Δ vs control | Δ % |
+|---|---:|---:|---:|
+| Control — `f57d68e`, the commit before the round | 21,975,776 | — | — |
+| Control **+ the JavaScript grammar alone** (`Cargo.toml` one-line change, nothing else) | 22,339,216 | **+363,440** | **+1.65%** |
+| The whole round | 22,455,024 | **+479,248** | **+2.18%** |
+
+The formatter was then isolated on its own by stubbing
+`models::script_format::format` to the identity and rebuilding. That pair was
+taken in a second build directory, so compare the two rows to each other and
+not to the table above — a build directory is worth about 14 KB of embedded
+paths, which is larger than the thing being measured:
+
+| Configuration | Bytes | Δ |
+|---|---:|---:|
+| The whole round | 22,440,864 | — |
+| …with `script_format::format` stubbed to the identity | 22,424,352 | **−16,512** |
+
+Three numbers worth separating, because they were the ones in doubt:
+
+- **Syntax highlighting is the single largest line item: +363,440 B (+1.65%)**,
+  one `tree-sitter-javascript` grammar and its generated C parser. That
+  confirms the scouting report's estimate almost exactly (+363,440 B, +1.77%
+  against its own smaller control). It is the price of the feature working at
+  all; there is no cheaper grammar.
+- **The formatter costs 16,512 B — 0.07%, three and a half percent of what
+  highlighting cost**, because it is a couple of hundred lines of Rust over
+  `&str` with no dependency at all.
+- **Everything else in the round** — the post-response hook, `pm.test` /
+  `pm.expect` and their JavaScript prelude, the Tests tab, the diagnostics
+  plumbing and 15 new `Str` variants in two languages — is the remaining
+  ~99,300 B.
+
+The formatter number is the one that justified a judgement call. The obvious
+way to get a *real* JavaScript formatter is `dprint-plugin-typescript`, and it
+was measured rather than guessed: it does not build at all at `0.93` in this
+graph (`swc_common 0.37.5` fails on `use serde::private`), and at `0.95.15` it
+builds and costs **+2,829,280 B, +12.7%** on top of the grammar build. That is
+five times what the entire rest of this round cost, on a binary that had
+already grown 5.6% for the script engine, to pretty-print a text box most users
+will paste into. So dodo ships the modest option — reindent, normalise blank
+lines, leave everything else byte-for-byte — and `models/script_format.rs`'s
+module doc states plainly what it does not do. If a future round wants real
+formatting, that measurement is the number to argue with.
 
 ### Features deliberately not added
 
