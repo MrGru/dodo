@@ -3,6 +3,7 @@
 use gpui::{AppContext as _, Context, Entity, Window};
 use gpui_component::input::InputState;
 
+use crate::api_explorer::models::console::{ConsoleLevel, ConsoleLog};
 use crate::api_explorer::models::exchange::Exchange;
 use crate::api_explorer::models::json_tree::JsonTree;
 use crate::i18n::Str;
@@ -47,8 +48,17 @@ impl ResponseTab {
     pub fn is_implemented(self) -> bool {
         matches!(
             self,
-            ResponseTab::Body | ResponseTab::Headers | ResponseTab::Cookies
+            ResponseTab::Body | ResponseTab::Headers | ResponseTab::Cookies | ResponseTab::Console
         )
+    }
+
+    /// Whether this tab has something to show before any response has arrived.
+    ///
+    /// Only the Console does: a pre-request script that failed produced no
+    /// exchange at all, and its output is the only explanation of why. Sending
+    /// the user to "no response yet" there would hide the answer.
+    pub fn shows_without_a_response(self) -> bool {
+        matches!(self, ResponseTab::Console)
     }
 }
 
@@ -96,6 +106,12 @@ pub struct ResponseState {
     /// time.
     pub body: Entity<InputState>,
     pub collapsed: bool,
+    /// This tab's script output. Survives across sends, with a separator
+    /// between runs — see [`ConsoleLog`].
+    pub console: ConsoleLog,
+    /// The quietest level the Console is showing. Everything at or above it is
+    /// on screen.
+    pub console_level: ConsoleLevel,
     /// The parsed JSON tree for Tree mode, built lazily the first time it is
     /// shown and dropped when a new response arrives. `None` after an attempt
     /// means the body did not parse as JSON.
@@ -120,6 +136,8 @@ impl ResponseState {
                     .line_number(true)
             }),
             collapsed: false,
+            console: ConsoleLog::default(),
+            console_level: ConsoleLevel::Debug,
             json_tree: None,
             json_tree_attempted: false,
         }
