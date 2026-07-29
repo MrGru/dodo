@@ -73,13 +73,13 @@ Facts about this chain, stated without inference:
 ## The rest of the graph
 
 Over the locked graph as resolved for a macOS arm64 host with `--all-features`,
-following normal (non-dev, non-build) dependency edges — 461 distinct packages
+following normal (non-dev, non-build) dependency edges — 465 distinct packages
 including dodo itself:
 
 | Licence (as declared) | Packages |
 |---|---|
-| MIT / Apache-2.0 dual, in its various spellings | 265 |
-| MIT only | 93 |
+| MIT / Apache-2.0 dual, in its various spellings | 266 |
+| MIT only | 96 |
 | Apache-2.0 only | 22 |
 | Unicode-3.0 (and one `(MIT OR Apache-2.0) AND Unicode-3.0`) | 19 |
 | Other permissive: BSD-2/3-Clause, ISC, Zlib, 0BSD, Unlicense, BSL-1.0, CC0-1.0, Apache-2.0 WITH LLVM-exception, in dual or combined expressions | 54 |
@@ -96,6 +96,7 @@ Individually notable, beyond the GPL crates above:
 | `option-ext` | MPL-2.0 | Transitive, via `dirs`. |
 | `libbz2-rs-sys` | bzip2-1.0.6 | A permissive BSD-style licence, transitive via `bzip2`. |
 | `aws-lc-sys` | `ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND …` | The rustls crypto provider's C sources; the expression is a conjunction because the vendored sources are multi-origin. |
+| `rquickjs-sys` | MIT | The API Explorer's JavaScript engine. It **vendors QuickJS-NG's C sources** and compiles four of them (`libregexp.c`, `libunicode.c`, `quickjs.c`, `dtoa.c`) into the binary. QuickJS is MIT (Bellard/Gonnord), so the crate's declared licence and the code it actually ships agree, and neither touches the open question above. |
 | `gpui_shared_string`, `gpui_util` | not declared | Both from zed-industries/zed, which as a repository is Apache-2.0/GPL-3.0/AGPL-3.0 mixed per crate. Neither crate carries a `license` field in its manifest, so no licence can be reported for them from the metadata alone. |
 
 The full per-crate list is not reproduced here; it is derivable exactly (see
