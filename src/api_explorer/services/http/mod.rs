@@ -13,6 +13,10 @@
 //! being sent. They are separate modules because they answer opposite
 //! questions: one decodes bytes into something readable, the other encodes
 //! something edited into bytes.
+//!
+//! `resolve` runs *before* `prepare`, substituting `{{name}}` across the draft
+//! so that everything `prepare` validates is the final text. Its module doc
+//! says why the order is that way round.
 
 pub mod auth;
 pub mod body;
@@ -22,6 +26,7 @@ pub mod cookies;
 pub mod headers;
 pub mod prepare;
 pub mod request_body;
+pub mod resolve;
 pub mod upload;
 
 pub use client::HttpTransport;

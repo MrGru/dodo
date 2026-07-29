@@ -9,7 +9,8 @@ use std::sync::Arc;
 use gpui::{Context, EventEmitter, Task, Window};
 
 use crate::api_explorer::models::exchange::{BodyKind, Exchange};
-use crate::api_explorer::services::http::{body, prepare};
+use crate::api_explorer::models::variables::VariableSet;
+use crate::api_explorer::services::http::{body, prepare, resolve};
 use crate::api_explorer::services::{Transport, TransportError};
 use crate::api_explorer::state::history::HistoryRecord;
 use crate::api_explorer::state::request::RequestState;
@@ -44,17 +45,23 @@ impl RequestTabState {
     ///
     /// Reading the editors out into a [`RequestDraft`] is the only part that
     /// happens here: it needs the entities, which live on the UI thread.
-    /// **Validation and assembly go to the background executor with the
-    /// request itself**, because building the body may read a file the Body tab
-    /// points at (a multipart file part, a binary body), and a file on a slow
-    /// volume must never stall a frame. The cost is that a mistyped URL is
-    /// reported one task hop later than the keystroke — invisible, and the
+    /// **Substitution, validation and assembly go to the background executor
+    /// with the request itself**, because building the body may read a file the
+    /// Body tab points at (a multipart file part, a binary body), and a file on
+    /// a slow volume must never stall a frame. The cost is that a mistyped URL
+    /// is reported one task hop later than the keystroke — invisible, and the
     /// right trade.
+    ///
+    /// `variables` is the page's [`VariableSet`], read on the UI thread at the
+    /// moment Send is pressed and moved into the task with the draft: a request
+    /// in flight resolves against the environment that was active when it
+    /// started, whatever the user switches to while it runs.
     ///
     /// [`RequestDraft`]: crate::api_explorer::models::request::RequestDraft
     pub fn send(
         &mut self,
         transport: Arc<dyn Transport>,
+        variables: VariableSet,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -66,7 +73,12 @@ impl RequestTabState {
         self.send_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { transport.execute(prepare::prepare(&draft)?) })
+                .spawn(async move {
+                    // `resolve` before `prepare`, so everything `prepare`
+                    // validates is the text that actually goes on the wire.
+                    let resolved = resolve::resolve(&draft, &variables)?;
+                    transport.execute(prepare::prepare(&resolved)?)
+                })
                 .await;
 
             // The window or the tab can be gone by the time this lands; both

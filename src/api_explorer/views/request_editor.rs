@@ -31,6 +31,9 @@ impl ApiExplorer {
         v_flex()
             .size_full()
             .child(self.request_bar(&tab, cx))
+            // The environment picker and the resolved-URL preview, on their own
+            // slim row rather than crowding the URL — see `environment_picker`.
+            .child(self.environment_row(&tab, cx))
             .child(self.request_tab_bar(&tab, cx))
             .child(div().flex_1().min_h_0().child(self.request_pane(&tab, cx)))
             .into_any_element()

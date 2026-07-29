@@ -6,6 +6,15 @@
 //! nodes are placeholders — [`CollectionTree::import`] re-numbers them so they
 //! cannot collide with the tree they are merged into.
 //!
+//! # A collection brings its variables with it
+//!
+//! A Postman collection may carry a top-level `variable` array, and every
+//! `{{baseUrl}}` in its requests refers to it. Importing the requests without
+//! it used to leave a tree in which nothing resolved, so [`parse_import`]
+//! returns an [`Import`] — the nodes *and* those variables — and the page files
+//! them into the collection scope. A folder-level `variable` array is not a
+//! Postman concept; there is nowhere for one to come from.
+//!
 //! [`CollectionTree::import`]: crate::api_explorer::models::collection::CollectionTree::import
 
 use serde_json::Value;
@@ -14,6 +23,8 @@ use crate::api_explorer::models::collection::{Node, NodeKind};
 use crate::api_explorer::models::key_value::KeyValue;
 use crate::api_explorer::models::method::HttpMethod;
 use crate::api_explorer::models::snapshot::RequestSnapshot;
+use crate::api_explorer::models::variables::Variable;
+use crate::api_explorer::services::environment_import::postman_variable;
 use crate::i18n::Str;
 
 /// Why an import could not be read.
@@ -34,19 +45,52 @@ impl ImportError {
     }
 }
 
+/// Everything one imported file contributes.
+///
+/// A struct rather than a bare `Vec<Node>` because a Postman collection carries
+/// variables its requests depend on; see this module's doc. dodo's own saved
+/// format is nodes only, so `variables` is empty for it.
+#[derive(Debug, Default)]
+pub struct Import {
+    pub roots: Vec<Node>,
+    pub variables: Vec<Variable>,
+}
+
 /// Parses a picked file into collections ready to merge into the tree.
-pub fn parse_import(bytes: &[u8]) -> Result<Vec<Node>, ImportError> {
+pub fn parse_import(bytes: &[u8]) -> Result<Import, ImportError> {
     let value: Value =
         serde_json::from_slice(bytes).map_err(|err| ImportError::new(err.to_string()))?;
 
     match &value {
         // dodo's own format: an array of nodes.
         Value::Array(_) => serde_json::from_value::<Vec<Node>>(value)
+            .map(|roots| Import {
+                roots,
+                variables: Vec::new(),
+            })
             .map_err(|err| ImportError::new(err.to_string())),
         // Postman v2: an object carrying `info` and `item`.
-        Value::Object(map) if map.contains_key("item") => Ok(vec![postman_collection(map)]),
+        Value::Object(map) if map.contains_key("item") => Ok(Import {
+            roots: vec![postman_collection(map)],
+            variables: postman_variables(map),
+        }),
         _ => Err(ImportError::new("unrecognized collection format")),
     }
+}
+
+/// A Postman collection's own `variable` array. Absent on most exports, which
+/// is an empty list rather than an error.
+fn postman_variables(map: &serde_json::Map<String, Value>) -> Vec<Variable> {
+    map.get("variable")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .map(postman_variable)
+                .filter(|variable| !variable.key.trim().is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Builds one collection node from a Postman v2 collection object.
@@ -176,13 +220,16 @@ mod tests {
                 {"id":4,"name":"Ping","kind":{"Request":{"method":"Get","url":"https://x/ping"}},"children":[]}
             ]}
         ]"#;
-        let roots = parse_import(json.as_bytes()).expect("imports");
-        assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].name, "APIs");
+        let imported = parse_import(json.as_bytes()).expect("imports");
+        assert_eq!(imported.roots.len(), 1);
+        assert_eq!(imported.roots[0].name, "APIs");
         assert_eq!(
-            roots[0].children[0].snapshot().map(|s| s.url.as_str()),
+            imported.roots[0].children[0]
+                .snapshot()
+                .map(|s| s.url.as_str()),
             Some("https://x/ping")
         );
+        assert!(imported.variables.is_empty());
     }
 
     #[test]
@@ -200,9 +247,9 @@ mod tests {
                 {"name": "Health", "request": {"method": "GET", "url": "https://api.example.com/health"}}
             ]
         }"#;
-        let roots = parse_import(json.as_bytes()).expect("imports");
-        assert_eq!(roots.len(), 1);
-        let collection = &roots[0];
+        let imported = parse_import(json.as_bytes()).expect("imports");
+        assert_eq!(imported.roots.len(), 1);
+        let collection = &imported.roots[0];
         assert_eq!(collection.name, "My API");
         assert!(matches!(collection.kind, NodeKind::Collection));
 
@@ -218,6 +265,43 @@ mod tests {
         let health = collection.children[1].snapshot().expect("a request");
         assert_eq!(health.method, HttpMethod::Get);
         assert_eq!(health.url, "https://api.example.com/health");
+    }
+
+    #[test]
+    fn a_collections_own_variable_array_is_imported_alongside_its_requests() {
+        let json = r#"{
+            "info": {"name": "My API"},
+            "item": [{"name": "Health", "request": {"method": "GET", "url": "{{baseUrl}}/health"}}],
+            "variable": [
+                {"key": "baseUrl", "value": "https://api.example.com", "type": "string"},
+                {"key": "apiKey", "value": "abc", "type": "secret"},
+                {"key": "  ", "value": "dropped"}
+            ]
+        }"#;
+        let imported = parse_import(json.as_bytes()).expect("imports");
+
+        // The request survives with its reference intact, unsubstituted.
+        let health = imported.roots[0].children[0].snapshot().expect("a request");
+        assert_eq!(health.url, "{{baseUrl}}/health");
+
+        // …and the variables it refers to came with it.
+        assert_eq!(imported.variables.len(), 2, "an unnamed row was kept");
+        assert_eq!(imported.variables[0].key, "baseUrl");
+        assert_eq!(imported.variables[0].value, "https://api.example.com");
+        assert!(imported.variables[0].enabled);
+        assert!(!imported.variables[0].secret);
+        assert!(imported.variables[1].secret);
+    }
+
+    #[test]
+    fn a_collection_with_no_variable_array_imports_none() {
+        let json = r#"{"info": {"name": "X"}, "item": []}"#;
+        assert!(
+            parse_import(json.as_bytes())
+                .expect("imports")
+                .variables
+                .is_empty()
+        );
     }
 
     #[test]
