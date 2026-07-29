@@ -21,10 +21,19 @@
 //! on the UI thread. Making it blocking keeps implementations honest and
 //! testable — a fake transport in a unit test is a struct with one method — and
 //! keeps a second async runtime out of the render path.
+//!
+//! `http::prepare` now sits on that same side of the line: building a body may
+//! read a file, so `state::tab::RequestTabState::send` spawns
+//! `prepare` → `execute` as one background job. The two modules here that are
+//! *not* transport — [`curl`], which parses a pasted command, and
+//! [`file_picker`], which asks the platform for a path — are pure and
+//! background-only respectively, for the same reason.
 
 pub mod collection_import;
 pub mod collection_store;
+pub mod curl;
 pub mod file_export;
+pub mod file_picker;
 pub mod http;
 
 use std::sync::Arc;
@@ -75,6 +84,13 @@ pub enum TransportError {
     UnsupportedScheme { scheme: String },
     /// A header name or value that cannot go on the wire.
     InvalidHeader { name: String },
+    /// A file the body was told to send could not be read — most often a saved
+    /// request whose upload has since been moved or deleted. The path is named
+    /// because that is the only question the user will have.
+    FileUnreadable { path: String, detail: String },
+    /// A file past the size this build will buffer into a request body. See
+    /// `http::upload::MAX_UPLOAD_BYTES` for why there is a cap at all.
+    FileTooLarge { path: String, limit_mb: u64 },
     /// No response within the deadline.
     Timeout { seconds: u64 },
     /// The host name did not resolve.
@@ -100,6 +116,14 @@ impl TransportError {
                 Str::HttpUnsupportedScheme(scheme.clone())
             }
             TransportError::InvalidHeader { name } => Str::HttpInvalidHeader(name.clone()),
+            TransportError::FileUnreadable { path, detail } => Str::HttpFileUnreadable {
+                path: path.clone(),
+                detail: detail.clone(),
+            },
+            TransportError::FileTooLarge { path, limit_mb } => Str::HttpFileTooLarge {
+                path: path.clone(),
+                limit_mb: *limit_mb,
+            },
             TransportError::Timeout { seconds } => Str::HttpTimeout(*seconds),
             TransportError::Dns { host } => Str::HttpDnsFailure(host.clone()),
             TransportError::Connect { detail } => Str::HttpConnectFailure(detail.clone()),

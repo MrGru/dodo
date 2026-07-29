@@ -14,6 +14,16 @@
 //! what their empty cells say. [`RowTable`] carries that difference and every
 //! row operation lives once, in `state::request`; this module is the drawing
 //! and the words around it.
+//!
+//! # The TYPE column
+//!
+//! One table *does* differ structurally: a multipart form row may send a file
+//! instead of text. That is the `typed` flag — passed in by the caller rather
+//! than read off the body type here, so this module keeps knowing nothing about
+//! what a body is. A typed table grows a TYPE cell and, on a `File` row, swaps
+//! the value input for the picker.
+
+use std::path::PathBuf;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -24,10 +34,13 @@ use gpui::{div, px};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::Input;
+use gpui_component::popover::Popover;
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex,
 };
 
+use crate::api_explorer::models::key_value::FieldKind;
+use crate::api_explorer::services::file_picker;
 use crate::api_explorer::state::request::{KeyValueRow, MoveRow, RowTable};
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::app_icon::AppIcon;
@@ -35,6 +48,10 @@ use crate::i18n::{Str, t};
 
 /// Width of the enable checkbox column, and of the header cell above it.
 const ENABLE_COLUMN: Pixels = px(24.);
+
+/// Width of the TYPE column, on the tables that have one. Wide enough for the
+/// longer of the two labels in either language plus its chevron.
+const TYPE_COLUMN: Pixels = px(92.);
 
 /// Width of the trailing column holding move, duplicate and delete.
 ///
@@ -90,8 +107,14 @@ fn labels(table: RowTable) -> Labels {
 /// The table has two views the toolbar switches between: the row editor (Table)
 /// and a `Key: Value` text area (Bulk Edit). Both write back to the same request
 /// state, so switching never loses data.
+///
+/// `typed` adds the TYPE column; only the multipart form body sets it. Bulk
+/// Edit is `Key: Value` text and cannot express a file, so a typed table's file
+/// rows survive the round trip only because `set_edit_mode` reuses the existing
+/// row entities positionally — the same way a row's description survives.
 pub fn key_value_table(
     table: RowTable,
+    typed: bool,
     tab: &Entity<RequestTabState>,
     cx: &App,
 ) -> impl IntoElement {
@@ -102,18 +125,41 @@ pub fn key_value_table(
         .iter()
         .filter(|row| row.enabled && !row.key.read(cx).value().trim().is_empty())
         .count();
+    let incomplete = if typed {
+        rows.iter().filter(|row| row.is_incomplete_file(cx)).count()
+    } else {
+        0
+    };
     let all_enabled = tab.read(cx).request.all_rows_enabled(table);
     let last = rows.len().saturating_sub(1);
 
     let body = if bulk {
         bulk_pane(table, tab, cx).into_any_element()
     } else {
-        table_pane(table, &labels, all_enabled, last, tab, cx).into_any_element()
+        table_pane(table, &labels, typed, all_enabled, last, tab, cx).into_any_element()
     };
 
     v_flex()
         .size_full()
         .child(toolbar_row(table, &labels, bulk, active, tab, cx))
+        // Stated above the rows rather than only inside them: a row whose file
+        // was never chosen is skipped at send time, and a payload that silently
+        // vanishes is the one failure a user cannot debug.
+        .when(incomplete > 0 && !bulk, |this| {
+            this.child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_1p5()
+                    .px_3()
+                    .py_1p5()
+                    .text_xs()
+                    .text_color(cx.theme().warning)
+                    .bg(cx.theme().warning.opacity(0.1))
+                    .child(Icon::new(AppIcon::AlertTriangle).size(px(12.)))
+                    .child(t(Str::IncompleteFileFields(incomplete), cx)),
+            )
+        })
         .child(body)
 }
 
@@ -122,6 +168,7 @@ pub fn key_value_table(
 fn table_pane(
     table: RowTable,
     labels: &Labels,
+    typed: bool,
     all_enabled: bool,
     last: usize,
     tab: &Entity<RequestTabState>,
@@ -131,7 +178,14 @@ fn table_pane(
     v_flex()
         .flex_1()
         .min_h_0()
-        .child(column_header(table, labels.id_prefix, all_enabled, tab, cx))
+        .child(column_header(
+            table,
+            labels.id_prefix,
+            typed,
+            all_enabled,
+            tab,
+            cx,
+        ))
         .child(
             div()
                 .id(SharedString::from(format!("{}-rows", labels.id_prefix)))
@@ -139,8 +193,17 @@ fn table_pane(
                 .min_h_0()
                 .overflow_y_scroll()
                 .children(rows.iter().enumerate().map(|(index, row)| {
-                    render_row(table, labels, row, index == 0, index == last, tab, cx)
-                        .into_any_element()
+                    render_row(
+                        table,
+                        labels,
+                        typed,
+                        row,
+                        index == 0,
+                        index == last,
+                        tab,
+                        cx,
+                    )
+                    .into_any_element()
                 }))
                 .child(add_row(table, labels, tab, cx)),
         )
@@ -285,6 +348,7 @@ fn add_top_button(
 fn column_header(
     table: RowTable,
     prefix: &'static str,
+    typed: bool,
     all_enabled: bool,
     tab: &Entity<RequestTabState>,
     cx: &App,
@@ -316,6 +380,14 @@ fn column_header(
             ),
         )
         .child(div().flex_1().min_w_0().child(t(Str::ColumnKey, cx)))
+        .when(typed, |this| {
+            this.child(
+                div()
+                    .w(TYPE_COLUMN)
+                    .flex_shrink_0()
+                    .child(t(Str::ColumnType, cx)),
+            )
+        })
         .child(div().flex_1().min_w_0().child(t(Str::ColumnValue, cx)))
         .child(
             div()
@@ -326,9 +398,14 @@ fn column_header(
         .child(div().w(ACTIONS_COLUMN).flex_shrink_0())
 }
 
+/// Drawing one row needs the whole context it sits in: which table, its words,
+/// whether it is typed, and where it is in the list. Bundling those into a
+/// struct would only move the same seven values one indirection away.
+#[allow(clippy::too_many_arguments)]
 fn render_row(
     table: RowTable,
     labels: &Labels,
+    typed: bool,
     row: &KeyValueRow,
     is_first: bool,
     is_last: bool,
@@ -368,11 +445,24 @@ fn render_row(
                 .min_w_0()
                 .child(Input::new(&row.key).appearance(false).small()),
         )
+        .when(typed, |this| {
+            this.child(
+                div()
+                    .w(TYPE_COLUMN)
+                    .flex_shrink_0()
+                    .child(type_picker(table, prefix, row, tab, cx)),
+            )
+        })
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .child(Input::new(&row.value).appearance(false).small()),
+                .when(typed && row.kind == FieldKind::File, |this| {
+                    this.child(file_cell(table, prefix, row, tab, cx))
+                })
+                .when(!(typed && row.kind == FieldKind::File), |this| {
+                    this.child(Input::new(&row.value).appearance(false).small())
+                }),
         )
         // The description is a note, not payload: it is kept with the row
         // through duplicate and reorder and never sent. See `KeyValueRow`.
@@ -383,6 +473,142 @@ fn render_row(
                 .child(Input::new(&row.description).appearance(false).small()),
         )
         .child(row_actions(table, prefix, id, is_first, is_last, tab, cx))
+}
+
+/// The Text / File switch for one row of a typed table.
+///
+/// A two-item `Popover` rather than a segmented pair of buttons: the cell is
+/// narrow, and the closed state has to say which type is in force without
+/// costing the value column any width.
+fn type_picker(
+    table: RowTable,
+    prefix: &'static str,
+    row: &KeyValueRow,
+    tab: &Entity<RequestTabState>,
+    cx: &App,
+) -> impl IntoElement {
+    let id = row.id;
+    let current = row.kind;
+
+    let options = FieldKind::ALL.map(|candidate| {
+        let tab = tab.clone();
+        Button::new(format!("{prefix}-kind-{id}-{}", candidate as usize))
+            .ghost()
+            .small()
+            .w_full()
+            .justify_start()
+            .selected(candidate == current)
+            .label(t(candidate.label(), cx))
+            .on_click(move |_, _, cx| {
+                tab.update(cx, |state, cx| {
+                    state.request.set_row_kind(table, id, candidate);
+                    state.request.dirty = true;
+                    cx.notify();
+                });
+            })
+    });
+
+    Popover::new(SharedString::from(format!("{prefix}-kind-{id}")))
+        .trigger(
+            Button::new(format!("{prefix}-kind-trigger-{id}"))
+                .ghost()
+                .xsmall()
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_1()
+                        .text_xs()
+                        .child(t(current.label(), cx))
+                        .child(Icon::new(AppIcon::ChevronDown).size(px(10.))),
+                ),
+        )
+        .p_1()
+        .w(px(120.))
+        .children(options)
+}
+
+/// The value cell of a `File` row: the picker, the chosen file, and the way
+/// back out of it.
+///
+/// The full path lives in the tooltip rather than in the label — a cell this
+/// narrow can only show a file name, and the name is what identifies the file
+/// to the person who picked it. An unchosen file is drawn in the warning colour
+/// so the row reads as unfinished at a glance.
+fn file_cell(
+    table: RowTable,
+    prefix: &'static str,
+    row: &KeyValueRow,
+    tab: &Entity<RequestTabState>,
+    cx: &App,
+) -> impl IntoElement {
+    let id = row.id;
+    let path = row.file_path.clone();
+    let chosen = !path.trim().is_empty();
+    let name = file_picker::ChosenFile {
+        path: PathBuf::from(&path),
+        size: row.file_size,
+    }
+    .display_name();
+    let size = row.file_size.map(file_picker::format_size);
+
+    let pick_tab = tab.clone();
+    let clear_tab = tab.clone();
+
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .items_center()
+        .gap_1()
+        .child(
+            Button::new(format!("{prefix}-file-{id}"))
+                .ghost()
+                .xsmall()
+                .icon(AppIcon::File)
+                .label(if chosen {
+                    SharedString::from(name)
+                } else {
+                    t(Str::ChooseFile, cx)
+                })
+                .when(chosen, |this| this.tooltip(SharedString::from(path)))
+                .when(!chosen, |this| this.tooltip(t(Str::NoFileSelected, cx)))
+                .on_click(move |_, _, cx| {
+                    file_picker::choose_file(pick_tab.clone(), cx, move |state, chosen, cx| {
+                        state.request.set_row_file(
+                            table,
+                            id,
+                            chosen.path.display().to_string(),
+                            chosen.size,
+                        );
+                        state.request.dirty = true;
+                        cx.notify();
+                    });
+                }),
+        )
+        .when_some(size.filter(|_| chosen), |this, size| {
+            this.child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(size),
+            )
+        })
+        .when(chosen, |this| {
+            this.child(
+                Button::new(format!("{prefix}-file-clear-{id}"))
+                    .ghost()
+                    .xsmall()
+                    .icon(AppIcon::Close)
+                    .tooltip(t(Str::ClearFile, cx))
+                    .on_click(move |_, _, cx| {
+                        clear_tab.update(cx, |state, cx| {
+                            state.request.set_row_file(table, id, String::new(), None);
+                            state.request.dirty = true;
+                            cx.notify();
+                        });
+                    }),
+            )
+        })
 }
 
 /// Move up, move down, duplicate, delete.

@@ -143,16 +143,16 @@ fn postman_header(header: &Value) -> KeyValue {
             .get("disabled")
             .and_then(Value::as_bool)
             .unwrap_or(false),
-        key: header
-            .get("key")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        value: header
-            .get("value")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
+        ..KeyValue::text(
+            header
+                .get("key")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            header
+                .get("value")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        )
     }
 }
 

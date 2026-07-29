@@ -1,24 +1,29 @@
 //! The Body tab: a type picker, and the editor that type is edited with.
 //!
-//! Three editing surfaces sit under one picker — the code editor for the
-//! text-shaped types, the key/value table for the two form types, and a stated
-//! "no body" panel for the rest. Which one is shown is the only thing the type
-//! decides here; how it is encoded and what `Content-Type` it implies is the
-//! service layer's business (`services::http::request_body`), so this file has
-//! no opinion about the wire.
+//! Four editing surfaces sit under one picker — the code editor for the
+//! text-shaped types, the key/value table for the two form types, a single-file
+//! picker for Binary, and a stated "no body" panel for `None`. Which one is
+//! shown is the only thing the type decides here; how it is encoded and what
+//! `Content-Type` it implies is the service layer's business
+//! (`services::http::request_body`), so this file has no opinion about the wire.
+//!
+//! Nothing here reads a file. The picker hands back a path and a size through
+//! `services::file_picker`, which does its `stat` on the background executor;
+//! the bytes are read once, at send time, in `services::http::upload`.
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{Context, Entity, IntoElement, ParentElement as _, Styled as _, div};
+use gpui::{Context, Entity, IntoElement, ParentElement as _, SharedString, Styled as _, div, px};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, h_flex, v_flex,
+    ActiveTheme as _, Icon, Selectable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 
 use crate::api_explorer::components::empty_state::empty_state;
 use crate::api_explorer::components::key_value_table::key_value_table;
-use crate::api_explorer::components::later_step::later_step;
 use crate::api_explorer::models::body::BodyType;
+use crate::api_explorer::services::file_picker;
+use crate::api_explorer::services::http::upload;
 use crate::api_explorer::state::request::RowTable;
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
@@ -139,9 +144,8 @@ impl ApiExplorer {
     /// The body-type selector: a wrapping segmented control, one button per kind.
     ///
     /// It wraps to as many lines as it needs so every kind stays visible and
-    /// selectable at any width — nothing is pushed off-screen. Binary is shown
-    /// disabled with the reason attached, the honest placeholder for a kind this
-    /// build cannot build yet.
+    /// selectable at any width — nothing is pushed off-screen. Every kind is
+    /// now buildable, so nothing here is disabled.
     fn body_type_selector(
         &self,
         tab: &Entity<RequestTabState>,
@@ -152,17 +156,11 @@ impl ApiExplorer {
         // IntoElement` return would capture `cx`, which cannot escape the map
         // closure.
         let buttons = BodyType::ALL.map(|candidate| {
-            let available = candidate.is_available();
             let switch_tab = tab.clone();
             Button::new(("body-type", candidate as usize))
                 .ghost()
                 .xsmall()
                 .selected(candidate == current)
-                // Binary is shown disabled with the reason attached rather than
-                // hidden, the honest placeholder for a kind this build cannot
-                // build yet.
-                .disabled(!available)
-                .when(!available, |this| this.tooltip(t(Str::BinaryBodyLater, cx)))
                 .label(t(candidate.label(), cx))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     switch_tab.update(cx, |state, cx| {
@@ -187,7 +185,8 @@ impl ApiExplorer {
         let body_type = state.request.body_type;
 
         if body_type.is_form() {
-            return key_value_table(RowTable::BodyFields, tab, cx).into_any_element();
+            return key_value_table(RowTable::BodyFields, body_type.is_typed_form(), tab, cx)
+                .into_any_element();
         }
 
         if body_type.is_text() {
@@ -203,23 +202,140 @@ impl ApiExplorer {
                 .into_any_element();
         }
 
-        match body_type {
-            // Not reachable through the picker, which shows Binary disabled —
-            // stated here too so the pane can never be blank.
-            BodyType::Binary => later_step(
-                AppIcon::Binary,
-                t(Str::BodyTypeBinary, cx),
-                t(Str::BinaryBodyLater, cx),
-                cx,
-            )
-            .into_any_element(),
-            _ => empty_state(
-                AppIcon::SquareCode,
-                t(Str::NoBodyTitle, cx),
-                Some(t(Str::NoBodyHint, cx)),
-                cx,
-            )
-            .into_any_element(),
+        if body_type.is_file() {
+            return self.binary_pane(tab, cx);
         }
+
+        empty_state(
+            AppIcon::SquareCode,
+            t(Str::NoBodyTitle, cx),
+            Some(t(Str::NoBodyHint, cx)),
+            cx,
+        )
+        .into_any_element()
+    }
+
+    /// The Binary body: one file, sent as the raw request body.
+    ///
+    /// Nothing is read here — only the name and the size the picker already
+    /// learned are shown, and the `Content-Type` line states what the extension
+    /// implies so the request is not a surprise. The bytes are read once, at
+    /// send time, on the background executor.
+    fn binary_pane(
+        &self,
+        tab: &Entity<RequestTabState>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let state = tab.read(cx);
+        let path = state.request.binary_path.clone();
+        let size = state.request.binary_size.map(file_picker::format_size);
+        let chosen = !path.trim().is_empty();
+        let file = file_picker::ChosenFile {
+            path: std::path::PathBuf::from(&path),
+            size: state.request.binary_size,
+        };
+        let name = file.display_name();
+        let media_type = upload::media_type_of(&file.path);
+
+        let pick_tab = tab.clone();
+        let clear_tab = tab.clone();
+
+        v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .p_4()
+            .child(
+                Icon::new(AppIcon::Binary)
+                    .size(px(28.))
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .when(chosen, |this| {
+                this.child(
+                    v_flex()
+                        .max_w_full()
+                        .min_w_0()
+                        .items_center()
+                        .gap_1()
+                        // The name identifies the file; the full path sits
+                        // under it, truncated, because this pane has the room
+                        // that a table cell does not.
+                        .child(div().font_bold().child(SharedString::from(name)))
+                        .child(
+                            div()
+                                .max_w_full()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(SharedString::from(path.clone())),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .when_some(size, |this, size| this.child(SharedString::from(size)))
+                                .child(SharedString::from(media_type)),
+                        ),
+                )
+            })
+            .when(!chosen, |this| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t(Str::BinaryBodyHint, cx)),
+                )
+            })
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new("binary-choose-file")
+                            .outline()
+                            .small()
+                            .icon(AppIcon::File)
+                            .label(if chosen {
+                                t(Str::ReplaceFile, cx)
+                            } else {
+                                t(Str::ChooseFile, cx)
+                            })
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                file_picker::choose_file(
+                                    pick_tab.clone(),
+                                    cx,
+                                    |state, chosen, cx| {
+                                        state.request.binary_path =
+                                            chosen.path.display().to_string();
+                                        state.request.binary_size = chosen.size;
+                                        state.request.dirty = true;
+                                        cx.notify();
+                                    },
+                                );
+                            })),
+                    )
+                    .when(chosen, |this| {
+                        this.child(
+                            Button::new("binary-clear-file")
+                                .ghost()
+                                .small()
+                                .icon(AppIcon::Close)
+                                .tooltip(t(Str::ClearFile, cx))
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    clear_tab.update(cx, |state, cx| {
+                                        state.request.binary_path.clear();
+                                        state.request.binary_size = None;
+                                        state.request.dirty = true;
+                                        cx.notify();
+                                    });
+                                    cx.notify();
+                                })),
+                        )
+                    }),
+            )
+            .into_any_element()
     }
 }

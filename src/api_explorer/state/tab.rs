@@ -42,10 +42,16 @@ impl RequestTabState {
 
     /// Sends the request this tab currently describes.
     ///
-    /// Validation happens here, on the UI thread, because it is cheap and a
-    /// mistyped URL should be reported instantly rather than after a task
-    /// hop. The request itself never runs here: [`Transport::execute`] is
-    /// blocking and goes to the background executor.
+    /// Reading the editors out into a [`RequestDraft`] is the only part that
+    /// happens here: it needs the entities, which live on the UI thread.
+    /// **Validation and assembly go to the background executor with the
+    /// request itself**, because building the body may read a file the Body tab
+    /// points at (a multipart file part, a binary body), and a file on a slow
+    /// volume must never stall a frame. The cost is that a mistyped URL is
+    /// reported one task hop later than the keystroke — invisible, and the
+    /// right trade.
+    ///
+    /// [`RequestDraft`]: crate::api_explorer::models::request::RequestDraft
     pub fn send(
         &mut self,
         transport: Arc<dyn Transport>,
@@ -53,13 +59,6 @@ impl RequestTabState {
         cx: &mut Context<Self>,
     ) {
         let draft = self.request.draft(cx);
-        let prepared = match prepare::prepare(&draft) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                self.fail(error, cx);
-                return;
-            }
-        };
 
         self.response.outcome = Outcome::InFlight;
         cx.notify();
@@ -67,7 +66,7 @@ impl RequestTabState {
         self.send_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { transport.execute(prepared) })
+                .spawn(async move { transport.execute(prepare::prepare(&draft)?) })
                 .await;
 
             // The window or the tab can be gone by the time this lands; both
