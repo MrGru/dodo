@@ -31,11 +31,14 @@
 
 pub mod collection_import;
 pub mod collection_store;
+pub mod consent_store;
 pub mod curl;
 pub mod environment_import;
 pub mod file_export;
 pub mod file_picker;
 pub mod http;
+pub mod script;
+pub mod send;
 pub mod variable_store;
 
 use std::sync::Arc;
