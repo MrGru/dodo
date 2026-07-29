@@ -53,6 +53,20 @@ impl HttpMethod {
         }
     }
 
+    /// The method a token names, case-insensitively, or `None` for one this
+    /// build has no variant for.
+    ///
+    /// `None` rather than a default: every caller — a pasted cURL command, a
+    /// Postman import, a script setting `pm.request.method` — has its own right
+    /// answer for an unknown verb, and silently substituting `GET` is not one
+    /// of them.
+    pub fn parse(token: &str) -> Option<Self> {
+        let token = token.trim();
+        Self::ALL
+            .into_iter()
+            .find(|method| method.as_str().eq_ignore_ascii_case(token))
+    }
+
     /// Whether a request body means anything for this method.
     ///
     /// `GET`, `HEAD`, `CONNECT` and `TRACE` have no defined semantics for one;

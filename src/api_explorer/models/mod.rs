@@ -6,12 +6,15 @@
 pub mod auth;
 pub mod body;
 pub mod collection;
+pub mod console;
 pub mod exchange;
 pub mod interpolate;
 pub mod json_tree;
 pub mod key_value;
 pub mod method;
 pub mod request;
+pub mod script;
+pub mod script_consent;
 pub mod script_template;
 pub mod snapshot;
 pub mod tab_title;
