@@ -205,6 +205,32 @@ renders plain unhighlighted text, which is exactly what gpui-component's
 highlighter does when no grammar feature is set — so the degraded state is one
 the library already supports, not one this project has to maintain.
 
+### What the script engine costs
+
+Measured on the same machine and profile, immediately before and after the
+round that added it, so the two numbers are comparable to each other and not to
+the table above (which was taken on an older tree):
+
+| Configuration | Bytes | Δ | Δ % |
+|---|---:|---:|---:|
+| Control — the commit before the round | 20,811,216 | — | — |
+| With `rquickjs`, the sandbox, the consent gate and the Console | 21,975,776 | **+1,164,560** | **+5.60%** |
+
+That is the **whole feature**, not the engine alone: it includes roughly 2,600
+lines of new Rust and 34 new `Str` variants in both languages. The scouting
+report measured `rquickjs` on its own at +999,024 B (+4.9%) against its own
+control, which is consistent with this once the rest of the round is accounted
+for. For scale, the two alternatives it measured were `rhai` at +1,906,032 B —
+nearly twice QuickJS, for a language no imported Postman script is written in —
+and `boa_engine` at +5,806,400 B.
+
+It is **not** behind a cargo feature, for the reason the next section gives
+about `docker`: gating it would mean `#[cfg]` on the `Str` variants and on the
+send path, and the i18n guard tests exist to make that surface hard to get
+wrong. `services/script/` is nonetheless the only module that names `rquickjs`,
+so a build without an engine is a `NullEngine` swap in one line rather than a
+refactor.
+
 ### Features deliberately not added
 
 - **`production` / `development` / `profiling`.** Nothing in this crate reads
