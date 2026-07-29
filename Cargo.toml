@@ -75,6 +75,15 @@ tokio = { version = "1.53.1", default-features = false, features = ["rt-multi-th
 # CPU delta) inside `docker::services`. Already in the tree transitively via
 # bollard, so it adds no build cost; pure Rust, no TLS.
 futures-util = "0.3.33"
+# The JavaScript engine behind the API Explorer's scripts (QuickJS-NG, via C).
+# Only `api_explorer::services::script` may name it, the same containment rule
+# `reqwest` and `bollard` follow. Deliberately minimal features: no `loader`
+# (a module loader is a whole attack surface — a script cannot `require`), no
+# `macro`, no `futures`. `rquickjs-sys` ships pre-generated bindings for all
+# four release targets, so no `bindgen` and no libclang enters the build; it
+# compiles four C files with `cc` and pointedly not `quickjs-libc.c`, which is
+# what would have supplied file, process and socket access.
+rquickjs = { version = "0.12.1", default-features = false, features = ["std"] }
 
 # ---------------------------------------------------------------------------
 # Build profiles
