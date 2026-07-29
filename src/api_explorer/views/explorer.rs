@@ -14,7 +14,7 @@ use gpui::{
     IntoElement, ParentElement as _, PathPromptOptions, Render, Styled as _, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::InputState;
+use gpui_component::input::{InputEvent, InputState};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_component::{ActiveTheme as _, Selectable as _, h_flex, v_flex};
 
@@ -25,10 +25,10 @@ use crate::api_explorer::services::collection_import::parse_import;
 use crate::api_explorer::services::collection_store::{
     CollectionStore, DiskCollectionStore, data_dir,
 };
-use crate::api_explorer::services::file_export;
-use crate::api_explorer::services::{Protocol, TransportRegistry};
+use crate::api_explorer::services::{Protocol, TransportRegistry, curl, file_export, file_picker};
 use crate::api_explorer::state::collection::CollectionState;
 use crate::api_explorer::state::history::{History, HistoryRecord};
+use crate::api_explorer::state::request::is_bulk_change;
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::state::ui::{
     COLLECTIONS_WIDTH, LeftPanel, REQUEST_MIN_HEIGHT, RESPONSE_HEIGHT, UiState,
@@ -88,7 +88,7 @@ pub struct ApiExplorer {
 impl ApiExplorer {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let first = cx.new(|cx| RequestTabState::new(window, cx));
-        Self::watch_tab(&first, cx);
+        Self::watch_tab(&first, window, cx);
 
         let name_placeholder = t(Str::NameRequestPlaceholder, cx);
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder(name_placeholder));
@@ -122,15 +122,128 @@ impl ApiExplorer {
         }
     }
 
-    /// Subscribes to a tab so its completed requests land in history. Every tab
-    /// — the first, a new one, or one opened from a saved request — is watched
-    /// through here, so nothing sent can escape the record.
-    fn watch_tab(tab: &Entity<RequestTabState>, cx: &mut Context<Self>) {
+    /// Subscribes to a tab so its completed requests land in history, and to
+    /// its URL field so that a pasted cURL command becomes a request rather
+    /// than a very long URL.
+    ///
+    /// Every tab — the first, a new one, or one opened from a saved request —
+    /// is watched through here, so nothing sent can escape the record.
+    fn watch_tab(tab: &Entity<RequestTabState>, window: &mut Window, cx: &mut Context<Self>) {
         cx.subscribe(tab, |this, _tab, record: &HistoryRecord, cx| {
             this.history.record(record.clone());
             cx.notify();
         })
         .detach();
+
+        let url = tab.read(cx).request.url.clone();
+        let watched = tab.clone();
+        cx.subscribe_in(
+            &url,
+            window,
+            move |this, url, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = url.read(cx).value().to_string();
+                    this.on_url_changed(&watched, text, window, cx);
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// Reacts to the URL field changing, which is where a pasted cURL command
+    /// is caught.
+    ///
+    /// Two things have to be true before anything happens: the change has to
+    /// look like a **paste** rather than a keystroke ([`is_bulk_change`]), and
+    /// the text has to parse as a cURL command with a URL in it. Without the
+    /// first check, typing the letters of the word "curl" into the box would
+    /// trip the importer halfway through.
+    ///
+    /// Nothing this method writes back can re-enter it: `InputState::set_value`
+    /// clears the widget's `emit_events` flag for the duration, so a
+    /// programmatic write is silent where a paste is not. `last_url` is still
+    /// kept in step by hand on both branches, so the *next* real edit compares
+    /// against what is actually on screen.
+    ///
+    /// # Nothing is overwritten
+    ///
+    /// A parsed command opens a **new tab**, and the field it was pasted into
+    /// is put back exactly as it was — so unsaved work in the tab you happened
+    /// to be looking at cannot be lost, and there is nothing to undo. The one
+    /// exception is a tab that has nothing in it (unnamed, unedited, empty
+    /// URL): reusing that is what stops "paste, paste, paste" from leaving a
+    /// trail of blank tabs, and by definition loses nothing.
+    fn on_url_changed(
+        &mut self,
+        tab: &Entity<RequestTabState>,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let previous = tab.read(cx).request.last_url.clone();
+        if previous == text {
+            return;
+        }
+        tab.update(cx, |state, _| state.request.last_url = text.clone());
+
+        if !is_bulk_change(&previous, &text) || !curl::looks_like_curl(&text) {
+            return;
+        }
+        let Some(snapshot) = curl::parse(&text) else {
+            return;
+        };
+
+        let pristine = {
+            let state = tab.read(cx);
+            state.request.name.is_none() && !state.request.dirty && previous.trim().is_empty()
+        };
+
+        if pristine {
+            tab.update(cx, |state, cx| {
+                state.request.apply_snapshot(&snapshot, None, window, cx);
+                // Imported, not saved: the unsaved dot is the honest state.
+                state.request.dirty = true;
+                cx.notify();
+            });
+            self.refresh_body_file(tab, cx);
+        } else {
+            // Put the field back before opening the new tab, so the tab left
+            // behind is byte-for-byte what it was.
+            let restored = previous;
+            tab.update(cx, |state, cx| {
+                state.request.last_url = restored.clone();
+                state
+                    .request
+                    .url
+                    .update(cx, |input, cx| input.set_value(restored, window, cx));
+            });
+            self.open_snapshot(snapshot, None, window, cx);
+            if let Some(opened) = self.active_tab().cloned() {
+                opened.update(cx, |state, cx| {
+                    state.request.dirty = true;
+                    cx.notify();
+                });
+                self.refresh_body_file(&opened, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Re-reads the size of the file a restored Binary body points at.
+    ///
+    /// The size is a property of the file rather than of the request, so it is
+    /// never saved; a snapshot arriving from a collection, from history or from
+    /// a pasted cURL command asks the filesystem again — on the background
+    /// executor, like every other `stat` in this module.
+    fn refresh_body_file(&self, tab: &Entity<RequestTabState>, cx: &mut Context<Self>) {
+        let path = tab.read(cx).request.binary_path.clone();
+        if path.trim().is_empty() {
+            return;
+        }
+        file_picker::refresh_size(tab.clone(), PathBuf::from(path), cx, |state, size, cx| {
+            state.request.binary_size = size;
+            cx.notify();
+        });
     }
 
     /// Loads the saved collections off disk on the background executor, then
@@ -180,7 +293,7 @@ impl ApiExplorer {
 
     pub(super) fn open_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab = cx.new(|cx| RequestTabState::new(window, cx));
-        Self::watch_tab(&tab, cx);
+        Self::watch_tab(&tab, window, cx);
         self.tabs.push(tab);
         self.ui.active_tab = self.tabs.len() - 1;
         cx.notify();
@@ -201,9 +314,10 @@ impl ApiExplorer {
             state.request.apply_snapshot(&snapshot, name, window, cx);
             state
         });
-        Self::watch_tab(&tab, cx);
-        self.tabs.push(tab);
+        Self::watch_tab(&tab, window, cx);
+        self.tabs.push(tab.clone());
         self.ui.active_tab = self.tabs.len() - 1;
+        self.refresh_body_file(&tab, cx);
         cx.notify();
     }
 

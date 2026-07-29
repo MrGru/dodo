@@ -17,6 +17,25 @@ phases plug in. `api_explorer` is also the only tool that registers a key bindin
 (`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
 `settings::init`).
 
+Three things about **`src/api_explorer/`** that no single file makes obvious:
+
+- **Sending is one background job, `prepare` included.** `prepare` used to run on the UI thread;
+  it does not any more, because encoding a body may read a file (a multipart file part, a binary
+  body). `state/tab.rs::send` spawns `prepare` → `Transport::execute` together, so a validation
+  error now lands one task hop after the click. **No file is ever read on the UI thread**:
+  `services/file_picker.rs` runs the picker and its `stat` off-thread, and
+  `services/http/upload.rs` is the only place bytes are read — reached solely from `prepare`, with
+  a stated size cap. Do not reintroduce a synchronous `prepare` call from a view.
+- **Pasting a cURL command into the URL box rebuilds the whole request** (`services/curl.rs`,
+  which is pure and heavily table-tested). Two guards keep it from firing while somebody types the
+  word "curl": `state::request::is_bulk_change` (a paste is not a keystroke) and a parse that must
+  yield a URL. A parsed command **opens a new tab and restores the field it was pasted into**,
+  reusing the current tab only when it is untouched — so it can never overwrite unsaved work.
+- **A tab's auto-derived title is the URL's *path*** (`models/tab_title.rs`, `/api/123`, not the
+  host), with the host as the fallback for an empty path and the raw text for anything that does
+  not parse. An explicitly named tab still wins. The rules live in that module's doc and its tests;
+  `state::request::display_name` only chooses between it and the "Untitled" wording.
+
 **`src/docker/`** is the Docker/Podman module, and it is **feature-complete as of round 6**: four
 list pages (Containers with compose grouping, filters, bulk actions; Images/Volumes/Networks),
 background polling with incremental merges, keyboard navigation, row context menus, and a

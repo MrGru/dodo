@@ -10,10 +10,11 @@ use gpui_component::input::InputState;
 
 use crate::api_explorer::models::auth::{ApiKeyLocation, AuthDraft, AuthType};
 use crate::api_explorer::models::body::{BodyDraft, BodyType};
-use crate::api_explorer::models::key_value::KeyValue;
+use crate::api_explorer::models::key_value::{FieldKind, KeyValue};
 use crate::api_explorer::models::method::HttpMethod;
 use crate::api_explorer::models::request::RequestDraft;
 use crate::api_explorer::models::snapshot::RequestSnapshot;
+use crate::api_explorer::models::tab_title;
 use crate::i18n::{Str, t};
 
 /// Which of the request tabs is showing.
@@ -118,6 +119,14 @@ pub struct KeyValueRow {
     /// has a description. It travels with the row through duplicate and
     /// reorder, which is the whole of what it is for.
     pub description: Entity<InputState>,
+    /// Whether the row sends its text or a file. Only multipart reads this;
+    /// every other table leaves it at [`FieldKind::Text`].
+    pub kind: FieldKind,
+    /// The file a [`FieldKind::File`] row sends. Plain data rather than an
+    /// `InputState`: it is chosen through the platform picker, never typed.
+    pub file_path: String,
+    /// The chosen file's size, when the `stat` succeeded. Display only.
+    pub file_size: Option<u64>,
 }
 
 impl KeyValueRow {
@@ -133,6 +142,9 @@ impl KeyValueRow {
             key: single_line(t(key, cx), window, cx),
             value: single_line(t(value, cx), window, cx),
             description: single_line(t(description, cx), window, cx),
+            kind: FieldKind::default(),
+            file_path: String::new(),
+            file_size: None,
         }
     }
 
@@ -142,7 +154,18 @@ impl KeyValueRow {
             enabled: self.enabled,
             key: self.key.read(cx).value().to_string(),
             value: self.value.read(cx).value().to_string(),
+            kind: self.kind,
+            file_path: self.file_path.clone(),
         }
+    }
+
+    /// Whether this row is a file row that has been named but never given a
+    /// file — the state the table marks and the encoder skips.
+    ///
+    /// Delegates to the model so the table and the encoder cannot drift apart
+    /// about what "incomplete" means.
+    pub fn is_incomplete_file(&self, cx: &gpui::App) -> bool {
+        self.snapshot(cx).is_incomplete_file()
     }
 }
 
@@ -248,6 +271,10 @@ pub struct RequestState {
     pub body_editor: Entity<InputState>,
     /// The rows behind the two form body types, shared for the same reason.
     pub body_fields: Vec<KeyValueRow>,
+    /// The file [`BodyType::Binary`] sends. Empty means none chosen.
+    pub binary_path: String,
+    /// Its size, when known. Display only; the encoder re-reads the file.
+    pub binary_size: Option<u64>,
 
     // Auth tab.
     pub auth_type: AuthType,
@@ -269,8 +296,45 @@ pub struct RequestState {
     /// Whether anything has been edited since the tab was last named. Drives
     /// the unsaved dot in the tab strip.
     pub dirty: bool,
+    /// What the URL field held at the last change event.
+    ///
+    /// Kept so that a *paste* can be told apart from typing: see
+    /// [`is_bulk_change`], which is what stops the cURL importer from firing
+    /// while somebody types the word "curl".
+    pub last_url: String,
     /// Source of [`KeyValueRow::id`]. Monotonic, never reused.
     next_row_id: usize,
+}
+
+/// Whether a change to a text field is a paste rather than a keystroke.
+///
+/// A keystroke changes at most a couple of characters at one place — the common
+/// prefix and suffix account for everything else. A paste replaces a selection,
+/// which may be the whole field, so length alone is not enough to tell them
+/// apart; this compares the shape of the edit instead.
+pub fn is_bulk_change(previous: &str, current: &str) -> bool {
+    let previous: Vec<char> = previous.chars().collect();
+    let current: Vec<char> = current.chars().collect();
+
+    let prefix = previous
+        .iter()
+        .zip(&current)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let remaining = previous.len().min(current.len()) - prefix;
+    let suffix = previous
+        .iter()
+        .rev()
+        .zip(current.iter().rev())
+        .take_while(|(a, b)| a == b)
+        .take(remaining)
+        .count();
+
+    let removed = previous.len() - prefix - suffix;
+    let inserted = current.len() - prefix - suffix;
+    // Two characters of slack: an IME commit and a paired-bracket insertion
+    // are both still typing.
+    removed > 2 || inserted > 2
 }
 
 impl RequestState {
@@ -305,6 +369,8 @@ impl RequestState {
             body_type: BodyType::default(),
             body_editor: code_editor("text", body_placeholder, window, cx),
             body_fields: Vec::new(),
+            binary_path: String::new(),
+            binary_size: None,
 
             auth_type: AuthType::default(),
             auth_token: single_line(token_placeholder, window, cx),
@@ -325,6 +391,7 @@ impl RequestState {
 
             name: None,
             dirty: false,
+            last_url: String::new(),
             next_row_id: 0,
         };
 
@@ -381,19 +448,27 @@ impl RequestState {
             return;
         };
 
-        let (enabled, key, value, description) = {
+        let (enabled, key, value, description, kind, file_path, file_size) = {
             let row = &self.rows(table)[index];
             (
                 row.enabled,
                 row.key.read(cx).value(),
                 row.value.read(cx).value(),
                 row.description.read(cx).value(),
+                row.kind,
+                row.file_path.clone(),
+                row.file_size,
             )
         };
 
         let mut copy = KeyValueRow::new(self.next_row_id, table, window, cx);
         self.next_row_id += 1;
         copy.enabled = enabled;
+        // A duplicated file row points at the same file: the point of
+        // duplicating one is usually to change the field name, not the upload.
+        copy.kind = kind;
+        copy.file_path = file_path;
+        copy.file_size = file_size;
         for (field, text) in [
             (&copy.key, key),
             (&copy.value, value),
@@ -403,6 +478,25 @@ impl RequestState {
         }
 
         self.rows_mut(table).insert(index + 1, copy);
+    }
+
+    /// Switches a row between sending its text and sending a file.
+    ///
+    /// Both sides are kept: switching a file row back to text and back again
+    /// finds the same file, for the same reason the Body tab keeps every
+    /// editor's contents when its kind changes.
+    pub fn set_row_kind(&mut self, table: RowTable, id: usize, kind: FieldKind) {
+        if let Some(row) = self.rows_mut(table).iter_mut().find(|row| row.id == id) {
+            row.kind = kind;
+        }
+    }
+
+    /// Records the file a row will upload. An empty path clears the choice.
+    pub fn set_row_file(&mut self, table: RowTable, id: usize, path: String, size: Option<u64>) {
+        if let Some(row) = self.rows_mut(table).iter_mut().find(|row| row.id == id) {
+            row.file_path = path;
+            row.file_size = size;
+        }
     }
 
     /// Swaps a row with its neighbour. A row already at the end it is moving
@@ -542,8 +636,7 @@ impl RequestState {
                 .into_iter()
                 .map(|(enabled, key, value)| KeyValue {
                     enabled,
-                    key,
-                    value,
+                    ..KeyValue::text(key, value)
                 })
                 .collect()
         } else {
@@ -638,6 +731,7 @@ impl RequestState {
                 kind: self.body_type,
                 text: self.body_editor.read(cx).value().to_string(),
                 fields: self.table_key_values(RowTable::BodyFields, cx),
+                file_path: self.binary_path.clone(),
             },
             auth: AuthDraft {
                 kind: self.auth_type,
@@ -681,6 +775,7 @@ impl RequestState {
     ) {
         self.method = snapshot.method;
         let url = snapshot.url.clone();
+        self.last_url = url.clone();
         self.url
             .update(cx, |state, cx| state.set_value(url, window, cx));
 
@@ -693,6 +788,11 @@ impl RequestState {
             .update(cx, |state, cx| state.set_value(body_text, window, cx));
         self.apply_body_language(cx);
         self.load_rows(RowTable::BodyFields, &snapshot.body.fields, window, cx);
+        self.binary_path = snapshot.body.file_path.clone();
+        // The size is not saved — it is a property of the file, not of the
+        // request — so the view asks for it again through
+        // `services::file_picker::refresh_size` after a restore.
+        self.binary_size = None;
 
         self.auth_type = snapshot.auth.kind;
         self.auth_key_location = snapshot.auth.key_location;
@@ -734,6 +834,8 @@ impl RequestState {
             let mut row = KeyValueRow::new(self.next_row_id, table, window, cx);
             self.next_row_id += 1;
             row.enabled = value.enabled;
+            row.kind = value.kind;
+            row.file_path = value.file_path.clone();
             let key = value.key.clone();
             let val = value.value.clone();
             row.key
@@ -751,39 +853,64 @@ impl RequestState {
         self.bulk_edit[table.index()] = false;
     }
 
-    /// What the request tab strip shows: the given name, or a summary of the
-    /// URL's path, or just the method for an empty request.
+    /// What the request tab strip shows.
+    ///
+    /// An explicit name — typed into the save popover, or carried in from the
+    /// collection the request was opened from — always wins. Everything else is
+    /// [`tab_title::derive`]'s job, including what to do with a URL that does
+    /// not parse yet; a request with nothing typed at all falls back to the one
+    /// piece of wording, which is why this needs `cx`.
     pub fn display_name(&self, cx: &gpui::App) -> SharedString {
         if let Some(name) = &self.name {
             return name.clone();
         }
 
-        let url = self.url.read(cx).value();
-        let trimmed = url.trim();
-        if trimmed.is_empty() {
-            return SharedString::new_static("/");
-        }
-
-        // Show the path if the URL parses, and the raw text while it is still
-        // being typed — a half-typed URL should not blank the tab title.
-        match reqwest::Url::parse(trimmed) {
-            Ok(parsed) => {
-                let path = parsed.path();
-                let host = parsed.host_str().unwrap_or_default();
-                if path == "/" || path.is_empty() {
-                    SharedString::from(host.to_string())
-                } else {
-                    SharedString::from(format!("{host}{path}"))
-                }
-            }
-            Err(_) => SharedString::from(trimmed.to_string()),
+        match tab_title::derive(&self.url.read(cx).value()) {
+            Some(title) => SharedString::from(title),
+            None => t(Str::UntitledRequest, cx),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_bulk_lines;
+    use super::{is_bulk_change, parse_bulk_lines};
+
+    #[test]
+    fn typing_one_character_at_a_time_is_not_a_paste() {
+        let typed = "curl https://example.com";
+        for split in 1..typed.len() {
+            assert!(
+                !is_bulk_change(&typed[..split - 1], &typed[..split]),
+                "typing up to {:?} read as a paste",
+                &typed[..split]
+            );
+        }
+        // …and so is deleting backwards through it.
+        assert!(!is_bulk_change("curl h", "curl "));
+    }
+
+    #[test]
+    fn an_edit_in_the_middle_is_still_typing() {
+        assert!(!is_bulk_change("https://a.b/xy", "https://a.b/x1y"));
+    }
+
+    #[test]
+    fn a_paste_over_a_selection_is_a_bulk_change_even_when_it_shortens() {
+        let long_url = "https://example.com/a/very/long/path/that/was/already/here";
+        let pasted = "curl -X POST https://a.b/x";
+        assert!(is_bulk_change(long_url, pasted));
+        assert!(is_bulk_change("", pasted));
+        // Clearing the field is bulk too; the caller's other checks decide what
+        // that means.
+        assert!(is_bulk_change(long_url, ""));
+    }
+
+    #[test]
+    fn no_change_at_all_is_not_a_change() {
+        assert!(!is_bulk_change("same", "same"));
+        assert!(!is_bulk_change("", ""));
+    }
 
     #[test]
     fn parses_key_value_lines() {

@@ -18,11 +18,18 @@
 //! - [`views`] — rendering only.
 //!
 //! What is deliberately still absent, each said out loud where a user would look
-//! for it rather than left to be discovered: a binary body (needs a file
-//! picker), OAuth 2.0 (needs a redirect flow and a token store), running the
-//! scripts the Scripts tab edits and the Tests/Console response tabs (need an
-//! engine), and drag-and-drop reordering of collections (the model supports it;
-//! the gesture is future work).
+//! for it rather than left to be discovered: OAuth 2.0 (needs a redirect flow
+//! and a token store), running the scripts the Scripts tab edits and the
+//! Tests/Console response tabs (need an engine), and drag-and-drop reordering of
+//! collections (the model supports it; the gesture is future work).
+//!
+//! Uploads are here, and there is one rule about them worth stating at this
+//! level: **no file is read on the UI thread.** Choosing one goes through
+//! [`services::file_picker`] (the `stat` runs on the background executor);
+//! reading its bytes happens once, at send time, inside
+//! [`services::http::upload`], reached only from `prepare` — which
+//! `state::tab::RequestTabState::send` has moved onto the background executor
+//! for exactly this reason.
 
 pub mod components;
 pub mod models;

@@ -242,7 +242,7 @@ pub enum Str {
     BodyPlaceholder,
     NoBodyTitle,
     NoBodyHint,
-    BinaryBodyLater,
+    BinaryBodyHint,
     /// "GET requests are sent without a body." The method is a wire token and
     /// is not translated; the sentence around it is.
     MethodSendsNoBody(String),
@@ -545,6 +545,34 @@ pub enum Str {
     // is now the click target that opens the detail dialog. The dialog's own
     // tab labels reuse `DockerInspect` and `DockerViewLogs`.
     DockerOpenDetails,
+
+    // API Explorer (round 7) — typed form rows, the binary body, and the tab
+    // title. Appended rather than slotted in beside the strings they read next
+    // to, for the reason the block above says: a new string must not renumber
+    // every existing one.
+    UntitledRequest,
+    ColumnType,
+    FieldKindText,
+    FieldKindFile,
+    ChooseFile,
+    ReplaceFile,
+    ClearFile,
+    NoFileSelected,
+    /// "{count} file fields have no file" — the warning above a form table
+    /// holding rows that will be skipped.
+    IncompleteFileFields(usize),
+    /// "A file that no longer exists at {path} …" — a saved upload that has
+    /// moved. `detail` is the operating system's own wording and stays in its
+    /// own language, the convention this module's doc records.
+    HttpFileUnreadable {
+        path: String,
+        detail: String,
+    },
+    /// "{path} is larger than the {limit_mb} MB this build will send."
+    HttpFileTooLarge {
+        path: String,
+        limit_mb: u64,
+    },
 }
 
 impl Str {
@@ -900,11 +928,11 @@ impl Str {
             (Str::NoBodyHint, Language::Vietnamese) => {
                 "Yêu cầu này được gửi mà không có nội dung. Chọn một loại ở trên để thêm.".into()
             }
-            (Str::BinaryBodyLater, Language::English) => {
-                "A binary body needs a file picker; it arrives in a later step.".into()
+            (Str::BinaryBodyHint, Language::English) => {
+                "Pick a file to send as the raw request body.".into()
             }
-            (Str::BinaryBodyLater, Language::Vietnamese) => {
-                "Nội dung nhị phân cần bộ chọn tệp; phần này sẽ có ở bước sau.".into()
+            (Str::BinaryBodyHint, Language::Vietnamese) => {
+                "Chọn một tệp để gửi làm nội dung thô của yêu cầu.".into()
             }
             (Str::MethodSendsNoBody(method), Language::English) => {
                 format!("{method} requests are sent without a body.").into()
@@ -1588,6 +1616,48 @@ impl Str {
             (Str::DockerStats, Language::Vietnamese) => "Thống kê".into(),
             (Str::DockerOpenDetails, Language::English) => "Open details".into(),
             (Str::DockerOpenDetails, Language::Vietnamese) => "Mở chi tiết".into(),
+
+            // Round 7 — typed form rows, the binary body, the tab title.
+            (Str::UntitledRequest, Language::English) => "Untitled".into(),
+            (Str::UntitledRequest, Language::Vietnamese) => "Chưa đặt tên".into(),
+            (Str::ColumnType, Language::English) => "TYPE".into(),
+            (Str::ColumnType, Language::Vietnamese) => "LOẠI".into(),
+            (Str::FieldKindText, Language::English) => "Text".into(),
+            (Str::FieldKindText, Language::Vietnamese) => "Văn bản".into(),
+            (Str::FieldKindFile, Language::English) => "File".into(),
+            (Str::FieldKindFile, Language::Vietnamese) => "Tệp".into(),
+            (Str::ChooseFile, Language::English) => "Choose file…".into(),
+            (Str::ChooseFile, Language::Vietnamese) => "Chọn tệp…".into(),
+            (Str::ReplaceFile, Language::English) => "Choose another file".into(),
+            (Str::ReplaceFile, Language::Vietnamese) => "Chọn tệp khác".into(),
+            (Str::ClearFile, Language::English) => "Remove the chosen file".into(),
+            (Str::ClearFile, Language::Vietnamese) => "Bỏ tệp đã chọn".into(),
+            (Str::NoFileSelected, Language::English) => "No file chosen".into(),
+            (Str::NoFileSelected, Language::Vietnamese) => "Chưa chọn tệp".into(),
+            // English marks the plural and Vietnamese does not, which is why
+            // each language formats the whole sentence rather than sharing a
+            // stem: a count is not a value you can glue a translated prefix to.
+            (Str::IncompleteFileFields(count), Language::English) => if count == 1 {
+                "1 file field has no file chosen and will not be sent.".to_string()
+            } else {
+                format!("{count} file fields have no file chosen and will not be sent.")
+            }
+            .into(),
+            (Str::IncompleteFileFields(count), Language::Vietnamese) => {
+                format!("{count} trường tệp chưa chọn tệp nên sẽ không được gửi.").into()
+            }
+            (Str::HttpFileUnreadable { path, detail }, Language::English) => {
+                format!("Could not read {path}: {detail}").into()
+            }
+            (Str::HttpFileUnreadable { path, detail }, Language::Vietnamese) => {
+                format!("Không đọc được {path}: {detail}").into()
+            }
+            (Str::HttpFileTooLarge { path, limit_mb }, Language::English) => {
+                format!("{path} is larger than the {limit_mb} MB this build can send.").into()
+            }
+            (Str::HttpFileTooLarge { path, limit_mb }, Language::Vietnamese) => {
+                format!("{path} lớn hơn mức {limit_mb} MB mà bản dựng này gửi được.").into()
+            }
         }
     }
 }
@@ -1817,7 +1887,7 @@ mod tests {
             plain(Str::BodyPlaceholder),
             plain(Str::NoBodyTitle),
             plain(Str::NoBodyHint),
-            plain(Str::BinaryBodyLater),
+            plain(Str::BinaryBodyHint),
             with(Str::MethodSendsNoBody("GET".into()), &["GET"]),
             plain(Str::AuthTypeLabel),
             plain(Str::AuthTypeNone),
@@ -2053,6 +2123,29 @@ mod tests {
             plain(Str::DockerBuild),
             plain(Str::DockerStats),
             plain(Str::DockerOpenDetails),
+            plain(Str::UntitledRequest),
+            plain(Str::ColumnType),
+            plain(Str::FieldKindText),
+            plain(Str::FieldKindFile),
+            plain(Str::ChooseFile),
+            plain(Str::ReplaceFile),
+            plain(Str::ClearFile),
+            plain(Str::NoFileSelected),
+            with(Str::IncompleteFileFields(NUMBER), &[NUMBER_TEXT]),
+            with(
+                Str::HttpFileUnreadable {
+                    path: "/tmp/a.png".into(),
+                    detail: DETAIL.into(),
+                },
+                &["/tmp/a.png", DETAIL],
+            ),
+            with(
+                Str::HttpFileTooLarge {
+                    path: "/tmp/a.png".into(),
+                    limit_mb: NUMBER as u64,
+                },
+                &["/tmp/a.png", NUMBER_TEXT],
+            ),
         ]
     }
 
@@ -2166,7 +2259,7 @@ mod tests {
             Str::BodyPlaceholder => 102,
             Str::NoBodyTitle => 103,
             Str::NoBodyHint => 104,
-            Str::BinaryBodyLater => 105,
+            Str::BinaryBodyHint => 105,
             Str::MethodSendsNoBody(_) => 106,
             Str::AuthTypeLabel => 107,
             Str::AuthTypeNone => 108,
@@ -2394,6 +2487,17 @@ mod tests {
             Str::DockerBuild => 326,
             Str::DockerStats => 327,
             Str::DockerOpenDetails => 328,
+            Str::UntitledRequest => 329,
+            Str::ColumnType => 330,
+            Str::FieldKindText => 331,
+            Str::FieldKindFile => 332,
+            Str::ChooseFile => 333,
+            Str::ReplaceFile => 334,
+            Str::ClearFile => 335,
+            Str::NoFileSelected => 336,
+            Str::IncompleteFileFields(_) => 337,
+            Str::HttpFileUnreadable { .. } => 338,
+            Str::HttpFileTooLarge { .. } => 339,
         }
     }
 

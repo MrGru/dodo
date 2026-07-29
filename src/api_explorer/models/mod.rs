@@ -13,3 +13,4 @@ pub mod method;
 pub mod request;
 pub mod script_template;
 pub mod snapshot;
+pub mod tab_title;

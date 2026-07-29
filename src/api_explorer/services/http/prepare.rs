@@ -3,6 +3,15 @@
 //! Everything that can be wrong with a request *as typed* is caught here, so
 //! the user sees "that URL has no host" rather than a network error thirty
 //! seconds later.
+//!
+//! # Threading
+//!
+//! This runs on the **background executor**, not the UI thread, because
+//! encoding the body may read the files a multipart or binary body sends (see
+//! `request_body` and `upload`). `state::tab::RequestTabState::send` is the
+//! caller and owns that placement; a validation failure therefore lands one
+//! task hop later than the keystroke, which is invisible and is the price of
+//! never stalling a frame on a file read.
 
 use std::time::Duration;
 
@@ -87,18 +96,18 @@ pub fn prepare(draft: &RequestDraft) -> Result<PreparedRequest, TransportError> 
 
     // A method with no body semantics drops one rather than erroring: the Body
     // tab says so on screen, and switching GET to POST should not require
-    // retyping the document.
-    let body = draft
-        .method
-        .carries_body()
-        .then(|| request_body::encode(&draft.body))
-        .flatten()
-        .map(|encoded| {
+    // retyping the document. Nothing is read from disk for such a request
+    // either — the encoder is not reached at all.
+    let body = if draft.method.carries_body() {
+        request_body::encode(&draft.body)?.map(|encoded| {
             if let Some(content_type) = encoded.content_type {
                 headers::set_if_absent(&mut headers, headers::CONTENT_TYPE, content_type);
             }
             encoded.bytes
-        });
+        })
+    } else {
+        None
+    };
 
     // Validated here rather than at send time so an unsendable header name is
     // reported as the editing mistake it is.
@@ -140,8 +149,7 @@ mod tests {
     fn row(enabled: bool, key: &str, value: &str) -> KeyValue {
         KeyValue {
             enabled,
-            key: key.into(),
-            value: value.into(),
+            ..KeyValue::text(key, value)
         }
     }
 
@@ -163,7 +171,7 @@ mod tests {
         d.body = BodyDraft {
             kind: BodyType::Json,
             text: text.into(),
-            fields: Vec::new(),
+            ..BodyDraft::default()
         };
         d
     }
@@ -323,8 +331,8 @@ mod tests {
         d.method = HttpMethod::Post;
         d.body = BodyDraft {
             kind: BodyType::UrlEncoded,
-            text: String::new(),
             fields: vec![row(true, "user", "ada"), row(true, "pass", "a b")],
+            ..BodyDraft::default()
         };
         let prepared = prepare(&d).expect("should prepare");
         assert_eq!(prepared.body.as_deref(), Some(&b"user=ada&pass=a+b"[..]));
@@ -362,6 +370,112 @@ mod tests {
             prepared.url,
             "https://example.com/search?q=rust&api_key=s+e+c"
         );
+    }
+
+    #[test]
+    fn a_multipart_body_reaches_the_wire_with_its_boundary_and_file_part() {
+        let path = std::env::temp_dir().join("dodo-prepare-test-avatar.png");
+        std::fs::write(&path, b"PNG").expect("scratch file is writable");
+
+        let mut d = draft("https://example.com/upload");
+        d.method = HttpMethod::Post;
+        d.body = BodyDraft {
+            kind: BodyType::FormData,
+            fields: vec![
+                KeyValue::text("name", "Ada"),
+                KeyValue::file("avatar", path.display().to_string()),
+                // Never chosen: skipped rather than sent as an empty part.
+                KeyValue::file("cv", ""),
+            ],
+            ..BodyDraft::default()
+        };
+        let prepared = prepare(&d).expect("should prepare");
+        let _ = std::fs::remove_file(&path);
+
+        let content_type = header_of(&prepared, "content-type").expect("multipart declares one");
+        assert!(content_type.starts_with("multipart/form-data; boundary="));
+        let document = String::from_utf8_lossy(prepared.body.as_deref().expect("has a body"));
+        assert!(document.contains("filename=\"dodo-prepare-test-avatar.png\""));
+        assert!(document.contains("Content-Type: image/png"));
+        assert!(
+            !document.contains("name=\"cv\""),
+            "an incomplete row was sent"
+        );
+    }
+
+    #[test]
+    fn a_binary_body_sends_the_file_and_types_it_from_the_extension() {
+        let path = std::env::temp_dir().join("dodo-prepare-test-payload.pdf");
+        std::fs::write(&path, b"%PDF-1.4").expect("scratch file is writable");
+
+        let mut d = draft("https://example.com/upload");
+        d.method = HttpMethod::Put;
+        d.body = BodyDraft {
+            kind: BodyType::Binary,
+            file_path: path.display().to_string(),
+            ..BodyDraft::default()
+        };
+        let prepared = prepare(&d).expect("should prepare");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(prepared.body.as_deref(), Some(&b"%PDF-1.4"[..]));
+        assert_eq!(
+            header_of(&prepared, "content-type"),
+            Some("application/pdf")
+        );
+    }
+
+    #[test]
+    fn an_explicit_content_type_still_wins_over_a_sniffed_one() {
+        let path = std::env::temp_dir().join("dodo-prepare-test-typed.bin");
+        std::fs::write(&path, b"raw").expect("scratch file is writable");
+
+        let mut d = draft("https://example.com/upload");
+        d.method = HttpMethod::Post;
+        d.headers = vec![row(true, "Content-Type", "application/vnd.custom")];
+        d.body = BodyDraft {
+            kind: BodyType::Binary,
+            file_path: path.display().to_string(),
+            ..BodyDraft::default()
+        };
+        let prepared = prepare(&d).expect("should prepare");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            header_of(&prepared, "content-type"),
+            Some("application/vnd.custom")
+        );
+    }
+
+    #[test]
+    fn a_missing_upload_stops_the_request_instead_of_sending_a_hollow_one() {
+        let missing = std::env::temp_dir().join("dodo-prepare-test-gone.png");
+        let mut d = draft("https://example.com/upload");
+        d.method = HttpMethod::Post;
+        d.body = BodyDraft {
+            kind: BodyType::Binary,
+            file_path: missing.display().to_string(),
+            ..BodyDraft::default()
+        };
+        assert!(matches!(
+            prepare(&d),
+            Err(TransportError::FileUnreadable { .. })
+        ));
+    }
+
+    #[test]
+    fn a_method_with_no_body_never_touches_the_filesystem() {
+        // The encoder is not reached at all, so a GET with a stale upload row
+        // still sends rather than failing on a file it was never going to use.
+        let mut d = draft("https://example.com/upload");
+        d.method = HttpMethod::Get;
+        d.body = BodyDraft {
+            kind: BodyType::Binary,
+            file_path: "/definitely/not/here.bin".into(),
+            ..BodyDraft::default()
+        };
+        let prepared = prepare(&d).expect("should prepare");
+        assert!(prepared.body.is_none());
     }
 
     #[test]

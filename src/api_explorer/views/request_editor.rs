@@ -6,7 +6,8 @@ use gpui_component::input::Input;
 use gpui_component::popover::Popover;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, StyledExt as _,
+    h_flex, v_flex,
 };
 
 use crate::api_explorer::components::key_value_table::key_value_table;
@@ -90,6 +91,17 @@ impl ApiExplorer {
     /// A `Popover` rather than a `Select`, because `Select` renders its trigger
     /// from a plain string and cannot colour it, and a `PopupMenu` would need
     /// nine separate actions to carry the choice.
+    ///
+    /// # Text size
+    ///
+    /// Both halves state their size rather than inheriting one. A `Button`
+    /// picks its text size from its `Size` (`button_text_size` in the library's
+    /// `styled.rs`), so the default `Medium` renders `text_base` — and a
+    /// nine-row popup of 16px bold tokens reads as a list of headings rather
+    /// than a menu. `small()` puts the rows at a menu height, and the `text_sm`
+    /// on the label is what makes the popup and the trigger agree: the URL
+    /// field beside them is `text_sm` too, so the whole request row is one
+    /// size.
     fn method_picker(
         &self,
         tab: &Entity<RequestTabState>,
@@ -101,10 +113,18 @@ impl ApiExplorer {
             let tab = tab.clone();
             Button::new(("method-option", candidate as usize))
                 .ghost()
+                .small()
                 .w_full()
                 .justify_start()
+                .selected(candidate == method)
                 .child(
+                    // `w_full` on the label rather than only `justify_start` on
+                    // the button: the button centres its child slot, so without
+                    // this the nine tokens sit down the middle of the popup and
+                    // read as a heading list rather than a menu.
                     div()
+                        .w_full()
+                        .text_sm()
                         .font_bold()
                         .text_color(candidate.color(cx))
                         .child(candidate.as_str()),
@@ -127,24 +147,25 @@ impl ApiExplorer {
                 cx.notify();
             }))
             .trigger(
-                // A compact control proportionate to the URL field: xsmall
-                // height and padding, small bold text, a small chevron.
-                Button::new("method-trigger").outline().xsmall().child(
+                // Sized to sit level with the URL field rather than under it:
+                // `small` height and padding, `text_sm` bold token, a small
+                // chevron.
+                Button::new("method-trigger").outline().small().child(
                     h_flex()
                         .items_center()
                         .gap_1()
                         .child(
                             div()
-                                .text_xs()
+                                .text_sm()
                                 .font_bold()
                                 .text_color(method.color(cx))
                                 .child(method.as_str()),
                         )
-                        .child(Icon::new(AppIcon::ChevronDown).size(px(10.))),
+                        .child(Icon::new(AppIcon::ChevronDown).size(px(12.))),
                 ),
             )
             .p_1()
-            .w(px(140.))
+            .w(px(132.))
             .children(rows)
     }
 
@@ -262,8 +283,14 @@ impl ApiExplorer {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         match tab.read(cx).request.active_tab {
-            RequestTab::Params => key_value_table(RowTable::Params, tab, cx).into_any_element(),
-            RequestTab::Headers => key_value_table(RowTable::Headers, tab, cx).into_any_element(),
+            // Only the multipart form body has typed rows; a query parameter
+            // and a header are always text.
+            RequestTab::Params => {
+                key_value_table(RowTable::Params, false, tab, cx).into_any_element()
+            }
+            RequestTab::Headers => {
+                key_value_table(RowTable::Headers, false, tab, cx).into_any_element()
+            }
             RequestTab::Body => self.request_body_pane(tab, cx),
             RequestTab::Auth => self.request_auth_pane(tab, cx),
             RequestTab::Scripts => self.request_scripts_pane(tab, cx),
