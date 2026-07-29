@@ -70,7 +70,7 @@ impl Language {
 /// Which part of a JWT an error is about. Its own row per language so that a
 /// new language has to say how it names the part, even if — as in Vietnamese —
 /// the answer is to keep the English term of art.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JwtPart {
     Header,
     Payload,
@@ -93,7 +93,7 @@ impl JwtPart {
 /// "Dodo" is the product name and is never translated, so it has no variant
 /// here. Neither do the technical terms that stay put in both languages —
 /// JSON, Base64, hex, JWT, URL — they appear inside the strings below.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Str {
     // Settings dialog.
     Settings,
@@ -272,7 +272,9 @@ pub enum Str {
     ApiKeyInQuery,
 
     // API Explorer — Scripts tab.
-    ScriptsNotExecuted,
+    /// The note at the top of the Scripts tab, saying what the engine will and
+    /// will not do with what is typed below it.
+    ScriptsSandboxNotice,
     PreRequestScriptLabel,
     PreRequestScriptPlaceholder,
     PostResponseScriptLabel,
@@ -642,10 +644,81 @@ pub enum Str {
     },
     /// An environment file could not be imported. `detail` as above.
     EnvironmentImportError(String),
+
+    // API Explorer — the script engine.
+    /// The precedence layer `pm.variables.set` writes into.
+    ScriptVariables,
+    /// The script threw or did not parse. `detail` is the engine's own
+    /// `TypeError: …`, third-party English kept verbatim inside a translated
+    /// frame.
+    ScriptThrew(String),
+    /// "The script did not finish within {seconds} seconds and was stopped."
+    ScriptDeadline(u64),
+    ScriptOutOfMemory,
+    /// "{name} is not supported in dodo." — the named failure that replaces an
+    /// opaque `undefined is not a function`.
+    ScriptUnsupported(String),
+    ScriptNoEngine,
+    ScriptSkippedByPolicy,
+    ScriptSkippedByConsent,
+    /// "Pre-request script finished in {millis} ms."
+    ScriptFinished {
+        millis: u64,
+    },
+    /// "The script wrote {count} variables."
+    ScriptWroteVariables(usize),
+    /// "The script asked for method {method}, which dodo does not support."
+    ScriptUnknownMethod(String),
+
+    // API Explorer — the Console tab.
+    ConsoleLevelDebug,
+    ConsoleLevelLog,
+    ConsoleLevelWarn,
+    ConsoleLevelError,
+    /// "Run {run} · {summary}" — the rule between two sends' output.
+    ConsoleRunSeparator {
+        run: usize,
+        summary: String,
+    },
+    /// "{count} lines from this run were dropped."
+    ConsoleRunTruncated(usize),
+    ConsoleEmpty,
+    ConsoleEmptyHint,
+    ConsoleClear,
+    /// "{count} older lines dropped."
+    ConsoleDropped(usize),
+
+    // API Explorer — the consent gate and its setting.
+    RunScripts,
+    RunScriptsDescription,
+    RunScriptsNever,
+    RunScriptsAskImported,
+    RunScriptsAlways,
+    ScriptConsentTitle,
+    ScriptConsentExplain,
+    /// "Request: {name}" above the script in the approval dialog.
+    ScriptConsentRequest(String),
+    ScriptConsentRun,
+    ScriptConsentSkip,
+    /// The approvals file could not be read or written. `detail` as above.
+    ConsentStoreError(String),
+    ConsentStoreMissingVersion,
+    /// "This approvals file was written by a newer dodo (schema {found}; this
+    /// build reads {supported})."
+    ConsentStoreUnsupportedVersion {
+        found: u64,
+        supported: u32,
+    },
 }
 
 impl Str {
-    fn text(self, language: Language) -> Cow<'static, str> {
+    /// The string in one language.
+    ///
+    /// `pub(crate)` rather than private because a [`Str`] can now be *held*
+    /// rather than rendered on the spot — a `ConsoleEntry` keeps dodo's own
+    /// lines unrendered so they re-translate — and those holders have to be
+    /// testable without a `Window`. Views still go through [`t`].
+    pub(crate) fn text(self, language: Language) -> Cow<'static, str> {
         match (self, language) {
             (Str::Settings, Language::English) => "Settings".into(),
             (Str::Settings, Language::Vietnamese) => "Cài đặt".into(),
@@ -1068,13 +1141,15 @@ impl Str {
             (Str::ApiKeyInQuery, Language::English) => "Query parameter".into(),
             (Str::ApiKeyInQuery, Language::Vietnamese) => "Tham số truy vấn".into(),
 
-            (Str::ScriptsNotExecuted, Language::English) => {
-                "Scripts are saved with the request for this session. Nothing runs them yet — \
-                 there is no script engine in this build.".into()
+            (Str::ScriptsSandboxNotice, Language::English) => {
+                "The pre-request script runs in a sandbox with no filesystem, no network and \
+                 no modules. pm.sendRequest, require and setTimeout are not available. The \
+                 post-response script is saved but not yet run.".into()
             }
-            (Str::ScriptsNotExecuted, Language::Vietnamese) => {
-                "Kịch bản được lưu cùng yêu cầu trong phiên này. Chưa có gì chạy chúng — \
-                 bản dựng này không có bộ chạy kịch bản.".into()
+            (Str::ScriptsSandboxNotice, Language::Vietnamese) => {
+                "Kịch bản trước yêu cầu chạy trong hộp cát không có tệp, không có mạng và \
+                 không có mô-đun. pm.sendRequest, require và setTimeout không khả dụng. Kịch \
+                 bản sau phản hồi được lưu nhưng chưa chạy.".into()
             }
             (Str::PreRequestScriptLabel, Language::English) => "Pre-request script".into(),
             (Str::PreRequestScriptLabel, Language::Vietnamese) => "Kịch bản trước yêu cầu".into(),
@@ -1875,6 +1950,182 @@ impl Str {
             (Str::EnvironmentImportError(detail), Language::Vietnamese) => {
                 format!("Không nhập được môi trường đó: {detail}").into()
             }
+
+            (Str::ScriptVariables, Language::English) => "Script".into(),
+            (Str::ScriptVariables, Language::Vietnamese) => "Kịch bản".into(),
+            (Str::ScriptThrew(detail), Language::English) => {
+                format!("The script failed: {detail}").into()
+            }
+            (Str::ScriptThrew(detail), Language::Vietnamese) => {
+                format!("Kịch bản lỗi: {detail}").into()
+            }
+            (Str::ScriptDeadline(seconds), Language::English) => format!(
+                "The script did not finish within {seconds} s and was stopped."
+            )
+            .into(),
+            (Str::ScriptDeadline(seconds), Language::Vietnamese) => {
+                format!("Kịch bản không kết thúc trong {seconds} giây và đã bị dừng.").into()
+            }
+            (Str::ScriptOutOfMemory, Language::English) => {
+                "The script asked for more memory than one run is allowed.".into()
+            }
+            (Str::ScriptOutOfMemory, Language::Vietnamese) => {
+                "Kịch bản yêu cầu nhiều bộ nhớ hơn mức cho phép mỗi lần chạy.".into()
+            }
+            (Str::ScriptUnsupported(name), Language::English) => {
+                format!("{name} is not supported in dodo, so this script cannot run.").into()
+            }
+            (Str::ScriptUnsupported(name), Language::Vietnamese) => {
+                format!("dodo không hỗ trợ {name}, nên kịch bản này không chạy được.").into()
+            }
+            (Str::ScriptNoEngine, Language::English) => {
+                "This build has no script engine, so nothing ran.".into()
+            }
+            (Str::ScriptNoEngine, Language::Vietnamese) => {
+                "Bản dựng này không có bộ chạy kịch bản, nên không có gì được chạy.".into()
+            }
+            (Str::ScriptSkippedByPolicy, Language::English) => {
+                "Scripts are switched off in Settings, so this one did not run.".into()
+            }
+            (Str::ScriptSkippedByPolicy, Language::Vietnamese) => {
+                "Kịch bản đang tắt trong Cài đặt, nên kịch bản này không chạy.".into()
+            }
+            (Str::ScriptSkippedByConsent, Language::English) => {
+                "This imported script was not approved, so it did not run.".into()
+            }
+            (Str::ScriptSkippedByConsent, Language::Vietnamese) => {
+                "Kịch bản nhập vào này chưa được duyệt, nên nó không chạy.".into()
+            }
+            (Str::ScriptFinished { millis }, Language::English) => {
+                format!("Pre-request script finished in {millis} ms.").into()
+            }
+            (Str::ScriptFinished { millis }, Language::Vietnamese) => {
+                format!("Kịch bản trước yêu cầu chạy xong trong {millis} ms.").into()
+            }
+            (Str::ScriptWroteVariables(count), Language::English) => {
+                format!("The script wrote {count} variables.").into()
+            }
+            (Str::ScriptWroteVariables(count), Language::Vietnamese) => {
+                format!("Kịch bản đã ghi {count} biến.").into()
+            }
+            (Str::ScriptUnknownMethod(method), Language::English) => format!(
+                "The script asked for method {method}, which dodo has no option for; the \
+                 method in the editor was kept."
+            )
+            .into(),
+            (Str::ScriptUnknownMethod(method), Language::Vietnamese) => format!(
+                "Kịch bản yêu cầu phương thức {method} mà dodo không có; phương thức trong \
+                 trình soạn thảo được giữ nguyên."
+            )
+            .into(),
+
+            (Str::ConsoleLevelDebug, Language::English) => "Debug".into(),
+            (Str::ConsoleLevelDebug, Language::Vietnamese) => "Gỡ lỗi".into(),
+            (Str::ConsoleLevelLog, Language::English) => "Log".into(),
+            (Str::ConsoleLevelLog, Language::Vietnamese) => "Nhật ký".into(),
+            (Str::ConsoleLevelWarn, Language::English) => "Warn".into(),
+            (Str::ConsoleLevelWarn, Language::Vietnamese) => "Cảnh báo".into(),
+            (Str::ConsoleLevelError, Language::English) => "Error".into(),
+            (Str::ConsoleLevelError, Language::Vietnamese) => "Lỗi".into(),
+            (Str::ConsoleRunSeparator { run, summary }, Language::English) => {
+                format!("Run {run} · {summary}").into()
+            }
+            (Str::ConsoleRunSeparator { run, summary }, Language::Vietnamese) => {
+                format!("Lần chạy {run} · {summary}").into()
+            }
+            (Str::ConsoleRunTruncated(count), Language::English) => {
+                format!("{count} lines from this run were dropped.").into()
+            }
+            (Str::ConsoleRunTruncated(count), Language::Vietnamese) => {
+                format!("{count} dòng của lần chạy này đã bị bỏ.").into()
+            }
+            (Str::ConsoleEmpty, Language::English) => "Nothing logged yet".into(),
+            (Str::ConsoleEmpty, Language::Vietnamese) => "Chưa có gì được ghi".into(),
+            (Str::ConsoleEmptyHint, Language::English) => {
+                "console.log from a script appears here, and stays across sends.".into()
+            }
+            (Str::ConsoleEmptyHint, Language::Vietnamese) => {
+                "console.log từ kịch bản hiện ở đây và được giữ qua các lần gửi.".into()
+            }
+            (Str::ConsoleClear, Language::English) => "Clear".into(),
+            (Str::ConsoleClear, Language::Vietnamese) => "Xoá".into(),
+            (Str::ConsoleDropped(count), Language::English) => {
+                format!("{count} older lines dropped").into()
+            }
+            (Str::ConsoleDropped(count), Language::Vietnamese) => {
+                format!("Đã bỏ {count} dòng cũ").into()
+            }
+
+            (Str::RunScripts, Language::English) => "Run scripts".into(),
+            (Str::RunScripts, Language::Vietnamese) => "Chạy kịch bản".into(),
+            (Str::RunScriptsDescription, Language::English) => {
+                "Whether the API Explorer runs the scripts a request carries. A script that \
+                 arrived in an imported collection is code from someone else."
+                    .into()
+            }
+            (Str::RunScriptsDescription, Language::Vietnamese) => {
+                "API Explorer có chạy kịch bản đi kèm yêu cầu hay không. Kịch bản đến từ bộ \
+                 sưu tập nhập vào là mã của người khác."
+                    .into()
+            }
+            (Str::RunScriptsNever, Language::English) => "Never".into(),
+            (Str::RunScriptsNever, Language::Vietnamese) => "Không bao giờ".into(),
+            (Str::RunScriptsAskImported, Language::English) => "Ask for imported".into(),
+            (Str::RunScriptsAskImported, Language::Vietnamese) => "Hỏi khi nhập vào".into(),
+            (Str::RunScriptsAlways, Language::English) => "Always".into(),
+            (Str::RunScriptsAlways, Language::Vietnamese) => "Luôn luôn".into(),
+            (Str::ScriptConsentTitle, Language::English) => "Run this imported script?".into(),
+            (Str::ScriptConsentTitle, Language::Vietnamese) => {
+                "Chạy kịch bản nhập vào này?".into()
+            }
+            (Str::ScriptConsentExplain, Language::English) => {
+                "This script came from an imported collection and has not run before. Read it \
+                 before approving: it can change this request and write your variables."
+                    .into()
+            }
+            (Str::ScriptConsentExplain, Language::Vietnamese) => {
+                "Kịch bản này đến từ bộ sưu tập nhập vào và chưa từng chạy. Hãy đọc trước khi \
+                 duyệt: nó có thể thay đổi yêu cầu này và ghi vào biến của bạn."
+                    .into()
+            }
+            (Str::ScriptConsentRequest(name), Language::English) => {
+                format!("Request: {name}").into()
+            }
+            (Str::ScriptConsentRequest(name), Language::Vietnamese) => {
+                format!("Yêu cầu: {name}").into()
+            }
+            (Str::ScriptConsentRun, Language::English) => "Run script".into(),
+            (Str::ScriptConsentRun, Language::Vietnamese) => "Chạy kịch bản".into(),
+            (Str::ScriptConsentSkip, Language::English) => "Send without it".into(),
+            (Str::ScriptConsentSkip, Language::Vietnamese) => "Gửi mà không chạy".into(),
+            (Str::ConsentStoreError(detail), Language::English) => {
+                format!("Could not read or write the script approvals: {detail}").into()
+            }
+            (Str::ConsentStoreError(detail), Language::Vietnamese) => {
+                format!("Không đọc hoặc ghi được danh sách kịch bản đã duyệt: {detail}").into()
+            }
+            (Str::ConsentStoreMissingVersion, Language::English) => {
+                "The script approvals file carries no schema version, so it was not read."
+                    .into()
+            }
+            (Str::ConsentStoreMissingVersion, Language::Vietnamese) => {
+                "Tệp kịch bản đã duyệt không có phiên bản lược đồ, nên không được đọc.".into()
+            }
+            (Str::ConsentStoreUnsupportedVersion { found, supported }, Language::English) => {
+                format!(
+                    "This script approvals file uses schema {found}; this build of dodo reads \
+                     {supported}. Every imported script will ask again."
+                )
+                .into()
+            }
+            (
+                Str::ConsentStoreUnsupportedVersion { found, supported },
+                Language::Vietnamese,
+            ) => format!(
+                "Tệp kịch bản đã duyệt này dùng lược đồ {found}; bản dodo này chỉ đọc \
+                 {supported}. Mọi kịch bản nhập vào sẽ hỏi lại."
+            )
+            .into(),
         }
     }
 }
@@ -2128,7 +2379,7 @@ mod tests {
             plain(Str::ApiKeySendAs),
             term(Str::ApiKeyInHeader),
             plain(Str::ApiKeyInQuery),
-            plain(Str::ScriptsNotExecuted),
+            plain(Str::ScriptsSandboxNotice),
             plain(Str::PreRequestScriptLabel),
             plain(Str::PreRequestScriptPlaceholder),
             plain(Str::PostResponseScriptLabel),
@@ -2411,6 +2662,57 @@ mod tests {
                 &[NUMBER_TEXT, "7"],
             ),
             with(Str::EnvironmentImportError(DETAIL.into()), &[DETAIL]),
+            plain(Str::ScriptVariables),
+            with(Str::ScriptThrew(DETAIL.into()), &[DETAIL]),
+            with(Str::ScriptDeadline(NUMBER as u64), &[NUMBER_TEXT]),
+            plain(Str::ScriptOutOfMemory),
+            with(Str::ScriptUnsupported(DETAIL.into()), &[DETAIL]),
+            plain(Str::ScriptNoEngine),
+            plain(Str::ScriptSkippedByPolicy),
+            plain(Str::ScriptSkippedByConsent),
+            with(
+                Str::ScriptFinished {
+                    millis: NUMBER as u64,
+                },
+                &[NUMBER_TEXT],
+            ),
+            with(Str::ScriptWroteVariables(NUMBER), &[NUMBER_TEXT]),
+            with(Str::ScriptUnknownMethod(DETAIL.into()), &[DETAIL]),
+            plain(Str::ConsoleLevelDebug),
+            plain(Str::ConsoleLevelLog),
+            plain(Str::ConsoleLevelWarn),
+            plain(Str::ConsoleLevelError),
+            with(
+                Str::ConsoleRunSeparator {
+                    run: NUMBER,
+                    summary: DETAIL.into(),
+                },
+                &[NUMBER_TEXT, DETAIL],
+            ),
+            with(Str::ConsoleRunTruncated(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::ConsoleEmpty),
+            plain(Str::ConsoleEmptyHint),
+            plain(Str::ConsoleClear),
+            with(Str::ConsoleDropped(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::RunScripts),
+            plain(Str::RunScriptsDescription),
+            plain(Str::RunScriptsNever),
+            plain(Str::RunScriptsAskImported),
+            plain(Str::RunScriptsAlways),
+            plain(Str::ScriptConsentTitle),
+            plain(Str::ScriptConsentExplain),
+            with(Str::ScriptConsentRequest(DETAIL.into()), &[DETAIL]),
+            plain(Str::ScriptConsentRun),
+            plain(Str::ScriptConsentSkip),
+            with(Str::ConsentStoreError(DETAIL.into()), &[DETAIL]),
+            plain(Str::ConsentStoreMissingVersion),
+            with(
+                Str::ConsentStoreUnsupportedVersion {
+                    found: NUMBER as u64,
+                    supported: 7,
+                },
+                &[NUMBER_TEXT, "7"],
+            ),
         ]
     }
 
@@ -2548,7 +2850,7 @@ mod tests {
             Str::ApiKeySendAs => 126,
             Str::ApiKeyInHeader => 127,
             Str::ApiKeyInQuery => 128,
-            Str::ScriptsNotExecuted => 129,
+            Str::ScriptsSandboxNotice => 129,
             Str::PreRequestScriptLabel => 130,
             Str::PreRequestScriptPlaceholder => 131,
             Str::PostResponseScriptLabel => 132,
@@ -2798,6 +3100,40 @@ mod tests {
             Str::VariableStoreMissingVersion => 371,
             Str::VariableStoreUnsupportedVersion { .. } => 372,
             Str::EnvironmentImportError(_) => 373,
+            Str::ScriptVariables => 374,
+            Str::ScriptThrew(_) => 375,
+            Str::ScriptDeadline(_) => 376,
+            Str::ScriptOutOfMemory => 377,
+            Str::ScriptUnsupported(_) => 378,
+            Str::ScriptNoEngine => 379,
+            Str::ScriptSkippedByPolicy => 380,
+            Str::ScriptSkippedByConsent => 381,
+            Str::ScriptFinished { .. } => 382,
+            Str::ScriptWroteVariables(_) => 383,
+            Str::ScriptUnknownMethod(_) => 384,
+            Str::ConsoleLevelDebug => 385,
+            Str::ConsoleLevelLog => 386,
+            Str::ConsoleLevelWarn => 387,
+            Str::ConsoleLevelError => 388,
+            Str::ConsoleRunSeparator { .. } => 389,
+            Str::ConsoleRunTruncated(_) => 390,
+            Str::ConsoleEmpty => 391,
+            Str::ConsoleEmptyHint => 392,
+            Str::ConsoleClear => 393,
+            Str::ConsoleDropped(_) => 394,
+            Str::RunScripts => 395,
+            Str::RunScriptsDescription => 396,
+            Str::RunScriptsNever => 397,
+            Str::RunScriptsAskImported => 398,
+            Str::RunScriptsAlways => 399,
+            Str::ScriptConsentTitle => 400,
+            Str::ScriptConsentExplain => 401,
+            Str::ScriptConsentRequest(_) => 402,
+            Str::ScriptConsentRun => 403,
+            Str::ScriptConsentSkip => 404,
+            Str::ConsentStoreError(_) => 405,
+            Str::ConsentStoreMissingVersion => 406,
+            Str::ConsentStoreUnsupportedVersion { .. } => 407,
         }
     }
 

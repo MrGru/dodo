@@ -30,12 +30,26 @@ impl ApiExplorer {
 
         v_flex()
             .size_full()
+            // `min_w_0` is what stops a wide tab pane from *widening the
+            // column*: a flex item defaults to `min-width: auto`, so without it
+            // the pane's content size wins over the split's allocation and
+            // pushes Send off the right of the window. The Scripts tab is where
+            // that shows up first, because its notice is the widest text in the
+            // editor.
+            .min_w_0()
             .child(self.request_bar(&tab, cx))
             // The environment picker and the resolved-URL preview, on their own
             // slim row rather than crowding the URL — see `environment_picker`.
             .child(self.environment_row(&tab, cx))
             .child(self.request_tab_bar(&tab, cx))
-            .child(div().flex_1().min_h_0().child(self.request_pane(&tab, cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.request_pane(&tab, cx)),
+            )
             .into_any_element()
     }
 

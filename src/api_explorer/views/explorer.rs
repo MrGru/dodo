@@ -18,14 +18,18 @@ use gpui_component::input::{InputEvent, InputState};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_component::{ActiveTheme as _, Selectable as _, h_flex, v_flex};
 
-use crate::api_explorer::SendRequest;
 use crate::api_explorer::models::collection::{CollectionTree, NodeId};
+use crate::api_explorer::models::script::{SkipReason, VariableWrite};
+use crate::api_explorer::models::script_consent::{ConsentDecision, ConsentKey, ConsentLedger};
 use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::api_explorer::services::collection_import::parse_import;
 use crate::api_explorer::services::collection_store::{
     CollectionStore, DiskCollectionStore, data_dir,
 };
+use crate::api_explorer::services::consent_store::{ConsentStore, DiskConsentStore};
 use crate::api_explorer::services::environment_import::parse_environment_import;
+use crate::api_explorer::services::script::{QuickJsEngine, ScriptContext, ScriptEngine};
+use crate::api_explorer::services::send::ScriptJob;
 use crate::api_explorer::services::variable_store::{
     DiskVariableStore, VariableStore, VariableStoreError,
 };
@@ -34,10 +38,12 @@ use crate::api_explorer::state::collection::CollectionState;
 use crate::api_explorer::state::environment::EnvironmentState;
 use crate::api_explorer::state::history::{History, HistoryRecord};
 use crate::api_explorer::state::request::is_bulk_change;
-use crate::api_explorer::state::tab::RequestTabState;
+use crate::api_explorer::state::tab::{RequestTabState, ScriptWrites};
 use crate::api_explorer::state::ui::{
     COLLECTIONS_WIDTH, LeftPanel, REQUEST_MIN_HEIGHT, RESPONSE_HEIGHT, UiState,
 };
+use crate::api_explorer::views::script_consent;
+use crate::api_explorer::{ScriptPolicy, SendRequest};
 use crate::app_icon::AppIcon;
 use crate::i18n::{Language, Str, t};
 
@@ -67,6 +73,14 @@ pub struct ApiExplorer {
     collection_store: Arc<dyn CollectionStore>,
     /// Where environments are persisted, behind a trait for the same reason.
     variable_store: Arc<dyn VariableStore>,
+    /// Which imported scripts the user has already approved, and where those
+    /// approvals are kept.
+    pub(super) consent: ConsentLedger,
+    consent_store: Arc<dyn ConsentStore>,
+    /// The JavaScript engine. An `Arc<dyn ScriptEngine>` for the same reason
+    /// the transport is a trait object: this view never learns which engine is
+    /// behind it, and a build without one swaps in `NullEngine`.
+    engine: Arc<dyn ScriptEngine>,
     /// Whether the method dropdown is showing. Held here rather than inside the
     /// popover so that picking a method can close it.
     pub(super) method_menu_open: bool,
@@ -117,6 +131,9 @@ impl ApiExplorer {
         let variable_store: Arc<dyn VariableStore> = Arc::new(DiskVariableStore::new());
         Self::load_environments(variable_store.clone(), cx);
 
+        let consent_store: Arc<dyn ConsentStore> = Arc::new(DiskConsentStore::new());
+        Self::load_consent(consent_store.clone(), cx);
+
         Self {
             tabs: vec![first],
             ui: UiState::new(cx),
@@ -126,6 +143,9 @@ impl ApiExplorer {
             transports: TransportRegistry::with_defaults(),
             collection_store,
             variable_store,
+            consent: ConsentLedger::default(),
+            consent_store,
+            engine: Arc::new(QuickJsEngine),
             method_menu_open: false,
             environment_menu_open: false,
             save_menu_open: false,
@@ -152,6 +172,14 @@ impl ApiExplorer {
         cx.subscribe(tab, |this, _tab, record: &HistoryRecord, cx| {
             this.history.record(record.clone());
             cx.notify();
+        })
+        .detach();
+
+        // Variables are cross-tab state, so a tab never writes them: it says
+        // what its script did and the page — which owns the environments and
+        // the store — applies and persists. The same seam history already uses.
+        cx.subscribe(tab, |this, _tab, writes: &ScriptWrites, cx| {
+            this.apply_script_writes(&writes.0, cx);
         })
         .detach();
 
@@ -237,7 +265,7 @@ impl ApiExplorer {
                     .url
                     .update(cx, |input, cx| input.set_value(restored, window, cx));
             });
-            self.open_snapshot(snapshot, None, window, cx);
+            self.open_snapshot(snapshot, None, None, window, cx);
             if let Some(opened) = self.active_tab().cloned() {
                 opened.update(cx, |state, cx| {
                     state.request.dirty = true;
@@ -353,6 +381,51 @@ impl ApiExplorer {
         .detach();
     }
 
+    // ---- Script approvals ----------------------------------------------------
+
+    /// Loads the approvals off disk on the background executor.
+    ///
+    /// A failure **fails closed**: the ledger stays empty, so every imported
+    /// script asks again. The alternative — treating an unreadable file as
+    /// "everything is approved" — is the one outcome this feature exists to
+    /// prevent. It is reported through the collections banner rather than
+    /// silently, because the user is about to be asked questions they thought
+    /// they had answered.
+    fn load_consent(store: Arc<dyn ConsentStore>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { store.load() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match loaded {
+                    Ok(document) => this.consent.set_document(document),
+                    Err(error) => this.collections.set_error(Some(error.message())),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn persist_consent(&mut self, cx: &mut Context<Self>) {
+        let document = self.consent.document().clone();
+        let store = self.consent_store.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { store.persist(&document) })
+                .await;
+            if let Err(error) = result {
+                let _ = this.update(cx, |this, cx| {
+                    this.collections.set_error(Some(error.message()));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
     /// Reads an environment file the user picks and merges it in.
     ///
     /// Its own picker rather than the collections one: the two file shapes are
@@ -424,16 +497,21 @@ impl ApiExplorer {
     /// Opens a saved request or a history entry in a fresh tab, restoring its
     /// full state. The tab is watched like any other, so resending from it is
     /// recorded again.
+    /// `node` is the collection node the snapshot came from, when it came from
+    /// one. It is half of a script's consent key, so a history reopen or a
+    /// pasted cURL command passes `None` rather than borrowing someone else's.
     pub(super) fn open_snapshot(
         &mut self,
         snapshot: RequestSnapshot,
         name: Option<gpui::SharedString>,
+        node: Option<NodeId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let tab = cx.new(|cx| {
             let mut state = RequestTabState::new(window, cx);
             state.request.apply_snapshot(&snapshot, name, window, cx);
+            state.request.origin_node = node;
             state
         });
         Self::watch_tab(&tab, window, cx);
@@ -544,7 +622,7 @@ impl ApiExplorer {
                 (snapshot, name)
             });
         if let Some((snapshot, name)) = opened {
-            self.open_snapshot(snapshot, name.map(Into::into), window, cx);
+            self.open_snapshot(snapshot, name.map(Into::into), Some(id), window, cx);
         }
     }
 
@@ -630,14 +708,14 @@ impl ApiExplorer {
 
     pub(super) fn reopen_history(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(snapshot) = self.history.snapshot(id).cloned() {
-            self.open_snapshot(snapshot, None, window, cx);
+            self.open_snapshot(snapshot, None, None, window, cx);
         }
     }
 
     /// Reopens a history entry and immediately sends it again.
     pub(super) fn resend_history(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(snapshot) = self.history.snapshot(id).cloned() {
-            self.open_snapshot(snapshot, None, window, cx);
+            self.open_snapshot(snapshot, None, None, window, cx);
             self.send_active(window, cx);
         }
     }
@@ -731,10 +809,106 @@ impl ApiExplorer {
 
     /// Sends the request in the active tab. Bound to Cmd/Ctrl+Enter and to the
     /// Send button.
+    ///
+    /// The one decision that happens *here* rather than on the background
+    /// executor is whether the pre-request script may run: the setting and the
+    /// approvals ledger both live on the UI thread, and asking the user is by
+    /// definition a UI act. Everything after that is one background job.
     pub(super) fn send_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.active_tab().cloned() else {
             return;
         };
+
+        let (origin, node, script, name) = {
+            let state = &tab.read(cx).request;
+            (
+                state.script_origin,
+                state.origin_node,
+                state.pre_request_script.read(cx).value().to_string(),
+                state.display_name(cx).to_string(),
+            )
+        };
+
+        match self
+            .consent
+            .decide(ScriptPolicy::current(cx), origin, node, &script)
+        {
+            ConsentDecision::NoScript => self.start_send(&tab, ScriptJob::None, window, cx),
+            ConsentDecision::Run => {
+                let job = self.script_job(&tab, cx);
+                self.start_send(&tab, job, window, cx);
+            }
+            ConsentDecision::Skip => self.start_send(
+                &tab,
+                ScriptJob::Skipped(SkipReason::PolicyDisabled),
+                window,
+                cx,
+            ),
+            // The send does not start until the prompt is answered; dismissing
+            // it leaves the request exactly where it was.
+            ConsentDecision::Ask => script_consent::open(
+                cx.entity(),
+                tab,
+                name,
+                script.clone(),
+                ConsentKey::new(node, &script),
+                window,
+                cx,
+            ),
+        }
+    }
+
+    /// The consent prompt's "Run script": remember the approval, then send.
+    pub(super) fn approve_script_and_send(
+        &mut self,
+        tab: &Entity<RequestTabState>,
+        key: ConsentKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.consent.approve(&key);
+        self.persist_consent(cx);
+        let job = self.script_job(tab, cx);
+        self.start_send(tab, job, window, cx);
+    }
+
+    /// The consent prompt's "Send without it". Deliberately **not** recorded:
+    /// declining once is not a durable statement, and the next send should ask
+    /// again.
+    pub(super) fn send_without_script(
+        &mut self,
+        tab: &Entity<RequestTabState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_send(
+            tab,
+            ScriptJob::Skipped(SkipReason::ConsentDeclined),
+            window,
+            cx,
+        );
+    }
+
+    /// Everything the engine needs about the scopes, read on the UI thread.
+    fn script_job(&self, tab: &Entity<RequestTabState>, cx: &Context<Self>) -> ScriptJob {
+        let state = &tab.read(cx).request;
+        ScriptJob::Run {
+            source: state.pre_request_script.read(cx).value().to_string(),
+            environment: ScriptContext::scope_map(
+                self.environments.variables(self.environments.active_id()),
+            ),
+            collection: ScriptContext::scope_map(self.environments.variables(None)),
+            request_name: state.display_name(cx).to_string(),
+        }
+    }
+
+    fn start_send(
+        &mut self,
+        tab: &Entity<RequestTabState>,
+        script: ScriptJob,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Phase 1 declares HTTP; a request that carries its own protocol picks
         // the backend the same way.
         let Some(transport) = self.transports.get(Protocol::Http) else {
@@ -743,8 +917,29 @@ impl ApiExplorer {
         // Read here, on the UI thread, so the request resolves against the
         // environment that was active when Send was pressed.
         let variables = self.environments.variable_set();
-        tab.update(cx, |tab, cx| tab.send(transport, variables, window, cx));
+        let engine = self.engine.clone();
+        tab.update(cx, |tab, cx| {
+            tab.send(transport, engine, variables, script, window, cx)
+        });
         cx.notify();
+    }
+
+    /// Applies the variables a pre-request script wrote and saves them.
+    ///
+    /// The rules live on [`EnvironmentState::apply_script_write`], which is
+    /// pure and testable; this is the part that needs `cx`.
+    fn apply_script_writes(&mut self, writes: &[VariableWrite], cx: &mut Context<Self>) {
+        // A plain loop rather than `any`, which short-circuits: every write
+        // has to be applied, not just the ones before the first that landed.
+        let mut changed = false;
+        for write in writes {
+            changed |= self.environments.apply_script_write(write);
+        }
+
+        if changed {
+            self.persist_environments(cx);
+            cx.notify();
+        }
     }
 
     fn on_send_action(&mut self, _: &SendRequest, window: &mut Window, cx: &mut Context<Self>) {
