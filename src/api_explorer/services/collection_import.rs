@@ -6,6 +6,26 @@
 //! nodes are placeholders — [`CollectionTree::import`] re-numbers them so they
 //! cannot collide with the tree they are merged into.
 //!
+//! # A collection brings its scripts with it, too
+//!
+//! Postman keeps scripts in `event` arrays — `listen: "prerequest"` and
+//! `listen: "test"`, each with `script.exec` as an array of lines. dodo used to
+//! read `name`, `item` and `request` and nothing else, so every script in every
+//! imported collection was **discarded silently**. They are read now, joined
+//! with newlines, into the `pre_request_script` / `post_response_script` fields
+//! the snapshot already had.
+//!
+//! Everything read this way is marked [`ScriptOrigin::Imported`], which is what
+//! puts it behind the consent gate. That marking is the whole reason importing
+//! scripts is safe to do at all.
+//!
+//! **Folder- and collection-level events are not read.** They would need script
+//! *inheritance* — a request running its folder's `prerequest` before its own —
+//! and inheritance is a semantic dodo does not have. Reading them into a place
+//! nothing executes would be the same silent lie in a new location; leaving
+//! them unread is at least honest, and `report.md` §3.4a records where they go
+//! when inheritance arrives.
+//!
 //! # A collection brings its variables with it
 //!
 //! A Postman collection may carry a top-level `variable` array, and every
@@ -22,6 +42,7 @@ use serde_json::Value;
 use crate::api_explorer::models::collection::{Node, NodeKind};
 use crate::api_explorer::models::key_value::KeyValue;
 use crate::api_explorer::models::method::HttpMethod;
+use crate::api_explorer::models::script::ScriptOrigin;
 use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::api_explorer::models::variables::Variable;
 use crate::api_explorer::services::environment_import::postman_variable;
@@ -135,7 +156,12 @@ fn postman_item(item: &Value) -> Node {
         };
     }
 
-    let snapshot = item.get("request").map(postman_request).unwrap_or_default();
+    let mut snapshot = item.get("request").map(postman_request).unwrap_or_default();
+    snapshot.pre_request_script = postman_event(item, "prerequest");
+    snapshot.post_response_script = postman_event(item, "test");
+    // Anything that arrived in a file is somebody else's code until the user
+    // says otherwise, whether or not this build runs it yet.
+    snapshot.script_origin = ScriptOrigin::Imported;
 
     Node {
         id: 0,
@@ -180,6 +206,35 @@ fn postman_request(request: &Value) -> RequestSnapshot {
     }
 }
 
+/// One `event` entry's script, as a single string.
+///
+/// `script.exec` is an array of lines in every export Postman writes, but the
+/// format also permits a bare string, so both are read. Blank and non-string
+/// entries are dropped rather than rendered as `null`.
+fn postman_event(item: &Value, listen: &str) -> String {
+    let Some(events) = item.get("event").and_then(Value::as_array) else {
+        return String::new();
+    };
+
+    let Some(script) = events
+        .iter()
+        .find(|event| event.get("listen").and_then(Value::as_str) == Some(listen))
+        .and_then(|event| event.get("script"))
+    else {
+        return String::new();
+    };
+
+    match script.get("exec") {
+        Some(Value::String(source)) => source.clone(),
+        Some(Value::Array(lines)) => lines
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn postman_header(header: &Value) -> KeyValue {
     KeyValue {
         // Postman's `disabled` flag is the inverse of dodo's `enabled`.
@@ -201,10 +256,7 @@ fn postman_header(header: &Value) -> KeyValue {
 }
 
 fn postman_method(method: &str) -> HttpMethod {
-    HttpMethod::ALL
-        .into_iter()
-        .find(|candidate| candidate.as_str().eq_ignore_ascii_case(method))
-        .unwrap_or_default()
+    HttpMethod::parse(method).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -212,6 +264,7 @@ mod tests {
     use super::parse_import;
     use crate::api_explorer::models::collection::NodeKind;
     use crate::api_explorer::models::method::HttpMethod;
+    use crate::api_explorer::models::script::ScriptOrigin;
 
     #[test]
     fn dodos_own_saved_format_imports() {
@@ -265,6 +318,116 @@ mod tests {
         let health = collection.children[1].snapshot().expect("a request");
         assert_eq!(health.method, HttpMethod::Get);
         assert_eq!(health.url, "https://api.example.com/health");
+    }
+
+    #[test]
+    fn a_postman_requests_event_scripts_are_read_rather_than_discarded() {
+        // The silent data loss this round fixes: `event` was never looked at,
+        // so every script in every imported collection was dropped.
+        let json = r#"{
+            "info": {"name": "My API"},
+            "item": [
+                {"name": "Login", "request": {"method": "POST", "url": "https://x/login"},
+                 "event": [
+                    {"listen": "prerequest", "script": {"type": "text/javascript", "exec": [
+                        "pm.variables.set(\"now\", Date.now());",
+                        "console.log('ready');"
+                    ]}},
+                    {"listen": "test", "script": {"exec": ["pm.test('ok', function () {});"]}}
+                 ]}
+            ]
+        }"#;
+        let imported = parse_import(json.as_bytes()).expect("imports");
+        let login = imported.roots[0].children[0].snapshot().expect("a request");
+
+        assert_eq!(
+            login.pre_request_script,
+            "pm.variables.set(\"now\", Date.now());\nconsole.log('ready');"
+        );
+        assert_eq!(login.post_response_script, "pm.test('ok', function () {});");
+    }
+
+    #[test]
+    fn everything_imported_is_marked_as_somebody_elses_code() {
+        // The marking is what puts an imported script behind the consent gate,
+        // and it applies whether or not the request carries one.
+        let json = r#"{
+            "info": {"name": "My API"},
+            "item": [
+                {"name": "With", "request": {"method": "GET", "url": "https://x/a"},
+                 "event": [{"listen": "prerequest", "script": {"exec": ["console.log(1);"]}}]},
+                {"name": "Without", "request": {"method": "GET", "url": "https://x/b"}}
+            ]
+        }"#;
+        let imported = parse_import(json.as_bytes()).expect("imports");
+        for child in &imported.roots[0].children {
+            assert_eq!(
+                child.snapshot().expect("a request").script_origin,
+                ScriptOrigin::Imported,
+                "{} was not marked as imported",
+                child.name
+            );
+        }
+    }
+
+    #[test]
+    fn an_event_script_may_also_be_a_bare_string() {
+        // Rarer than the array form, but the format permits it.
+        let json = r#"{
+            "info": {"name": "My API"},
+            "item": [
+                {"name": "One", "request": {"method": "GET", "url": "https://x/a"},
+                 "event": [{"listen": "prerequest", "script": {"exec": "console.log(1);"}}]}
+            ]
+        }"#;
+        let imported = parse_import(json.as_bytes()).expect("imports");
+        assert_eq!(
+            imported.roots[0].children[0]
+                .snapshot()
+                .expect("a request")
+                .pre_request_script,
+            "console.log(1);"
+        );
+    }
+
+    #[test]
+    fn a_request_with_no_events_imports_with_empty_scripts() {
+        let json = r#"{
+            "info": {"name": "My API"},
+            "item": [
+                {"name": "Bare", "request": {"method": "GET", "url": "https://x/a"}},
+                {"name": "Other listener", "request": {"method": "GET", "url": "https://x/b"},
+                 "event": [{"listen": "somethingElse", "script": {"exec": ["nope"]}}]}
+            ]
+        }"#;
+        let imported = parse_import(json.as_bytes()).expect("imports");
+        for child in &imported.roots[0].children {
+            let snapshot = child.snapshot().expect("a request");
+            assert!(snapshot.pre_request_script.is_empty());
+            assert!(snapshot.post_response_script.is_empty());
+        }
+    }
+
+    #[test]
+    fn dodos_own_format_keeps_whatever_origin_it_was_saved_with() {
+        // Re-importing dodo's own export must not relabel a request the user
+        // wrote here as somebody else's code — nor launder one that was.
+        let json = r#"[
+            {"id":1,"name":"C","kind":"Collection","children":[
+                {"id":2,"name":"Mine","kind":{"Request":{"method":"Get","url":"https://x/a"}},"children":[]},
+                {"id":3,"name":"Theirs","kind":{"Request":{"method":"Get","url":"https://x/b","script_origin":"Imported"}},"children":[]}
+            ]}
+        ]"#;
+        let imported = parse_import(json.as_bytes()).expect("imports");
+        let children = &imported.roots[0].children;
+        assert_eq!(
+            children[0].snapshot().expect("a request").script_origin,
+            ScriptOrigin::Authored
+        );
+        assert_eq!(
+            children[1].snapshot().expect("a request").script_origin,
+            ScriptOrigin::Imported
+        );
     }
 
     #[test]

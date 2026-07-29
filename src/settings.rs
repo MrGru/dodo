@@ -26,6 +26,8 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 use unicode_normalization::UnicodeNormalization as _;
 use unicode_normalization::char::is_combining_mark;
 
+use crate::api_explorer::ScriptPolicy;
+use crate::api_explorer::models::script_consent::ConsentPolicy;
 use crate::app_icon::AppIcon;
 use crate::assets::Assets;
 use crate::i18n::{Language, Str, t};
@@ -132,14 +134,16 @@ pub fn open(window: &mut Window, cx: &mut App) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Setting {
     Language,
+    RunScripts,
     FontSize,
     BorderRadius,
     Theme,
 }
 
 impl Setting {
-    const ALL: [Setting; 4] = [
+    const ALL: [Setting; 5] = [
         Setting::Language,
+        Setting::RunScripts,
         Setting::FontSize,
         Setting::BorderRadius,
         Setting::Theme,
@@ -148,7 +152,7 @@ impl Setting {
     /// Index into the vec [`pages`] returns — the sidebar entry to open.
     fn page_ix(self) -> usize {
         match self {
-            Setting::Language => 0,
+            Setting::Language | Setting::RunScripts => 0,
             Setting::FontSize | Setting::BorderRadius | Setting::Theme => 1,
         }
     }
@@ -156,6 +160,7 @@ impl Setting {
     fn label(self) -> Str {
         match self {
             Setting::Language => Str::Language,
+            Setting::RunScripts => Str::RunScripts,
             Setting::FontSize => Str::FontSize,
             Setting::BorderRadius => Str::BorderRadius,
             Setting::Theme => Str::Theme,
@@ -166,7 +171,7 @@ impl Setting {
     /// the user knows where the jump will land.
     fn section(self) -> Str {
         match self {
-            Setting::Language => Str::General,
+            Setting::Language | Setting::RunScripts => Str::General,
             Setting::FontSize | Setting::BorderRadius | Setting::Theme => Str::Appearance,
         }
     }
@@ -514,14 +519,24 @@ fn pages(highlight: Option<Setting>, cx: &App) -> Vec<SettingPage> {
             .resettable(false)
             .default_open(true)
             .group(
-                SettingGroup::new().title(general.clone()).item(
-                    SettingItem::new(
-                        t(Str::Language, cx),
-                        highlighted(language_field(), lit(Setting::Language), cx),
+                SettingGroup::new()
+                    .title(general.clone())
+                    .item(
+                        SettingItem::new(
+                            t(Str::Language, cx),
+                            highlighted(language_field(), lit(Setting::Language), cx),
+                        )
+                        .description(t(Str::LanguageDescription, cx))
+                        .keywords([general.clone()]),
                     )
-                    .description(t(Str::LanguageDescription, cx))
-                    .keywords([general]),
-                ),
+                    .item(
+                        SettingItem::new(
+                            t(Str::RunScripts, cx),
+                            highlighted(run_scripts_field(cx), lit(Setting::RunScripts), cx),
+                        )
+                        .description(t(Str::RunScriptsDescription, cx))
+                        .keywords([general]),
+                    ),
             ),
         SettingPage::new(appearance.clone())
             .icon(AppIcon::Palette)
@@ -580,6 +595,25 @@ fn language_field() -> SettingField<SharedString> {
         |value: SharedString, cx: &mut App| Language::from_code(&value).set(cx),
     )
     .default_value(Language::default().code())
+}
+
+/// Whether the API Explorer runs a request's scripts.
+///
+/// Not persisted, like every other setting here, which is why the default is
+/// the cautious one: a fresh launch asks about imported scripts rather than
+/// running them. The *approvals* the prompt collects are persisted separately —
+/// see `api_explorer::services::consent_store`.
+fn run_scripts_field(cx: &App) -> SettingField<SharedString> {
+    let options = ConsentPolicy::ALL
+        .map(|policy| (policy.code().into(), t(policy.label(), cx)))
+        .to_vec();
+
+    SettingField::dropdown(
+        options,
+        |cx: &App| ScriptPolicy::current(cx).code().into(),
+        |value: SharedString, cx: &mut App| ScriptPolicy::set(ConsentPolicy::from_code(&value), cx),
+    )
+    .default_value(ConsentPolicy::default().code())
 }
 
 fn font_size_field(cx: &App) -> SettingField<SharedString> {

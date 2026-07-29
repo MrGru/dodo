@@ -17,11 +17,17 @@
 //! - [`components`] — the few small elements the widget library does not have.
 //! - [`views`] — rendering only.
 //!
+//! Scripts run. The **pre-request** hook executes on every send, in a QuickJS
+//! sandbox that [`services::script`] is the only module allowed to name, behind
+//! a consent gate for anything that arrived by import
+//! ([`models::script_consent`]); its output lands in the Console response tab.
+//!
 //! What is deliberately still absent, each said out loud where a user would look
 //! for it rather than left to be discovered: OAuth 2.0 (needs a redirect flow
-//! and a token store), running the scripts the Scripts tab edits and the
-//! Tests/Console response tabs (need an engine), and drag-and-drop reordering of
-//! collections (the model supports it; the gesture is future work).
+//! and a token store), the **post-response** hook and the Tests tab (`pm.response`,
+//! `pm.test` and `pm.expect` are the next round — the Scripts tab says so, and
+//! the editor keeps what is typed there meanwhile), and drag-and-drop reordering
+//! of collections (the model supports it; the gesture is future work).
 //!
 //! Uploads are here, and there is one rule about them worth stating at this
 //! level: **no file is read on the UI thread.** Choosing one goes through
@@ -37,13 +43,40 @@ pub mod services;
 pub mod state;
 pub mod views;
 
-use gpui::{App, KeyBinding, actions};
+use gpui::{App, Global, KeyBinding, actions};
 
 pub use views::ApiExplorer;
 
+use crate::api_explorer::models::script_consent::ConsentPolicy;
 use crate::api_explorer::views::explorer::KEY_CONTEXT;
 
 actions!(dodo, [SendRequest]);
+
+/// The active "Run scripts" setting.
+///
+/// A global rather than page state because the Settings dialog edits it, and a
+/// `SettingField` is a pair of closures over `&App` / `&mut App` — the same
+/// reason [`Language`](crate::i18n::Language) is one. Like every other dodo
+/// setting it is **not persisted**, so each launch starts at
+/// [`ConsentPolicy::AskImported`]; that is the safe end, which is what makes
+/// not persisting it acceptable here. The *approvals* are persisted, because
+/// re-approving every script on every launch would train the user to click
+/// through the prompt without reading it.
+#[derive(Clone, Copy, Default)]
+pub struct ScriptPolicy(ConsentPolicy);
+
+impl Global for ScriptPolicy {}
+
+impl ScriptPolicy {
+    pub fn current(cx: &App) -> ConsentPolicy {
+        cx.try_global::<ScriptPolicy>()
+            .map_or_else(ConsentPolicy::default, |policy| policy.0)
+    }
+
+    pub fn set(policy: ConsentPolicy, cx: &mut App) {
+        cx.set_global(ScriptPolicy(policy));
+    }
+}
 
 /// Registers the send shortcut.
 ///
