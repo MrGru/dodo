@@ -23,6 +23,17 @@ pub struct EnvironmentState {
     /// The next environment id to hand out. Monotonic and never reused, so a
     /// deleted environment's id cannot be resurrected by a stale click.
     next_id: u64,
+    /// Whether the disk load has landed, either with a document or with an
+    /// error.
+    ///
+    /// This exists to make one narrow race impossible rather than merely
+    /// unlikely. The document is read on the background executor, so between
+    /// app launch and that read completing this holds an *empty* document. An
+    /// editor opened in that window would show no variables and, on the first
+    /// edit, write that emptiness back over the file. Nothing may be saved
+    /// until the load has been accounted for; see
+    /// [`EnvironmentState::is_loaded`].
+    loaded: bool,
     error: Option<Str>,
 }
 
@@ -36,6 +47,17 @@ impl EnvironmentState {
     pub fn set_document(&mut self, document: VariableDocument) {
         self.next_id = document.next_id();
         self.document = document;
+        self.loaded = true;
+    }
+
+    /// Whether what is held reflects the disk — true once the load has
+    /// completed, whether it produced a document or an error.
+    ///
+    /// A *failed* load counts: the failure is shown, the held document is
+    /// knowingly empty, and refusing to save for the rest of the session would
+    /// be worse than letting the user start again.
+    pub fn is_loaded(&self) -> bool {
+        self.loaded
     }
 
     pub fn error(&self) -> Option<&Str> {
@@ -44,6 +66,13 @@ impl EnvironmentState {
 
     pub fn set_error(&mut self, error: Option<Str>) {
         self.error = error;
+    }
+
+    /// Marks the load as accounted for after it failed. See
+    /// [`EnvironmentState::is_loaded`].
+    pub fn mark_load_failed(&mut self, error: Str) {
+        self.error = Some(error);
+        self.loaded = true;
     }
 
     pub fn environments(&self) -> &[Environment] {
@@ -197,6 +226,28 @@ mod tests {
         state.set_variables(None, vec![Variable::new("version", "v1")]);
         state.set_active(Some(staging));
         state
+    }
+
+    #[test]
+    fn nothing_counts_as_loaded_until_the_disk_read_lands() {
+        // The editor refuses to write anything back while this is false, which
+        // is what stops a dialog opened during startup from saving its empty
+        // placeholder rows over the file still being read.
+        let mut state = EnvironmentState::default();
+        assert!(!state.is_loaded());
+
+        state.set_document(VariableDocument::default());
+        assert!(state.is_loaded());
+    }
+
+    #[test]
+    fn a_failed_load_still_counts_as_landed() {
+        // Otherwise a read failure would leave the editor unable to save for
+        // the rest of the session.
+        let mut state = EnvironmentState::default();
+        state.mark_load_failed(crate::i18n::Str::VariableStoreMissingVersion);
+        assert!(state.is_loaded());
+        assert!(state.error().is_some());
     }
 
     #[test]

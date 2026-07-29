@@ -324,7 +324,7 @@ impl ApiExplorer {
             let _ = this.update(cx, |this, cx| {
                 match loaded {
                     Ok(document) => this.environments.set_document(document),
-                    Err(error) => this.environments.set_error(Some(error.message())),
+                    Err(error) => this.environments.mark_load_failed(error.message()),
                 }
                 cx.notify();
             });
