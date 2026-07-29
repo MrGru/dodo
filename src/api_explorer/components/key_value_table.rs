@@ -49,9 +49,12 @@ use crate::i18n::{Str, t};
 /// Width of the enable checkbox column, and of the header cell above it.
 const ENABLE_COLUMN: Pixels = px(24.);
 
-/// Width of the TYPE column, on the tables that have one. Wide enough for the
-/// longer of the two labels in either language plus its chevron.
-const TYPE_COLUMN: Pixels = px(92.);
+/// Width of the TYPE column, on the tables that have one.
+///
+/// Fixed, like the two columns either side of it, so the rows line up; kept
+/// tight because it is width taken from the three text columns, and a narrow
+/// window has none to spare.
+const TYPE_COLUMN: Pixels = px(76.);
 
 /// Width of the trailing column holding move, duplicate and delete.
 ///
@@ -343,6 +346,24 @@ fn add_top_button(
         })
 }
 
+/// The VALUE column's cell, sized for the table it is in.
+///
+/// On a typed table it takes a double share of the leftover width: the cell
+/// holds a file name, a size and a clear button rather than a text input, so
+/// an equal split leaves the name with nothing. A hard `min_w` was tried here
+/// and is wrong — it makes the row overflow instead of shrink, and the KEY and
+/// DESCRIPTION headers collapse into one-character-wide stacks. Used for the
+/// header cell and the row cell alike, so the two cannot drift out of
+/// alignment.
+fn value_column(typed: bool) -> gpui::Div {
+    let cell = div().min_w_0();
+    if typed {
+        cell.flex_grow(2.).flex_shrink(1.).flex_basis(px(0.))
+    } else {
+        cell.flex_1()
+    }
+}
+
 /// The `KEY` / `VALUE` / `DESCRIPTION` rule, led by the toggle-all checkbox that
 /// enables or disables every row at once.
 fn column_header(
@@ -388,7 +409,7 @@ fn column_header(
                     .child(t(Str::ColumnType, cx)),
             )
         })
-        .child(div().flex_1().min_w_0().child(t(Str::ColumnValue, cx)))
+        .child(value_column(typed).child(t(Str::ColumnValue, cx)))
         .child(
             div()
                 .flex_1()
@@ -454,9 +475,7 @@ fn render_row(
             )
         })
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
+            value_column(typed)
                 .when(typed && row.kind == FieldKind::File, |this| {
                     this.child(file_cell(table, prefix, row, tab, cx))
                 })
@@ -554,35 +573,54 @@ fn file_cell(
     let pick_tab = tab.clone();
     let clear_tab = tab.clone();
 
+    let label = if chosen {
+        SharedString::from(name)
+    } else {
+        t(Str::ChooseFile, cx)
+    };
+
     h_flex()
         .w_full()
         .min_w_0()
         .items_center()
         .gap_1()
+        // The name is the only part that may give way. Without the `min_w_0`
+        // here *and* the `truncate` on the label itself, a long file name grows
+        // the button past its cell and lands on top of the description column
+        // at a narrow window — a `flex_1` parent alone does not stop a child
+        // from overflowing.
         .child(
-            Button::new(format!("{prefix}-file-{id}"))
-                .ghost()
-                .xsmall()
-                .icon(AppIcon::File)
-                .label(if chosen {
-                    SharedString::from(name)
-                } else {
-                    t(Str::ChooseFile, cx)
-                })
-                .when(chosen, |this| this.tooltip(SharedString::from(path)))
-                .when(!chosen, |this| this.tooltip(t(Str::NoFileSelected, cx)))
-                .on_click(move |_, _, cx| {
-                    file_picker::choose_file(pick_tab.clone(), cx, move |state, chosen, cx| {
-                        state.request.set_row_file(
-                            table,
-                            id,
-                            chosen.path.display().to_string(),
-                            chosen.size,
-                        );
-                        state.request.dirty = true;
-                        cx.notify();
-                    });
-                }),
+            div().flex_1().min_w_0().overflow_hidden().child(
+                Button::new(format!("{prefix}-file-{id}"))
+                    .ghost()
+                    .xsmall()
+                    .w_full()
+                    .justify_start()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .items_center()
+                            .gap_1()
+                            .text_xs()
+                            .child(Icon::new(AppIcon::File).size(px(12.)).flex_shrink_0())
+                            .child(div().flex_1().min_w_0().truncate().child(label)),
+                    )
+                    .when(chosen, |this| this.tooltip(SharedString::from(path)))
+                    .when(!chosen, |this| this.tooltip(t(Str::NoFileSelected, cx)))
+                    .on_click(move |_, _, cx| {
+                        file_picker::choose_file(pick_tab.clone(), cx, move |state, chosen, cx| {
+                            state.request.set_row_file(
+                                table,
+                                id,
+                                chosen.path.display().to_string(),
+                                chosen.size,
+                            );
+                            state.request.dirty = true;
+                            cx.notify();
+                        });
+                    }),
+            ),
         )
         .when_some(size.filter(|_| chosen), |this, size| {
             this.child(
@@ -598,6 +636,7 @@ fn file_cell(
                 Button::new(format!("{prefix}-file-clear-{id}"))
                     .ghost()
                     .xsmall()
+                    .flex_shrink_0()
                     .icon(AppIcon::Close)
                     .tooltip(t(Str::ClearFile, cx))
                     .on_click(move |_, _, cx| {
