@@ -17,23 +17,41 @@ phases plug in. `api_explorer` is also the only tool that registers a key bindin
 (`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
 `settings::init`).
 
-Four things about **`src/api_explorer/`** that no single file makes obvious:
+Seven things about **`src/api_explorer/`** that no single file makes obvious:
 
-- **`{{name}}` is substituted *before* `prepare`, and an unresolved one fails the request.**
-  `services/http/resolve.rs` runs over the whole draft first, so everything `prepare` validates is
-  the final text — a variable holding `ftp://…` fails as the scheme error it is. The
-  unresolved-variable policy is a **decision, not an oversight**: `models/interpolate.rs`'s module
-  doc argues it against sending the token literally and against substituting empty, and a later
-  scripting round only moves the check to after the pre-request hook. That module also owns the
-  escape rule (`\{{`) and the recursion guard, and is where any change to substitution belongs —
-  it is pure and exhaustively table-tested.
-- **Sending is one background job, `prepare` included.** `prepare` used to run on the UI thread;
-  it does not any more, because encoding a body may read a file (a multipart file part, a binary
-  body). `state/tab.rs::send` spawns `prepare` → `Transport::execute` together, so a validation
-  error now lands one task hop after the click. **No file is ever read on the UI thread**:
-  `services/file_picker.rs` runs the picker and its `stat` off-thread, and
-  `services/http/upload.rs` is the only place bytes are read — reached solely from `prepare`, with
-  a stated size cap. Do not reintroduce a synchronous `prepare` call from a view.
+- **The whole send pipeline lives in `services/send.rs`, in this order:**
+  `pre-request script → resolve {{name}} → prepare → Transport::execute`. It is one blocking
+  function over trait objects, which is what makes the *ordering* unit-testable with a fake
+  transport and a fake engine and no `Window`. Its module doc records why the script runs
+  **before** substitution (the scripting plan said the opposite and was wrong: the shipped
+  `pm.variables.set("timestamp", …)` template promises the value resolves in that same request)
+  and why `prepare` nonetheless stays **last** (a header or URL a script wrote still goes through
+  dodo's own validation). `models/interpolate.rs` owns substitution itself — the escape rule
+  (`\{{`), the recursion guard and the decision that an unresolved reference *fails* the request
+  rather than being sent literally or blanked; it is pure and exhaustively table-tested.
+- **Sending is one background job — script, `prepare` and the request together.** `prepare` used
+  to run on the UI thread; it does not any more, because encoding a body may read a file (a
+  multipart file part, a binary body), and a script may loop for its whole 2 s budget.
+  `state/tab.rs::send` spawns the lot, so a validation error lands one task hop after the click.
+  **No file is ever read on the UI thread**: `services/file_picker.rs` runs the picker and its
+  `stat` off-thread, and `services/http/upload.rs` is the only place bytes are read — reached
+  solely from `prepare`, with a stated size cap. Do not reintroduce a synchronous `prepare` call
+  from a view.
+- **`services/script/` is the only module that may name `rquickjs`**, and `quickjs.rs`'s doc is
+  the authority on the sandbox: the positive intrinsic allowlist, the 2 s deadline / 16 MiB / 256
+  KiB caps, one fresh runtime per run, and why `pm.sendRequest` is denied by *not existing* while
+  still failing with a message that names it. Read it before changing anything about what a script
+  can reach. One correction it records, because it cost a build to find: **the `Eval` intrinsic
+  cannot be left out.** `JS_AddIntrinsicEval` registers no global — it sets `ctx->eval_internal`,
+  which `JS_EvalInternal` refuses to run without — so omitting it breaks dodo's own `ctx.eval`,
+  not just the script's. `eval` confers no capability the script lacks; what it costs is
+  legibility, and any future static API scan has to say so.
+- **A script's provenance is a property of the request, not of the text.**
+  `RequestSnapshot::script_origin` is set to `Imported` by `services/collection_import.rs` and
+  never changed by editing, so an imported script cannot be laundered past the consent gate.
+  Editing changes the *content hash*, which re-arms the gate — the two halves of a
+  `models/script_consent.rs::ConsentKey`. That module owns the whole policy; approvals persist in
+  a third `data_dir()` file.
 - **Pasting a cURL command into the URL box rebuilds the whole request** (`services/curl.rs`,
   which is pure and heavily table-tested). Two guards keep it from firing while somebody types the
   word "curl": `state::request::is_bulk_change` (a paste is not a keystroke) and a parse that must
@@ -43,6 +61,12 @@ Four things about **`src/api_explorer/`** that no single file makes obvious:
   host), with the host as the fallback for an empty path and the raw text for anything that does
   not parse. An explicitly named tab still wins. The rules live in that module's doc and its tests;
   `state::request::display_name` only chooses between it and the "Untitled" wording.
+- **The request and response columns need `min_w_0`, and it is load-bearing.** A flex item
+  defaults to `min-width: auto`, so without it the *widest child of the widest tab* sets the
+  column's width and everything else — the Send button first — is pushed off the right of the
+  window. It is invisible until some pane grows: the Scripts tab's sandbox notice made it show up
+  at 1280px. `render_request_editor` and `render_response_viewer` carry the `min_w_0` with the
+  reason inline; put one on any new pane rather than trimming the text that exposed it.
 
 **`src/docker/`** is the Docker/Podman module, and it is **feature-complete as of round 6**: four
 list pages (Containers with compose grouping, filters, bulk actions; Images/Volumes/Networks),
@@ -93,19 +117,21 @@ Six things about the module that are not obvious from any one file:
   not repaint on the page's `cx.notify()`), and its width must be **stated** rather than `w_full`
   (a percentage width resolves to `auto` inside the dialog's wrappers and content-sizes the body).
 
-**dodo persists two things across restarts**, both under `~/Library/Application Support/dodo/`
-(`data_dir()`) and both behind a trait so the state layer never learns where they live:
-`collections.json` (`services::collection_store`) and `environments.json`
-(`services::variable_store`). The `dodo-theming-settings` skill's "nothing is persisted across
-restarts" is therefore scoped to appearance/language settings only. Persistence and initial load
-run on the background executor, never the UI thread.
+**dodo persists three things across restarts**, all under `~/Library/Application Support/dodo/`
+(`data_dir()`) and each behind a trait so the state layer never learns where they live:
+`collections.json` (`services::collection_store`), `environments.json`
+(`services::variable_store`) and `script-consent.json` (`services::consent_store`, the imported
+scripts the user has approved). The `dodo-theming-settings` skill's "nothing is persisted across
+restarts" is therefore scoped to appearance/language settings only — including the new
+**Run scripts** setting, which is a `ScriptPolicy` global and deliberately starts each launch at
+the cautious `Ask for imported`. Persistence and initial load run on the background executor,
+never the UI thread.
 
-The two files version differently, and the difference is deliberate. A `RequestSnapshot` inside
+The files version differently, and the difference is deliberate. A `RequestSnapshot` inside
 `collections.json` is versioned only by `#[serde(default)]`, which copes with *added* fields and
-nothing else. `environments.json` carries an explicit `"version"` from its very first write
-(`models::variables::SCHEMA_VERSION`), and `variable_store::parse_document` **refuses** a file
-whose version is higher rather than half-reading it. Copy that pattern for any new file; do not
-copy `collections.json`'s.
+nothing else. `environments.json` and `script-consent.json` carry an explicit `"version"` from
+their very first write, and their `parse_document` **refuses** a file whose version is higher
+rather than half-reading it. Copy that pattern for any new file; do not copy `collections.json`'s.
 
 **Build and release engineering lives in `docs/`**, and those two files are the authority for it:
 `docs/build-optimization.md` (release profile, the measured before/after size table, linker
