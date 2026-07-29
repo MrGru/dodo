@@ -15,6 +15,7 @@ use crate::api_explorer::models::auth::AuthDraft;
 use crate::api_explorer::models::body::BodyDraft;
 use crate::api_explorer::models::key_value::KeyValue;
 use crate::api_explorer::models::method::HttpMethod;
+use crate::api_explorer::models::script::ScriptOrigin;
 
 /// Everything the request editor holds, captured as plain data.
 ///
@@ -38,6 +39,13 @@ pub struct RequestSnapshot {
     pub pre_request_script: String,
     #[serde(default)]
     pub post_response_script: String,
+    /// Whether these scripts arrived by import or were typed here. It is what
+    /// the consent gate reads, so it travels with the request into the
+    /// collection file — see
+    /// [`ScriptOrigin`](crate::api_explorer::models::script::ScriptOrigin) for
+    /// why editing does not change it.
+    #[serde(default)]
+    pub script_origin: ScriptOrigin,
 }
 
 impl RequestSnapshot {
@@ -81,6 +89,12 @@ mod tests {
         assert_eq!(snapshot.method, HttpMethod::Get);
         assert_eq!(snapshot.url, "https://example.com");
         assert!(snapshot.pre_request_script.is_empty());
+        // Everything in a file that predates the engine was typed here and
+        // never ran, so `Authored` is the truth rather than a lenient default.
+        assert_eq!(
+            snapshot.script_origin,
+            crate::api_explorer::models::script::ScriptOrigin::Authored
+        );
     }
 
     #[test]

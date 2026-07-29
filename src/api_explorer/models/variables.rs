@@ -124,6 +124,11 @@ impl Variable {
 pub enum VariableScope {
     Collection,
     Environment,
+    /// A value a pre-request script wrote with `pm.variables.set`. Highest
+    /// precedence, and **never persisted**: the layer is pushed onto the set
+    /// for one send and goes away with it, which is what Postman means by a
+    /// local variable.
+    Script,
 }
 
 impl VariableScope {
@@ -132,6 +137,7 @@ impl VariableScope {
         match self {
             VariableScope::Collection => crate::i18n::Str::CollectionVariables,
             VariableScope::Environment => crate::i18n::Str::EnvironmentVariables,
+            VariableScope::Script => crate::i18n::Str::ScriptVariables,
         }
     }
 }
