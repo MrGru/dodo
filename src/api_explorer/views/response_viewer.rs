@@ -38,6 +38,9 @@ impl ApiExplorer {
 
         v_flex()
             .size_full()
+            // Same reason as `render_request_editor`: without `min_w_0` a wide
+            // pane widens the whole column instead of being bounded by it.
+            .min_w_0()
             .border_t_1()
             .border_color(cx.theme().border)
             .child(self.response_meta_row(&tab, cx))
@@ -162,6 +165,7 @@ impl ApiExplorer {
         let state = tab.read(cx);
         let active = state.response.active_tab;
         let header_count = state.response.header_count();
+        let console_errors = state.response.console.unread_errors();
         let body_view = state.response.body_view;
         let has_body = state.response.exchange().is_some();
         let kind = state
@@ -203,16 +207,25 @@ impl ApiExplorer {
                         .selected_index(selected)
                         .children(ResponseTab::ALL.map(|pane| {
                             let tab = Tab::new().label(t(pane.label(), cx));
-                            // The count badge the reference shows beside Headers.
-                            if pane == ResponseTab::Headers && header_count > 0 {
-                                tab.suffix(
+                            match pane {
+                                // The count badge the reference shows beside
+                                // Headers.
+                                ResponseTab::Headers if header_count > 0 => tab.suffix(
                                     Tag::secondary()
                                         .small()
                                         .rounded_full()
                                         .child(format!("{header_count}")),
-                                )
-                            } else {
-                                tab
+                                ),
+                                // Errors a script logged while the user was
+                                // looking at another pane. Cleared by opening
+                                // the Console, not by the next send.
+                                ResponseTab::Console if console_errors > 0 => tab.suffix(
+                                    Tag::danger()
+                                        .small()
+                                        .rounded_full()
+                                        .child(format!("{console_errors}")),
+                                ),
+                                _ => tab,
                             }
                         }))
                         .on_click(cx.listener(move |_, index: &usize, _, cx| {
@@ -221,6 +234,9 @@ impl ApiExplorer {
                             };
                             switch_tab.update(cx, |state, cx| {
                                 state.response.active_tab = pane;
+                                if pane == ResponseTab::Console {
+                                    state.response.console.mark_read();
+                                }
                                 cx.notify();
                             });
                             cx.notify();
@@ -358,7 +374,11 @@ impl ApiExplorer {
             return self.error_banner(error.clone(), cx).into_any_element();
         }
 
-        if state.response.exchange().is_none() {
+        let pane = state.response.active_tab;
+        // The Console is the one tab worth showing with no exchange: a
+        // pre-request script that failed produced no response at all, and its
+        // output is the only account of why.
+        if state.response.exchange().is_none() && !pane.shows_without_a_response() {
             return empty_state(
                 AppIcon::Send,
                 t(Str::NoResponseYet, cx),
@@ -368,7 +388,6 @@ impl ApiExplorer {
             .into_any_element();
         }
 
-        let pane = state.response.active_tab;
         // Read before the immutable borrow of `cx` is needed mutably below.
         let body_view = state.response.body_view;
         if !pane.is_implemented() {
@@ -384,6 +403,7 @@ impl ApiExplorer {
         match pane {
             ResponseTab::Headers => self.headers_pane(tab, cx).into_any_element(),
             ResponseTab::Cookies => self.cookies_pane(tab, cx).into_any_element(),
+            ResponseTab::Console => self.console_pane(tab, cx),
             // Body is the default pane. In Tree mode it renders the parsed JSON
             // tree; every other mode renders through the shared editor.
             _ => {

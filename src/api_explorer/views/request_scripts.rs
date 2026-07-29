@@ -1,15 +1,12 @@
 //! The Scripts tab: two editors, a per-editor templates menu, and an honest
 //! note about what they do.
 //!
-//! This phase stores and edits scripts and nothing else — there is no engine to
-//! run them, and there is no way to run them by accident. The note at the top
-//! of the pane says exactly that, and the placeholders inside both editors say
-//! it again in the conditional ("would run"), because a user who never reads
-//! the banner still reads the empty editor. The templates menu is an editing
-//! convenience only: it inserts snippets, it does not run them.
-//!
-//! Nothing here reaches `RequestDraft`: a field the service layer carries but
-//! never uses would be the beginning of pretending.
+//! The pre-request editor is now live — its contents run on every send — so the
+//! note at the top no longer says "nothing runs these". What it says instead is
+//! the part a user cannot see from the editor: **what the sandbox denies**, and
+//! that the post-response half is still stored rather than run. The same
+//! element, in the same place, with a truer sentence; the honesty rule the tab
+//! was built around has not changed, only the fact it reports.
 
 use gpui::{
     Context, Entity, IntoElement, ParentElement as _, Pixels, SharedString, Styled as _, div, px,
@@ -62,6 +59,7 @@ impl ApiExplorer {
 
         v_flex()
             .size_full()
+            .min_w_0()
             .child(self.scripts_notice(cx))
             .child(
                 // Both editors on screen rather than behind a nested tab strip:
@@ -71,6 +69,7 @@ impl ApiExplorer {
                 v_flex()
                     .flex_1()
                     .min_h_0()
+                    .min_w_0()
                     .child(self.script_pane(
                         ScriptSlot::Pre,
                         t(Str::PreRequestScriptLabel, cx),
@@ -95,6 +94,7 @@ impl ApiExplorer {
     fn scripts_notice(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .w_full()
+            .min_w_0()
             .items_start()
             .gap_2()
             .px_3()
@@ -114,7 +114,7 @@ impl ApiExplorer {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(t(Str::ScriptsNotExecuted, cx)),
+                    .child(t(Str::ScriptsSandboxNotice, cx)),
             )
     }
 
@@ -131,6 +131,7 @@ impl ApiExplorer {
     ) -> impl IntoElement {
         v_flex()
             .w_full()
+            .min_w_0()
             .flex_1()
             .min_h(SCRIPT_MIN_HEIGHT)
             .child(
@@ -153,7 +154,7 @@ impl ApiExplorer {
                     .child(self.templates_menu(slot, editor, templates, menu_open, cx)),
             )
             .child(
-                div().flex_1().min_h_0().child(
+                div().flex_1().min_h_0().min_w_0().overflow_hidden().child(
                     Input::new(editor)
                         .font_family(cx.theme().mono_font_family.clone())
                         .text_size(cx.theme().mono_font_size)
