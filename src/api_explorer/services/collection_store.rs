@@ -193,6 +193,73 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// A collection saved by the build shipped **before** variables existed
+    /// still loads, field for field.
+    ///
+    /// The bytes are the exact shape of a real `collections.json` written by
+    /// that build (checked against one on disk): `KeyValue` rows carry no
+    /// `kind`/`file_path`, and `BodyDraft` carries no `file_path`. Variables
+    /// changed nothing here — they are a *second* file — and this test is what
+    /// keeps that true if a later round is tempted to fold them in.
+    #[test]
+    fn a_collection_saved_before_environments_existed_still_loads() {
+        let path = temp_path();
+        std::fs::create_dir_all(path.parent().unwrap()).expect("scratch dir");
+        std::fs::write(
+            &path,
+            br#"[
+  {
+    "id": 0,
+    "name": "Duan",
+    "kind": "Collection",
+    "expanded": true,
+    "children": [
+      {
+        "id": 1,
+        "name": "todos",
+        "kind": {
+          "Request": {
+            "method": "Post",
+            "url": "https://jsonplaceholder.typicode.com/todos/1",
+            "params": [{"enabled": true, "key": "q", "value": "1"}],
+            "headers": [{"enabled": true, "key": "Accept", "value": "application/json"}],
+            "body": {"kind": "Json", "text": "{\"a\":1}", "fields": []},
+            "auth": {
+              "kind": "Bearer", "token": "abc", "username": "", "password": "",
+              "key_name": "", "key_value": "", "key_location": "Header"
+            },
+            "pre_request_script": "",
+            "post_response_script": ""
+          }
+        },
+        "expanded": true,
+        "children": []
+      }
+    ]
+  }
+]"#,
+        )
+        .expect("writes the old file");
+
+        let loaded = DiskCollectionStore::at(path.clone())
+            .load()
+            .expect("a pre-variables collection must still load");
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].name, "Duan");
+        let request = loaded[0].children[0].snapshot().expect("a request");
+        assert_eq!(request.url, "https://jsonplaceholder.typicode.com/todos/1");
+        assert_eq!(request.params[0].key, "q");
+        // The fields this round did not add, defaulted rather than lost.
+        assert_eq!(request.params[0].kind, Default::default());
+        assert!(request.params[0].file_path.is_empty());
+        assert!(request.body.file_path.is_empty());
+        assert_eq!(request.body.text, r#"{"a":1}"#);
+        assert_eq!(request.auth.token, "abc");
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     #[test]
     fn the_in_memory_store_round_trips_too() {
         let store = InMemoryCollectionStore::default();

@@ -25,8 +25,13 @@ use crate::api_explorer::services::collection_import::parse_import;
 use crate::api_explorer::services::collection_store::{
     CollectionStore, DiskCollectionStore, data_dir,
 };
+use crate::api_explorer::services::environment_import::parse_environment_import;
+use crate::api_explorer::services::variable_store::{
+    DiskVariableStore, VariableStore, VariableStoreError,
+};
 use crate::api_explorer::services::{Protocol, TransportRegistry, curl, file_export, file_picker};
 use crate::api_explorer::state::collection::CollectionState;
+use crate::api_explorer::state::environment::EnvironmentState;
 use crate::api_explorer::state::history::{History, HistoryRecord};
 use crate::api_explorer::state::request::is_bulk_change;
 use crate::api_explorer::state::tab::RequestTabState;
@@ -46,6 +51,10 @@ pub struct ApiExplorer {
     pub(super) tabs: Vec<Entity<RequestTabState>>,
     pub(super) ui: UiState,
     pub(super) collections: CollectionState,
+    /// The environments and their variables, page-wide rather than per-tab:
+    /// switching environment re-resolves every open request, which is the point
+    /// of having one.
+    pub(super) environments: EnvironmentState,
     /// The in-memory request history, fed by each tab completing.
     pub(super) history: History,
     /// The protocol backends. The view asks for the one matching the request's
@@ -56,9 +65,14 @@ pub struct ApiExplorer {
     /// same reason the transport is a trait object: this view never learns
     /// whether they are on disk or in memory.
     collection_store: Arc<dyn CollectionStore>,
+    /// Where environments are persisted, behind a trait for the same reason.
+    variable_store: Arc<dyn VariableStore>,
     /// Whether the method dropdown is showing. Held here rather than inside the
     /// popover so that picking a method can close it.
     pub(super) method_menu_open: bool,
+    /// Whether the environment picker's popover is showing, held here for the
+    /// same reason: choosing an environment has to close it.
+    pub(super) environment_menu_open: bool,
     /// Whether the request-naming popover is showing.
     pub(super) save_menu_open: bool,
     /// Whether the Auth tab's scheme dropdown is showing.
@@ -100,14 +114,20 @@ impl ApiExplorer {
         let collection_store: Arc<dyn CollectionStore> = Arc::new(DiskCollectionStore::new());
         Self::load_collections(collection_store.clone(), cx);
 
+        let variable_store: Arc<dyn VariableStore> = Arc::new(DiskVariableStore::new());
+        Self::load_environments(variable_store.clone(), cx);
+
         Self {
             tabs: vec![first],
             ui: UiState::new(cx),
             collections: CollectionState::default(),
+            environments: EnvironmentState::default(),
             history: History::default(),
             transports: TransportRegistry::with_defaults(),
             collection_store,
+            variable_store,
             method_menu_open: false,
+            environment_menu_open: false,
             save_menu_open: false,
             auth_menu_open: false,
             pre_template_menu_open: false,
@@ -282,6 +302,108 @@ impl ApiExplorer {
                     cx.notify();
                 });
             }
+        })
+        .detach();
+    }
+
+    // ---- Environments --------------------------------------------------------
+
+    /// Loads the saved environments off disk on the background executor, then
+    /// installs them.
+    ///
+    /// A missing file is an empty document; a read, parse or **schema version**
+    /// failure is shown rather than swallowed. That last one is the whole point
+    /// of the version field: a file from a newer dodo leaves the picker empty
+    /// and says why, instead of half-loading someone's tokens.
+    fn load_environments(store: Arc<dyn VariableStore>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { store.load() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match loaded {
+                    Ok(document) => this.environments.set_document(document),
+                    Err(error) => this.environments.set_error(Some(error.message())),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Writes the current environments to the store on the background executor.
+    /// Called after every structural edit and when a field loses focus, not on
+    /// every keystroke.
+    pub(super) fn persist_environments(&mut self, cx: &mut Context<Self>) {
+        let document = self.environments.document().clone();
+        let store = self.variable_store.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { store.persist(&document) })
+                .await;
+            if let Err(error) = result {
+                let _ = this.update(cx, |this, cx| {
+                    this.environments.set_error(Some(error.message()));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Reads an environment file the user picks and merges it in.
+    ///
+    /// Its own picker rather than the collections one: the two file shapes are
+    /// different, and guessing which a picked file is would turn a mis-click
+    /// into a puzzling error.
+    pub(super) fn import_environments(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, Option<u64>, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let read = cx
+                .background_executor()
+                .spawn(async move { std::fs::read(&path).map_err(|err| err.to_string()) })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let selected = match read {
+                    Ok(bytes) => match parse_environment_import(&bytes) {
+                        Ok(environments) => {
+                            let selected = this.environments.import(environments);
+                            this.environments.set_error(None);
+                            this.persist_environments(cx);
+                            selected
+                        }
+                        Err(error) => {
+                            this.environments.set_error(Some(error.message()));
+                            None
+                        }
+                    },
+                    Err(detail) => {
+                        this.environments
+                            .set_error(Some(VariableStoreError::Io { detail }.message()));
+                        None
+                    }
+                };
+                then(this, selected, window, cx);
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -479,10 +601,18 @@ impl ApiExplorer {
             let _ = this.update(cx, |this, cx| {
                 match read {
                     Ok(bytes) => match parse_import(&bytes) {
-                        Ok(roots) => {
-                            this.collections.tree_mut().import(roots);
+                        Ok(imported) => {
+                            this.collections.tree_mut().import(imported.roots);
                             this.collections.set_error(None);
                             this.persist_collections(cx);
+                            // A Postman collection's own `variable` array comes
+                            // with it: without them every `{{baseUrl}}` in the
+                            // requests just imported would fail to resolve.
+                            if !imported.variables.is_empty() {
+                                this.environments
+                                    .import_collection_variables(imported.variables);
+                                this.persist_environments(cx);
+                            }
                         }
                         Err(error) => this.collections.set_error(Some(error.message())),
                     },
@@ -610,7 +740,10 @@ impl ApiExplorer {
         let Some(transport) = self.transports.get(Protocol::Http) else {
             return;
         };
-        tab.update(cx, |tab, cx| tab.send(transport, window, cx));
+        // Read here, on the UI thread, so the request resolves against the
+        // environment that was active when Send was pressed.
+        let variables = self.environments.variable_set();
+        tab.update(cx, |tab, cx| tab.send(transport, variables, window, cx));
         cx.notify();
     }
 

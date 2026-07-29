@@ -15,6 +15,7 @@ use crate::api_explorer::models::method::HttpMethod;
 /// phase, so carrying them here would be data no one reads. They live in
 /// `state::request` and travel no further, which is what the tab says on
 /// screen.
+#[derive(Debug)]
 pub struct RequestDraft {
     pub method: HttpMethod,
     pub url: String,

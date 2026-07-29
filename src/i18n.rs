@@ -573,6 +573,75 @@ pub enum Str {
         path: String,
         limit_mb: u64,
     },
+
+    // API Explorer (round 8) — variables and environments: the request-bar
+    // picker, the editor dialog, the two scope names, the unencrypted-storage
+    // notice, and the two new send-time failures.
+    /// The picker's label for "resolve against no environment at all".
+    NoEnvironment,
+    /// The picker trigger's tooltip.
+    SelectEnvironment,
+    /// The row at the foot of the picker, and the dialog's own title.
+    ManageEnvironments,
+    Environments,
+    NewEnvironment,
+    DefaultEnvironmentName,
+    /// Appended to a duplicated environment's name.
+    EnvironmentCopySuffix,
+    DuplicateEnvironment,
+    DeleteEnvironment,
+    ImportEnvironment,
+    /// The two variable scopes, named in the editor's scope list and in the
+    /// resolved-value preview.
+    CollectionVariables,
+    EnvironmentVariables,
+    /// The wording under the collection scope, saying what it is for.
+    CollectionVariablesNote,
+    /// The empty state when no environment has been created yet.
+    NoEnvironmentsYet,
+    NoEnvironmentsYetHint,
+    /// The variables table's own column and controls.
+    ColumnSecret,
+    AddVariable,
+    NoActiveVariables,
+    /// "{count} variables active" above the editor's table.
+    ActiveVariables(usize),
+    VariableKeyPlaceholder,
+    VariableValuePlaceholder,
+    MarkSecret,
+    RevealSecret,
+    HideSecret,
+    /// The notice the editor shows about secret values. The captain's decision
+    /// is that this is on screen, not only in the docs.
+    SecretStorageWarning,
+    /// The resolved-value preview under the request bar.
+    ResolvedUrlLabel,
+    /// "{name} is not defined" — the preview's wording for a missing variable,
+    /// which is the same sentence the send-time failure uses.
+    UnresolvedVariablePreview(String),
+    /// The tooltip on the preview row, naming where a value came from.
+    ResolvesFrom {
+        name: String,
+        scope: String,
+    },
+    /// "No variable named {name} is defined in this environment." — the send
+    /// failure. Its own wording rather than a shared stem, because it is read
+    /// in an error banner rather than beside the URL.
+    HttpUnresolvedVariable(String),
+    /// "{name} refers to itself."
+    HttpRecursiveVariable(String),
+    /// The environments file could not be read or written. `detail` is
+    /// third-party English, kept verbatim inside a translated frame.
+    VariableStoreError(String),
+    VariableStoreMissingVersion,
+    /// "This environments file was written by a newer dodo (schema {found};
+    /// this build reads {supported})."
+    VariableStoreUnsupportedVersion {
+        found: u64,
+        supported: u32,
+    },
+    /// An environment file could not be imported. `detail` as above.
+    EnvironmentImportError(String),
 }
 
 impl Str {
@@ -1658,6 +1727,154 @@ impl Str {
             (Str::HttpFileTooLarge { path, limit_mb }, Language::Vietnamese) => {
                 format!("{path} lớn hơn mức {limit_mb} MB mà bản dựng này gửi được.").into()
             }
+
+            // Round 8 — variables and environments.
+            (Str::NoEnvironment, Language::English) => "No environment".into(),
+            (Str::NoEnvironment, Language::Vietnamese) => "Không dùng môi trường".into(),
+            (Str::SelectEnvironment, Language::English) => "Choose the active environment".into(),
+            (Str::SelectEnvironment, Language::Vietnamese) => {
+                "Chọn môi trường đang dùng".into()
+            }
+            (Str::ManageEnvironments, Language::English) => "Manage environments…".into(),
+            (Str::ManageEnvironments, Language::Vietnamese) => "Quản lý môi trường…".into(),
+            (Str::Environments, Language::English) => "Environments".into(),
+            (Str::Environments, Language::Vietnamese) => "Môi trường".into(),
+            (Str::NewEnvironment, Language::English) => "New environment".into(),
+            (Str::NewEnvironment, Language::Vietnamese) => "Môi trường mới".into(),
+            (Str::DefaultEnvironmentName, Language::English) => "New environment".into(),
+            (Str::DefaultEnvironmentName, Language::Vietnamese) => "Môi trường mới".into(),
+            (Str::EnvironmentCopySuffix, Language::English) => "copy".into(),
+            (Str::EnvironmentCopySuffix, Language::Vietnamese) => "bản sao".into(),
+            (Str::DuplicateEnvironment, Language::English) => "Duplicate".into(),
+            (Str::DuplicateEnvironment, Language::Vietnamese) => "Nhân bản".into(),
+            (Str::DeleteEnvironment, Language::English) => "Delete".into(),
+            (Str::DeleteEnvironment, Language::Vietnamese) => "Xoá".into(),
+            (Str::ImportEnvironment, Language::English) => "Import".into(),
+            (Str::ImportEnvironment, Language::Vietnamese) => "Nhập".into(),
+            (Str::CollectionVariables, Language::English) => "Collection variables".into(),
+            (Str::CollectionVariables, Language::Vietnamese) => "Biến bộ sưu tập".into(),
+            (Str::EnvironmentVariables, Language::English) => "Environment variables".into(),
+            (Str::EnvironmentVariables, Language::Vietnamese) => "Biến môi trường".into(),
+            (Str::CollectionVariablesNote, Language::English) => {
+                "Shared by every request, whichever environment is active. An imported \
+                 collection files its own variables here."
+                    .into()
+            }
+            (Str::CollectionVariablesNote, Language::Vietnamese) => {
+                "Dùng chung cho mọi yêu cầu, bất kể môi trường nào đang bật. Bộ sưu tập được \
+                 nhập vào sẽ đặt biến của nó ở đây."
+                    .into()
+            }
+            (Str::NoEnvironmentsYet, Language::English) => "No environments yet".into(),
+            (Str::NoEnvironmentsYet, Language::Vietnamese) => "Chưa có môi trường nào".into(),
+            (Str::NoEnvironmentsYetHint, Language::English) => {
+                "Create one to keep a host, a token or an API key in a single place and refer \
+                 to it as {{name}}."
+                    .into()
+            }
+            (Str::NoEnvironmentsYetHint, Language::Vietnamese) => {
+                "Hãy tạo một môi trường để giữ tên máy chủ, mã thông báo hay khoá API ở một \
+                 chỗ và gọi lại bằng {{name}}."
+                    .into()
+            }
+            (Str::ColumnSecret, Language::English) => "SECRET".into(),
+            (Str::ColumnSecret, Language::Vietnamese) => "BÍ MẬT".into(),
+            (Str::AddVariable, Language::English) => "Add variable".into(),
+            (Str::AddVariable, Language::Vietnamese) => "Thêm biến".into(),
+            (Str::NoActiveVariables, Language::English) => "No variables".into(),
+            (Str::NoActiveVariables, Language::Vietnamese) => "Chưa có biến nào".into(),
+            (Str::ActiveVariables(count), Language::English) => {
+                format!("{count} active").into()
+            }
+            (Str::ActiveVariables(count), Language::Vietnamese) => {
+                format!("{count} đang bật").into()
+            }
+            (Str::VariableKeyPlaceholder, Language::English) => "baseUrl".into(),
+            (Str::VariableKeyPlaceholder, Language::Vietnamese) => "baseUrl".into(),
+            (Str::VariableValuePlaceholder, Language::English) => "Value".into(),
+            (Str::VariableValuePlaceholder, Language::Vietnamese) => "Giá trị".into(),
+            (Str::MarkSecret, Language::English) => "Mask this value in the editor".into(),
+            (Str::MarkSecret, Language::Vietnamese) => "Che giá trị này trong trình sửa".into(),
+            (Str::RevealSecret, Language::English) => "Show the value".into(),
+            (Str::RevealSecret, Language::Vietnamese) => "Hiện giá trị".into(),
+            (Str::HideSecret, Language::English) => "Hide the value".into(),
+            (Str::HideSecret, Language::Vietnamese) => "Ẩn giá trị".into(),
+            (Str::SecretStorageWarning, Language::English) => {
+                "Secret values are masked here, but they are saved to this machine in plain \
+                 text, unencrypted, like every other variable."
+                    .into()
+            }
+            (Str::SecretStorageWarning, Language::Vietnamese) => {
+                "Giá trị bí mật được che ở đây, nhưng vẫn lưu trên máy này dưới dạng văn bản \
+                 thuần, không mã hoá, như mọi biến khác."
+                    .into()
+            }
+            (Str::ResolvedUrlLabel, Language::English) => "Resolves to".into(),
+            (Str::ResolvedUrlLabel, Language::Vietnamese) => "Kết quả thay thế".into(),
+            (Str::UnresolvedVariablePreview(name), Language::English) => {
+                format!("{name} is not defined").into()
+            }
+            (Str::UnresolvedVariablePreview(name), Language::Vietnamese) => {
+                format!("{name} chưa được định nghĩa").into()
+            }
+            (Str::ResolvesFrom { name, scope }, Language::English) => {
+                format!("{name} — from {scope}").into()
+            }
+            (Str::ResolvesFrom { name, scope }, Language::Vietnamese) => {
+                format!("{name} — lấy từ {scope}").into()
+            }
+            (Str::HttpUnresolvedVariable(name), Language::English) => {
+                format!("No variable named {name} is defined. Add it to an environment, or to \
+                         the collection variables, then send again.")
+                .into()
+            }
+            (Str::HttpUnresolvedVariable(name), Language::Vietnamese) => {
+                format!("Chưa có biến nào tên {name}. Hãy thêm nó vào một môi trường hoặc vào \
+                         biến bộ sưu tập rồi gửi lại.")
+                .into()
+            }
+            (Str::HttpRecursiveVariable(name), Language::English) => {
+                format!("The variable {name} refers back to itself, so it cannot be resolved.")
+                    .into()
+            }
+            (Str::HttpRecursiveVariable(name), Language::Vietnamese) => {
+                format!("Biến {name} tham chiếu lại chính nó nên không thể thay thế được.").into()
+            }
+            (Str::VariableStoreError(detail), Language::English) => {
+                format!("Could not save or load environments: {detail}").into()
+            }
+            (Str::VariableStoreError(detail), Language::Vietnamese) => {
+                format!("Không lưu hoặc đọc được môi trường: {detail}").into()
+            }
+            (Str::VariableStoreMissingVersion, Language::English) => {
+                "This environments file carries no schema version, so it cannot be read safely."
+                    .into()
+            }
+            (Str::VariableStoreMissingVersion, Language::Vietnamese) => {
+                "Tệp môi trường này không ghi phiên bản lược đồ nên không thể đọc an toàn.".into()
+            }
+            (
+                Str::VariableStoreUnsupportedVersion { found, supported },
+                Language::English,
+            ) => format!(
+                "This environments file uses schema {found}; this build of dodo reads {supported}. \
+                 Update dodo rather than risk misreading it."
+            )
+            .into(),
+            (
+                Str::VariableStoreUnsupportedVersion { found, supported },
+                Language::Vietnamese,
+            ) => format!(
+                "Tệp môi trường này dùng lược đồ {found}; bản dodo này chỉ đọc {supported}. Hãy \
+                 cập nhật dodo thay vì đọc sai tệp."
+            )
+            .into(),
+            (Str::EnvironmentImportError(detail), Language::English) => {
+                format!("Could not import that environment: {detail}").into()
+            }
+            (Str::EnvironmentImportError(detail), Language::Vietnamese) => {
+                format!("Không nhập được môi trường đó: {detail}").into()
+            }
         }
     }
 }
@@ -2146,6 +2363,54 @@ mod tests {
                 },
                 &["/tmp/a.png", NUMBER_TEXT],
             ),
+            plain(Str::NoEnvironment),
+            plain(Str::SelectEnvironment),
+            plain(Str::ManageEnvironments),
+            plain(Str::Environments),
+            plain(Str::NewEnvironment),
+            plain(Str::DefaultEnvironmentName),
+            plain(Str::EnvironmentCopySuffix),
+            plain(Str::DuplicateEnvironment),
+            plain(Str::DeleteEnvironment),
+            plain(Str::ImportEnvironment),
+            plain(Str::CollectionVariables),
+            plain(Str::EnvironmentVariables),
+            plain(Str::CollectionVariablesNote),
+            plain(Str::NoEnvironmentsYet),
+            plain(Str::NoEnvironmentsYetHint),
+            plain(Str::ColumnSecret),
+            plain(Str::AddVariable),
+            plain(Str::NoActiveVariables),
+            with(Str::ActiveVariables(NUMBER), &[NUMBER_TEXT]),
+            // The placeholder is an example variable name, not prose: it reads
+            // the same in every language on purpose.
+            term(Str::VariableKeyPlaceholder),
+            plain(Str::VariableValuePlaceholder),
+            plain(Str::MarkSecret),
+            plain(Str::RevealSecret),
+            plain(Str::HideSecret),
+            plain(Str::SecretStorageWarning),
+            plain(Str::ResolvedUrlLabel),
+            with(Str::UnresolvedVariablePreview(DETAIL.into()), &[DETAIL]),
+            with(
+                Str::ResolvesFrom {
+                    name: DETAIL.into(),
+                    scope: "<<scope-sentinel>>".into(),
+                },
+                &[DETAIL, "<<scope-sentinel>>"],
+            ),
+            with(Str::HttpUnresolvedVariable(DETAIL.into()), &[DETAIL]),
+            with(Str::HttpRecursiveVariable(DETAIL.into()), &[DETAIL]),
+            with(Str::VariableStoreError(DETAIL.into()), &[DETAIL]),
+            plain(Str::VariableStoreMissingVersion),
+            with(
+                Str::VariableStoreUnsupportedVersion {
+                    found: NUMBER as u64,
+                    supported: 7,
+                },
+                &[NUMBER_TEXT, "7"],
+            ),
+            with(Str::EnvironmentImportError(DETAIL.into()), &[DETAIL]),
         ]
     }
 
@@ -2498,6 +2763,41 @@ mod tests {
             Str::IncompleteFileFields(_) => 337,
             Str::HttpFileUnreadable { .. } => 338,
             Str::HttpFileTooLarge { .. } => 339,
+
+            Str::NoEnvironment => 340,
+            Str::SelectEnvironment => 341,
+            Str::ManageEnvironments => 342,
+            Str::Environments => 343,
+            Str::NewEnvironment => 344,
+            Str::DefaultEnvironmentName => 345,
+            Str::EnvironmentCopySuffix => 346,
+            Str::DuplicateEnvironment => 347,
+            Str::DeleteEnvironment => 348,
+            Str::ImportEnvironment => 349,
+            Str::CollectionVariables => 350,
+            Str::EnvironmentVariables => 351,
+            Str::CollectionVariablesNote => 352,
+            Str::NoEnvironmentsYet => 353,
+            Str::NoEnvironmentsYetHint => 354,
+            Str::ColumnSecret => 355,
+            Str::AddVariable => 356,
+            Str::NoActiveVariables => 357,
+            Str::ActiveVariables(_) => 358,
+            Str::VariableKeyPlaceholder => 359,
+            Str::VariableValuePlaceholder => 360,
+            Str::MarkSecret => 361,
+            Str::RevealSecret => 362,
+            Str::HideSecret => 363,
+            Str::SecretStorageWarning => 364,
+            Str::ResolvedUrlLabel => 365,
+            Str::UnresolvedVariablePreview(_) => 366,
+            Str::ResolvesFrom { .. } => 367,
+            Str::HttpUnresolvedVariable(_) => 368,
+            Str::HttpRecursiveVariable(_) => 369,
+            Str::VariableStoreError(_) => 370,
+            Str::VariableStoreMissingVersion => 371,
+            Str::VariableStoreUnsupportedVersion { .. } => 372,
+            Str::EnvironmentImportError(_) => 373,
         }
     }
 

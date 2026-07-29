@@ -32,9 +32,11 @@
 pub mod collection_import;
 pub mod collection_store;
 pub mod curl;
+pub mod environment_import;
 pub mod file_export;
 pub mod file_picker;
 pub mod http;
+pub mod variable_store;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -91,6 +93,13 @@ pub enum TransportError {
     /// A file past the size this build will buffer into a request body. See
     /// `http::upload::MAX_UPLOAD_BYTES` for why there is a cap at all.
     FileTooLarge { path: String, limit_mb: u64 },
+    /// A `{{name}}` no enabled variable in any scope defines. The request is
+    /// stopped rather than sent with the reference on the wire or with an empty
+    /// string in its place; `models::interpolate`'s doc argues that choice.
+    UnresolvedVariable { name: String },
+    /// A variable whose value expands back into itself, directly or through a
+    /// chain. Reported instead of hanging.
+    RecursiveVariable { name: String },
     /// No response within the deadline.
     Timeout { seconds: u64 },
     /// The host name did not resolve.
@@ -124,6 +133,10 @@ impl TransportError {
                 path: path.clone(),
                 limit_mb: *limit_mb,
             },
+            TransportError::UnresolvedVariable { name } => {
+                Str::HttpUnresolvedVariable(name.clone())
+            }
+            TransportError::RecursiveVariable { name } => Str::HttpRecursiveVariable(name.clone()),
             TransportError::Timeout { seconds } => Str::HttpTimeout(*seconds),
             TransportError::Dns { host } => Str::HttpDnsFailure(host.clone()),
             TransportError::Connect { detail } => Str::HttpConnectFailure(detail.clone()),
