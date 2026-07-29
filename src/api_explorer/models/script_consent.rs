@@ -21,6 +21,15 @@
 //! A request with no saved node — a history reopen, a pasted cURL command —
 //! keys on `None`, so it is one bucket rather than none.
 //!
+//! # One key covers **both** hooks
+//!
+//! [`ConsentKey::new`] hashes the pre-request and post-response scripts
+//! together. That is not a convenience: an approval given when only the
+//! pre-request hook existed said nothing about a post-response script that never
+//! ran, and honouring it now would let a request execute code the user was never
+//! shown. Hashing the pair re-arms exactly those approvals, which is the correct
+//! answer. The prompt shows every script that will run, for the same reason.
+//!
 //! # The policy is a setting; the approvals are data
 //!
 //! [`ConsentPolicy`] lives in the Settings dialog beside Language, and like
@@ -95,21 +104,31 @@ pub struct ConsentKey {
     /// The collection node this request was opened from, when it came from
     /// one.
     pub node: Option<NodeId>,
-    /// A hash of the script text — see [`script_hash`].
+    /// A hash of both scripts — see [`script_hash`] and this module's doc.
     pub hash: String,
 }
 
 impl ConsentKey {
-    pub fn new(node: Option<NodeId>, script: &str) -> Self {
+    pub fn new(node: Option<NodeId>, pre: &str, post: &str) -> Self {
         Self {
             node,
-            hash: script_hash(script),
+            hash: script_hash(&joined(pre, post)),
         }
     }
 }
 
+/// The two hooks as one string to hash.
+///
+/// The `\u{1e}` (record separator) cannot appear in JavaScript source outside a
+/// string literal, and even inside one it would have to be written as an escape
+/// — so no pair of scripts can be rearranged into another pair with the same
+/// digest.
+fn joined(pre: &str, post: &str) -> String {
+    format!("{pre}\u{1e}{post}")
+}
+
 /// What the send path should do about a script.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsentDecision {
     /// There is no script, so there is nothing to decide.
     NoScript,
@@ -117,8 +136,13 @@ pub enum ConsentDecision {
     Run,
     /// Do not run it, and say why in the Console.
     Skip,
-    /// Show the script and ask.
-    Ask,
+    /// Show the scripts and ask.
+    Ask {
+        /// Whether this request had an approval that an edit has just
+        /// invalidated. It changes what the prompt can truthfully say: "this
+        /// has not run before" is false once an earlier version has.
+        re_armed: bool,
+    },
 }
 
 /// One approval, as it is stored.
@@ -181,16 +205,36 @@ impl ConsentLedger {
         });
     }
 
-    /// What to do about `script`, given where the request came from and what
-    /// the user has already agreed to.
+    /// Whether this node carries an approval for *some other* text — i.e. the
+    /// user approved a script here and then it changed.
+    ///
+    /// Only claimed for a request that came from a saved node. Everything with
+    /// no node shares one bucket (a history reopen, a pasted cURL command), and
+    /// "you approved something else that also had no node" is not a statement
+    /// about this request.
+    fn re_armed(&self, key: &ConsentKey) -> bool {
+        key.node.is_some()
+            && self
+                .document
+                .approvals
+                .iter()
+                .any(|record| record.node == key.node && record.hash != key.hash)
+    }
+
+    /// What to do about this request's scripts, given where the request came
+    /// from and what the user has already agreed to.
+    ///
+    /// Both hooks are decided together: they run in the same send, from the same
+    /// request, and asking twice for one Send would be theatre.
     pub fn decide(
         &self,
         policy: ConsentPolicy,
         origin: ScriptOrigin,
         node: Option<NodeId>,
-        script: &str,
+        pre: &str,
+        post: &str,
     ) -> ConsentDecision {
-        if !is_runnable(script) {
+        if !is_runnable(pre) && !is_runnable(post) {
             return ConsentDecision::NoScript;
         }
         match policy {
@@ -199,10 +243,13 @@ impl ConsentLedger {
             ConsentPolicy::AskImported => match origin {
                 ScriptOrigin::Authored => ConsentDecision::Run,
                 ScriptOrigin::Imported => {
-                    if self.is_approved(&ConsentKey::new(node, script)) {
+                    let key = ConsentKey::new(node, pre, post);
+                    if self.is_approved(&key) {
                         ConsentDecision::Run
                     } else {
-                        ConsentDecision::Ask
+                        ConsentDecision::Ask {
+                            re_armed: self.re_armed(&key),
+                        }
                     }
                 }
             },
@@ -218,6 +265,10 @@ mod tests {
     use crate::api_explorer::models::script::ScriptOrigin;
 
     const SCRIPT: &str = "pm.environment.set(\"token\", \"abc\");";
+    const TEST: &str = "pm.test(\"ok\", function () {});";
+
+    /// The first-visit prompt: nothing here has ever been approved.
+    const FIRST: ConsentDecision = ConsentDecision::Ask { re_armed: false };
 
     #[test]
     fn a_script_typed_in_dodo_runs_without_a_prompt() {
@@ -227,7 +278,8 @@ mod tests {
                 ConsentPolicy::AskImported,
                 ScriptOrigin::Authored,
                 Some(3),
-                SCRIPT
+                SCRIPT,
+                "",
             ),
             ConsentDecision::Run
         );
@@ -242,19 +294,21 @@ mod tests {
                 ScriptOrigin::Imported,
                 Some(3),
                 script,
+                "",
             )
         };
 
-        assert_eq!(decide(&ledger, SCRIPT), ConsentDecision::Ask);
-        ledger.approve(&ConsentKey::new(Some(3), SCRIPT));
+        assert_eq!(decide(&ledger, SCRIPT), FIRST);
+        ledger.approve(&ConsentKey::new(Some(3), SCRIPT, ""));
         assert_eq!(decide(&ledger, SCRIPT), ConsentDecision::Run);
     }
 
     #[test]
-    fn editing_an_approved_script_re_arms_the_gate() {
-        // The whole point of hashing the text rather than trusting the node.
+    fn editing_an_approved_script_re_arms_the_gate_and_says_so() {
+        // The whole point of hashing the text rather than trusting the node —
+        // and the prompt must not then claim the script has never run.
         let mut ledger = ConsentLedger::default();
-        ledger.approve(&ConsentKey::new(Some(3), SCRIPT));
+        ledger.approve(&ConsentKey::new(Some(3), SCRIPT, ""));
 
         let edited = "pm.environment.set(\"token\", \"stolen\");";
         assert_eq!(
@@ -262,24 +316,89 @@ mod tests {
                 ConsentPolicy::AskImported,
                 ScriptOrigin::Imported,
                 Some(3),
-                edited
+                edited,
+                "",
             ),
-            ConsentDecision::Ask
+            ConsentDecision::Ask { re_armed: true }
+        );
+    }
+
+    #[test]
+    fn adding_a_post_response_script_re_arms_an_approval_given_for_the_other_hook() {
+        // An approval given when only the pre-request hook ran said nothing
+        // about a post-response script, so it must not carry over to one.
+        let mut ledger = ConsentLedger::default();
+        ledger.approve(&ConsentKey::new(Some(3), SCRIPT, ""));
+        assert_eq!(
+            ledger.decide(
+                ConsentPolicy::AskImported,
+                ScriptOrigin::Imported,
+                Some(3),
+                SCRIPT,
+                TEST,
+            ),
+            ConsentDecision::Ask { re_armed: true }
+        );
+    }
+
+    #[test]
+    fn the_two_hooks_cannot_be_rearranged_into_the_same_approval() {
+        let swapped = ConsentKey::new(Some(3), SCRIPT, TEST);
+        assert_ne!(ConsentKey::new(Some(3), TEST, SCRIPT).hash, swapped.hash);
+        // …and neither collides with the concatenation of the pair.
+        assert_ne!(
+            ConsentKey::new(Some(3), &format!("{SCRIPT}{TEST}"), "").hash,
+            swapped.hash
+        );
+    }
+
+    #[test]
+    fn a_post_response_script_alone_still_asks() {
+        let ledger = ConsentLedger::default();
+        assert_eq!(
+            ledger.decide(
+                ConsentPolicy::AskImported,
+                ScriptOrigin::Imported,
+                Some(3),
+                "",
+                TEST,
+            ),
+            FIRST
         );
     }
 
     #[test]
     fn an_approval_does_not_spread_to_another_node() {
         let mut ledger = ConsentLedger::default();
-        ledger.approve(&ConsentKey::new(Some(3), SCRIPT));
+        ledger.approve(&ConsentKey::new(Some(3), SCRIPT, ""));
         assert_eq!(
             ledger.decide(
                 ConsentPolicy::AskImported,
                 ScriptOrigin::Imported,
                 Some(4),
-                SCRIPT
+                SCRIPT,
+                "",
             ),
-            ConsentDecision::Ask
+            FIRST,
+            "another node has approved nothing, so nothing was re-armed either"
+        );
+    }
+
+    #[test]
+    fn a_request_with_no_node_never_claims_a_previous_approval() {
+        // Everything without a node shares one bucket, so "something else here
+        // was approved" says nothing about this request.
+        let mut ledger = ConsentLedger::default();
+        ledger.approve(&ConsentKey::new(None, SCRIPT, ""));
+        assert_eq!(
+            ledger.decide(
+                ConsentPolicy::AskImported,
+                ScriptOrigin::Imported,
+                None,
+                TEST,
+                "",
+            ),
+            FIRST
         );
     }
 
@@ -288,11 +407,11 @@ mod tests {
         let ledger = ConsentLedger::default();
         for origin in [ScriptOrigin::Authored, ScriptOrigin::Imported] {
             assert_eq!(
-                ledger.decide(ConsentPolicy::Never, origin, None, SCRIPT),
+                ledger.decide(ConsentPolicy::Never, origin, None, SCRIPT, TEST),
                 ConsentDecision::Skip
             );
             assert_eq!(
-                ledger.decide(ConsentPolicy::Always, origin, None, SCRIPT),
+                ledger.decide(ConsentPolicy::Always, origin, None, SCRIPT, TEST),
                 ConsentDecision::Run
             );
         }
@@ -306,7 +425,8 @@ mod tests {
                 ConsentPolicy::AskImported,
                 ScriptOrigin::Imported,
                 Some(1),
-                "   \n "
+                "   \n ",
+                "",
             ),
             ConsentDecision::NoScript
         );
@@ -315,7 +435,7 @@ mod tests {
     #[test]
     fn approving_twice_does_not_grow_the_file() {
         let mut ledger = ConsentLedger::default();
-        let key = ConsentKey::new(Some(1), SCRIPT);
+        let key = ConsentKey::new(Some(1), SCRIPT, "");
         ledger.approve(&key);
         ledger.approve(&key);
         assert_eq!(ledger.document().approvals.len(), 1);
@@ -324,7 +444,7 @@ mod tests {
     #[test]
     fn a_document_round_trips_with_its_version() {
         let mut ledger = ConsentLedger::default();
-        ledger.approve(&ConsentKey::new(Some(7), SCRIPT));
+        ledger.approve(&ConsentKey::new(Some(7), SCRIPT, ""));
 
         let json = serde_json::to_string(ledger.document()).expect("serializes");
         assert!(json.contains(&format!("\"version\":{SCHEMA_VERSION}")));

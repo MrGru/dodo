@@ -19,7 +19,7 @@ use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_component::{ActiveTheme as _, Selectable as _, h_flex, v_flex};
 
 use crate::api_explorer::models::collection::{CollectionTree, NodeId};
-use crate::api_explorer::models::script::{SkipReason, VariableWrite};
+use crate::api_explorer::models::script::{SkipReason, VariableWrite, is_runnable};
 use crate::api_explorer::models::script_consent::{ConsentDecision, ConsentKey, ConsentLedger};
 use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::api_explorer::services::collection_import::parse_import;
@@ -37,7 +37,7 @@ use crate::api_explorer::services::{Protocol, TransportRegistry, curl, file_expo
 use crate::api_explorer::state::collection::CollectionState;
 use crate::api_explorer::state::environment::EnvironmentState;
 use crate::api_explorer::state::history::{History, HistoryRecord};
-use crate::api_explorer::state::request::is_bulk_change;
+use crate::api_explorer::state::request::{ScriptSlot, is_bulk_change};
 use crate::api_explorer::state::tab::{RequestTabState, ScriptWrites};
 use crate::api_explorer::state::ui::{
     COLLECTIONS_WIDTH, LeftPanel, REQUEST_MIN_HEIGHT, RESPONSE_HEIGHT, UiState,
@@ -196,6 +196,26 @@ impl ApiExplorer {
             },
         )
         .detach();
+
+        // Both script editors are re-parsed after a pause, so a syntax error is
+        // found where it was typed rather than discovered by pressing Send. The
+        // engine is the page's, which is what keeps the editor and the Console
+        // from disagreeing.
+        for slot in ScriptSlot::ALL {
+            let editor = tab.read(cx).request.script_editor(slot).clone();
+            let checked = tab.clone();
+            cx.subscribe_in(
+                &editor,
+                window,
+                move |this, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let engine = this.engine.clone();
+                        checked.update(cx, |tab, cx| tab.check_script(slot, engine, window, cx));
+                    }
+                },
+            )
+            .detach();
+        }
     }
 
     /// Reacts to the URL field changing, which is where a pasted cURL command
@@ -819,39 +839,51 @@ impl ApiExplorer {
             return;
         };
 
-        let (origin, node, script, name) = {
+        let (origin, node, pre, post, name) = {
             let state = &tab.read(cx).request;
             (
                 state.script_origin,
                 state.origin_node,
                 state.pre_request_script.read(cx).value().to_string(),
+                state.post_response_script.read(cx).value().to_string(),
                 state.display_name(cx).to_string(),
             )
         };
 
+        // One decision for both hooks: they belong to the same request and run
+        // in the same send, so two prompts for one Send would be theatre.
         match self
             .consent
-            .decide(ScriptPolicy::current(cx), origin, node, &script)
+            .decide(ScriptPolicy::current(cx), origin, node, &pre, &post)
         {
-            ConsentDecision::NoScript => self.start_send(&tab, ScriptJob::None, window, cx),
+            ConsentDecision::NoScript => {
+                self.start_send(&tab, (ScriptJob::None, ScriptJob::None), window, cx)
+            }
             ConsentDecision::Run => {
-                let job = self.script_job(&tab, cx);
-                self.start_send(&tab, job, window, cx);
+                let jobs = self.script_jobs(&tab, cx);
+                self.start_send(&tab, jobs, window, cx);
             }
             ConsentDecision::Skip => self.start_send(
                 &tab,
-                ScriptJob::Skipped(SkipReason::PolicyDisabled),
+                (
+                    ScriptJob::Skipped(SkipReason::PolicyDisabled),
+                    ScriptJob::Skipped(SkipReason::PolicyDisabled),
+                ),
                 window,
                 cx,
             ),
             // The send does not start until the prompt is answered; dismissing
             // it leaves the request exactly where it was.
-            ConsentDecision::Ask => script_consent::open(
+            ConsentDecision::Ask { re_armed } => script_consent::open(
                 cx.entity(),
                 tab,
                 name,
-                script.clone(),
-                ConsentKey::new(node, &script),
+                script_consent::Scripts {
+                    pre: pre.clone(),
+                    post: post.clone(),
+                    re_armed,
+                },
+                ConsentKey::new(node, &pre, &post),
                 window,
                 cx,
             ),
@@ -868,8 +900,8 @@ impl ApiExplorer {
     ) {
         self.consent.approve(&key);
         self.persist_consent(cx);
-        let job = self.script_job(tab, cx);
-        self.start_send(tab, job, window, cx);
+        let jobs = self.script_jobs(tab, cx);
+        self.start_send(tab, jobs, window, cx);
     }
 
     /// The consent prompt's "Send without it". Deliberately **not** recorded:
@@ -883,29 +915,52 @@ impl ApiExplorer {
     ) {
         self.start_send(
             tab,
-            ScriptJob::Skipped(SkipReason::ConsentDeclined),
+            (
+                ScriptJob::Skipped(SkipReason::ConsentDeclined),
+                ScriptJob::Skipped(SkipReason::ConsentDeclined),
+            ),
             window,
             cx,
         );
     }
 
-    /// Everything the engine needs about the scopes, read on the UI thread.
-    fn script_job(&self, tab: &Entity<RequestTabState>, cx: &Context<Self>) -> ScriptJob {
+    /// Everything the engine needs about the scopes, read on the UI thread —
+    /// one job per hook, and [`ScriptJob::None`] for a hook with no script so
+    /// the send path can tell "empty" from "declined".
+    fn script_jobs(
+        &self,
+        tab: &Entity<RequestTabState>,
+        cx: &Context<Self>,
+    ) -> (ScriptJob, ScriptJob) {
         let state = &tab.read(cx).request;
-        ScriptJob::Run {
-            source: state.pre_request_script.read(cx).value().to_string(),
-            environment: ScriptContext::scope_map(
-                self.environments.variables(self.environments.active_id()),
-            ),
-            collection: ScriptContext::scope_map(self.environments.variables(None)),
-            request_name: state.display_name(cx).to_string(),
-        }
+        let environment =
+            ScriptContext::scope_map(self.environments.variables(self.environments.active_id()));
+        let collection = ScriptContext::scope_map(self.environments.variables(None));
+        let request_name = state.display_name(cx).to_string();
+
+        let job = |source: String| {
+            if is_runnable(&source) {
+                ScriptJob::Run {
+                    source,
+                    environment: environment.clone(),
+                    collection: collection.clone(),
+                    request_name: request_name.clone(),
+                }
+            } else {
+                ScriptJob::None
+            }
+        };
+
+        (
+            job(state.pre_request_script.read(cx).value().to_string()),
+            job(state.post_response_script.read(cx).value().to_string()),
+        )
     }
 
     fn start_send(
         &mut self,
         tab: &Entity<RequestTabState>,
-        script: ScriptJob,
+        scripts: (ScriptJob, ScriptJob),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -919,7 +974,7 @@ impl ApiExplorer {
         let variables = self.environments.variable_set();
         let engine = self.engine.clone();
         tab.update(cx, |tab, cx| {
-            tab.send(transport, engine, variables, script, window, cx)
+            tab.send(transport, engine, variables, scripts, window, cx)
         });
         cx.notify();
     }

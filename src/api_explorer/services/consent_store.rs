@@ -191,7 +191,7 @@ mod tests {
 
     fn document() -> ConsentDocument {
         let mut ledger = ConsentLedger::default();
-        ledger.approve(&ConsentKey::new(Some(4), "console.log(1);"));
+        ledger.approve(&ConsentKey::new(Some(4), "console.log(1);", ""));
         ledger.document().clone()
     }
 
@@ -217,8 +217,8 @@ mod tests {
         let loaded = DiskConsentStore::at(path.clone()).load().expect("loads");
         let mut ledger = ConsentLedger::default();
         ledger.set_document(loaded);
-        assert!(ledger.is_approved(&ConsentKey::new(Some(4), "console.log(1);")));
-        assert!(!ledger.is_approved(&ConsentKey::new(Some(4), "console.log(2);")));
+        assert!(ledger.is_approved(&ConsentKey::new(Some(4), "console.log(1);", "")));
+        assert!(!ledger.is_approved(&ConsentKey::new(Some(4), "console.log(2);", "")));
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }

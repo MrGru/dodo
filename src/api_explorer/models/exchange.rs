@@ -98,6 +98,14 @@ impl BodyKind {
 /// same struct, so the viewer does not learn a second shape.
 pub struct Exchange {
     pub status: u16,
+    /// The status line's reason phrase — `"OK"`, `"Not Found"`.
+    ///
+    /// Captured because `pm.response.status` is that phrase and `.code` is the
+    /// number, and a script that reads `pm.response.status` and gets `200` is
+    /// reading a different API than the one it was written against. Empty when
+    /// a protocol has no such concept, which keeps this as protocol-neutral as
+    /// the rest of the struct: it is still only "what arrived".
+    pub reason: String,
     /// In wire order, duplicates preserved.
     pub headers: Vec<(String, String)>,
     pub body: String,

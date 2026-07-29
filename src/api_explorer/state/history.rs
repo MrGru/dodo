@@ -15,6 +15,7 @@ use std::time::{Duration, SystemTime};
 use crate::api_explorer::models::exchange::StatusClass;
 use crate::api_explorer::models::method::HttpMethod;
 use crate::api_explorer::models::snapshot::RequestSnapshot;
+use crate::api_explorer::models::test_result::TestSummary;
 
 /// The most entries kept. Old ones fall off the end so a long session cannot
 /// grow history without bound.
@@ -28,6 +29,15 @@ pub struct HistoryRecord {
     pub status: Option<u16>,
     /// How long the round trip took, or `None` on failure.
     pub elapsed: Option<Duration>,
+    /// A `passed/failed/errored` count, or `None` when this request ran no
+    /// tests.
+    ///
+    /// A **summary**, never the results themselves: history is capped by count
+    /// rather than by bytes, so 200 unbounded result lists would be an unbounded
+    /// footprint on a within-session convenience — and reopening an entry
+    /// restores the *request*, not the response, so there would be nowhere to
+    /// render them.
+    pub tests: Option<TestSummary>,
 }
 
 /// One recorded request.
@@ -37,6 +47,7 @@ pub struct HistoryEntry {
     pub url: String,
     pub status: Option<u16>,
     pub elapsed: Option<Duration>,
+    pub tests: Option<TestSummary>,
     pub at: SystemTime,
     /// The full request, kept so the entry can be reopened or resent exactly.
     pub snapshot: RequestSnapshot,
@@ -70,6 +81,7 @@ impl History {
                 url: record.snapshot.url.clone(),
                 status: record.status,
                 elapsed: record.elapsed,
+                tests: record.tests,
                 at: SystemTime::now(),
                 snapshot: record.snapshot,
             },
@@ -106,7 +118,7 @@ impl History {
 
 #[cfg(test)]
 mod tests {
-    use super::{History, HistoryRecord, MAX_ENTRIES};
+    use super::{History, HistoryRecord, MAX_ENTRIES, TestSummary};
     use crate::api_explorer::models::method::HttpMethod;
     use crate::api_explorer::models::snapshot::RequestSnapshot;
     use std::time::Duration;
@@ -120,7 +132,23 @@ mod tests {
             },
             status,
             elapsed: Some(Duration::from_millis(10)),
+            tests: None,
         }
+    }
+
+    #[test]
+    fn a_requests_test_summary_travels_with_it_into_history() {
+        let mut history = History::default();
+        history.record(HistoryRecord {
+            tests: Some(TestSummary {
+                passed: 3,
+                failed: 1,
+                errored: 0,
+            }),
+            ..record("https://a", Some(200))
+        });
+        let summary = history.entries()[0].tests.expect("a summary");
+        assert_eq!(summary.badge(), "3/4");
     }
 
     #[test]

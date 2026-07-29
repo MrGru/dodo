@@ -21,6 +21,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::api_explorer::models::console::ConsoleEntry;
+use crate::api_explorer::models::test_result::TestResult;
 use crate::i18n::Str;
 
 /// What one run may produce before the engine starts truncating.
@@ -33,6 +34,9 @@ pub mod limits {
     pub const VARIABLE_WRITES: usize = 200;
     /// Bytes of a single variable value.
     pub const VARIABLE_VALUE_BYTES: usize = 256 * 1024;
+    /// `pm.test` results kept from a single run — a script can define them in a
+    /// loop just as easily as it can log in one.
+    pub use crate::api_explorer::models::test_result::MAX_RESULTS as TEST_RESULTS;
 }
 
 /// Where a request's scripts came from.
@@ -69,6 +73,45 @@ pub struct ScriptRequest {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: String,
+}
+
+/// The response as a post-response script sees it, and may **not** change it.
+///
+/// A copy rather than a borrow of
+/// [`Exchange`](crate::api_explorer::models::exchange::Exchange), for two
+/// reasons that both matter. It keeps `Exchange` free of any scripting concept,
+/// which is the one-way door `report.md` §7.2 flags; and it makes the response a
+/// script sees genuinely read-only, so the Body and Headers tabs cannot end up
+/// showing something other than what arrived.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScriptResponse {
+    /// `pm.response.code`.
+    pub code: u16,
+    /// `pm.response.status` — the reason phrase (`"OK"`), which is why
+    /// `Exchange` now captures it.
+    pub status: String,
+    /// In wire order, duplicates preserved.
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+    /// `pm.response.responseTime`, in milliseconds.
+    pub elapsed_millis: u64,
+    /// `pm.response.responseSize` — bytes received, not the decoded length.
+    pub size_bytes: usize,
+}
+
+/// A syntax error the editor can point at, before anything is sent.
+///
+/// Line and column are **0-based**, ready for
+/// `gpui_component::input::Position`; the engine reports them 1-based and the
+/// conversion happens where the engine is named, so nothing downstream has to
+/// remember which convention it is holding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptSyntaxError {
+    pub line: usize,
+    pub column: usize,
+    /// The engine's own wording, kept verbatim inside a translated frame — the
+    /// convention `i18n.rs` documents for third-party parser text.
+    pub detail: String,
 }
 
 /// Which persisted scope a script wrote to.
@@ -179,9 +222,17 @@ pub struct ScriptRun {
     /// in": it is what lets the send path skip the write-back entirely and
     /// leave disabled header rows and field kinds untouched.
     pub request: Option<ScriptRequest>,
+    /// What `pm.test` produced, in the order the script defined them.
+    ///
+    /// On [`ScriptRun`] rather than only on the post-response side because
+    /// `pm.test` works in a pre-request script too, exactly as it does in
+    /// Postman; each result carries the phase it came from.
+    pub tests: Vec<TestResult>,
     pub duration: Duration,
     /// Console output the run's own caps dropped.
     pub dropped_logs: usize,
+    /// Test results the run's own cap dropped.
+    pub dropped_tests: usize,
 }
 
 impl ScriptRun {

@@ -54,6 +54,10 @@ pub enum AppIcon {
     /// draws a backspace key, not a waste bin, so a destructive row action read
     /// as "clear the field".
     Trash,
+    /// A passed and a failed row in the API Explorer's Tests tab. Both resolve
+    /// through `Assets`' fallback to `gpui_component_assets`.
+    CircleCheck,
+    CircleX,
 
     // Docker module. `container`, `layers`, `refresh-cw`, `filter`, `square`
     // and `rotate-ccw` ship as our own SVGs; the rest resolve through `Assets`'
@@ -105,6 +109,8 @@ impl IconNamed for AppIcon {
             Self::PanelBottom => "icons/panel-bottom.svg",
             Self::Plus => "icons/plus.svg",
             Self::Trash => "icons/trash.svg",
+            Self::CircleCheck => "icons/circle-check.svg",
+            Self::CircleX => "icons/circle-x.svg",
             Self::Container => "icons/container.svg",
             Self::Layers => "icons/layers.svg",
             Self::Network => "icons/network.svg",

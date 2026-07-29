@@ -80,25 +80,383 @@
 //! therefore the *only* thing that bounds a runaway script. Nothing here claims
 //! more.
 //!
+//! # `pm.test` and `pm.expect` are written in JavaScript, on purpose
+//!
+//! [`PRELUDE`] is the chai-shaped assertion surface, evaluated in the sandbox
+//! before the user's script. Writing `.to.be.a("string")` as Rust bindings would
+//! mean a chain of host objects with getters for every link (`to`, `be`, `have`,
+//! `not`, …), which is both more code and a *larger* audit surface than a page
+//! of JavaScript that can reach nothing the script could not reach anyway.
+//!
+//! It is handed its two host functions **as arguments** rather than through
+//! globals, so `__record`-shaped names never exist for a script to find. What it
+//! builds is ordinary script-visible data: a hostile script can overwrite
+//! `pm.expect`, and that only makes its own tests lie.
+//!
+//! # Checking without running
+//!
+//! [`QuickJsEngine::check`] compiles with `Module::declare`, which is QuickJS's
+//! `JS_EVAL_FLAG_COMPILE_ONLY` — the parser runs, nothing executes, no binding
+//! is installed. Two notes on the fit, because it is not exact:
+//!
+//! - It compiles as a **module**, which is always strict. That is not a
+//!   mismatch: `Ctx::eval` uses `EvalOptions::default()`, whose `strict` is
+//!   already `true`, so a script runs strict here too.
+//! - A module accepts a few things a script does not (top-level `await`,
+//!   `import`). Those are **false negatives** — the check stays quiet and the
+//!   run reports the failure — which is the safe direction. A check that
+//!   underlined code the engine then ran happily would be the contradiction
+//!   worth avoiding.
+//!
 //! [`models::script::limits`]: crate::api_explorer::models::script::limits
 //! [`models::script::unsupported`]: crate::api_explorer::models::script::unsupported
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use rquickjs::function::Rest;
-use rquickjs::{Context, Ctx, Function, Object, Runtime, Value, context::intrinsic};
+use rquickjs::{Context, Ctx, Function, Module, Object, Runtime, Value, context::intrinsic};
 
 use crate::api_explorer::models::console::{ConsoleEntry, ConsoleLevel};
 use crate::api_explorer::models::script::{
-    DEADLINE, MEMORY_LIMIT, STACK_LIMIT, ScriptError, ScriptRequest, ScriptRun, VariableWrite,
-    WriteScope, limits, unsupported,
+    DEADLINE, MEMORY_LIMIT, STACK_LIMIT, ScriptError, ScriptRequest, ScriptResponse, ScriptRun,
+    ScriptSyntaxError, VariableWrite, WriteScope, limits, unsupported,
 };
+use crate::api_explorer::models::test_result::{ScriptPhase, TestOutcome, TestResult};
 use crate::api_explorer::services::script::{ScriptContext, ScriptEngine};
+
+/// The name compiled scripts are given, and therefore the name that appears in
+/// the `at <name>:<line>:<column>` frame [`syntax_error`] reads the position
+/// from. Distinctive so that parsing it cannot match a frame from user code.
+const CHECK_NAME: &str = "dodo-script";
+
+/// `pm.test`, `pm.expect` and `pm.response.to.*`, as JavaScript.
+///
+/// Evaluates to a function taking `(pm, record, now)`; see
+/// [`install_assertions`] for why those arrive as arguments. The matcher set is
+/// exactly the one `report.md` §3.2 names and no more — an unsupported matcher
+/// must fail as a missing function, never quietly pass.
+///
+/// Chai's chain words (`to`, `be`, `have`, …) are self-references, so
+/// `expect(x).to.be.above(1)` walks back to the same assertion object. `not` is
+/// a **getter** returning a fresh negated assertion: a plain property would
+/// recurse forever building it.
+const PRELUDE: &str = r#"
+(function (pm, record, now) {
+  'use strict';
+
+  function typeOf(value) {
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return 'array';
+    return typeof value;
+  }
+
+  function show(value) {
+    if (typeof value === 'string') return JSON.stringify(value);
+    if (value === undefined) return 'undefined';
+    if (value === null) return 'null';
+    try {
+      var text = JSON.stringify(value);
+      return text === undefined ? String(value) : text;
+    } catch (error) {
+      return String(value);
+    }
+  }
+
+  function fail(message) {
+    var error = new Error(message);
+    error.name = 'AssertionError';
+    throw error;
+  }
+
+  function deepEqual(a, b) {
+    if (a === b) return true;
+    if (typeOf(a) !== typeOf(b)) return false;
+    if (a === null || typeof a !== 'object') return a !== a && b !== b;
+    if (Array.isArray(a)) {
+      if (a.length !== b.length) return false;
+      for (var i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
+      return true;
+    }
+    var keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    for (var k = 0; k < keys.length; k++) {
+      if (!Object.prototype.hasOwnProperty.call(b, keys[k])) return false;
+      if (!deepEqual(a[keys[k]], b[keys[k]])) return false;
+    }
+    return true;
+  }
+
+  function assertion(value, negated) {
+    var self = {};
+
+    function check(ok, message, negatedMessage) {
+      if (negated) {
+        if (ok) fail(negatedMessage);
+      } else if (!ok) {
+        fail(message);
+      }
+      return self;
+    }
+
+    var chain = ['to', 'be', 'been', 'is', 'that', 'and', 'has', 'have',
+                 'with', 'at', 'of', 'same', 'which', 'does'];
+    for (var i = 0; i < chain.length; i++) self[chain[i]] = self;
+
+    Object.defineProperty(self, 'not', {
+      get: function () { return assertion(value, !negated); }
+    });
+
+    function getter(name, run) {
+      Object.defineProperty(self, name, { get: run });
+    }
+
+    self.equal = function (other) {
+      return check(value === other,
+        'expected ' + show(value) + ' to equal ' + show(other),
+        'expected ' + show(value) + ' not to equal ' + show(other));
+    };
+    self.equals = self.equal;
+    self.eq = self.equal;
+
+    self.eql = function (other) {
+      return check(deepEqual(value, other),
+        'expected ' + show(value) + ' to deeply equal ' + show(other),
+        'expected ' + show(value) + ' not to deeply equal ' + show(other));
+    };
+
+    self.a = function (type) {
+      var wanted = String(type).toLowerCase();
+      return check(typeOf(value) === wanted,
+        'expected ' + show(value) + ' to be a ' + wanted + ' but it is a ' + typeOf(value),
+        'expected ' + show(value) + ' not to be a ' + wanted);
+    };
+    self.an = self.a;
+
+    getter('true', function () {
+      return check(value === true,
+        'expected ' + show(value) + ' to be true',
+        'expected ' + show(value) + ' not to be true');
+    });
+    getter('false', function () {
+      return check(value === false,
+        'expected ' + show(value) + ' to be false',
+        'expected ' + show(value) + ' not to be false');
+    });
+    getter('null', function () {
+      return check(value === null,
+        'expected ' + show(value) + ' to be null',
+        'expected ' + show(value) + ' not to be null');
+    });
+    getter('undefined', function () {
+      return check(value === undefined,
+        'expected ' + show(value) + ' to be undefined',
+        'expected ' + show(value) + ' not to be undefined');
+    });
+    getter('ok', function () {
+      return check(!!value,
+        'expected ' + show(value) + ' to be truthy',
+        'expected ' + show(value) + ' not to be truthy');
+    });
+
+    self.include = function (needle) {
+      var found = false;
+      if (typeof value === 'string') {
+        found = value.indexOf(String(needle)) !== -1;
+      } else if (Array.isArray(value)) {
+        for (var i = 0; i < value.length; i++) {
+          if (deepEqual(value[i], needle)) { found = true; break; }
+        }
+      } else if (value !== null && typeof value === 'object' && needle !== null &&
+                 typeof needle === 'object') {
+        var keys = Object.keys(needle);
+        found = true;
+        for (var k = 0; k < keys.length; k++) {
+          if (!deepEqual(value[keys[k]], needle[keys[k]])) { found = false; break; }
+        }
+      }
+      return check(found,
+        'expected ' + show(value) + ' to include ' + show(needle),
+        'expected ' + show(value) + ' not to include ' + show(needle));
+    };
+    self.includes = self.include;
+    self.contain = self.include;
+    self.contains = self.include;
+
+    self.match = function (pattern) {
+      return check(pattern.test(String(value)),
+        'expected ' + show(value) + ' to match ' + String(pattern),
+        'expected ' + show(value) + ' not to match ' + String(pattern));
+    };
+    self.matches = self.match;
+
+    self.property = function (name, expected) {
+      var owner = value === null || value === undefined ? null : Object(value);
+      var present = owner !== null && name in owner;
+      if (arguments.length < 2) {
+        return check(present,
+          'expected ' + show(value) + " to have property '" + name + "'",
+          'expected ' + show(value) + " not to have property '" + name + "'");
+      }
+      return check(present && owner[name] === expected,
+        'expected ' + show(value) + " to have property '" + name + "' equal to " + show(expected),
+        'expected ' + show(value) + " not to have property '" + name + "' equal to " + show(expected));
+    };
+
+    self.lengthOf = function (expected) {
+      var length = value === null || value === undefined ? undefined : value.length;
+      return check(length === expected,
+        'expected ' + show(value) + ' to have length ' + expected + ' but it has ' + length,
+        'expected ' + show(value) + ' not to have length ' + expected);
+    };
+    self.length = self.lengthOf;
+
+    self.above = function (bound) {
+      return check(value > bound,
+        'expected ' + show(value) + ' to be above ' + bound,
+        'expected ' + show(value) + ' not to be above ' + bound);
+    };
+    self.greaterThan = self.above;
+    self.gt = self.above;
+
+    self.below = function (bound) {
+      return check(value < bound,
+        'expected ' + show(value) + ' to be below ' + bound,
+        'expected ' + show(value) + ' not to be below ' + bound);
+    };
+    self.lessThan = self.below;
+    self.lt = self.below;
+
+    self.within = function (low, high) {
+      return check(value >= low && value <= high,
+        'expected ' + show(value) + ' to be within ' + low + ' and ' + high,
+        'expected ' + show(value) + ' not to be within ' + low + ' and ' + high);
+    };
+
+    // `.to.deep.equal(x)` is chai's spelling of `.eql(x)`.
+    self.deep = { equal: self.eql, eql: self.eql, include: self.include };
+
+    return self;
+  }
+
+  pm.expect = function (value) { return assertion(value, false); };
+
+  pm.test = function (name, body) {
+    var label = String(name);
+    var started = now();
+    var outcome = 'passed';
+    var message = '';
+    try {
+      if (typeof body !== 'function') {
+        throw new TypeError('pm.test needs a function as its second argument');
+      }
+      body();
+    } catch (error) {
+      if (error && error.name === 'AssertionError') {
+        outcome = 'failed';
+        message = String(error.message);
+      } else {
+        outcome = 'errored';
+        message = error && error.name
+          ? String(error.name) + ': ' + String(error.message)
+          : String(error);
+      }
+    }
+    record(label, outcome, message, now() - started);
+  };
+
+  if (!pm.response) return;
+  var response = pm.response;
+
+  function pathValue(root, path) {
+    var parts = String(path).replace(/\[(\d+)\]/g, '.$1').split('.');
+    var cursor = root;
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] === '') continue;
+      if (cursor === null || cursor === undefined) return undefined;
+      cursor = cursor[parts[i]];
+    }
+    return cursor;
+  }
+
+  var have = {
+    status: function (expected) {
+      if (typeof expected === 'number') {
+        if (response.code !== expected) {
+          fail('expected response code ' + response.code + ' to equal ' + expected);
+        }
+      } else if (String(response.status) !== String(expected)) {
+        fail('expected response status ' + show(response.status) +
+             ' to equal ' + show(expected));
+      }
+      return response.to;
+    },
+    header: function (name, expected) {
+      if (!response.headers.has(name)) {
+        fail("expected the response to have header '" + name + "'");
+      }
+      if (arguments.length > 1 &&
+          String(response.headers.get(name)) !== String(expected)) {
+        fail("expected header '" + name + "' to be " + show(expected) +
+             ' but it is ' + show(response.headers.get(name)));
+      }
+      return response.to;
+    },
+    body: function (expected) {
+      var text = response.text();
+      if (expected instanceof RegExp) {
+        if (!expected.test(text)) {
+          fail('expected the response body to match ' + String(expected));
+        }
+      } else if (arguments.length > 0 && text !== String(expected)) {
+        fail('expected the response body to equal ' + show(expected));
+      } else if (arguments.length === 0 && text.length === 0) {
+        fail('expected the response to have a body');
+      }
+      return response.to;
+    },
+    jsonBody: function (path, expected) {
+      var parsed;
+      try {
+        parsed = response.json();
+      } catch (error) {
+        fail('expected the response body to be JSON');
+      }
+      if (arguments.length === 0) return response.to;
+      var found = pathValue(parsed, path);
+      if (arguments.length === 1) {
+        if (found === undefined) {
+          fail("expected the response body to have '" + path + "'");
+        }
+        return response.to;
+      }
+      if (!deepEqual(found, expected)) {
+        fail("expected '" + path + "' to equal " + show(expected) +
+             ' but it is ' + show(found));
+      }
+      return response.to;
+    }
+  };
+
+  var be = {};
+  Object.defineProperty(be, 'json', {
+    get: function () {
+      try {
+        response.json();
+      } catch (error) {
+        fail('expected the response body to be JSON');
+      }
+      return response.to;
+    }
+  });
+
+  response.to = { have: have, has: have, be: be, is: be };
+})
+"#;
 
 /// The intrinsics a script gets. Everything absent from this tuple is absent
 /// from the language — see this module's doc for the four that matter.
@@ -119,6 +477,10 @@ pub struct QuickJsEngine;
 impl ScriptEngine for QuickJsEngine {
     fn run(&self, script: &str, context: ScriptContext) -> ScriptRun {
         run(script, context)
+    }
+
+    fn check(&self, script: &str) -> Option<ScriptSyntaxError> {
+        check(script)
     }
 }
 
@@ -141,6 +503,9 @@ struct RunState {
     logs: Vec<ConsoleEntry>,
     log_bytes: usize,
     dropped_logs: usize,
+    /// What `pm.test` has produced so far, in call order.
+    tests: Vec<TestResult>,
+    dropped_tests: usize,
 }
 
 impl RunState {
@@ -195,6 +560,16 @@ impl RunState {
         }
         self.writes.push(VariableWrite { scope, key, value });
     }
+
+    /// Records one finished `pm.test`. Over-budget results are dropped and
+    /// counted, the same bargain the console makes.
+    fn record_test(&mut self, result: TestResult) {
+        if self.tests.len() >= limits::TEST_RESULTS {
+            self.dropped_tests += 1;
+            return;
+        }
+        self.tests.push(result);
+    }
 }
 
 /// Keeps a value inside its cap without splitting a character.
@@ -213,18 +588,28 @@ fn truncate(mut value: String, cap: usize) -> String {
 /// One run, start to finish.
 fn run(script: &str, context: ScriptContext) -> ScriptRun {
     let started = Instant::now();
-    let original = context.request.clone();
+    let ScriptContext {
+        phase,
+        request: original,
+        response,
+        variables,
+        environment,
+        collection,
+        request_name,
+    } = context;
 
     let state = Rc::new(RefCell::new(RunState {
-        headers: context.request.headers.clone(),
-        variables: context.variables,
+        headers: original.headers.clone(),
+        variables,
         locals: Vec::new(),
-        environment: context.environment,
-        collection: context.collection,
+        environment,
+        collection,
         writes: Vec::new(),
         logs: Vec::new(),
         log_bytes: 0,
         dropped_logs: 0,
+        tests: Vec::new(),
+        dropped_tests: 0,
     }));
 
     let Ok(runtime) = Runtime::new() else {
@@ -244,7 +629,15 @@ fn run(script: &str, context: ScriptContext) -> ScriptRun {
     };
 
     let evaluated = context_handle.with(|ctx| {
-        if let Err(error) = bind(&ctx, &state, &original, &context.request_name) {
+        if let Err(error) = bind(
+            &ctx,
+            &state,
+            &original,
+            response.as_ref(),
+            phase,
+            &request_name,
+            started,
+        ) {
             return Err(describe(&ctx, error, script));
         }
         match ctx.eval::<Value, _>(script) {
@@ -266,10 +659,18 @@ fn run(script: &str, context: ScriptContext) -> ScriptRun {
         run.environment = state.environment.clone();
         run.collection = state.collection.clone();
         run.dropped_logs = state.dropped_logs;
+        // Tests a run defined before it threw are kept for the same reason its
+        // logs are: they are usually the only account of how far it got.
+        run.tests = state.tests.clone();
+        run.dropped_tests = state.dropped_tests;
     }
 
     match evaluated {
-        Ok(fields) => {
+        // The request write-back is a pre-request concern only. A post-response
+        // script that assigns to `pm.request` has changed a request that has
+        // already gone; reading it back would make the send path apply it to
+        // nothing.
+        Ok(fields) if phase == ScriptPhase::PreRequest => {
             let request = ScriptRequest {
                 method: fields.method,
                 url: fields.url,
@@ -280,6 +681,7 @@ fn run(script: &str, context: ScriptContext) -> ScriptRun {
             // the write-back entirely and keep disabled header rows intact.
             run.request = (request != original).then_some(request);
         }
+        Ok(_) => {}
         Err(error) => {
             // The interrupt handler reports the deadline as an ordinary
             // exception, so the clock is what tells the two apart.
@@ -294,6 +696,76 @@ fn run(script: &str, context: ScriptContext) -> ScriptRun {
     }
 
     run
+}
+
+/// Compiles `script` and reports where it does not parse. Nothing runs; see
+/// this module's doc for what a module compile does and does not answer.
+fn check(script: &str) -> Option<ScriptSyntaxError> {
+    if script.trim().is_empty() {
+        return None;
+    }
+
+    let runtime = Runtime::new().ok()?;
+    runtime.set_memory_limit(MEMORY_LIMIT);
+    runtime.set_max_stack_size(STACK_LIMIT);
+    // A pathological source can make a parser work; the same budget the run
+    // gets bounds the check, so typing can never wedge the executor.
+    let deadline = Instant::now() + DEADLINE;
+    runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
+
+    let context = Context::custom::<Sandbox>(&runtime).ok()?;
+    context.with(
+        |ctx| match Module::declare(ctx.clone(), CHECK_NAME, script) {
+            Ok(_) => None,
+            Err(_) => Some(syntax_error(&ctx)),
+        },
+    )
+}
+
+/// Reads a compile failure out of the pending exception.
+///
+/// The position comes from the first stack frame, which QuickJS writes as
+/// `    at <filename>:<line>:<column>` with both numbers 1-based
+/// (`quickjs.c`, `build_backtrace`). A frame that cannot be read leaves the
+/// caret at the start of the script rather than nowhere: an underline in the
+/// wrong place is still a message, and no underline at all is silence.
+fn syntax_error(ctx: &Ctx<'_>) -> ScriptSyntaxError {
+    let caught = ctx.catch();
+    let detail = caught
+        .clone()
+        .into_object()
+        .and_then(|object| {
+            let exception = rquickjs::Exception::from_object(object)?;
+            exception.message()
+        })
+        .unwrap_or_else(|| "SyntaxError".to_string());
+
+    let stack = caught
+        .into_object()
+        .and_then(|object| object.get::<_, Option<String>>("stack").ok().flatten())
+        .unwrap_or_default();
+
+    let (line, column) = position(&stack).unwrap_or((1, 1));
+    ScriptSyntaxError {
+        // 1-based from the engine, 0-based for the editor.
+        line: line.saturating_sub(1),
+        column: column.saturating_sub(1),
+        detail,
+    }
+}
+
+/// The `line, column` of the `at <CHECK_NAME>:line:column` frame.
+fn position(stack: &str) -> Option<(usize, usize)> {
+    let after = stack.split_once(&format!("{CHECK_NAME}:"))?.1;
+    let mut numbers = after
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty());
+    let line = numbers.next()?.parse().ok()?;
+    let column = numbers
+        .next()
+        .and_then(|part| part.parse().ok())
+        .unwrap_or(1);
+    Some((line, column))
 }
 
 /// The `pm.request` fields that live as plain JavaScript properties.
@@ -386,11 +858,15 @@ fn describe(ctx: &Ctx<'_>, error: rquickjs::Error, source: &str) -> ScriptError 
 
 /// Installs every binding a script gets. Read this function as the sandbox's
 /// allowlist: what is not here does not exist.
-fn bind(
-    ctx: &Ctx<'_>,
+#[allow(clippy::too_many_arguments)]
+fn bind<'js>(
+    ctx: &Ctx<'js>,
     state: &Rc<RefCell<RunState>>,
     request: &ScriptRequest,
+    response: Option<&ScriptResponse>,
+    phase: ScriptPhase,
     request_name: &str,
+    started: Instant,
 ) -> Result<(), rquickjs::Error> {
     let globals = ctx.globals();
 
@@ -410,15 +886,138 @@ fn bind(
     )?;
     pm.set("request", request_binding(ctx, state, request)?)?;
 
+    // Absent in the pre-request phase rather than present and empty: reaching
+    // for a response that does not exist yet must fail loudly, not read as a
+    // status of 0.
+    if let Some(response) = response {
+        pm.set("response", response_binding(ctx, response)?)?;
+    }
+
     let info = Object::new(ctx.clone())?;
     info.set("requestName", request_name)?;
-    // One hook exists, so this is a constant rather than a phase the caller
-    // passes in. The post-response round is where it becomes a choice.
-    info.set("eventName", "prerequest")?;
+    info.set("eventName", phase.event_name())?;
     pm.set("info", info)?;
 
-    globals.set("pm", pm)?;
+    globals.set("pm", pm.clone())?;
+
+    install_assertions(ctx, state, &pm, phase, started)?;
     Ok(())
+}
+
+/// Evaluates [`PRELUDE`] and hands it its two host functions as arguments.
+///
+/// They are arguments rather than globals so that no `__`-prefixed name exists
+/// for a script to find and call directly; after this returns, the only way to
+/// record a result is `pm.test`.
+fn install_assertions<'js>(
+    ctx: &Ctx<'js>,
+    state: &Rc<RefCell<RunState>>,
+    pm: &Object<'js>,
+    phase: ScriptPhase,
+    started: Instant,
+) -> Result<(), rquickjs::Error> {
+    let recorder = state.clone();
+    let record = Function::new(
+        ctx.clone(),
+        move |name: String, outcome: String, message: String, micros: f64| {
+            let outcome = match outcome.as_str() {
+                "passed" => TestOutcome::Passed,
+                "failed" => TestOutcome::Failed { message },
+                _ => TestOutcome::Errored { message },
+            };
+            recorder.borrow_mut().record_test(TestResult {
+                name,
+                outcome,
+                elapsed: Duration::from_micros(micros.max(0.) as u64),
+                phase,
+            });
+        },
+    )?;
+
+    // Microseconds since the run began. `Date.now` would do, but at millisecond
+    // resolution every assertion reads as 0 ms, which looks like a bug.
+    let now = Function::new(ctx.clone(), move || started.elapsed().as_micros() as f64)?;
+
+    let installer: Function = ctx.eval(PRELUDE)?;
+    installer.call::<_, ()>((pm.clone(), record, now))
+}
+
+/// `pm.response` — everything about what came back, and nothing that could
+/// change it.
+fn response_binding<'js>(
+    ctx: &Ctx<'js>,
+    response: &ScriptResponse,
+) -> Result<Object<'js>, rquickjs::Error> {
+    let object = Object::new(ctx.clone())?;
+    object.set("code", response.code)?;
+    object.set("status", response.status.as_str())?;
+    object.set("responseTime", response.elapsed_millis)?;
+    object.set("responseSize", response.size_bytes)?;
+
+    let text = response.body.clone();
+    object.set(
+        "text",
+        Function::new(ctx.clone(), move || text.clone())?.with_name("text")?,
+    )?;
+
+    let json_source = response.body.clone();
+    object.set(
+        "json",
+        Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+            // Postman throws a JSONError for a body that is not JSON, and a
+            // script that catches it is doing something reasonable. Returning
+            // `undefined` instead would turn a wrong content type into a silent
+            // `undefined is not an object` three lines later.
+            ctx.json_parse(json_source.clone()).map_err(|_| {
+                rquickjs::Exception::throw_message(
+                    &ctx,
+                    "JSONError: the response body is not valid JSON",
+                )
+            })
+        })?
+        .with_name("json")?,
+    )?;
+
+    let headers = Object::new(ctx.clone())?;
+
+    let get = response.headers.clone();
+    headers.set(
+        "get",
+        Function::new(ctx.clone(), move |name: String| {
+            let name = name.trim().to_ascii_lowercase();
+            get.iter()
+                .find(|(key, _)| key.trim().to_ascii_lowercase() == name)
+                .map(|(_, value)| value.clone())
+        })?,
+    )?;
+
+    let has = response.headers.clone();
+    headers.set(
+        "has",
+        Function::new(ctx.clone(), move |name: String| {
+            let name = name.trim().to_ascii_lowercase();
+            has.iter()
+                .any(|(key, _)| key.trim().to_ascii_lowercase() == name)
+        })?,
+    )?;
+
+    let all = response.headers.clone();
+    headers.set(
+        "all",
+        Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+            let list = rquickjs::Array::new(ctx.clone())?;
+            for (index, (key, value)) in all.iter().enumerate() {
+                let entry = Object::new(ctx.clone())?;
+                entry.set("key", key.as_str())?;
+                entry.set("value", value.as_str())?;
+                list.set(index, entry)?;
+            }
+            Ok::<_, rquickjs::Error>(list)
+        })?,
+    )?;
+
+    object.set("headers", headers)?;
+    Ok(object)
 }
 
 /// `console.log/info/warn/error/debug`.
@@ -753,11 +1352,12 @@ fn btoa(ctx: Ctx<'_>, raw: String) -> rquickjs::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{QuickJsEngine, run};
+    use super::{QuickJsEngine, check, position, run};
     use crate::api_explorer::models::console::ConsoleLevel;
     use crate::api_explorer::models::script::{
-        ScriptError, ScriptRequest, ScriptRun, WriteScope, limits,
+        ScriptError, ScriptRequest, ScriptResponse, ScriptRun, WriteScope, limits,
     };
+    use crate::api_explorer::models::test_result::{ScriptPhase, TestOutcome};
     use crate::api_explorer::models::variables::{Variable, VariableScope, VariableSet};
     use crate::api_explorer::services::script::{ScriptContext, ScriptEngine};
     use std::collections::BTreeMap;
@@ -774,16 +1374,37 @@ mod tests {
         );
 
         ScriptContext {
+            phase: ScriptPhase::PreRequest,
             request: ScriptRequest {
                 method: "GET".into(),
                 url: "https://example.com/things".into(),
                 headers: vec![("Accept".into(), "application/json".into())],
                 body: String::new(),
             },
+            response: None,
             variables,
             environment: BTreeMap::from([("host".into(), "example.com".into())]),
             collection: BTreeMap::from([("version".into(), "v1".into())]),
             request_name: "List things".into(),
+        }
+    }
+
+    /// The same context, in the post-response phase, with a response to read.
+    fn responded(body: &str) -> ScriptContext {
+        ScriptContext {
+            phase: ScriptPhase::PostResponse,
+            response: Some(ScriptResponse {
+                code: 201,
+                status: "Created".into(),
+                headers: vec![
+                    ("Content-Type".into(), "application/json".into()),
+                    ("X-Trace".into(), "abc".into()),
+                ],
+                body: body.into(),
+                elapsed_millis: 42,
+                size_bytes: body.len(),
+            }),
+            ..context()
         }
     }
 
@@ -1239,5 +1860,387 @@ mod tests {
         let run = QuickJsEngine.run("console.log('via the trait');", context());
         assert!(run.error.is_none());
         assert_eq!(logs(&run), ["via the trait"]);
+    }
+
+    // ---- pm.response ---------------------------------------------------------
+
+    /// Runs `source` in the post-response phase against `body`, asserting the
+    /// run itself succeeded.
+    fn after(body: &str, source: &str) -> ScriptRun {
+        let run = run(source, responded(body));
+        assert!(run.error.is_none(), "script failed: {:?}", run.error);
+        run
+    }
+
+    #[test]
+    fn pm_response_reports_the_status_code_phrase_timing_and_size() {
+        let run = after(
+            "{}",
+            "console.log(pm.response.code, pm.response.status, \
+             pm.response.responseTime, pm.response.responseSize);",
+        );
+        assert_eq!(logs(&run), ["201 Created 42 2"]);
+    }
+
+    #[test]
+    fn pm_response_text_and_json_read_the_body() {
+        let run = after(
+            "{\"id\":7,\"tags\":[\"a\"]}",
+            "console.log(pm.response.text());\
+             console.log(pm.response.json().id, pm.response.json().tags[0]);",
+        );
+        assert_eq!(logs(&run), ["{\"id\":7,\"tags\":[\"a\"]}", "7 a"]);
+    }
+
+    #[test]
+    fn pm_response_json_throws_a_named_error_rather_than_undefined() {
+        // Returning `undefined` would turn a wrong content type into a baffling
+        // failure three lines later.
+        let run = run("console.log(pm.response.json());", responded("not json"));
+        match run.error {
+            Some(ScriptError::Threw { detail }) => {
+                assert!(detail.contains("JSONError"), "unhelpful detail: {detail}")
+            }
+            other => panic!("expected a throw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pm_response_headers_match_case_insensitively() {
+        let run = after(
+            "{}",
+            "console.log(pm.response.headers.get('CONTENT-TYPE'));\
+             console.log(String(pm.response.headers.has('x-trace')));\
+             console.log(String(pm.response.headers.all().length));",
+        );
+        assert_eq!(logs(&run), ["application/json", "true", "2"]);
+    }
+
+    #[test]
+    fn pm_response_does_not_exist_in_the_pre_request_phase() {
+        // Absent, not an object full of zeroes: reaching for a response that
+        // has not happened must fail rather than read as a status of 0.
+        let run = ok("console.log(typeof pm.response);");
+        assert_eq!(logs(&run), ["undefined"]);
+    }
+
+    #[test]
+    fn pm_info_names_the_hook_it_is_running_in() {
+        let run = after("{}", "console.log(pm.info.eventName);");
+        assert_eq!(logs(&run), ["test"]);
+    }
+
+    #[test]
+    fn a_post_response_script_cannot_change_the_request() {
+        // The request has already gone; reading a change back would apply it to
+        // nothing.
+        let run = after("{}", "pm.request.url = 'https://elsewhere.example/';");
+        assert!(run.request.is_none());
+    }
+
+    // ---- pm.test -------------------------------------------------------------
+
+    #[test]
+    fn a_passing_test_is_recorded_with_its_name_and_phase() {
+        let run = after("{}", "pm.test('Status is 201', function () {});");
+        assert_eq!(run.tests.len(), 1);
+        assert_eq!(run.tests[0].name, "Status is 201");
+        assert_eq!(run.tests[0].outcome, TestOutcome::Passed);
+        assert_eq!(run.tests[0].phase, ScriptPhase::PostResponse);
+    }
+
+    #[test]
+    fn a_failing_assertion_fails_that_test_and_lets_the_rest_run() {
+        // The claim the Tests tab depends on: one bad assertion is a failed
+        // row, not an aborted script.
+        let run = after(
+            "{}",
+            "pm.test('one', function () { pm.expect(1).to.equal(2); });\
+             pm.test('two', function () { pm.expect(1).to.equal(1); });\
+             console.log('reached the end');",
+        );
+        assert_eq!(run.tests.len(), 2);
+        match &run.tests[0].outcome {
+            TestOutcome::Failed { message } => {
+                assert!(message.contains("expected 1 to equal 2"), "{message}")
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+        assert_eq!(run.tests[1].outcome, TestOutcome::Passed);
+        assert_eq!(logs(&run), ["reached the end"]);
+    }
+
+    #[test]
+    fn a_throw_that_is_not_an_assertion_errors_the_test_rather_than_failing_it() {
+        // Different words, different icon, different fix: the API is fine and
+        // the script is wrong.
+        let run = after("{}", "pm.test('boom', function () { null.id; });");
+        match &run.tests[0].outcome {
+            TestOutcome::Errored { message } => {
+                assert!(message.contains("TypeError"), "{message}")
+            }
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pm_test_works_in_the_pre_request_phase_too() {
+        let run = ok("pm.test('before', function () { pm.expect(1).to.be.ok; });");
+        assert_eq!(run.tests.len(), 1);
+        assert_eq!(run.tests[0].phase, ScriptPhase::PreRequest);
+    }
+
+    #[test]
+    fn a_test_whose_body_is_not_a_function_errors_rather_than_passing_silently() {
+        let run = after("{}", "pm.test('typo', 'oops');");
+        assert!(matches!(run.tests[0].outcome, TestOutcome::Errored { .. }));
+    }
+
+    #[test]
+    fn test_results_are_capped_and_the_overflow_is_counted() {
+        let run = after(
+            "{}",
+            "for (let i = 0; i < 700; i++) { pm.test('t' + i, function () {}); }",
+        );
+        assert_eq!(run.tests.len(), limits::TEST_RESULTS);
+        assert!(run.dropped_tests > 0);
+    }
+
+    #[test]
+    fn tests_defined_before_a_throw_survive_it() {
+        let run = run(
+            "pm.test('first', function () {}); null.boom;",
+            responded("{}"),
+        );
+        assert!(run.error.is_some());
+        assert_eq!(run.tests.len(), 1);
+    }
+
+    // ---- pm.expect -----------------------------------------------------------
+
+    /// Every matcher, asserted twice: the passing form and the failing one, so
+    /// no matcher can quietly pass everything.
+    #[test]
+    fn every_matcher_the_surface_promises_both_passes_and_fails() {
+        let cases: [(&str, &str); 14] = [
+            ("pm.expect(1).to.equal(1)", "pm.expect(1).to.equal(2)"),
+            (
+                "pm.expect({a:[1]}).to.eql({a:[1]})",
+                "pm.expect({a:[1]}).to.eql({a:[2]})",
+            ),
+            (
+                "pm.expect('x').to.be.a('string')",
+                "pm.expect('x').to.be.a('number')",
+            ),
+            ("pm.expect(true).to.be.true", "pm.expect(false).to.be.true"),
+            (
+                "pm.expect(false).to.be.false",
+                "pm.expect(true).to.be.false",
+            ),
+            ("pm.expect(null).to.be.null", "pm.expect(0).to.be.null"),
+            (
+                "pm.expect(undefined).to.be.undefined",
+                "pm.expect(0).to.be.undefined",
+            ),
+            ("pm.expect(1).to.be.ok", "pm.expect(0).to.be.ok"),
+            (
+                "pm.expect('abc').to.include('b')",
+                "pm.expect('abc').to.include('z')",
+            ),
+            (
+                "pm.expect('abc').to.match(/b/)",
+                "pm.expect('abc').to.match(/z/)",
+            ),
+            (
+                "pm.expect({id:1}).to.have.property('id', 1)",
+                "pm.expect({id:1}).to.have.property('id', 2)",
+            ),
+            (
+                "pm.expect([1,2]).to.have.lengthOf(2)",
+                "pm.expect([1,2]).to.have.lengthOf(3)",
+            ),
+            ("pm.expect(5).to.be.above(1)", "pm.expect(5).to.be.above(9)"),
+            (
+                "pm.expect(5).to.be.within(1, 9)",
+                "pm.expect(50).to.be.within(1, 9)",
+            ),
+        ];
+
+        for (passes, fails) in cases {
+            let run = after("{}", &format!("pm.test('t', function () {{ {passes}; }});"));
+            assert_eq!(
+                run.tests[0].outcome,
+                TestOutcome::Passed,
+                "should pass: {passes} — {:?}",
+                run.tests[0].outcome
+            );
+
+            let run = after("{}", &format!("pm.test('t', function () {{ {fails}; }});"));
+            assert!(
+                matches!(run.tests[0].outcome, TestOutcome::Failed { .. }),
+                "should fail: {fails} — {:?}",
+                run.tests[0].outcome
+            );
+        }
+    }
+
+    #[test]
+    fn below_is_the_mirror_of_above() {
+        let run = after(
+            "{}",
+            "pm.test('a', function () { pm.expect(1).to.be.below(5); });\
+             pm.test('b', function () { pm.expect(9).to.be.below(5); });",
+        );
+        assert_eq!(run.tests[0].outcome, TestOutcome::Passed);
+        assert!(matches!(run.tests[1].outcome, TestOutcome::Failed { .. }));
+    }
+
+    #[test]
+    fn not_negates_every_matcher_it_is_put_in_front_of() {
+        let run = after(
+            "{}",
+            "pm.test('a', function () { pm.expect(1).to.not.equal(2); });\
+             pm.test('b', function () { pm.expect(1).to.not.equal(1); });\
+             pm.test('c', function () { pm.expect('abc').to.not.include('z'); });\
+             pm.test('d', function () { pm.expect(true).to.not.be.true; });",
+        );
+        assert_eq!(run.tests[0].outcome, TestOutcome::Passed);
+        assert!(matches!(run.tests[1].outcome, TestOutcome::Failed { .. }));
+        assert_eq!(run.tests[2].outcome, TestOutcome::Passed);
+        assert!(matches!(run.tests[3].outcome, TestOutcome::Failed { .. }));
+    }
+
+    #[test]
+    fn a_failure_message_names_what_was_expected_and_what_was_there() {
+        let run = after(
+            "{}",
+            "pm.test('t', function () { pm.expect({name: 'ada'}).to.have.property('id'); });",
+        );
+        match &run.tests[0].outcome {
+            TestOutcome::Failed { message } => {
+                assert!(message.contains("ada"), "{message}");
+                assert!(message.contains("id"), "{message}");
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    // ---- pm.response.to.* ----------------------------------------------------
+
+    #[test]
+    fn response_status_accepts_a_code_and_a_reason_phrase() {
+        let run = after(
+            "{}",
+            "pm.test('a', function () { pm.response.to.have.status(201); });\
+             pm.test('b', function () { pm.response.to.have.status('Created'); });\
+             pm.test('c', function () { pm.response.to.have.status(200); });",
+        );
+        assert_eq!(run.tests[0].outcome, TestOutcome::Passed);
+        assert_eq!(run.tests[1].outcome, TestOutcome::Passed);
+        assert!(matches!(run.tests[2].outcome, TestOutcome::Failed { .. }));
+    }
+
+    #[test]
+    fn response_header_json_and_json_body_all_assert() {
+        let run = after(
+            "{\"id\":7,\"items\":[{\"id\":\"x\"}]}",
+            "pm.test('a', function () { pm.response.to.have.header('X-Trace'); });\
+             pm.test('b', function () { pm.response.to.have.header('X-Absent'); });\
+             pm.test('c', function () { pm.response.to.be.json; });\
+             pm.test('d', function () { pm.response.to.have.jsonBody('id', 7); });\
+             pm.test('e', function () { pm.response.to.have.jsonBody('items[0].id', 'x'); });\
+             pm.test('f', function () { pm.response.to.have.jsonBody('nope'); });",
+        );
+        let outcomes: Vec<bool> = run
+            .tests
+            .iter()
+            .map(|test| test.outcome == TestOutcome::Passed)
+            .collect();
+        assert_eq!(outcomes, [true, false, true, true, true, false]);
+    }
+
+    #[test]
+    fn the_shipped_assert_status_template_runs_against_a_real_response() {
+        use crate::api_explorer::models::script_template::ScriptTemplate;
+
+        for template in ScriptTemplate::POST_RESPONSE {
+            let run = run(template.snippet(), responded("{\"id\":7}"));
+            assert!(
+                run.error.is_none(),
+                "a shipped template does not run: {:?}\n{}",
+                run.error,
+                template.snippet()
+            );
+        }
+    }
+
+    // ---- the syntax check ----------------------------------------------------
+
+    #[test]
+    fn a_script_that_parses_reports_nothing() {
+        assert_eq!(check("pm.test('a', function () {});"), None);
+        assert_eq!(check(""), None);
+        assert_eq!(check("   \n  "), None);
+    }
+
+    #[test]
+    fn a_syntax_error_is_found_with_its_line_and_a_message() {
+        let found = check("const a = 1;\nconst b = ;\nconst c = 3;").expect("a syntax error");
+        // 0-based, ready for the editor: the failure is on the second line.
+        assert_eq!(found.line, 1, "{found:?}");
+        assert!(
+            found.detail.to_lowercase().contains("unexpected"),
+            "unhelpful detail: {}",
+            found.detail
+        );
+    }
+
+    #[test]
+    fn an_unclosed_block_is_reported_too() {
+        let found = check("pm.test('a', function () {").expect("a syntax error");
+        assert!(!found.detail.is_empty());
+    }
+
+    #[test]
+    fn the_check_runs_nothing() {
+        // If it evaluated, this would loop until the deadline and the assertion
+        // below about elapsed time would fail.
+        let started = std::time::Instant::now();
+        assert_eq!(check("while (true) {}"), None);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "the check executed the script"
+        );
+    }
+
+    #[test]
+    fn the_check_and_the_run_do_not_contradict_each_other() {
+        // The property that matters: anything the check underlines must also
+        // fail when run, because they are the same parser.
+        for source in [
+            "const a = ;",
+            "function (",
+            "pm.test('a', function () {",
+            "}{",
+        ] {
+            assert!(check(source).is_some(), "the check stayed quiet: {source}");
+            assert!(
+                eval(source).error.is_some(),
+                "the engine ran what the check rejected: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stack_frame_yields_a_line_and_a_column() {
+        assert_eq!(position("    at dodo-script:12:5\n"), Some((12, 5)));
+        assert_eq!(position("    at dodo-script:3\n"), Some((3, 1)));
+        assert_eq!(position("nothing useful"), None);
+    }
+
+    #[test]
+    fn the_engines_check_is_reachable_through_the_trait() {
+        assert!(QuickJsEngine.check("const a = ;").is_some());
+        assert!(QuickJsEngine.check("const a = 1;").is_none());
     }
 }
