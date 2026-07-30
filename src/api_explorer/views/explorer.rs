@@ -42,7 +42,7 @@ use crate::api_explorer::state::tab::{RequestTabState, ScriptWrites};
 use crate::api_explorer::state::ui::{
     COLLECTIONS_WIDTH, LeftPanel, REQUEST_MIN_HEIGHT, RESPONSE_HEIGHT, UiState,
 };
-use crate::api_explorer::views::script_consent;
+use crate::api_explorer::views::{generate_code, script_consent};
 use crate::api_explorer::{ScriptPolicy, SendRequest};
 use crate::app_icon::AppIcon;
 use crate::i18n::{Language, Str, t};
@@ -768,6 +768,26 @@ impl ApiExplorer {
     pub(super) fn clear_history(&mut self, cx: &mut Context<Self>) {
         self.history.clear();
         cx.notify();
+    }
+
+    // ---- Generated code ------------------------------------------------------
+
+    /// Opens the Generate code dialog for the request in front.
+    ///
+    /// Both of the dialog's inputs are read **here** and handed over as plain
+    /// data: the dialog holds no page handle, so it cannot read the page it was
+    /// opened from — which is what makes the leasing trap that
+    /// `views::generate_code` documents impossible rather than merely avoided.
+    /// The variable set is read at the moment the button is pressed, exactly as
+    /// `start_send` reads it, so the snippet resolves against the environment
+    /// that was active then.
+    pub(super) fn open_generate_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab().cloned() else {
+            return;
+        };
+        let snapshot = tab.read(cx).request.snapshot(cx);
+        let variables = self.environments.variable_set();
+        generate_code::open(snapshot, variables, window, cx);
     }
 
     // ---- Response body export ------------------------------------------------

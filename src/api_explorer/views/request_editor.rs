@@ -83,10 +83,10 @@ impl ApiExplorer {
                     .flex_shrink_0()
                     .ghost()
                     .icon(AppIcon::SquareCode)
-                    // Visibly disabled with a tooltip that names the step it
-                    // arrives in, rather than a control that does nothing.
-                    .disabled(true)
-                    .tooltip(t(Str::GenerateCodeLater, cx)),
+                    .tooltip(t(Str::GenerateCode, cx))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_generate_code(window, cx);
+                    })),
             )
             .child(div().flex_shrink_0().child(self.save_button(tab, cx)))
             .child(

@@ -268,6 +268,73 @@ impl VariableSet {
                 .map(|variable| (*scope, variable.value.as_str()))
         })
     }
+
+    /// The names of every effective variable marked `secret`, highest scope
+    /// first, each listed once.
+    ///
+    /// A name defined in two layers appears once, because a reference to it
+    /// resolves once. Used by the code generator to say which values it left
+    /// out; see [`VariableSet::with_secrets_masked`].
+    pub fn secret_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for (_, variables) in self.layers.iter().rev() {
+            for variable in variables {
+                if !variable.is_effective() || !variable.secret {
+                    continue;
+                }
+                let name = variable.key.trim().to_string();
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        names
+    }
+
+    /// A copy in which every `secret` variable resolves to its own `{{name}}`
+    /// reference instead of to its value.
+    ///
+    /// This is how the code generator withholds a secret without teaching
+    /// [`interpolate`] a third outcome: the masked value is `\{{name}}`, and the
+    /// **escape rule already in the substituter** turns that into the literal
+    /// text `{{name}}` wherever it lands. Two properties fall out of doing it
+    /// this way rather than by rewriting the request text:
+    ///
+    /// - **Nesting is covered.** A public `base = {{scheme}}://{{host}}` with a
+    ///   secret `host` yields `https://{{host}}`, because the mask is applied
+    ///   where the value is read rather than where the reference is written.
+    /// - **It cannot recurse.** The escaped form performs no lookup, so the
+    ///   name never re-enters the expansion chain.
+    ///
+    /// A masked name that a *lower* layer also defines non-secretly still
+    /// masks: precedence is unchanged, and the highest layer is the one that
+    /// would have supplied the value.
+    ///
+    /// [`interpolate`]: crate::api_explorer::models::interpolate::interpolate
+    pub fn with_secrets_masked(&self) -> VariableSet {
+        VariableSet {
+            layers: self
+                .layers
+                .iter()
+                .map(|(scope, variables)| {
+                    let variables = variables
+                        .iter()
+                        .map(|variable| {
+                            if !variable.secret {
+                                return variable.clone();
+                            }
+                            let key = variable.key.trim();
+                            Variable {
+                                value: format!("\\{{{{{key}}}}}"),
+                                ..variable.clone()
+                            }
+                        })
+                        .collect();
+                    (*scope, variables)
+                })
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -404,5 +471,101 @@ mod tests {
     fn next_id_never_reuses_one_already_in_the_file() {
         assert_eq!(document().next_id(), 8);
         assert_eq!(VariableDocument::default().next_id(), 1);
+    }
+
+    // ---- Masking secrets, for the code generator ---------------------------
+
+    /// A set with one public and one secret variable in the environment layer.
+    fn mixed() -> VariableSet {
+        let mut set = VariableSet::default();
+        set.push_layer(
+            VariableScope::Environment,
+            vec![
+                Variable::new("host", "api.example.com"),
+                Variable::secret("token", "s3cr3t"),
+                Variable {
+                    enabled: false,
+                    ..Variable::secret("unused", "nope")
+                },
+            ],
+        );
+        set
+    }
+
+    #[test]
+    fn only_effective_secret_variables_are_named() {
+        assert_eq!(mixed().secret_names(), ["token".to_string()]);
+        assert!(VariableSet::default().secret_names().is_empty());
+    }
+
+    #[test]
+    fn a_name_defined_in_two_layers_is_named_once() {
+        let mut set = VariableSet::default();
+        set.push_layer(VariableScope::Collection, vec![Variable::secret("k", "a")]);
+        set.push_layer(VariableScope::Environment, vec![Variable::secret("k", "b")]);
+        assert_eq!(set.secret_names(), ["k".to_string()]);
+    }
+
+    #[test]
+    fn masking_leaves_a_public_variable_alone_and_escapes_a_secret_one() {
+        let masked = mixed().with_secrets_masked();
+        assert_eq!(
+            masked.lookup("host"),
+            Some((VariableScope::Environment, "api.example.com"))
+        );
+        assert_eq!(
+            masked.lookup("token"),
+            Some((VariableScope::Environment, r"\{{token}}"))
+        );
+    }
+
+    #[test]
+    fn a_masked_secret_substitutes_as_its_own_reference() {
+        use crate::api_explorer::models::interpolate::interpolate;
+
+        let masked = mixed().with_secrets_masked();
+        assert_eq!(
+            interpolate("https://{{host}}/x?t={{token}}", &masked).expect("interpolates"),
+            "https://api.example.com/x?t={{token}}"
+        );
+    }
+
+    #[test]
+    fn a_public_variable_built_from_a_secret_one_masks_too() {
+        // The mask is applied where the value is *read*, so nesting is covered
+        // rather than being a hole the caller has to know about.
+        let mut set = VariableSet::default();
+        set.push_layer(
+            VariableScope::Environment,
+            vec![
+                Variable::new("base", "https://{{host}}/v1"),
+                Variable::secret("host", "internal.example.com"),
+            ],
+        );
+        assert_eq!(
+            crate::api_explorer::models::interpolate::interpolate(
+                "{{base}}/things",
+                &set.with_secrets_masked()
+            )
+            .expect("interpolates"),
+            "https://{{host}}/v1/things"
+        );
+    }
+
+    #[test]
+    fn masking_a_self_referential_secret_cannot_recurse() {
+        use crate::api_explorer::models::interpolate::interpolate;
+
+        let mut set = VariableSet::default();
+        set.push_layer(
+            VariableScope::Environment,
+            vec![Variable::secret("loop", "{{loop}}")],
+        );
+        // Unmasked this is a cycle; masked, the escaped form performs no lookup.
+        assert!(interpolate("{{loop}}", &set).is_err());
+        assert_eq!(
+            interpolate("{{loop}}", &set.with_secrets_masked()).expect("interpolates"),
+            "{{loop}}"
+        );
     }
 }

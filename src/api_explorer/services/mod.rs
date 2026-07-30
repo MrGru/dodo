@@ -29,6 +29,7 @@
 //! [`file_picker`], which asks the platform for a path — are pure and
 //! background-only respectively, for the same reason.
 
+pub mod codegen;
 pub mod collection_import;
 pub mod collection_store;
 pub mod consent_store;

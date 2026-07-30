@@ -191,7 +191,8 @@ pub enum Str {
     NameRequest,
     NameRequestPlaceholder,
     SaveName,
-    GenerateCodeLater,
+    /// The request bar's code-generation button, and the dialog's own title.
+    GenerateCode,
     // API Explorer — request tabs.
     RequestTabParams,
     RequestTabHeaders,
@@ -743,6 +744,25 @@ pub enum Str {
     TestsErroredCount(usize),
     /// Results the per-run cap dropped. Said out loud, never hidden.
     TestsDropped(usize),
+
+    // API Explorer — the Generate code dialog.
+    /// The four target tabs. Each is the name of a tool or of a browser API, so
+    /// each is the same word in both languages — declared with `term()`.
+    CodeTargetCurl,
+    CodeTargetFetch,
+    CodeTargetAxios,
+    CodeTargetXhr,
+    /// The notice when nothing was withheld: the snippet holds the request's
+    /// real values, whatever they are.
+    GenerateCodeCarriesValues,
+    /// The notice when secret variables were left as placeholders. `names` is
+    /// the comma-separated list, and the sentence must also say what is *not*
+    /// withheld — see `views::generate_code`.
+    GenerateCodeSecretsWithheld(String),
+    /// The notice once the toggle resolves them. Deliberately uncounted.
+    GenerateCodeSecretsRevealed,
+    /// The toggle itself.
+    GenerateCodeRevealSecrets,
 }
 
 impl Str {
@@ -995,12 +1015,8 @@ impl Str {
             (Str::NameRequestPlaceholder, Language::Vietnamese) => "Tên yêu cầu".into(),
             (Str::SaveName, Language::English) => "Save name".into(),
             (Str::SaveName, Language::Vietnamese) => "Lưu tên".into(),
-            (Str::GenerateCodeLater, Language::English) => {
-                "Code generation arrives in a later step.".into()
-            }
-            (Str::GenerateCodeLater, Language::Vietnamese) => {
-                "Sinh mã sẽ có ở bước sau.".into()
-            }
+            (Str::GenerateCode, Language::English) => "Generate code".into(),
+            (Str::GenerateCode, Language::Vietnamese) => "Sinh mã".into(),
             (Str::RequestTabParams, Language::English) => "Params".into(),
             (Str::RequestTabParams, Language::Vietnamese) => "Tham số".into(),
             (Str::RequestTabHeaders, Language::English) => "Headers".into(),
@@ -2241,6 +2257,52 @@ impl Str {
             (Str::TestsDropped(count), Language::Vietnamese) => {
                 format!("Đã bỏ thêm {count} kết quả").into()
             }
+
+            (Str::CodeTargetCurl, Language::English) => "cURL".into(),
+            (Str::CodeTargetCurl, Language::Vietnamese) => "cURL".into(),
+            (Str::CodeTargetFetch, Language::English) => "fetch".into(),
+            (Str::CodeTargetFetch, Language::Vietnamese) => "fetch".into(),
+            (Str::CodeTargetAxios, Language::English) => "axios".into(),
+            (Str::CodeTargetAxios, Language::Vietnamese) => "axios".into(),
+            (Str::CodeTargetXhr, Language::English) => "XMLHttpRequest".into(),
+            (Str::CodeTargetXhr, Language::Vietnamese) => "XMLHttpRequest".into(),
+            (Str::GenerateCodeCarriesValues, Language::English) => {
+                "This code carries the request's real values, including any token or \
+                 password it uses."
+                    .into()
+            }
+            (Str::GenerateCodeCarriesValues, Language::Vietnamese) => {
+                "Đoạn mã này mang đúng các giá trị thật của yêu cầu, kể cả token hay mật \
+                 khẩu mà nó dùng."
+                    .into()
+            }
+            (Str::GenerateCodeSecretsWithheld(names), Language::English) => format!(
+                "Left as {{{{placeholders}}}}: {names}. Everything else — including a token \
+                 or password typed into this request — is in the code below."
+            )
+            .into(),
+            (Str::GenerateCodeSecretsWithheld(names), Language::Vietnamese) => format!(
+                "Được giữ nguyên dạng {{{{chỗ trống}}}}: {names}. Mọi thứ còn lại — kể cả \
+                 token hay mật khẩu gõ trực tiếp vào yêu cầu này — đều nằm trong đoạn mã \
+                 bên dưới."
+            )
+            .into(),
+            (Str::GenerateCodeSecretsRevealed, Language::English) => {
+                "This code contains the real value of every secret variable it uses, in \
+                 plain text. Anything you paste it into keeps that value."
+                    .into()
+            }
+            (Str::GenerateCodeSecretsRevealed, Language::Vietnamese) => {
+                "Đoạn mã này chứa giá trị thật của mọi biến bí mật mà nó dùng, ở dạng văn \
+                 bản thuần. Bất cứ nơi nào bạn dán vào cũng giữ lại giá trị đó."
+                    .into()
+            }
+            (Str::GenerateCodeRevealSecrets, Language::English) => {
+                "Resolve secret variables".into()
+            }
+            (Str::GenerateCodeRevealSecrets, Language::Vietnamese) => {
+                "Thay thế cả biến bí mật".into()
+            }
         }
     }
 }
@@ -2427,7 +2489,7 @@ mod tests {
             plain(Str::NameRequest),
             plain(Str::NameRequestPlaceholder),
             plain(Str::SaveName),
-            plain(Str::GenerateCodeLater),
+            plain(Str::GenerateCode),
             plain(Str::RequestTabParams),
             plain(Str::RequestTabHeaders),
             plain(Str::RequestTabBody),
@@ -2852,6 +2914,14 @@ mod tests {
             with(Str::TestsFailedCount(NUMBER), &[NUMBER_TEXT]),
             with(Str::TestsErroredCount(NUMBER), &[NUMBER_TEXT]),
             with(Str::TestsDropped(NUMBER), &[NUMBER_TEXT]),
+            term(Str::CodeTargetCurl),
+            term(Str::CodeTargetFetch),
+            term(Str::CodeTargetAxios),
+            term(Str::CodeTargetXhr),
+            plain(Str::GenerateCodeCarriesValues),
+            with(Str::GenerateCodeSecretsWithheld(DETAIL.into()), &[DETAIL]),
+            plain(Str::GenerateCodeSecretsRevealed),
+            plain(Str::GenerateCodeRevealSecrets),
         ]
     }
 
@@ -2923,7 +2993,7 @@ mod tests {
             Str::NameRequest => 60,
             Str::NameRequestPlaceholder => 61,
             Str::SaveName => 62,
-            Str::GenerateCodeLater => 63,
+            Str::GenerateCode => 63,
             Str::RequestTabParams => 64,
             Str::RequestTabHeaders => 65,
             Str::RequestTabBody => 66,
@@ -3286,6 +3356,15 @@ mod tests {
             Str::TestsFailedCount(_) => 418,
             Str::TestsErroredCount(_) => 419,
             Str::TestsDropped(_) => 420,
+
+            Str::CodeTargetCurl => 421,
+            Str::CodeTargetFetch => 422,
+            Str::CodeTargetAxios => 423,
+            Str::CodeTargetXhr => 424,
+            Str::GenerateCodeCarriesValues => 425,
+            Str::GenerateCodeSecretsWithheld(_) => 426,
+            Str::GenerateCodeSecretsRevealed => 427,
+            Str::GenerateCodeRevealSecrets => 428,
         }
     }
 

@@ -8,6 +8,7 @@ pub mod collections_panel;
 pub mod environment_picker;
 pub mod environments_editor;
 pub mod explorer;
+pub mod generate_code;
 pub mod history_panel;
 pub mod request_auth;
 pub mod request_body;
