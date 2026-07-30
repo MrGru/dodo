@@ -8,6 +8,14 @@ edition = "2024"
 # records that question as open.
 license = "MIT"
 
+# `tools/` holds release engineering that must never reach the application.
+# `tools/update-manifest` is its own crate with its own Cargo.toml and
+# Cargo.lock; this keeps it out of `cargo package` and out of the file set cargo
+# watches for this package, so it costs the shipped binary zero bytes and the
+# app's `test` / `clippy --all-targets` runs zero time. It is built only by the
+# release workflow, which invokes it through `--manifest-path`.
+exclude = ["tools/*"]
+
 # Only features that switch real code off are listed here. `production` /
 # `development` / `profiling` marker flags were considered and deliberately not
 # added: nothing in this crate reads them, so they would be decorative — see
