@@ -119,19 +119,31 @@ jobs:
       # backslash paths below are unambiguously PowerShell and not a bash
       # script full of escape sequences.
       #
-      # The output is captured rather than left to stream, and that is not
-      # cosmetic: a release build is a GUI-subsystem binary (see the
-      # `windows_subsystem` attribute in `src/main.rs`), and a shell does not
-      # wait for one of those unless it is reading its output. Assigning to
-      # `$info` makes PowerShell hand the child a pipe and wait for EOF, which
-      # is what makes `$LASTEXITCODE` mean anything at all here. Without it a
-      # crashing binary would still leave a green step.
+      # `Start-Process -Wait`, not the `&` call operator. A release build is a
+      # GUI-subsystem binary (the `windows_subsystem` attribute in
+      # `src/main.rs`) and **a shell does not wait for one** — `&` returns at
+      # once, PowerShell tears down the capture pipe, and the child dies writing
+      # into it with `The pipe is being closed. (os error 232)`.
+      #
+      # An earlier version of this comment claimed the opposite: that capturing
+      # into `$info` was itself what made the shell wait. That was wrong, and it
+      # was never caught here because the last green Windows run of this
+      # workflow (30259360264, 2026-07-27) predates commit 4e7cc53 — the commit
+      # that made release builds GUI-subsystem. This workflow has therefore
+      # never run against a windowless binary. The identical bug did fire in
+      # release.yml and cost v0.1.5 its Windows archive.
+      #
+      # UNVERIFIED on a Windows runner; see docs/release.md.
       - name: Smoke test the binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $info = & .\target\${{ matrix.target }}\release\dodo.exe --build-info
-          if ($LASTEXITCODE -ne 0) { throw "--build-info exited $LASTEXITCODE" }
+          $exe = ".\target\${{ matrix.target }}\release\dodo.exe"
+          $infoFile = Join-Path $env:RUNNER_TEMP "build-info.txt"
+          $proc = Start-Process -FilePath $exe -ArgumentList '--build-info' `
+            -RedirectStandardOutput $infoFile -NoNewWindow -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "--build-info exited $($proc.ExitCode)" }
+          $info = Get-Content $infoFile
           if (-not $info) { throw "--build-info printed nothing" }
           Write-Output $info
 
