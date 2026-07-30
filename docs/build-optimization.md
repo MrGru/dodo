@@ -246,18 +246,25 @@ above ends on:
 |---|---:|---:|---:|
 | Control — `f57d68e`, the commit before the round | 21,975,776 | — | — |
 | Control **+ the JavaScript grammar alone** (`Cargo.toml` one-line change, nothing else) | 22,339,216 | **+363,440** | **+1.65%** |
-| The whole round | 22,455,024 | **+479,248** | **+2.18%** |
+| The whole round | 22,440,864 | **+465,088** | **+2.12%** |
 
 The formatter was then isolated on its own by stubbing
-`models::script_format::format` to the identity and rebuilding. That pair was
-taken in a second build directory, so compare the two rows to each other and
-not to the table above — a build directory is worth about 14 KB of embedded
-paths, which is larger than the thing being measured:
+`models::script_format::format` to the identity and rebuilding:
 
 | Configuration | Bytes | Δ |
 |---|---:|---:|
 | The whole round | 22,440,864 | — |
 | …with `script_format::format` stubbed to the identity | 22,424,352 | **−16,512** |
+
+One warning about reading numbers this small off a fat-LTO build. The stubbed
+row above was taken in a second build directory and came out byte-identical to
+the same code built in `target/`, so the build directory itself costs nothing —
+but an intermediate build of this branch measured 22,455,024, and the only
+difference was two placeholder strings getting four words shorter. Fourteen
+kilobytes moved because of that, which is nearly as much as the formatter costs
+in total. Inlining decisions shift under LTO for reasons that have nothing to do
+with the size of the edit, so measure the tree you actually mean to ship and do
+not attribute a swing of this magnitude to whatever you happened to change.
 
 Three numbers worth separating, because they were the ones in doubt:
 
@@ -272,7 +279,7 @@ Three numbers worth separating, because they were the ones in doubt:
 - **Everything else in the round** — the post-response hook, `pm.test` /
   `pm.expect` and their JavaScript prelude, the Tests tab, the diagnostics
   plumbing and 15 new `Str` variants in two languages — is the remaining
-  ~99,300 B.
+  ~85,100 B.
 
 The formatter number is the one that justified a judgement call. The obvious
 way to get a *real* JavaScript formatter is `dprint-plugin-typescript`, and it

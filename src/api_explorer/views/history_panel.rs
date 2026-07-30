@@ -160,11 +160,17 @@ impl ApiExplorer {
             .w_full()
             .items_center()
             .gap_1()
+            // `flex_shrink_0` and `whitespace_nowrap`, not `flex_1`: this cell
+            // used to be the only thing between the row's start and its spacer,
+            // so nothing ever competed with it for width. The tests badge now
+            // does, and a shrinkable cell holding "0 ms" wraps it to three
+            // lines ("0" / "m" / "s") long before the row itself runs out of
+            // room. A duration is four characters; it never needs to shrink.
             .when_some(elapsed, |this, elapsed| {
                 this.child(
                     div()
-                        .flex_1()
-                        .min_w_0()
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(elapsed),
@@ -172,7 +178,8 @@ impl ApiExplorer {
             })
             // A `3/4` badge, coloured by the worst outcome — the one thing a
             // history row has space for. The results themselves are not kept:
-            // see `HistoryRecord::tests`.
+            // see `HistoryRecord::tests`. Its own cell, also unshrinkable, for
+            // the same reason.
             .when_some(entry.tests, |this, summary| {
                 let tone = if summary.all_passed() {
                     cx.theme().success
@@ -182,10 +189,12 @@ impl ApiExplorer {
                     cx.theme().warning
                 };
                 this.child(
-                    Tag::custom(tone.opacity(0.15), tone, tone.opacity(0.4))
-                        .small()
-                        .rounded(cx.theme().radius)
-                        .child(summary.badge()),
+                    div().flex_shrink_0().child(
+                        Tag::custom(tone.opacity(0.15), tone, tone.opacity(0.4))
+                            .small()
+                            .rounded(cx.theme().radius)
+                            .child(summary.badge()),
+                    ),
                 )
             })
             .child(div().flex_1().min_w_0())
