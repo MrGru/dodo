@@ -213,6 +213,29 @@ jobs:
       # The bash script is not reused here: a windows runner has no `unzip`,
       # and Expand-Archive/Get-FileHash are the native equivalents. Kept
       # deliberately short — it checks the same five things.
+      #
+      # `--build-info` is run through `Start-Process -Wait` rather than the `&`
+      # call operator, and that is the whole reason v0.1.5 shipped with no
+      # Windows archive. A release build is a GUI-subsystem binary (the
+      # `windows_subsystem` attribute in `src/main.rs`), and **a shell does not
+      # wait for a GUI-subsystem process** — `src/main.rs`'s own doc comment on
+      # `attach_parent_console` says so. So `&` returned immediately, PowerShell
+      # tore down the capture pipe, and the child then panicked writing into it:
+      #
+      #     failed printing to stdout: The pipe is being closed. (os error 232)
+      #
+      # `$info` was left empty and the next line threw on a null. Evidence: run
+      # 30539731759 attempt 1, job 90861436501 — the step failed, its upload step
+      # was skipped, and the release published without Windows.
+      #
+      # `Start-Process -Wait` waits regardless of subsystem, and
+      # `-RedirectStandardOutput` hands the child a real file handle, so
+      # `attach_parent_console` correctly leaves it alone. The two guards below
+      # are what make a future regression legible instead of silent.
+      #
+      # UNVERIFIED: this cannot be executed anywhere but a Windows runner, and
+      # has not been. See "Checking a Windows fix without a Windows machine" in
+      # docs/release.md.
       - name: Verify archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -234,7 +257,13 @@ jobs:
           # 3/4. it runs and reports the expected metadata
           $exe = Get-ChildItem -Recurse -Filter dodo.exe $dest | Select-Object -First 1
           if (-not $exe) { throw "no dodo.exe in the archive" }
-          $info = & $exe.FullName --build-info
+
+          $infoFile = Join-Path $env:RUNNER_TEMP "build-info.txt"
+          $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--build-info' `
+            -RedirectStandardOutput $infoFile -NoNewWindow -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "--build-info exited $($proc.ExitCode)" }
+          $info = Get-Content $infoFile
+          if (-not $info) { throw "--build-info printed nothing" }
           Write-Output $info
           $version = ($info | Select-String '^version:').ToString().Split()[-1]
           if ($version -ne "${{ needs.meta.outputs.version }}") {
