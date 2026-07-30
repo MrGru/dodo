@@ -1,4 +1,9 @@
 /target
+# `tools/*` are standalone crates with their own Cargo.toml and Cargo.lock (see
+# "Automatic updates" in docs/release.md). The `/target` above is anchored to
+# the repo root, so each of theirs has to be named. Their `Cargo.lock` files ARE
+# committed — they are binaries, and the release workflow builds them `--locked`.
+/tools/*/target
 .claude/settings.local.json
 # Release archives produced by scripts/package.sh; regenerated, never committed.
 /dist
