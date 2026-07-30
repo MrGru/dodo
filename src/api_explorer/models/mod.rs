@@ -5,6 +5,7 @@
 
 pub mod auth;
 pub mod body;
+pub mod codegen;
 pub mod collection;
 pub mod console;
 pub mod exchange;

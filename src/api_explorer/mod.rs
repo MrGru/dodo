@@ -27,6 +27,15 @@
 //! they are typed by the same engine that will run them, and have a Format
 //! action whose deliberately narrow scope [`models::script_format`] argues.
 //!
+//! The request on screen can be turned into **runnable code** — cURL, `fetch`,
+//! `axios` or `XMLHttpRequest` — in a dialog with a Copy action
+//! ([`views::generate_code`]). Every target is generated from one normalized
+//! form ([`services::codegen::normalize`]) that follows `prepare`'s own ordering,
+//! and the cURL output is held to a round-trip property against
+//! [`services::curl`]'s parser. What reaches the clipboard when an environment
+//! holds a `secret` variable is a decision, argued in
+//! [`services::codegen`]'s module doc and stated on screen.
+//!
 //! What is deliberately still absent, each said out loud where a user would look
 //! for it rather than left to be discovered: OAuth 2.0 (needs a redirect flow
 //! and a token store), `pm.sendRequest` (denied outright — see

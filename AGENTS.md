@@ -17,7 +17,7 @@ phases plug in. `api_explorer` is also the only tool that registers a key bindin
 (`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
 `settings::init`).
 
-Eleven things about **`src/api_explorer/`** that no single file makes obvious:
+Thirteen things about **`src/api_explorer/`** that no single file makes obvious:
 
 - **The whole send pipeline lives in `services/send.rs`, in this order:**
   `pre-request script → resolve {{name}} → prepare → Transport::execute → post-response script`.
@@ -80,6 +80,31 @@ Eleven things about **`src/api_explorer/`** that no single file makes obvious:
   re-indents and normalises blank lines, and its doc records why (a real one, `dprint-plugin-
   typescript`, measured at +2.8 MB — 12.7% — on a binary that had already grown for the engine).
   Lines inside a template literal or block comment are emitted byte-for-byte.
+- **Code generation and cURL parsing are separate modules on purpose.**
+  `services/curl.rs` reads one language; `services/codegen/` writes four (cURL, `fetch`, `axios`,
+  `XMLHttpRequest`). They share no code and are shaped nothing alike — a tokenizer plus an option
+  table against four pure emitters over a single normalized form. **`services/codegen/normalize.rs`
+  is the piece to understand first**: it flattens a `RequestSnapshot` into method / one absolute URL
+  / one header list with auth folded in / one body, following `prepare`'s exact deference order and
+  reusing `auth::apply`, `effective_pairs` and `request_body::form_escape` rather than re-deriving
+  them. Four ad-hoc walks would have given "does the API key ride in the query" four answers. It
+  validates nothing and reads no file — both are stated there with why. The two directions are
+  joined by a **round-trip property test** in `services/codegen/curl.rs`: generate, hand it to
+  `curl::parse`, and require both to normalize to the same `NormalizedRequest`. The equivalence is
+  over the *wire request*, not the snapshot (an Auth-tab entry comes back as a header), and the three
+  cases where even that cannot hold are named in that module's doc.
+- **Generated code withholds a `secret` variable and says so; it withholds nothing else.** A
+  reference to a variable marked `secret` is emitted as the literal `{{name}}`, via
+  `VariableSet::with_secrets_masked` — which sets the masked value to `\{{name}}` so the substituter's
+  *existing* escape rule does the work, covering nesting and making recursion impossible. A token or
+  password typed straight into the Auth tab **is** in the copied text, because it has no name to
+  stand in for it; the dialog's notice is never absent and says exactly that, and a
+  **Resolve secret variables** toggle resolves them behind a danger-coloured warning. The whole
+  policy and its reasoning live in `services/codegen/mod.rs`'s module doc — read it before changing
+  what reaches the clipboard. What JavaScript cannot express (a form-data FILE row, a binary body)
+  becomes an **undeclared identifier** with a comment naming the path, so running the snippet
+  unchanged throws rather than silently sending an incomplete request; `services/codegen/
+  javascript.rs` argues that against the two alternatives.
 - **Pasting a cURL command into the URL box rebuilds the whole request** (`services/curl.rs`,
   which is pure and heavily table-tested). Two guards keep it from firing while somebody types the
   word "curl": `state::request::is_bulk_change` (a paste is not a keystroke) and a parse that must

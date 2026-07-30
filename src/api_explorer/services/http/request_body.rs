@@ -170,7 +170,13 @@ fn urlencoded_body(pairs: &[(String, String)]) -> String {
         .join("&")
 }
 
-fn form_escape(text: &str) -> String {
+/// One field of a `x-www-form-urlencoded` document.
+///
+/// `pub` so that `services::codegen` escapes a query parameter with the *same*
+/// function the wire uses rather than a second one that agrees today. The
+/// generated snippet has to spell the URL the way dodo would send it, and `+`
+/// versus `%20` is exactly the kind of near-agreement that goes unnoticed.
+pub fn form_escape(text: &str) -> String {
     utf8_percent_encode(text, FORM_COMPONENT)
         .to_string()
         .replace(' ', "+")
