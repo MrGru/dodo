@@ -32,6 +32,29 @@ that is actually worth.
 | `check` | 4 platforms | `cargo check --locked --all-features --target <triple>`, natively | macOS arm64 only |
 | `build-debug` | macos-14 | `cargo build --locked` and a `--build-info` smoke test | Yes |
 
+**The `check` row runs natively, and it cannot be reproduced locally on macOS
+for two of its four targets.** `cargo check --target x86_64-unknown-linux-gnu`
+and `--target x86_64-pc-windows-msvc` from a Mac both die in the **build script
+of `aws-lc-sys`** — a C library reached transitively through
+`reqwest -> rustls -> rustls-platform-verifier -> aws-lc-rs`. Linux wants an
+`x86_64-linux-gnu-gcc` that is not there; Windows wants `windows.h`. Neither is
+a portability problem in dodo, and neither can be fixed by a cargo flag: the
+crate needs a cross **C** toolchain, which is why CI compiles each target on its
+own runner instead. The two Apple targets *do* cross-check locally
+(`aarch64-apple-darwin` and `x86_64-apple-darwin`), and between them they cover
+the arch-width differences that catch Rust code.
+
+Two more traps if you try it anyway, both cost real time to find:
+
+- Use rustup's toolchain **by absolute path**. If `rustc` on `PATH` is
+  Homebrew's, it ships only the host std, so every target fails with
+  `can't find crate for core` — and `rustup run stable …` does *not* fix it,
+  because it prepends to a `PATH` that already has Homebrew first. Run
+  `~/.rustup/toolchains/<toolchain>/bin/cargo` with `RUSTC` set to its sibling.
+- Give it its own `CARGO_TARGET_DIR`. A different rustc version invalidates
+  every fingerprint in `target/`, which throws away the warm cache that a
+  release-size measurement needs.
+
 **No `--release` build runs on a push.** That is a change from how this
 repository started, and the reasoning is worth keeping:
 

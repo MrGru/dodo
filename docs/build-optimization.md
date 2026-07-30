@@ -293,6 +293,38 @@ lines, leave everything else byte-for-byte — and `models/script_format.rs`'s
 module doc states plainly what it does not do. If a future round wants real
 formatting, that measurement is the number to argue with.
 
+### What code generation cost
+
+The round after that one added the Generate code dialog: four emitters (cURL,
+`fetch`, `axios`, `XMLHttpRequest`), the shared normalized form they all read,
+the dialog itself, and 9 new `Str` variants in both languages. **It added no
+dependency at all** — three of the four targets are string generation and the
+fourth reuses `percent-encoding`, which was already in the graph for
+`request_body`. So this row is what roughly 2,400 lines of new Rust (about half
+of it tests) costs on its own, with no new crate anywhere in it:
+
+| Configuration | Bytes | Δ vs control | Δ % |
+|---|---:|---:|---:|
+| Control — `74726c6`, the commit before the round | 22,440,864 | — | — |
+| The whole round | 22,507,008 | **+66,144** | **+0.29%** |
+
+Both rows were built on the same machine, from the same `target/`, with
+`cargo build --release --locked`. The control was rebuilt from `74726c6` after
+the round rather than taken from the previous section's table, and came out
+byte-identical to it — which is worth knowing on its own: on this graph the
+release build is reproducible to the byte across a branch switch, so a delta
+this small is signal rather than noise. Read the warning at the end of the
+previous section anyway before attributing it to any one part of the round; on a
+fat-LTO build inlining decisions move by tens of kilobytes for reasons unrelated
+to the size of the edit.
+
+**+66,144 B is the cheapest round the API Explorer has had**, an order of
+magnitude below the two before it (+1,164,560 and +465,088), and the reason is
+visible in the diff: those rounds each added a crate — `rquickjs`, then a
+tree-sitter grammar — and this one adds none. It is a data point for the
+project's standing bias: new Rust is nearly free at this scale, and new
+dependencies are not.
+
 ### Features deliberately not added
 
 - **`production` / `development` / `profiling`.** Nothing in this crate reads

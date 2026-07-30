@@ -204,8 +204,16 @@ binary (the `#[include]` filters in `src/assets.rs`), which is why the branding 
 bytes. Anything new under `assets/` that must stay out of the binary has to stay outside those two
 filters — measure the binary, do not assume.
 
-Five things about build and release that catch people:
+Six things about build and release that catch people:
 
+- **Two of the four `cargo check` targets cannot be run from this Mac at all.**
+  Linux and Windows both die in `aws-lc-sys`'s C build script (no cross C toolchain, no
+  `windows.h`) — not a portability problem in dodo, and not fixable by a cargo flag. The two Apple
+  targets do cross-check locally. "The `check` row runs natively" in `docs/release.md` has the
+  detail, including the two traps that cost time: Homebrew's `rustc` shadows rustup's and ships
+  only the host std (`rustup run` does **not** fix it — use the toolchain's absolute path), and a
+  cross-check needs its own `CARGO_TARGET_DIR` or it invalidates the warm cache a size
+  measurement depends on.
 - **`fmt` and `clippy` are blocking jobs; keep them green.** Run `cargo fmt --all` and
   `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
   (34 unformatted files, 12 warnings) is paid off; there is no crate-level `allow`, and the two
