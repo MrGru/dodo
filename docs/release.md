@@ -197,6 +197,21 @@ resolve, and that `build.rs` embedded the right metadata. **It does not prove
 the UI renders.** That check is manual: download the archive on a real desktop
 and open it. Do that before announcing a release.
 
+**On Windows that step is load-bearing in a second way.** A release build is a
+GUI-subsystem binary — `#![cfg_attr(not(debug_assertions), windows_subsystem =
+"windows")]` in `src/main.rs`, so launching dodo shows the app window and no
+console window behind it. The price is that such a process starts with **no
+valid standard handles** unless its parent handed it some, which would send
+`--version` / `--build-info` nowhere; `attach_parent_console` in the same file
+buys them back, on the CLI path only, and its doc comment is the authority on
+why. Two consequences for CI, both already handled: every Windows smoke test
+must **capture** the output (`$info = & dodo.exe --build-info`), because a shell
+does not wait for a GUI-subsystem process it is not reading from and
+`$LASTEXITCODE` would otherwise be meaningless; and a debug build is
+deliberately left on the console subsystem, so `cargo run` on Windows still
+prints normally. None of this has been executed on a Windows host — it was
+written from the `AttachConsole` documentation and compiles only on CI.
+
 ### Licence files in the packaged output
 
 Every archive ships `LICENSE` (dodo's own MIT terms) and

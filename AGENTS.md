@@ -9,6 +9,16 @@ description and `Cargo.toml` for exact dependency sources.
 Read `src/main.rs` for the startup sequence and `src/layout.rs` for the view model; the doc
 comments there are the authority on structure. This file is only a map.
 
+`src/main.rs` also owns **app lifecycle**, and both halves are counter-intuitive enough to name
+here: a release Windows build is a **GUI-subsystem** binary (no console window behind the app),
+which costs it valid standard handles, so `attach_parent_console` buys them back on the
+`--version` / `--build-info` path alone — and every Windows smoke test must therefore *capture*
+the output or the shell will not even wait for the process. Closing the single window quits the
+app through **`QuitMode::LastWindowClosed`** (GPUI's own check, run after the window is removed,
+not a callback that force-quits) plus a macOS-only `cmd-w` binding, needed because dodo installs
+no menu bar for that shortcut to hang off. The doc comments there carry the reasoning;
+`docs/release.md` records that the Windows half has never run on a Windows host.
+
 Most tools are a single `src/<tool>.rs`. **`src/api_explorer/` and `src/docker/` are the
 exceptions** and the pattern to copy when a tool outgrows one file: `models/` (plain data, no GPUI,
 unit tested), `services/` (the trait that is the only place naming the outside-world crate),

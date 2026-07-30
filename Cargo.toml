@@ -90,6 +90,20 @@ futures-util = "0.3.33"
 # what would have supplied file, process and socket access.
 rquickjs = { version = "0.12.1", default-features = false, features = ["std"] }
 
+# Two kernel32 calls only — `GetStdHandle` and `AttachConsole` — so that
+# `--version` / `--build-info` still print from a GUI-subsystem binary. See
+# `attach_parent_console` in `src/main.rs` for why that is needed. This is a
+# target-gated dependency: it adds nothing to a macOS or Linux build, and the
+# version is one already in the graph, so it costs no extra crate. Prefer
+# adding a feature here over hand-declaring an `extern "system"` signature —
+# this host cannot compile the Windows target, so the signatures need to come
+# from something the Windows compiler will check.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
+
 # ---------------------------------------------------------------------------
 # Build profiles
 #
