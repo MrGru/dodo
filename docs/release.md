@@ -204,13 +204,49 @@ console window behind it. The price is that such a process starts with **no
 valid standard handles** unless its parent handed it some, which would send
 `--version` / `--build-info` nowhere; `attach_parent_console` in the same file
 buys them back, on the CLI path only, and its doc comment is the authority on
-why. Two consequences for CI, both already handled: every Windows smoke test
-must **capture** the output (`$info = & dodo.exe --build-info`), because a shell
-does not wait for a GUI-subsystem process it is not reading from and
-`$LASTEXITCODE` would otherwise be meaningless; and a debug build is
-deliberately left on the console subsystem, so `cargo run` on Windows still
-prints normally. None of this has been executed on a Windows host — it was
-written from the `AttachConsole` documentation and compiles only on CI.
+why.
+
+**The consequence for CI, and the one that cost v0.1.5 its Windows archive: a
+shell does not wait for a GUI-subsystem process at all.** `&` — PowerShell's
+call operator — returns as soon as the process starts. PowerShell then tears
+down the pipe it was capturing into, and the child dies writing to it:
+
+```
+thread 'main' panicked at library/std/src/io/stdio.rs:
+failed printing to stdout: The pipe is being closed. (os error 232)
+```
+
+`$info` is left empty and the next line throws on a null. That is what happened
+in run `30539731759` (attempt 1, job `90861436501`): the *build* and *packaging*
+succeeded, the **verify** step failed, its upload step was therefore skipped, and
+the release published with no Windows archive at all.
+
+Capturing into a variable does **not** fix this — an earlier version of this
+document and of the workflow comments claimed it did, and both were wrong.
+`release.yml` was already capturing when it failed. The fix is to use a form
+that waits regardless of subsystem:
+
+```powershell
+$proc = Start-Process -FilePath $exe -ArgumentList '--build-info' `
+  -RedirectStandardOutput $infoFile -NoNewWindow -Wait -PassThru
+if ($proc.ExitCode -ne 0) { throw "--build-info exited $($proc.ExitCode)" }
+$info = Get-Content $infoFile
+if (-not $info) { throw "--build-info printed nothing" }
+```
+
+`-RedirectStandardOutput` also hands the child a real file handle, so
+`attach_parent_console` correctly declines to attach a console. Both
+`release.yml` and `release-profile.yml` now use this shape;
+`release-profile.yml` had the identical latent bug and had simply never run
+against a windowless binary — its last green Windows run (`30259360264`,
+2026-07-27) predates commit `4e7cc53`, which is what made release builds
+GUI-subsystem.
+
+A debug build is deliberately left on the console subsystem, so `cargo run` on
+Windows still prints normally. **None of this has been executed on a Windows
+host.** The diagnosis is inferred from the child's broken-pipe panic, the null
+`$info`, and the documented non-waiting behaviour; a real Windows runner is the
+arbiter.
 
 ### Licence files in the packaged output
 
@@ -429,6 +465,212 @@ the GitHub Release as a pre-release automatically.
 
 ---
 
+## Automatic updates
+
+**Scope.** This section describes what a release *publishes*. Nothing inside
+dodo reads any of it yet — there is no update check, no dialog and no installer.
+Nothing described here is linked into the application binary.
+
+### What a release publishes
+
+Per platform, unchanged: one archive and its `.sha256` sidecar, plus a second
+`-app.tar.gz` archive on each macOS platform. New, at the release root:
+
+| Asset | What it is |
+|---|---|
+| `update.json` | The manifest an updater reads: one entry per platform, with URL, SHA-256, byte size and a reserved signature field. |
+| `SHA256SUMS` | Every archive in the release, in the layout `sha256sum -c` reads. Now written by the generator, which hashes each file itself, rather than by concatenating the sidecars. |
+
+```json
+{
+  "manifest_version": 1,
+  "channel": "stable",
+  "version": "0.2.0",
+  "notes": "## dodo v0.2.0\n…",
+  "published_at": "2026-07-30T12:11:03Z",
+  "files": {
+    "macos-arm64": {
+      "url": "https://github.com/MrGru/dodo/releases/download/v0.2.0/dodo-v0.2.0-macos-arm64-app.tar.gz",
+      "sha256": "1faaa4c3…",
+      "size": 11567151,
+      "signature": null
+    }
+  }
+}
+```
+
+Three fields are there for the future and are cheap now only because they were
+put in from the first release:
+
+- **`manifest_version`** — a client that only understands version 1 can refuse a
+  version 2 document instead of mis-parsing it. Impossible to retrofit: by the
+  time you need it, manifests without it are already in the wild.
+- **`signature`**, per file — reserved for Ed25519/minisign. It is always
+  `null`, **nothing verifies it**, and no signing is implemented. Adding it later
+  becomes populating a field rather than a schema break.
+- **`channel`** — written into the document even though `stable` is the only
+  channel that works today. See [Channels](#channels).
+
+**The macOS entry points at the `-app.tar.gz` bundle, never the bare binary,**
+because an installer replaces `dodo.app`. That is selected by exact filename;
+if the bundle is missing, the release fails rather than silently falling back to
+the bare archive.
+
+### How `update.json` is generated
+
+By `tools/update-manifest`, a standalone crate. It is **not** part of dodo:
+`exclude = ["tools/*"]` in the root `Cargo.toml` keeps it out of the package, it
+has its own `Cargo.lock` and four dependencies (`serde`, `serde_json`, `sha2`,
+`semver`), and `cargo metadata` on the repo root lists exactly one package. It
+costs the shipped binary **zero bytes** and the app's test and clippy runs zero
+time.
+
+The publish job runs it *before* creating the release:
+
+```sh
+cargo run --release --locked --manifest-path tools/update-manifest/Cargo.toml -- \
+  --version 0.2.0 --channel stable \
+  --dir artifacts --repo MrGru/dodo --tag v0.2.0 \
+  --notes-file "$NOTES" --published-at 2026-07-30T12:11:03Z \
+  --out artifacts/update.json --sums-out artifacts/SHA256SUMS \
+  --expect-platform macos-arm64 --expect-platform macos-x64 \
+  --expect-platform linux-x64  --expect-platform windows-x64
+```
+
+It exits non-zero, having written nothing, on any of: an expected platform with
+no artifact; a file in `--dir` it does not recognise (including an archive from a
+*different* version); a computed hash that disagrees with the `.sha256` sidecar;
+a missing sidecar. Hashes are streamed, never read into memory. `published_at`
+comes from `SOURCE_DATE_EPOCH`, so re-running the job for the same tag produces a
+byte-identical manifest.
+
+### Why a missing platform blocks the whole release
+
+**Any missing platform fails the release, including the experimental ones.**
+Three of the four build matrix rows are `experimental: true` and therefore
+`continue-on-error: true`, and the publish job gates on
+`needs.build.result == 'success'` — which a `continue-on-error` failure still
+satisfies. So the pipeline was free to publish a release with a platform missing,
+and did: **v0.1.5 shipped eleven assets and no Windows archive**, with nothing
+anywhere recording that one had been expected.
+
+The alternative — omit the missing platform from the manifest and publish
+anyway — was rejected. A manifest is a promise to a client that is going to act
+on it unattended: a Windows user on an older version would poll, find no
+`windows-x64` entry, and be told they are up to date. That failure is silent,
+indefinite, and invisible from the release page, which looks complete. A failed
+release is loud, happens in front of the person who triggered it, and is
+repairable in minutes now that publishing is re-runnable.
+
+**When the block is the wrong answer** — a platform is genuinely broken and the
+release must go out without it — the fix is to state that in the workflow by
+dropping its `--expect-platform` line, in a commit someone reviews. Leaving a
+platform out of the manifest should be a decision with a diff attached, not a
+side effect of a red matrix row nobody noticed.
+
+### Publishing is re-runnable
+
+`gh release create` fails with *"a release with the same tag name already
+exists"*, so a partially-published tag could never be repaired by re-running,
+and tags here are immutable (see [Tagging strategy](#tagging-strategy)) so
+deleting and re-tagging is not an option either. This is not hypothetical:
+v0.1.5's attempt 1 published, and the re-run (attempt 2, job `90886356082`) died
+on exactly that error.
+
+The publish step now probes with `gh release view` and either creates the
+release (keeping `--verify-tag`, which correctly refuses to invent a missing
+tag) or `gh release edit`s it and re-uploads with `--clobber`. Re-running the
+job converges on the intended state instead of failing.
+
+### Channels
+
+`--channel` is written into the document from the first release, so a client can
+always tell which stream a manifest describes.
+
+Only **stable** is wired up. Its URL is the one the app will default to:
+
+```
+https://github.com/MrGru/dodo/releases/latest/download/update.json
+```
+
+**The trap:** `latest` excludes pre-releases. Since the workflow marks any tag
+with a suffix (`v0.2.0-rc.1`) as a pre-release, a beta or nightly manifest
+published this way is unreachable at that URL — it will always resolve to the
+newest *stable* release, and a beta client would silently be handed stable's
+manifest.
+
+To add a channel, the generator needs no change (pass `--channel beta`); what
+needs deciding is the **publication path**. The recommendation, and the reason
+the shape above does not foreclose it:
+
+- **Serve channel manifests from GitHub Pages**, one stable path per channel —
+  `https://mrgru.github.io/dodo/updates/{stable,beta,nightly}.json` — with the
+  release assets themselves still living on the GitHub Release. The path is
+  mutable by design, so it does not fight the immutable-tag rule; it is static,
+  cacheable and needs no API token or rate limit; and it lets `stable` keep its
+  `releases/latest/download/update.json` URL as-is.
+- **Not** a moving `channel-beta` tag: that contradicts
+  [Tagging strategy](#tagging-strategy) outright.
+- **Not** querying the releases API and filtering on `prerelease`: it needs a
+  token, it is rate-limited, and it turns a static fetch into a paginated one.
+
+### Verifying a manifest by hand
+
+Everything in the manifest is checkable with no special tooling:
+
+```sh
+# 1. fetch the manifest and the archives it names
+gh release download v0.2.0 --repo MrGru/dodo --dir artifacts
+
+# 2. the combined checksum file covers every archive
+cd artifacts && sha256sum -c SHA256SUMS
+
+# 3. the manifest agrees with the archives, per platform
+python3 - <<'PY'
+import hashlib, json, os
+m = json.load(open("update.json"))
+assert m["manifest_version"] == 1, m["manifest_version"]
+for key, f in m["files"].items():
+    name = f["url"].rsplit("/", 1)[1]
+    body = open(name, "rb").read()
+    got = hashlib.sha256(body).hexdigest()
+    assert got == f["sha256"], f"{key}: {got} != {f['sha256']}"
+    assert len(body) == f["size"], f"{key}: size"
+    assert f["signature"] is None
+    print(f"{key:12} {name}  ok")
+PY
+```
+
+Two things worth eyeballing while you are there: each `macos-*` URL ends in
+`-app.tar.gz`, and every platform you expected is present as a key.
+
+### Binary size cost
+
+**Zero bytes**, measured rather than assumed, per the standing policy in
+`docs/build-optimization.md`.
+
+`cargo build --release --locked` on macOS arm64, both from a genuine compile
+(the baseline was forced with `touch src/main.rs`, so cargo could not simply
+declare it up to date):
+
+| Tree | Bytes | SHA-256 |
+|---|---|---|
+| Pristine `main` | 22,507,024 | `ad5413e7c9fef795…` |
+| With `tools/update-manifest` + `exclude` | 22,507,024 | `ad5413e7c9fef795…` |
+
+**Byte-identical**, so the delta is exactly 0 — not "too small to see". That is
+what a separate crate buys: `cargo metadata --no-deps` at the repo root lists
+`dodo` as the only package and one workspace member, `cargo test --locked
+--all-features` still reports 636 tests, and `cargo clippy --all-targets` still
+lints only dodo. Reverting the `exclude` key did not even cause cargo to
+rebuild, which is the same fact from the other direction: `exclude` is packaging
+metadata and is not part of the build fingerprint.
+
+The generator's own dependencies (`serde`, `serde_json`, `sha2`, `semver`) are
+locked in `tools/update-manifest/Cargo.lock` and never enter dodo's graph.
+
+---
+
 ## Required GitHub Secrets
 
 **None today.** The release workflow uses only `${{ github.token }}`, which
@@ -477,11 +719,12 @@ desktop entry and icons an AppImage or `.deb` needs now exist and are already
 staged in the tar.gz under `share/` — see
 [Application icon](#application-icon).
 
-**Automatic updates.** Nothing in dodo checks for a new version. If it ever
-does, the pieces are already in place: `--build-info` reports the running
-version, and the release assets and their checksums are at predictable URLs.
-The decision that has to come first is whether a developer tool should phone
-home at all.
+**Automatic updates.** The *publishing* half is built and documented in
+[Automatic updates](#automatic-updates) above: every release now ships an
+`update.json` manifest. **Nothing in dodo reads it yet** — the in-app update
+check and its dialog are not written, and the question of whether a developer
+tool should phone home at all is still open and still has to be answered before
+any client code exists.
 
 **Crash reporting and symbol upload.** The shipped binary is `strip =
 "symbols"`, so a crash report from it is addresses only. The other half of that

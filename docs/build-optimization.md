@@ -325,6 +325,39 @@ tree-sitter grammar — and this one adds none. It is a data point for the
 project's standing bias: new Rust is nearly free at this scale, and new
 dependencies are not.
 
+### What the update manifest cost
+
+**Nothing. Zero bytes, byte-identical binary.** The round that added the release
+manifest generator put it in `tools/update-manifest`, a standalone crate with its
+own `Cargo.toml` and `Cargo.lock`, and added `exclude = ["tools/*"]` to dodo's
+`[package]`. Nothing in it is compiled by, linked into, or lints alongside the
+application.
+
+| Configuration | Bytes | SHA-256 |
+|---|---:|---|
+| Control — `8f05fc7`, the commit before the round | 22,507,024 | `ad5413e7c9fef795…` |
+| The whole round | 22,507,024 | `ad5413e7c9fef795…` |
+
+Both rows are genuine compiles on the same machine and `target/` with
+`cargo build --release --locked`; the control was forced with `touch
+src/main.rs` so cargo could not simply report it up to date, and the two came out
+identical to the byte. This is the one kind of row where the fat-LTO noise
+warning above does not apply — there is no delta to attribute, because the
+compiler was handed the same input twice.
+
+Two secondary confirmations, since "it is a separate crate" is the whole claim:
+`cargo metadata --no-deps` at the repo root lists `dodo` as the only package and
+one workspace member, and reverting the `exclude` key did not cause cargo to
+rebuild at all — `exclude` is packaging metadata and not part of the build
+fingerprint.
+
+The precedent this sets is worth naming: **release engineering goes in
+`tools/`, not behind a feature flag.** A `[[bin]]` on dodo or a
+`cfg(feature)`-gated module would both have put the code in the crate and made
+"does it ship?" a question about build flags. A separate crate makes the answer
+structural. `docs/release.md`, "Automatic updates", is the authority on what the
+tool does.
+
 ### Features deliberately not added
 
 - **`production` / `development` / `profiling`.** Nothing in this crate reads
