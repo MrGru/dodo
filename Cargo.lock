@@ -1498,6 +1498,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "unicode-normalization",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

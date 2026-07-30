@@ -118,10 +118,22 @@ jobs:
       # `shell: pwsh` is stated rather than left to the runner default, so the
       # backslash paths below are unambiguously PowerShell and not a bash
       # script full of escape sequences.
+      #
+      # The output is captured rather than left to stream, and that is not
+      # cosmetic: a release build is a GUI-subsystem binary (see the
+      # `windows_subsystem` attribute in `src/main.rs`), and a shell does not
+      # wait for one of those unless it is reading its output. Assigning to
+      # `$info` makes PowerShell hand the child a pipe and wait for EOF, which
+      # is what makes `$LASTEXITCODE` mean anything at all here. Without it a
+      # crashing binary would still leave a green step.
       - name: Smoke test the binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\target\${{ matrix.target }}\release\dodo.exe --build-info
+        run: |
+          $info = & .\target\${{ matrix.target }}\release\dodo.exe --build-info
+          if ($LASTEXITCODE -ne 0) { throw "--build-info exited $LASTEXITCODE" }
+          if (-not $info) { throw "--build-info printed nothing" }
+          Write-Output $info
 
   # ---------------------------------------------------------------------------
   # A scheduled run nobody looks at is not a signal. This writes the per-target
