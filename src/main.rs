@@ -92,16 +92,29 @@ fn main() {
 ///
 /// macOS only. Windows and Linux close a single-window app with Alt-F4, and
 /// Ctrl-W is not free there — it is "delete previous word" in a text field.
+///
+/// **The `defer` is load-bearing, and the first version of this shipped without
+/// it and did nothing.** A keystroke is dispatched from inside
+/// `App::update_window_id`, which `take()`s the `Window` out of `App::windows`
+/// for the duration of the update — so `AnyWindowHandle::update` called straight
+/// from an action handler is re-entrant and always fails with `window not found`,
+/// while the keystroke still counts as consumed (which is why the mouse cursor
+/// hid and nothing else happened). `cx.defer` runs the removal from the effect
+/// flush instead, once the window is back. Do not inline it again.
 #[cfg(target_os = "macos")]
 fn init_close_window_binding(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("cmd-w", CloseWindow, None)]);
     cx.on_action(|_: &CloseWindow, cx: &mut App| {
-        // Every open window, which is one. `App::active_window` is deliberately
-        // not used: it is the *key* window and is `None` whenever the app is not
-        // frontmost, which would make this silently do nothing.
-        for window in cx.windows() {
-            let _ = window.update(cx, |_, window, _| window.remove_window());
-        }
+        cx.defer(|cx| {
+            // Every open window, which is one. `App::active_window` is
+            // deliberately not used: it is the *key* window and is `None`
+            // whenever the app is not frontmost. The only way `update` can fail
+            // from here is a window that closed between the keystroke and the
+            // flush, which needs no handling — it is already gone.
+            for window in cx.windows() {
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+            }
+        });
     });
 }
 
