@@ -26,6 +26,7 @@
 
 pub mod models;
 pub mod services;
+pub mod state;
 
 use gpui::{App, Global};
 
