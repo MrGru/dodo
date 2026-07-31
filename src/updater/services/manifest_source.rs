@@ -163,7 +163,10 @@ mod tests {
     #[test]
     fn the_in_memory_source_records_what_it_was_asked_for() {
         let source = InMemoryManifestSource::serving(b"{}".to_vec());
-        assert_eq!(source.fetch("https://example.test/a").unwrap_or_default(), b"{}");
+        assert_eq!(
+            source.fetch("https://example.test/a").unwrap_or_default(),
+            b"{}"
+        );
         let _ = source.fetch("https://example.test/b");
         assert_eq!(
             source.requested(),
@@ -185,7 +188,10 @@ mod tests {
     /// size that could exhaust memory.
     #[test]
     fn the_manifest_cap_is_generous_but_bounded() {
-        assert!(MAX_MANIFEST_BYTES >= 64 * 1024, "smaller than a real manifest could grow");
+        assert!(
+            MAX_MANIFEST_BYTES >= 64 * 1024,
+            "smaller than a real manifest could grow"
+        );
         assert!(MAX_MANIFEST_BYTES <= 8 * 1024 * 1024, "not a bound at all");
     }
 }
