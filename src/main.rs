@@ -22,6 +22,7 @@ mod i18n;
 mod i18n_lint;
 mod json_formatter;
 mod layout;
+mod paths;
 mod settings;
 
 use gpui::*;

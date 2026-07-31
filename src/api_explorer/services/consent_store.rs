@@ -23,8 +23,8 @@ use std::sync::Mutex;
 use serde_json::Value;
 
 use crate::api_explorer::models::script_consent::{ConsentDocument, SCHEMA_VERSION};
-use crate::api_explorer::services::collection_store::data_dir;
 use crate::i18n::Str;
+use crate::paths::data_dir;
 
 /// Why approvals could not be loaded or saved.
 #[derive(Debug)]

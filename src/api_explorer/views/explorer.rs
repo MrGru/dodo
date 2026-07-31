@@ -23,9 +23,7 @@ use crate::api_explorer::models::script::{SkipReason, VariableWrite, is_runnable
 use crate::api_explorer::models::script_consent::{ConsentDecision, ConsentKey, ConsentLedger};
 use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::api_explorer::services::collection_import::parse_import;
-use crate::api_explorer::services::collection_store::{
-    CollectionStore, DiskCollectionStore, data_dir,
-};
+use crate::api_explorer::services::collection_store::{CollectionStore, DiskCollectionStore};
 use crate::api_explorer::services::consent_store::{ConsentStore, DiskConsentStore};
 use crate::api_explorer::services::environment_import::parse_environment_import;
 use crate::api_explorer::services::script::{QuickJsEngine, ScriptContext, ScriptEngine};
@@ -46,6 +44,7 @@ use crate::api_explorer::views::{generate_code, script_consent};
 use crate::api_explorer::{ScriptPolicy, SendRequest};
 use crate::app_icon::AppIcon;
 use crate::i18n::{Language, Str, t};
+use crate::paths::data_dir;
 
 /// The key context the send shortcut is bound in. Matching happens up the
 /// focus chain, so the binding fires from inside the URL field too.

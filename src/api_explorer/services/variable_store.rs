@@ -30,8 +30,8 @@ use std::sync::Mutex;
 use serde_json::Value;
 
 use crate::api_explorer::models::variables::{SCHEMA_VERSION, VariableDocument};
-use crate::api_explorer::services::collection_store::data_dir;
 use crate::i18n::Str;
+use crate::paths::data_dir;
 
 /// Why environments could not be loaded or saved, in terms the UI can show.
 #[derive(Debug)]
