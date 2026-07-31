@@ -341,7 +341,8 @@ mod tests {
         assert_eq!(seen.last().map(|p| p.percent), Some(100));
         assert_eq!(seen.last().map(|p| p.downloaded), Some(400));
         assert_eq!(
-            seen, downloader.reported(),
+            seen,
+            downloader.reported(),
             "the fake records exactly what it emitted"
         );
 
@@ -358,7 +359,10 @@ mod tests {
             downloader.download(&file_for(b"x"), &path, &|_| {}),
             Err(UpdateError::Download("reset".into()))
         );
-        assert!(!path.exists(), "a failed download must leave no file behind");
+        assert!(
+            !path.exists(),
+            "a failed download must leave no file behind"
+        );
 
         clean_temp_dir(&dir);
     }
@@ -370,6 +374,9 @@ mod tests {
         std::fs::create_dir_all(dir.join("nested")).expect("creates");
         std::fs::write(dir.join("nested/x"), b"x").expect("writes");
         clean_temp_dir(&dir);
-        assert!(!dir.exists(), "cleaning removes the directory and its contents");
+        assert!(
+            !dir.exists(),
+            "cleaning removes the directory and its contents"
+        );
     }
 }

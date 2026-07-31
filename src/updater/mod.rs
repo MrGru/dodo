@@ -25,6 +25,7 @@
 //! and the UI never performs IO — it does not so much as `stat` a file.
 
 pub mod models;
+pub mod services;
 
 use gpui::{App, Global};
 
