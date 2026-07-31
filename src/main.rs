@@ -63,6 +63,13 @@ fn main() {
         // Binds the Docker list pages' keyboard navigation, scoped to the Docker
         // view. Same post-`init` ordering rule as the two above.
         docker::init(cx);
+        // Loads `updater.json`, sweeps whatever a previous install renamed
+        // aside, and schedules the silent background check. Everything it does
+        // is asynchronous; it opens no window and blocks nothing. Same
+        // post-`gpui_component::init` ordering as the three above — it binds no
+        // keys today, and keeping the position means adding one later is not a
+        // debugging session.
+        updater::init(cx);
         init_close_window_binding(cx);
 
         let window_options = WindowOptions {

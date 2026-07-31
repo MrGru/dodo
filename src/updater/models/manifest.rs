@@ -165,11 +165,13 @@ pub fn parse(bytes: &[u8]) -> Result<Manifest, ManifestError> {
         return Err(ManifestError::UnreadableVersion(manifest.version.clone()));
     }
 
-    // Only the entries this build could actually act on are validated: a
-    // platform dodo does not run on may carry whatever it likes.
-    for platform in PlatformKey::ALL {
-        if let Some(file) = manifest.files.get(platform.key()) {
-            validate_file(platform.key(), file)?;
+    // Every entry this build *recognises* is validated; an unrecognised key is
+    // left alone (see the module doc). Walking the document's own keys rather
+    // than `PlatformKey::ALL` is what makes the distinction "do we know this
+    // platform" rather than "is it in our table twice".
+    for (key, file) in &manifest.files {
+        if PlatformKey::parse(key).is_some() {
+            validate_file(key, file)?;
         }
     }
 
@@ -255,11 +257,12 @@ mod tests {
     /// client-side half of the same assertion.
     #[test]
     fn the_macos_entry_names_the_app_bundle() {
-        for key in [PlatformKey::MacosArm64] {
-            let manifest = valid();
-            let url = &manifest.file_for(key).expect("present").url;
-            assert!(url.ends_with("-app.tar.gz"), "{url}");
-        }
+        let manifest = valid();
+        let url = &manifest
+            .file_for(PlatformKey::MacosArm64)
+            .expect("present")
+            .url;
+        assert!(url.ends_with("-app.tar.gz"), "{url}");
     }
 
     #[test]

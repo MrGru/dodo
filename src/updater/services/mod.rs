@@ -43,9 +43,48 @@ pub mod pipeline;
 pub mod verify;
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::updater::models::manifest::ManifestFile;
 use crate::updater::models::state::{DownloadProgress, InstallOutcome, UpdateError};
+
+/// A flag the UI sets and the background job reads.
+///
+/// Cancellation has to reach *inside* a running transfer, not merely stop the
+/// task that is waiting for it: dropping the GPUI task stops the UI listening,
+/// but a 12 MB download on a slow link would carry on to completion and then
+/// install itself, which is precisely what the user asked not to happen. So the
+/// flag is checked between every pipeline stage **and** on every progress
+/// callback, which is the granularity of one 64 KiB chunk.
+#[derive(Clone, Default)]
+pub struct Cancellation(Arc<AtomicBool>);
+
+impl Cancellation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// What a progress callback tells the downloader to do next.
+///
+/// Returning a value rather than reading a shared flag inside the downloader
+/// keeps the [`Downloader`] trait free of any opinion about *why* a transfer
+/// might stop — a test aborts one with a counter, the app aborts one with a
+/// [`Cancellation`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flow {
+    Continue,
+    Abort,
+}
 
 /// Where `update.json` comes from.
 pub trait ManifestSource: Send + Sync + 'static {
@@ -76,14 +115,19 @@ pub struct DownloadedArchive {
 /// because the API Explorer displays bodies, and nothing here displays
 /// anything.
 pub trait Downloader: Send + Sync + 'static {
-    /// `progress` is called as bytes arrive. It is `&dyn Fn` rather than a
-    /// generic so the trait stays `dyn`-compatible; the pipeline hands it a
-    /// closure that forwards a [`DownloadProgress`] event.
+    /// `progress` is called as bytes arrive, and its answer decides whether the
+    /// transfer continues. It is `&dyn Fn` rather than a generic so the trait
+    /// stays `dyn`-compatible; the pipeline hands it a closure that forwards a
+    /// [`DownloadProgress`] event and consults a [`Cancellation`].
+    ///
+    /// A [`Flow::Abort`] deletes the partial file and returns an error: half an
+    /// archive is worse than none, and nothing downstream should be able to
+    /// find one.
     fn download(
         &self,
         file: &ManifestFile,
         destination: &Path,
-        progress: &dyn Fn(DownloadProgress),
+        progress: &dyn Fn(DownloadProgress) -> Flow,
     ) -> Result<DownloadedArchive, UpdateError>;
 }
 

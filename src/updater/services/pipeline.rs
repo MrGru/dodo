@@ -39,13 +39,17 @@ use crate::updater::models::manifest::{self, ManifestError};
 use crate::updater::models::platform::PlatformKey;
 use crate::updater::models::state::{InstallOutcome, UpdateError, UpdateEvent, UpdateInfo};
 use crate::updater::models::version::{UpdateDecision, Version, decide};
-use crate::updater::services::{Downloader, ManifestSource, PlatformInstaller, Verifier, log};
+use crate::updater::services::download::CANCELLED;
+use crate::updater::services::{
+    Cancellation, Downloader, Flow, ManifestSource, PlatformInstaller, Verifier, log,
+};
 
 /// What a check concluded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CheckOutcome {
-    /// Newer, on this channel, not skipped.
-    Found(UpdateInfo),
+    /// Newer, on this channel, not skipped. Boxed because an `UpdateInfo`
+    /// carries the whole release notes and dwarfs the other variant.
+    Found(Box<UpdateInfo>),
     /// Nothing to do — up to date, skipped, or a release this channel does not
     /// follow. All three are reported to the user as "up to date": the last two
     /// are consequences of the user's own settings, not news.
@@ -69,7 +73,7 @@ pub fn check(
     match &result {
         Ok(CheckOutcome::Found(info)) => {
             log::note(&format!("update available: {}", info.version));
-            emit(UpdateEvent::UpdateFound(info.clone()));
+            emit(UpdateEvent::UpdateFound((**info).clone()));
         }
         Ok(CheckOutcome::UpToDate) => emit(UpdateEvent::NoUpdateAvailable),
         Err(error) => {
@@ -111,7 +115,7 @@ fn run_check(
         config.channel,
         config.skipped_version.as_deref(),
     ) {
-        UpdateDecision::Offer => Ok(CheckOutcome::Found(info)),
+        UpdateDecision::Offer => Ok(CheckOutcome::Found(Box::new(info))),
         UpdateDecision::UpToDate | UpdateDecision::Skipped | UpdateDecision::WrongChannel => {
             Ok(CheckOutcome::UpToDate)
         }
@@ -123,24 +127,51 @@ fn run_check(
 /// `into` is the directory the archive is written to — the caller's temp
 /// staging directory, so a failure leaves nothing in the user's data directory.
 ///
-/// Returns the outcome. An [`InstallOutcome::Manual`] is an `Ok`: the archive is
-/// downloaded and verified and this machine cannot be updated in place, which is
-/// a normal answer and not a failure.
+/// Returns the outcome, or `Ok(None)` when the user cancelled. An
+/// [`InstallOutcome::Manual`] is an `Ok(Some(..))`: the archive is downloaded
+/// and verified and this machine cannot be updated in place, which is a normal
+/// answer and not a failure.
+///
+/// **Cancellation emits nothing.** The machine has already been moved back by
+/// [`UpdaterMachine::cancel`](crate::updater::state::machine::UpdaterMachine::cancel)
+/// when the flag was set, and an `Error` event arriving afterwards would put an
+/// error on screen for something the user themselves asked for. `cancel` is
+/// checked before each stage as well as inside the transfer, so an abort during
+/// a download and one during the pause before an install behave the same.
 pub fn download_and_install(
     downloader: &dyn Downloader,
     verifier: &dyn Verifier,
     installer: &dyn PlatformInstaller,
     info: &UpdateInfo,
     into: &Path,
+    cancel: &Cancellation,
     emit: &dyn Fn(UpdateEvent),
-) -> Result<InstallOutcome, UpdateError> {
+) -> Result<Option<InstallOutcome>, UpdateError> {
     let destination = into.join(info.file_name());
+
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
 
     emit(UpdateEvent::DownloadStarted);
     let archive = match downloader.download(&info.file, &destination, &|progress| {
-        emit(UpdateEvent::DownloadProgress(progress))
+        emit(UpdateEvent::DownloadProgress(progress));
+        if cancel.is_cancelled() {
+            Flow::Abort
+        } else {
+            Flow::Continue
+        }
     }) {
         Ok(archive) => archive,
+        // A transfer this pipeline aborted itself is not news.
+        Err(_) if cancel.is_cancelled() => {
+            log::note("download cancelled");
+            return Ok(None);
+        }
+        Err(UpdateError::Download(detail)) if detail == CANCELLED => {
+            log::note("download aborted");
+            return Ok(None);
+        }
         Err(error) => {
             log::problem(&format!("download failed: {error:?}"));
             emit(UpdateEvent::Error(error.clone()));
@@ -148,6 +179,12 @@ pub fn download_and_install(
         }
     };
     emit(UpdateEvent::DownloadCompleted(archive.path.clone()));
+
+    if cancel.is_cancelled() {
+        // The archive is verified-pending and unwanted; it lives in the
+        // process's own temp directory, which is swept on the next run.
+        return Ok(None);
+    }
 
     emit(UpdateEvent::VerificationStarted);
     if let Err(error) = verifier.verify(&archive.path, &info.file) {
@@ -160,11 +197,22 @@ pub fn download_and_install(
     }
     emit(UpdateEvent::VerificationSucceeded);
 
+    // The last point at which stopping is safe: an install that has begun
+    // cannot be abandoned — see `state::machine`.
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
+
     emit(UpdateEvent::Installing);
     match installer.install(&archive.path) {
         Ok(outcome) => {
+            // A completed install has no use for the archive; a *refused* one
+            // does — the user was just told where it is.
+            if matches!(outcome, InstallOutcome::Installed) {
+                crate::updater::services::download::clean_temp_dir(into);
+            }
             emit(UpdateEvent::ReadyToRestart(outcome.clone()));
-            Ok(outcome)
+            Ok(Some(outcome))
         }
         Err(error) => {
             log::problem(&format!("install failed: {error:?}"));
@@ -198,6 +246,7 @@ mod tests {
         DownloadProgress, InstallOutcome, ManualReason, UpdateError, UpdateEvent,
     };
     use crate::updater::models::version::{Channel, Version};
+    use crate::updater::services::Cancellation;
     use crate::updater::services::download::InMemoryDownloader;
     use crate::updater::services::installers::{Call, RecordingInstaller};
     use crate::updater::services::manifest_source::InMemoryManifestSource;
@@ -320,8 +369,10 @@ mod tests {
     #[test]
     fn the_configured_url_is_the_one_fetched() {
         let source = InMemoryManifestSource::serving(manifest_for("0.2.0", b"a").into_bytes());
-        let mut config = UpdaterConfig::default();
-        config.manifest_url = "https://example.test/custom.json".into();
+        let config = UpdaterConfig {
+            manifest_url: "https://example.test/custom.json".into(),
+            ..UpdaterConfig::default()
+        };
 
         check(&source, &config, &v("0.1.6"), &|_| {}).expect("checks");
         assert_eq!(source.requested(), ["https://example.test/custom.json"]);
@@ -369,8 +420,10 @@ mod tests {
             Ok(CheckOutcome::UpToDate)
         );
 
-        let mut beta = UpdaterConfig::default();
-        beta.channel = Channel::Beta;
+        let beta = UpdaterConfig {
+            channel: Channel::Beta,
+            ..UpdaterConfig::default()
+        };
         assert!(matches!(
             check(&source, &beta, &v("0.1.6"), &|_| {}),
             Ok(CheckOutcome::Found(_))
@@ -453,7 +506,7 @@ mod tests {
         let info = match check(&source, &UpdaterConfig::default(), &v("0.1.6"), &|_| {})
             .expect("checks")
         {
-            CheckOutcome::Found(info) => info,
+            CheckOutcome::Found(info) => *info,
             other => panic!("expected an update, got {other:?}"),
         };
 
@@ -466,11 +519,12 @@ mod tests {
             &installer,
             &info,
             &dir,
+            &Cancellation::new(),
             &recorder.emit(),
         )
         .expect("installs");
 
-        assert_eq!(outcome, InstallOutcome::Installed);
+        assert_eq!(outcome, Some(InstallOutcome::Installed));
         assert_eq!(
             recorder.shape(),
             [
@@ -491,7 +545,12 @@ mod tests {
             [Call::Install(archive.clone())],
             "the installer is handed the file that was verified, not the URL"
         );
-        assert_eq!(std::fs::read(&archive).expect("kept"), body);
+        assert!(
+            !archive.exists(),
+            "a completed install has no further use for a 12 MB archive in the \
+             temp directory — only a *refused* one keeps it, because the user \
+             was told where it is"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -506,7 +565,7 @@ mod tests {
         let info = match check(&source, &UpdaterConfig::default(), &v("0.1.6"), &|_| {})
             .expect("checks")
         {
-            CheckOutcome::Found(info) => info,
+            CheckOutcome::Found(info) => *info,
             other => panic!("expected an update, got {other:?}"),
         };
 
@@ -525,6 +584,7 @@ mod tests {
             &installer,
             &info,
             &dir,
+            &Cancellation::new(),
             &recorder.emit(),
         )
         .expect_err("the bytes are not the promised ones");
@@ -557,7 +617,7 @@ mod tests {
         let info = match check(&source, &UpdaterConfig::default(), &v("0.1.6"), &|_| {})
             .expect("checks")
         {
-            CheckOutcome::Found(info) => info,
+            CheckOutcome::Found(info) => *info,
             other => panic!("expected an update, got {other:?}"),
         };
 
@@ -571,6 +631,7 @@ mod tests {
                 &installer,
                 &info,
                 &dir,
+                &Cancellation::new(),
                 &recorder.emit(),
             )
             .is_err()
@@ -592,7 +653,7 @@ mod tests {
         let info = match check(&source, &UpdaterConfig::default(), &v("0.1.6"), &|_| {})
             .expect("checks")
         {
-            CheckOutcome::Found(info) => info,
+            CheckOutcome::Found(info) => *info,
             other => panic!("expected an update, got {other:?}"),
         };
 
@@ -609,11 +670,12 @@ mod tests {
             &installer,
             &info,
             &dir,
+            &Cancellation::new(),
             &recorder.emit(),
         )
         .expect("a refusal is not a failure");
 
-        assert!(matches!(outcome, InstallOutcome::Manual { .. }));
+        assert!(matches!(outcome, Some(InstallOutcome::Manual { .. })));
         assert_eq!(recorder.shape().last(), Some(&"ReadyToRestart"));
         assert!(
             archive_path.exists(),
@@ -631,7 +693,7 @@ mod tests {
         let info = match check(&source, &UpdaterConfig::default(), &v("0.1.6"), &|_| {})
             .expect("checks")
         {
-            CheckOutcome::Found(info) => info,
+            CheckOutcome::Found(info) => *info,
             other => panic!("expected an update, got {other:?}"),
         };
 
@@ -642,6 +704,7 @@ mod tests {
             &RecordingInstaller::returning(InstallOutcome::Installed),
             &info,
             &dir,
+            &Cancellation::new(),
             &recorder.emit(),
         )
         .expect("installs");
@@ -661,6 +724,97 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].downloaded <= pair[1].downloaded),
             "progress must not go backwards: {progress:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cancellation, all the way through: the pipeline stops, reports nothing,
+    /// and — the part that matters — the installer is never called. A download
+    /// the user abandoned must not install itself when it finishes.
+    #[test]
+    fn a_cancelled_run_installs_nothing_and_reports_no_error() {
+        let dir = scratch();
+        let body = vec![b'x'; 4000];
+        let source = InMemoryManifestSource::serving(manifest_for("0.2.0", &body).into_bytes());
+        let info = match check(&source, &UpdaterConfig::default(), &v("0.1.6"), &|_| {})
+            .expect("checks")
+        {
+            CheckOutcome::Found(info) => *info,
+            other => panic!("expected an update, got {other:?}"),
+        };
+
+        let installer = RecordingInstaller::returning(InstallOutcome::Installed);
+        let recorder = Recorder::default();
+        let cancel = Cancellation::new();
+        cancel.cancel();
+
+        let outcome = download_and_install(
+            &InMemoryDownloader::serving(body),
+            &Sha256Verifier::new(),
+            &installer,
+            &info,
+            &dir,
+            &cancel,
+            &recorder.emit(),
+        )
+        .expect("cancelling is not a failure");
+
+        assert_eq!(outcome, None);
+        assert!(installer.calls().is_empty(), "nothing may be installed");
+        assert!(
+            !recorder.shape().contains(&"Error"),
+            "the user asked for this; it must not come back as an error: {:?}",
+            recorder.shape()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cancelled *during* the transfer rather than before it: the download
+    /// aborts, the partial file goes, and still nothing installs.
+    #[test]
+    fn cancelling_mid_download_aborts_the_transfer() {
+        let dir = scratch();
+        let body = vec![b'x'; 4000];
+        let source = InMemoryManifestSource::serving(manifest_for("0.2.0", &body).into_bytes());
+        let info = match check(&source, &UpdaterConfig::default(), &v("0.1.6"), &|_| {})
+            .expect("checks")
+        {
+            CheckOutcome::Found(info) => *info,
+            other => panic!("expected an update, got {other:?}"),
+        };
+
+        let installer = RecordingInstaller::returning(InstallOutcome::Installed);
+        let cancel = Cancellation::new();
+        let recorder = Recorder::default();
+
+        // Flip the flag once the transfer has started reporting progress.
+        let seen = std::sync::atomic::AtomicU64::new(0);
+        let emit = recorder.emit();
+        let outcome = download_and_install(
+            &InMemoryDownloader::serving(body),
+            &Sha256Verifier::new(),
+            &installer,
+            &info,
+            &dir,
+            &cancel,
+            &|event| {
+                if matches!(event, UpdateEvent::DownloadProgress(_))
+                    && seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 1
+                {
+                    cancel.cancel();
+                }
+                emit(event);
+            },
+        )
+        .expect("cancelling is not a failure");
+
+        assert_eq!(outcome, None);
+        assert!(installer.calls().is_empty());
+        assert!(
+            !dir.join(info.file_name()).exists(),
+            "the partial archive must not be left behind"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

@@ -175,16 +175,20 @@ mod tests {
 
     #[test]
     fn a_hand_edited_interval_cannot_busy_loop_or_disable_itself() {
-        let mut config = UpdaterConfig::default();
+        let with_interval = |hours| UpdaterConfig {
+            check_interval_hours: hours,
+            ..UpdaterConfig::default()
+        };
 
-        config.check_interval_hours = 0;
-        assert_eq!(config.effective_interval_hours(), MIN_CHECK_INTERVAL_HOURS);
-
-        config.check_interval_hours = u32::MAX;
-        assert_eq!(config.effective_interval_hours(), MAX_CHECK_INTERVAL_HOURS);
-
-        config.check_interval_hours = 6;
-        assert_eq!(config.effective_interval_hours(), 6);
+        assert_eq!(
+            with_interval(0).effective_interval_hours(),
+            MIN_CHECK_INTERVAL_HOURS
+        );
+        assert_eq!(
+            with_interval(u32::MAX).effective_interval_hours(),
+            MAX_CHECK_INTERVAL_HOURS
+        );
+        assert_eq!(with_interval(6).effective_interval_hours(), 6);
     }
 
     #[test]
@@ -229,10 +233,12 @@ mod tests {
 
     #[test]
     fn the_document_round_trips() {
-        let mut config = UpdaterConfig::default();
-        config.channel = Channel::Beta;
+        let mut config = UpdaterConfig {
+            channel: Channel::Beta,
+            check_interval_hours: 6,
+            ..UpdaterConfig::default()
+        };
         config.skip("1.0.0-beta.2");
-        config.check_interval_hours = 6;
 
         let json = serde_json::to_string(&config).expect("serializes");
         assert!(json.contains("\"version\":1"), "{json}");

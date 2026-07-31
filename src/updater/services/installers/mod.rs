@@ -35,9 +35,13 @@ pub mod macos;
 pub mod swap;
 pub mod windows;
 
+#[cfg(test)]
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
+#[cfg(test)]
 use crate::updater::models::state::{InstallOutcome, UpdateError};
 use crate::updater::services::PlatformInstaller;
 
@@ -66,16 +70,18 @@ pub fn platform_installer() -> Arc<dyn PlatformInstaller> {
 
 /// An installer that records what it was asked to do and does none of it.
 ///
-/// The twin for the three above, shaped after
-/// `consent_store::InMemoryConsentStore`. It is what lets
+/// The twin for the three above. It is what lets
 /// [`pipeline`](super::pipeline)'s tests run a whole cycle through to
-/// `ReadyToRestart` without touching an installed application.
+/// `ReadyToRestart` without touching an installed application — and a test
+/// double only, so it is `#[cfg(test)]` and costs the shipped binary nothing.
+#[cfg(test)]
 pub struct RecordingInstaller {
     outcome: Result<InstallOutcome, UpdateError>,
     calls: Mutex<Vec<Call>>,
 }
 
 /// One thing a [`RecordingInstaller`] was asked to do.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Call {
     Install(PathBuf),
@@ -83,6 +89,7 @@ pub enum Call {
     Sweep,
 }
 
+#[cfg(test)]
 impl RecordingInstaller {
     /// An installer that succeeds, reporting `outcome`.
     pub fn returning(outcome: InstallOutcome) -> Self {
@@ -115,6 +122,7 @@ impl RecordingInstaller {
     }
 }
 
+#[cfg(test)]
 impl PlatformInstaller for RecordingInstaller {
     fn install(&self, archive: &Path) -> Result<InstallOutcome, UpdateError> {
         self.record(Call::Install(archive.to_path_buf()));

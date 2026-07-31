@@ -219,13 +219,29 @@ fn compare_pre(left: &[PreRelease], right: &[PreRelease]) -> Ordering {
 /// Which stream of releases the app follows. Serialized as the same lowercase
 /// strings `update.json` uses, so a manifest's `channel` and the user's
 /// configured channel are the same vocabulary.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+///
+/// **Deserialization is deliberately lenient**, which is why `Deserialize` is
+/// written out rather than derived: a derived one rejects an unknown string,
+/// and rejecting it would fail the *whole* document. In `updater.json` that
+/// means one typo (`"nghtly"`) discards the user's manifest URL and their
+/// skipped version along with it; in `update.json` it means a channel added
+/// after this build shipped stops updates entirely. Falling back to
+/// [`Channel::Stable`] — the most conservative stream — costs nothing and fails
+/// in the safe direction. Serialization stays exact.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Channel {
     #[default]
     Stable,
     Beta,
     Nightly,
+}
+
+impl<'de> serde::Deserialize<'de> for Channel {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Channel, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Ok(Channel::from_code(&text))
+    }
 }
 
 impl Channel {

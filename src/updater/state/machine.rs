@@ -57,12 +57,6 @@ pub struct UpdaterMachine {
     state: UpdaterState,
 }
 
-impl Default for UpdaterState {
-    fn default() -> Self {
-        UpdaterState::Idle
-    }
-}
-
 impl UpdaterMachine {
     pub fn new() -> Self {
         Self::default()
@@ -231,11 +225,6 @@ impl UpdaterMachine {
         let version = self.state.info()?.version.clone();
         self.state = UpdaterState::Completed;
         Some(version)
-    }
-
-    /// Back to the beginning, for a dialog that is being reopened.
-    pub fn reset(&mut self) {
-        self.state = UpdaterState::Idle;
     }
 
     /// The error a failed machine holds, for the dialog to render.
@@ -633,13 +622,6 @@ mod tests {
             "a refusal is carried in the outcome, not in a failure state — the \
              dialog is what tells the two apart"
         );
-    }
-
-    #[test]
-    fn resetting_returns_to_idle_from_anywhere() {
-        let mut machine = installed();
-        machine.reset();
-        assert_eq!(*machine.state(), UpdaterState::Idle);
     }
 
     #[test]

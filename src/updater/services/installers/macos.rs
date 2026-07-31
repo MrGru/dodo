@@ -133,9 +133,8 @@ impl PlatformInstaller for MacosInstaller {
                 .arg(bundle)
                 .spawn()
                 .map(|_| ()),
-            InstallTarget::BareExecutable { executable } => {
-                Command::new(executable).spawn().map(|_| ())
-            }
+            // A bare binary has no bundle to hand `open`; run it directly.
+            bare => Command::new(bare.executable()).spawn().map(|_| ()),
         };
 
         started.map_err(|err| UpdateError::Install(format!("could not relaunch: {err}")))
@@ -173,7 +172,7 @@ mod tests {
     use super::MacosInstaller;
     use crate::updater::models::state::{InstallOutcome, ManualReason};
     use crate::updater::services::PlatformInstaller;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn scratch() -> PathBuf {
@@ -186,7 +185,7 @@ mod tests {
 
     /// Builds `<dir>/dodo.app` with a marker inside, and returns the path the
     /// running executable would have.
-    fn fake_bundle(dir: &PathBuf, marker: &[u8]) -> PathBuf {
+    fn fake_bundle(dir: &Path, marker: &[u8]) -> PathBuf {
         let macos = dir.join("dodo.app/Contents/MacOS");
         std::fs::create_dir_all(&macos).expect("creates");
         std::fs::write(macos.join("dodo"), marker).expect("writes");
@@ -195,7 +194,7 @@ mod tests {
 
     /// Packs `<dir>/dodo.app` into a `-app.tar.gz`, the shape the release
     /// publishes.
-    fn pack(dir: &PathBuf, into: &PathBuf) {
+    fn pack(dir: &Path, into: &Path) {
         assert!(
             std::process::Command::new("tar")
                 .arg("-czf")

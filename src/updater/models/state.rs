@@ -203,9 +203,10 @@ impl UpdateError {
 }
 
 /// Where the updater is.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum UpdaterState {
     /// Nothing has happened yet, or the flow was cancelled back to nothing.
+    #[default]
     Idle,
     Checking,
     UpdateAvailable(UpdateInfo),
