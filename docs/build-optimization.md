@@ -358,6 +358,50 @@ The precedent this sets is worth naming: **release engineering goes in
 structural. `docs/release.md`, "Automatic updates", is the authority on what the
 tool does.
 
+### What the in-app updater cost
+
+The round after that one added the consumer side: `src/updater/` (the manifest
+parse, SemVer and channels, an incremental SHA-256, `updater.json`, the state
+machine, the pipeline, three platform installers and the dialog), a
+cross-platform `src/paths.rs`, and 40 new `Str` variants in both languages.
+About 6,000 lines, roughly half of them tests. **It added no dependency.**
+
+| Configuration | Bytes | Δ vs control | Δ % |
+|---|---:|---:|---:|
+| Control — `e0829ee`, the commit before the round | 22,507,024 | — | — |
+| The whole round | 22,805,120 | **+298,096** | **+1.32%** |
+
+Both rows are genuine compiles on the same machine and `target/` with
+`cargo build --release --locked`; the control was forced with `touch
+src/main.rs`. +298 KB is comfortably above the ~14 KB of noise a fat-LTO build
+shows for a trivial edit, so the number is signal — but do not attribute it to
+any single part of the round for the reasons the previous section gives.
+
+**It is the second-biggest dependency-free round the project has had**, four and
+a half times code generation's +66,144 B, and the shape of the code explains it:
+unlike the four pure string emitters that round added, this one pulls in
+`std::process::Command`, a second `reqwest::blocking::Client` construction path,
+`std::fs` rename/metadata/read_dir across three installers, and 80 new `match`
+arms in `Str::text`. Every one of those is monomorphised into a binary built
+with `codegen-units = 1`.
+
+Two things it deliberately did **not** cost:
+
+- **No `sha2`.** It is in `Cargo.lock` only as a build dependency of
+  `rust-embed-utils`, so nothing of it is linked today; taking it would have
+  been a genuinely new runtime dependency. `models/sha256.rs` is ~120 lines
+  against the NIST FIPS 180-4 vectors. Same reasoning for `semver` and
+  `models/version.rs`, which additionally needed a channel policy no crate
+  supplies.
+- **No `flate2` / `tar` / `zip`.** Extraction shells out to the operating
+  system's own `tar`, which reads both formats dodo publishes and exists on all
+  three platforms.
+
+The test doubles cost nothing either: unlike
+`consent_store::InMemoryConsentStore`, which is `#[allow(dead_code)]` because it
+doubles as a runtime fallback, the updater's four are `#[cfg(test)]` and are not
+compiled into the shipped binary at all.
+
 ### Features deliberately not added
 
 - **`production` / `development` / `profiling`.** Nothing in this crate reads

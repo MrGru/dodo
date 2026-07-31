@@ -2,7 +2,8 @@
 
 `dodo` is a Rust desktop app: a single window with a collapsible sidebar, where each sidebar
 entry swaps the main pane to a self-contained developer tool (JSON formatter, Encoder/Decoder,
-API Explorer) plus a Settings dialog. It is built on GPUI (Zed's UI framework) and the `gpui-component` widget
+API Explorer, Docker) plus, in the sidebar footer, a Settings dialog and a **Check for updates**
+dialog. It is built on GPUI (Zed's UI framework) and the `gpui-component` widget
 library, both pulled from git and pinned only by `Cargo.lock`. See `README.md` for the user-facing
 description and `Cargo.toml` for exact dependency sources.
 
@@ -184,26 +185,64 @@ Six things about the module that are not obvious from any one file:
   not repaint on the page's `cx.notify()`), and its width must be **stated** rather than `w_full`
   (a percentage width resolves to `auto` inside the dialog's wrappers and content-sizes the body).
 
-**dodo persists three things across restarts**, all under `~/Library/Application Support/dodo/`
-(`data_dir()`) and each behind a trait so the state layer never learns where they live:
-`collections.json` (`services::collection_store`), `environments.json`
-(`services::variable_store`) and `script-consent.json` (`services::consent_store`, the imported
-scripts the user has approved). The `dodo-theming-settings` skill's "nothing is persisted across
-restarts" is therefore scoped to appearance/language settings only — including the new
-**Run scripts** setting, which is a `ScriptPolicy` global and deliberately starts each launch at
-the cautious `Ask for imported`. Persistence and initial load run on the background executor,
-never the UI thread.
+**`src/updater/`** is the in-app updater — check, ask, download, verify, install, restart — and
+the consumer of the `update.json` the release publishes. Same five-layer split as the two tools
+above; **`src/updater/mod.rs` is the authority** on the structure and "The in-app updater" in
+`docs/release.md` on the behaviour, what was proved against the live release and what was not.
+Six things worth knowing before touching it:
+
+- **Check silently, ask before downloading**, and the second half is *structural*:
+  `services::pipeline::check` is handed no `Downloader`, so it cannot fetch an archive however
+  it is called. Only a button reaches `download_and_install`.
+- **`services/installers/` carries `#[cfg(target_os)]` in exactly one place** — the
+  `platform_installer()` factory, mirroring `docker::services::default_engine`. All three
+  installers therefore compile *and are tested* on every host, which is deliberate insurance
+  against the `#[cfg(unix)]`-only failure that broke `build (windows-x64)`. Nothing in them is a
+  platform API. Do not add a `cfg` anywhere else in the module.
+- **The macOS swap is two renames with a rollback, not one atomic operation.** `swap.rs`'s doc
+  says so and says why `renamex_np(RENAME_SWAP)` is not used (a direct `libc` dependency for one
+  call on one platform). Do not upgrade the word to "atomic" without upgrading the code.
+- **Refusing to install is a success**, surfaced as "downloaded, install manually" with the
+  archive's path — a bare binary, an unwritable `/Applications`, a read-only volume. Only a
+  broken archive or a half-failed rename is an `Err`.
+- **Verification is integrity, not authenticity.** The digest comes from the same HTTPS origin as
+  the archive; `signature` is read, always `null`, and verified by nothing. A mismatch discards
+  the file, and **a downloaded file is never executed** — extraction runs the system's `tar` with
+  the archive as input.
+- **`models/sha256.rs` and `models/version.rs` are hand-written rather than `sha2` and `semver`**,
+  and both module docs argue it: `sha2` is only a *build* dependency today, so taking it would be
+  a genuinely new runtime dependency and a `Cargo.lock` edit. Both are exhaustively table-tested
+  (NIST FIPS 180-4 vectors; SemVer §11 precedence).
+
+**dodo persists four things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
+behind a trait so the state layer never learns where they live: `collections.json`
+(`api_explorer::services::collection_store`), `environments.json` (`services::variable_store`),
+`script-consent.json` (`services::consent_store`, the imported scripts the user has approved) and
+`updater.json` (`updater::services::config_store`). The `dodo-theming-settings` skill's "nothing
+is persisted across restarts" is therefore scoped to appearance/language settings only —
+including the **Run scripts** setting, which is a `ScriptPolicy` global and deliberately starts
+each launch at the cautious `Ask for imported`. `updater.json` is the one exception and the
+reason is `skipped_version`: a "skip this version" that expired every launch would make the button
+a lie. Persistence and initial load run on the background executor, never the UI thread.
+
+**`data_dir()` lives in `src/paths.rs`**, not under `api_explorer/` any more, and it knows all
+three platforms: `~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME`or
+`~/.config`. The macOS path is frozen — changing it orphans every existing installation's saved
+collections. It classifies the platform from `build_info::VERSION_INFO.target` rather than
+`#[cfg]`, which is what lets all three branches be unit tested from a Mac that cannot compile two
+of them; copy that trick rather than a `cfg` split for anything else platform-shaped and pure.
 
 The files version differently, and the difference is deliberate. A `RequestSnapshot` inside
 `collections.json` is versioned only by `#[serde(default)]`, which copes with *added* fields and
-nothing else. `environments.json` and `script-consent.json` carry an explicit `"version"` from
-their very first write, and their `parse_document` **refuses** a file whose version is higher
-rather than half-reading it. Copy that pattern for any new file; do not copy `collections.json`'s.
+nothing else. `environments.json`, `script-consent.json` and `updater.json` carry an explicit
+`"version"` from their very first write, and their `parse_document` **refuses** a file whose
+version is higher rather than half-reading it. Copy that pattern for any new file; do not copy
+`collections.json`'s.
 
 **Build and release engineering lives in `docs/`**, and those two files are the authority for it:
 `docs/build-optimization.md` (release profile, the measured before/after size table, linker
 findings, the dependency report, startup review) and `docs/release.md` (CI, the release workflow,
-packaging, verification, the application icon, future signing/notarisation placeholders). The rest
+packaging, verification, the application icon, the in-app updater, future signing/notarisation). The rest
 is `Cargo.toml`'s `[profile.*]` comments, `build.rs`, `scripts/` and `.github/`.
 
 **The application icon is a committed pipeline, not a file someone dropped in.** `assets/branding/`
@@ -224,14 +263,13 @@ in the root `Cargo.toml` keeps it out of the package (`cargo metadata --no-deps`
 package), it carries its own `Cargo.lock` and four dependencies, and it is built only by the
 release workflow through `--manifest-path`. It costs the binary zero bytes. Do not add it to a
 workspace, and do not give dodo a `[[bin]]`. "Automatic updates" in `docs/release.md` is the
-authority: the manifest shape and why `manifest_version` / `signature` / `channel` exist before
-anything reads them, the hand-verification recipe, and the channel design. Three things that are
+authority: the manifest shape and why `manifest_version` / `signature` / `channel` exist, the
+hand-verification recipe, and the channel design. Three things that are
 decisions rather than details: the manifest points at macOS's **`-app.tar.gz` bundle** selected by
 exact filename (an installer swaps the `.app`); **any missing platform fails the release**,
 experimental ones included, because a silently absent platform means those users are never offered
 an update; and the publish step is **create-or-update**, because `gh release create` cannot repair
-a tag that already exists and tags here are immutable. Nothing reads the manifest yet — the in-app
-updater is a later round.
+a tag that already exists and tags here are immutable. `src/updater/` is what reads it.
 
 Six things about build and release that catch people:
 

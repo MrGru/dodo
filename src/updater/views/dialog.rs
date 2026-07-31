@@ -130,7 +130,17 @@ fn present(view: Entity<UpdateDialog>, window: &mut Window, cx: &mut App) {
 }
 
 fn card_size(window: &Window) -> (gpui::Pixels, gpui::Pixels) {
-    let viewport = window.viewport_size();
+    card_size_for(window.viewport_size())
+}
+
+/// The card width and body height for one viewport: the preferred size, shrunk
+/// to leave [`PANEL_MARGIN`] around the card in a window smaller than that.
+///
+/// Split out from [`card_size`] so it can be tested without a `Window`. That is
+/// worth doing rather than eyeballing: `Dialog` centres the card by computing
+/// `left` from the width it was given, so a card wider than the window is not
+/// merely clipped — it is pushed off *both* edges, and the buttons go with it.
+fn card_size_for(viewport: gpui::Size<gpui::Pixels>) -> (gpui::Pixels, gpui::Pixels) {
     (
         PANEL_W.min(viewport.width - PANEL_MARGIN * 2.),
         PANEL_H.min(viewport.height - PANEL_MARGIN * 4.),
@@ -688,7 +698,49 @@ pub(crate) fn default_services() -> UpdaterServices {
 
 #[cfg(test)]
 mod tests {
-    use super::format_size;
+    use super::{DIALOG_PADDING_X, PANEL_H, PANEL_MARGIN, PANEL_W, card_size_for, format_size};
+    use gpui::{px, size};
+
+    /// The narrow end. dodo opens at 900x620 and its window can be dragged well
+    /// below that; the card has to shrink rather than be pushed off-centre.
+    #[test]
+    fn the_card_fits_inside_a_narrow_window() {
+        for (w, h) in [(480., 400.), (600., 480.), (760., 620.)] {
+            let (card_w, body_h) = card_size_for(size(px(w), px(h)));
+            assert!(
+                card_w <= px(w) - PANEL_MARGIN * 2.,
+                "at {w}x{h} the card is {card_w:?}, wider than the window leaves room for"
+            );
+            assert!(
+                body_h <= px(h),
+                "at {w}x{h} the body is taller than the window"
+            );
+            assert!(
+                card_w > DIALOG_PADDING_X,
+                "at {w}x{h} the card is narrower than its own padding, so the body \
+                 would compute a negative width"
+            );
+        }
+    }
+
+    /// The wide end: the card stops growing at its preferred size rather than
+    /// stretching a two-line dialog across a 5K display.
+    #[test]
+    fn the_card_stops_growing_on_a_wide_window() {
+        for (w, h) in [(900., 620.), (1280., 800.), (3840., 2160.)] {
+            assert_eq!(
+                card_size_for(size(px(w), px(h))),
+                (PANEL_W, PANEL_H),
+                "at {w}x{h}"
+            );
+        }
+    }
+
+    /// dodo's own default window, which is what most people will see.
+    #[test]
+    fn the_default_window_gets_the_preferred_card() {
+        assert_eq!(card_size_for(size(px(900.), px(620.))), (PANEL_W, PANEL_H));
+    }
 
     #[test]
     fn byte_counts_read_the_way_a_download_is_usually_quoted() {
