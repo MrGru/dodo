@@ -24,6 +24,7 @@ mod json_formatter;
 mod layout;
 mod paths;
 mod settings;
+mod updater;
 
 use gpui::*;
 use gpui_component::*;

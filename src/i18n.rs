@@ -763,6 +763,77 @@ pub enum Str {
     GenerateCodeSecretsRevealed,
     /// The toggle itself.
     GenerateCodeRevealSecrets,
+
+    // The in-app updater: the sidebar affordance and the dialog.
+    CheckForUpdates,
+    SoftwareUpdate,
+    UpdateChecking,
+    UpdateUpToDate,
+    /// The version this binary is, shown under every verdict so the user can
+    /// tell what they are comparing against.
+    UpdateCurrentVersion(String),
+    UpdateAvailableHeadline(String),
+    /// The manifest's `published_at`, verbatim. An ISO-8601 UTC timestamp is
+    /// the same characters in every language.
+    UpdatePublished(String),
+    UpdateDownloadSize(String),
+    UpdateReleaseNotes,
+    UpdateDownloadAction,
+    /// Nothing is downloaded until the user presses the action above, so this
+    /// only ever appears after an explicit agreement.
+    UpdateDownloadProgress {
+        done: String,
+        total: String,
+        percent: u8,
+    },
+    UpdateVerifying,
+    UpdateInstalling,
+    UpdateInstalledHeadline(String),
+    UpdateRestartNow,
+    UpdateLater,
+    UpdateSkipVersion,
+    UpdateCancel,
+    UpdateRetry,
+    UpdateCheckAutomatically,
+    /// The install could not be done here. **Not a failure** — the archive is
+    /// downloaded and verified, and this says where it is.
+    UpdateManualInstall(String),
+    UpdateManualNotABundle,
+    UpdateManualNotWritable,
+    UpdateManualReadOnly,
+    UpdateFailedHeadline,
+    /// `reqwest`'s own message is third-party English, kept verbatim inside a
+    /// translated frame — the convention this module records.
+    UpdateErrorNetwork(String),
+    UpdateErrorManifestMalformed(String),
+    UpdateErrorManifestMissingVersion,
+    UpdateErrorManifestUnsupportedVersion {
+        found: u64,
+        supported: u32,
+    },
+    UpdateErrorManifestUnreadableVersion(String),
+    /// Frames one of the three reasons below, which are written as sentence
+    /// fragments so the whole message reads as one sentence in each language.
+    /// Boxed because a `Str` cannot contain itself by value.
+    UpdateErrorManifestInvalidFile {
+        platform: String,
+        detail: Box<Str>,
+    },
+    UpdateErrorManifestBadDigest(String),
+    UpdateErrorManifestZeroSize,
+    UpdateErrorManifestInsecureUrl(String),
+    UpdateErrorPlatformMissing(String),
+    UpdateErrorDownload(String),
+    UpdateErrorChecksum {
+        expected: String,
+        actual: String,
+    },
+    UpdateErrorSize {
+        expected: u64,
+        actual: u64,
+    },
+    UpdateErrorInstall(String),
+    UpdateErrorIo(String),
 }
 
 impl Str {
@@ -2303,6 +2374,229 @@ impl Str {
             (Str::GenerateCodeRevealSecrets, Language::Vietnamese) => {
                 "Thay thế cả biến bí mật".into()
             }
+
+            (Str::CheckForUpdates, Language::English) => "Check for updates".into(),
+            (Str::CheckForUpdates, Language::Vietnamese) => "Kiểm tra cập nhật".into(),
+            (Str::SoftwareUpdate, Language::English) => "Software update".into(),
+            (Str::SoftwareUpdate, Language::Vietnamese) => "Cập nhật phần mềm".into(),
+            (Str::UpdateChecking, Language::English) => "Checking for updates…".into(),
+            (Str::UpdateChecking, Language::Vietnamese) => "Đang kiểm tra cập nhật…".into(),
+            (Str::UpdateUpToDate, Language::English) => "dodo is up to date.".into(),
+            (Str::UpdateUpToDate, Language::Vietnamese) => "dodo đã là bản mới nhất.".into(),
+            (Str::UpdateCurrentVersion(version), Language::English) => {
+                format!("You are running version {version}.").into()
+            }
+            (Str::UpdateCurrentVersion(version), Language::Vietnamese) => {
+                format!("Bạn đang dùng phiên bản {version}.").into()
+            }
+            (Str::UpdateAvailableHeadline(version), Language::English) => {
+                format!("Version {version} is available.").into()
+            }
+            (Str::UpdateAvailableHeadline(version), Language::Vietnamese) => {
+                format!("Đã có phiên bản {version}.").into()
+            }
+            (Str::UpdatePublished(when), Language::English) => format!("Published {when}").into(),
+            (Str::UpdatePublished(when), Language::Vietnamese) => format!("Phát hành {when}").into(),
+            (Str::UpdateDownloadSize(size), Language::English) => {
+                format!("Download size {size}").into()
+            }
+            (Str::UpdateDownloadSize(size), Language::Vietnamese) => {
+                format!("Dung lượng tải về {size}").into()
+            }
+            (Str::UpdateReleaseNotes, Language::English) => "Release notes".into(),
+            (Str::UpdateReleaseNotes, Language::Vietnamese) => "Ghi chú phát hành".into(),
+            (Str::UpdateDownloadAction, Language::English) => "Download and install".into(),
+            (Str::UpdateDownloadAction, Language::Vietnamese) => "Tải về và cài đặt".into(),
+            (
+                Str::UpdateDownloadProgress {
+                    done,
+                    total,
+                    percent,
+                },
+                Language::English,
+            ) => format!("Downloading… {done} of {total} ({percent}%)").into(),
+            (
+                Str::UpdateDownloadProgress {
+                    done,
+                    total,
+                    percent,
+                },
+                Language::Vietnamese,
+            ) => format!("Đang tải… {done} trên {total} ({percent}%)").into(),
+            (Str::UpdateVerifying, Language::English) => "Verifying the download…".into(),
+            (Str::UpdateVerifying, Language::Vietnamese) => "Đang xác minh tệp tải về…".into(),
+            (Str::UpdateInstalling, Language::English) => "Installing…".into(),
+            (Str::UpdateInstalling, Language::Vietnamese) => "Đang cài đặt…".into(),
+            (Str::UpdateInstalledHeadline(version), Language::English) => {
+                format!("Version {version} is installed.").into()
+            }
+            (Str::UpdateInstalledHeadline(version), Language::Vietnamese) => {
+                format!("Đã cài đặt phiên bản {version}.").into()
+            }
+            (Str::UpdateRestartNow, Language::English) => "Restart now".into(),
+            (Str::UpdateRestartNow, Language::Vietnamese) => "Khởi động lại ngay".into(),
+            (Str::UpdateLater, Language::English) => "Later".into(),
+            (Str::UpdateLater, Language::Vietnamese) => "Để sau".into(),
+            (Str::UpdateSkipVersion, Language::English) => "Skip this version".into(),
+            (Str::UpdateSkipVersion, Language::Vietnamese) => "Bỏ qua phiên bản này".into(),
+            (Str::UpdateCancel, Language::English) => "Cancel".into(),
+            (Str::UpdateCancel, Language::Vietnamese) => "Huỷ".into(),
+            (Str::UpdateRetry, Language::English) => "Try again".into(),
+            (Str::UpdateRetry, Language::Vietnamese) => "Thử lại".into(),
+            (Str::UpdateCheckAutomatically, Language::English) => {
+                "Check for updates automatically".into()
+            }
+            (Str::UpdateCheckAutomatically, Language::Vietnamese) => {
+                "Tự động kiểm tra cập nhật".into()
+            }
+            (Str::UpdateManualInstall(path), Language::English) => format!(
+                "The update was downloaded and verified, but dodo cannot replace itself where \
+                 it is installed. The archive is at {path}."
+            )
+            .into(),
+            (Str::UpdateManualInstall(path), Language::Vietnamese) => format!(
+                "Bản cập nhật đã được tải về và xác minh, nhưng dodo không thể tự thay thế ở \
+                 vị trí đang cài. Tệp nén nằm tại {path}."
+            )
+            .into(),
+            (Str::UpdateManualNotABundle, Language::English) => {
+                "dodo is running as a plain executable rather than from an app bundle.".into()
+            }
+            (Str::UpdateManualNotABundle, Language::Vietnamese) => {
+                "dodo đang chạy dưới dạng tệp thực thi đơn lẻ, không phải từ gói ứng dụng.".into()
+            }
+            (Str::UpdateManualNotWritable, Language::English) => {
+                "The folder dodo is installed in cannot be written to.".into()
+            }
+            (Str::UpdateManualNotWritable, Language::Vietnamese) => {
+                "Không thể ghi vào thư mục đang cài dodo.".into()
+            }
+            (Str::UpdateManualReadOnly, Language::English) => {
+                "dodo is running from a read-only location.".into()
+            }
+            (Str::UpdateManualReadOnly, Language::Vietnamese) => {
+                "dodo đang chạy từ một vị trí chỉ đọc.".into()
+            }
+            (Str::UpdateFailedHeadline, Language::English) => {
+                "The update could not be completed.".into()
+            }
+            (Str::UpdateFailedHeadline, Language::Vietnamese) => {
+                "Không thể hoàn tất bản cập nhật.".into()
+            }
+            (Str::UpdateErrorNetwork(detail), Language::English) => {
+                format!("Could not reach the update server: {detail}").into()
+            }
+            (Str::UpdateErrorNetwork(detail), Language::Vietnamese) => {
+                format!("Không kết nối được máy chủ cập nhật: {detail}").into()
+            }
+            (Str::UpdateErrorManifestMalformed(detail), Language::English) => {
+                format!("The update manifest could not be read: {detail}").into()
+            }
+            (Str::UpdateErrorManifestMalformed(detail), Language::Vietnamese) => {
+                format!("Không đọc được tệp kê khai cập nhật: {detail}").into()
+            }
+            (Str::UpdateErrorManifestMissingVersion, Language::English) => {
+                "The update manifest carries no version, so dodo cannot tell how to read it."
+                    .into()
+            }
+            (Str::UpdateErrorManifestMissingVersion, Language::Vietnamese) => {
+                "Tệp kê khai cập nhật không ghi phiên bản, nên dodo không biết cách đọc nó.".into()
+            }
+            (
+                Str::UpdateErrorManifestUnsupportedVersion { found, supported },
+                Language::English,
+            ) => format!(
+                "The update manifest is version {found}; this dodo understands version \
+                 {supported}. Update dodo by hand."
+            )
+            .into(),
+            (
+                Str::UpdateErrorManifestUnsupportedVersion { found, supported },
+                Language::Vietnamese,
+            ) => format!(
+                "Tệp kê khai cập nhật ở phiên bản {found}; dodo này chỉ hiểu phiên bản \
+                 {supported}. Hãy cập nhật dodo thủ công."
+            )
+            .into(),
+            (Str::UpdateErrorManifestUnreadableVersion(text), Language::English) => {
+                format!("The update manifest names a version dodo cannot read: {text}").into()
+            }
+            (Str::UpdateErrorManifestUnreadableVersion(text), Language::Vietnamese) => {
+                format!("Tệp kê khai cập nhật ghi một phiên bản dodo không đọc được: {text}").into()
+            }
+            (Str::UpdateErrorManifestInvalidFile { platform, detail }, language) => format!(
+                "{}: {}",
+                match language {
+                    Language::English =>
+                        format!("The update manifest's {platform} entry is unusable"),
+                    Language::Vietnamese =>
+                        format!("Mục {platform} trong tệp kê khai cập nhật không dùng được"),
+                },
+                detail.text(language)
+            )
+            .into(),
+            (Str::UpdateErrorManifestBadDigest(digest), Language::English) => {
+                format!("{digest} is not a SHA-256 checksum").into()
+            }
+            (Str::UpdateErrorManifestBadDigest(digest), Language::Vietnamese) => {
+                format!("{digest} không phải là mã băm SHA-256").into()
+            }
+            (Str::UpdateErrorManifestZeroSize, Language::English) => {
+                "the download size is zero".into()
+            }
+            (Str::UpdateErrorManifestZeroSize, Language::Vietnamese) => {
+                "dung lượng tải về bằng không".into()
+            }
+            (Str::UpdateErrorManifestInsecureUrl(url), Language::English) => {
+                format!("the download address does not use https: {url}").into()
+            }
+            (Str::UpdateErrorManifestInsecureUrl(url), Language::Vietnamese) => {
+                format!("địa chỉ tải về không dùng https: {url}").into()
+            }
+            (Str::UpdateErrorPlatformMissing(key), Language::English) => {
+                format!("This release publishes no download for {key}.").into()
+            }
+            (Str::UpdateErrorPlatformMissing(key), Language::Vietnamese) => {
+                format!("Bản phát hành này không có tệp tải về cho {key}.").into()
+            }
+            (Str::UpdateErrorDownload(detail), Language::English) => {
+                format!("The download failed: {detail}").into()
+            }
+            (Str::UpdateErrorDownload(detail), Language::Vietnamese) => {
+                format!("Tải về thất bại: {detail}").into()
+            }
+            (Str::UpdateErrorChecksum { expected, actual }, Language::English) => format!(
+                "The download does not match the checksum this release published — expected \
+                 {expected}, got {actual}. It has been discarded and nothing was installed."
+            )
+            .into(),
+            (Str::UpdateErrorChecksum { expected, actual }, Language::Vietnamese) => format!(
+                "Tệp tải về không khớp mã băm mà bản phát hành công bố — cần {expected}, nhận \
+                 được {actual}. Tệp đã bị xoá và không có gì được cài đặt."
+            )
+            .into(),
+            (Str::UpdateErrorSize { expected, actual }, Language::English) => format!(
+                "The download is {actual} bytes; this release says {expected}. It has been \
+                 discarded and nothing was installed."
+            )
+            .into(),
+            (Str::UpdateErrorSize { expected, actual }, Language::Vietnamese) => format!(
+                "Tệp tải về có {actual} byte; bản phát hành ghi {expected}. Tệp đã bị xoá và \
+                 không có gì được cài đặt."
+            )
+            .into(),
+            (Str::UpdateErrorInstall(detail), Language::English) => {
+                format!("The update could not be installed: {detail}").into()
+            }
+            (Str::UpdateErrorInstall(detail), Language::Vietnamese) => {
+                format!("Không thể cài đặt bản cập nhật: {detail}").into()
+            }
+            (Str::UpdateErrorIo(detail), Language::English) => {
+                format!("A file could not be written: {detail}").into()
+            }
+            (Str::UpdateErrorIo(detail), Language::Vietnamese) => {
+                format!("Không thể ghi tệp: {detail}").into()
+            }
         }
     }
 }
@@ -2922,6 +3216,86 @@ mod tests {
             with(Str::GenerateCodeSecretsWithheld(DETAIL.into()), &[DETAIL]),
             plain(Str::GenerateCodeSecretsRevealed),
             plain(Str::GenerateCodeRevealSecrets),
+            // The in-app updater.
+            plain(Str::CheckForUpdates),
+            plain(Str::SoftwareUpdate),
+            plain(Str::UpdateChecking),
+            plain(Str::UpdateUpToDate),
+            with(Str::UpdateCurrentVersion(DETAIL.into()), &[DETAIL]),
+            with(Str::UpdateAvailableHeadline(DETAIL.into()), &[DETAIL]),
+            with(Str::UpdatePublished(DETAIL.into()), &[DETAIL]),
+            with(Str::UpdateDownloadSize(DETAIL.into()), &[DETAIL]),
+            plain(Str::UpdateReleaseNotes),
+            plain(Str::UpdateDownloadAction),
+            with(
+                Str::UpdateDownloadProgress {
+                    done: DETAIL.into(),
+                    total: NUMBER_TEXT.into(),
+                    percent: 42,
+                },
+                &[DETAIL, NUMBER_TEXT, "42"],
+            ),
+            plain(Str::UpdateVerifying),
+            plain(Str::UpdateInstalling),
+            with(Str::UpdateInstalledHeadline(DETAIL.into()), &[DETAIL]),
+            plain(Str::UpdateRestartNow),
+            plain(Str::UpdateLater),
+            plain(Str::UpdateSkipVersion),
+            plain(Str::UpdateCancel),
+            plain(Str::UpdateRetry),
+            plain(Str::UpdateCheckAutomatically),
+            with(Str::UpdateManualInstall(DETAIL.into()), &[DETAIL]),
+            plain(Str::UpdateManualNotABundle),
+            plain(Str::UpdateManualNotWritable),
+            plain(Str::UpdateManualReadOnly),
+            plain(Str::UpdateFailedHeadline),
+            with(Str::UpdateErrorNetwork(DETAIL.into()), &[DETAIL]),
+            with(Str::UpdateErrorManifestMalformed(DETAIL.into()), &[DETAIL]),
+            plain(Str::UpdateErrorManifestMissingVersion),
+            with(
+                Str::UpdateErrorManifestUnsupportedVersion {
+                    found: NUMBER as u64,
+                    supported: 77,
+                },
+                &[NUMBER_TEXT, "77"],
+            ),
+            with(
+                Str::UpdateErrorManifestUnreadableVersion(DETAIL.into()),
+                &[DETAIL],
+            ),
+            // The framed reason is language-dependent, so only the platform key
+            // — which is a wire identifier and never translated — is asserted.
+            with(
+                Str::UpdateErrorManifestInvalidFile {
+                    platform: DETAIL.into(),
+                    detail: Box::new(Str::UpdateErrorManifestZeroSize),
+                },
+                &[DETAIL],
+            ),
+            with(Str::UpdateErrorManifestBadDigest(DETAIL.into()), &[DETAIL]),
+            plain(Str::UpdateErrorManifestZeroSize),
+            with(
+                Str::UpdateErrorManifestInsecureUrl(DETAIL.into()),
+                &[DETAIL],
+            ),
+            with(Str::UpdateErrorPlatformMissing(DETAIL.into()), &[DETAIL]),
+            with(Str::UpdateErrorDownload(DETAIL.into()), &[DETAIL]),
+            with(
+                Str::UpdateErrorChecksum {
+                    expected: DETAIL.into(),
+                    actual: NUMBER_TEXT.into(),
+                },
+                &[DETAIL, NUMBER_TEXT],
+            ),
+            with(
+                Str::UpdateErrorSize {
+                    expected: NUMBER as u64,
+                    actual: 77,
+                },
+                &[NUMBER_TEXT, "77"],
+            ),
+            with(Str::UpdateErrorInstall(DETAIL.into()), &[DETAIL]),
+            with(Str::UpdateErrorIo(DETAIL.into()), &[DETAIL]),
         ]
     }
 
@@ -3365,6 +3739,47 @@ mod tests {
             Str::GenerateCodeSecretsWithheld(_) => 426,
             Str::GenerateCodeSecretsRevealed => 427,
             Str::GenerateCodeRevealSecrets => 428,
+
+            Str::CheckForUpdates => 429,
+            Str::SoftwareUpdate => 430,
+            Str::UpdateChecking => 431,
+            Str::UpdateUpToDate => 432,
+            Str::UpdateCurrentVersion(_) => 433,
+            Str::UpdateAvailableHeadline(_) => 434,
+            Str::UpdatePublished(_) => 435,
+            Str::UpdateDownloadSize(_) => 436,
+            Str::UpdateReleaseNotes => 437,
+            Str::UpdateDownloadAction => 438,
+            Str::UpdateDownloadProgress { .. } => 439,
+            Str::UpdateVerifying => 440,
+            Str::UpdateInstalling => 441,
+            Str::UpdateInstalledHeadline(_) => 442,
+            Str::UpdateRestartNow => 443,
+            Str::UpdateLater => 444,
+            Str::UpdateSkipVersion => 445,
+            Str::UpdateCancel => 446,
+            Str::UpdateRetry => 447,
+            Str::UpdateCheckAutomatically => 448,
+            Str::UpdateManualInstall(_) => 449,
+            Str::UpdateManualNotABundle => 450,
+            Str::UpdateManualNotWritable => 451,
+            Str::UpdateManualReadOnly => 452,
+            Str::UpdateFailedHeadline => 453,
+            Str::UpdateErrorNetwork(_) => 454,
+            Str::UpdateErrorManifestMalformed(_) => 455,
+            Str::UpdateErrorManifestMissingVersion => 456,
+            Str::UpdateErrorManifestUnsupportedVersion { .. } => 457,
+            Str::UpdateErrorManifestUnreadableVersion(_) => 458,
+            Str::UpdateErrorManifestInvalidFile { .. } => 459,
+            Str::UpdateErrorManifestBadDigest(_) => 460,
+            Str::UpdateErrorManifestZeroSize => 461,
+            Str::UpdateErrorManifestInsecureUrl(_) => 462,
+            Str::UpdateErrorPlatformMissing(_) => 463,
+            Str::UpdateErrorDownload(_) => 464,
+            Str::UpdateErrorChecksum { .. } => 465,
+            Str::UpdateErrorSize { .. } => 466,
+            Str::UpdateErrorInstall(_) => 467,
+            Str::UpdateErrorIo(_) => 468,
         }
     }
 
