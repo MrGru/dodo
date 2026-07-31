@@ -14,6 +14,7 @@ use crate::encoder_decoder::EncoderDecoder;
 use crate::i18n::{Str, t};
 use crate::json_formatter::JsonFormatter;
 use crate::settings;
+use crate::updater;
 
 /// Which tool is currently shown in the main pane. Selecting a sidebar item
 /// switches the active view.
@@ -153,21 +154,51 @@ impl Render for Layout {
                     )
                     .child(SidebarGroup::new(t(Str::Tools, cx)).child(self.menu(cx)))
                     .footer(
-                        SidebarFooter::new().child(
-                            Button::new("open-settings")
-                                .ghost()
-                                .w_full()
-                                .justify_start()
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .child(AppIcon::Settings.view())
-                                        .when(!icon_collapsed, |this| {
-                                            this.child(t(Str::Settings, cx))
-                                        }),
-                                )
-                                .on_click(|_, window, cx| settings::open(window, cx)),
-                        ),
+                        SidebarFooter::new()
+                            .child(
+                                // Beside Settings rather than inside it: this is
+                                // an action, not a preference, and the one
+                                // preference it carries ("check automatically")
+                                // lives in the dialog it opens.
+                                Button::new("check-for-updates")
+                                    .ghost()
+                                    .w_full()
+                                    .justify_start()
+                                    .child(h_flex().gap_2().child(AppIcon::Download.view()).when(
+                                        !icon_collapsed,
+                                        |this| {
+                                            // Fixed-length label in a
+                                            // 240px-wide sidebar: without
+                                            // these it wraps to two lines
+                                            // and pushes the footer taller.
+                                            this.child(
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .whitespace_nowrap()
+                                                    .child(t(Str::CheckForUpdates, cx)),
+                                            )
+                                        },
+                                    ))
+                                    .on_click(|_, window, cx| updater::open(window, cx)),
+                            )
+                            .child(
+                                Button::new("open-settings")
+                                    .ghost()
+                                    .w_full()
+                                    .justify_start()
+                                    .child(h_flex().gap_2().child(AppIcon::Settings.view()).when(
+                                        !icon_collapsed,
+                                        |this| {
+                                            this.child(
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .whitespace_nowrap()
+                                                    .child(t(Str::Settings, cx)),
+                                            )
+                                        },
+                                    ))
+                                    .on_click(|_, window, cx| settings::open(window, cx)),
+                            ),
                     ),
             )
             .child(

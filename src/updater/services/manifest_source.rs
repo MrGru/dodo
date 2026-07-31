@@ -111,7 +111,11 @@ impl ManifestSource for HttpManifestSource {
 }
 
 /// A manifest held in memory, for tests and for driving the pipeline with no
-/// network at all. Shaped after `consent_store::InMemoryConsentStore`.
+/// network at all. Shaped after `consent_store::InMemoryConsentStore`, with one
+/// difference: it is `#[cfg(test)]` rather than `#[allow(dead_code)]`, because
+/// unlike that one it is *only* a test double — it is no use as a runtime
+/// fallback, so compiling it into the shipped binary would buy nothing.
+#[cfg(test)]
 pub struct InMemoryManifestSource {
     /// What every fetch returns, whatever URL it is given — or the failure it
     /// returns instead.
@@ -121,6 +125,7 @@ pub struct InMemoryManifestSource {
     requested: std::sync::Mutex<Vec<String>>,
 }
 
+#[cfg(test)]
 impl InMemoryManifestSource {
     pub fn serving(document: impl Into<Vec<u8>>) -> Self {
         Self {
@@ -145,6 +150,7 @@ impl InMemoryManifestSource {
     }
 }
 
+#[cfg(test)]
 impl ManifestSource for InMemoryManifestSource {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, UpdateError> {
         if let Ok(mut urls) = self.requested.lock() {
@@ -184,14 +190,13 @@ mod tests {
     }
 
     /// The cap is on the *manifest*, which is the one response the updater
-    /// buffers whole. It is nowhere near the real document and nowhere near a
-    /// size that could exhaust memory.
-    #[test]
-    fn the_manifest_cap_is_generous_but_bounded() {
-        assert!(
-            MAX_MANIFEST_BYTES >= 64 * 1024,
-            "smaller than a real manifest could grow"
-        );
-        assert!(MAX_MANIFEST_BYTES <= 8 * 1024 * 1024, "not a bound at all");
-    }
+    /// buffers whole: nowhere near the real document (about 2 KiB) and nowhere
+    /// near a size that could exhaust memory. A `const` assertion rather than a
+    /// runtime one because both sides are constants — clippy is right that
+    /// `assert!` over two literals is not a test.
+    const _: () = assert!(
+        MAX_MANIFEST_BYTES >= 64 * 1024 && MAX_MANIFEST_BYTES <= 8 * 1024 * 1024,
+        "the manifest cap must stay well above a real manifest and well below a \
+         size that could exhaust memory"
+    );
 }

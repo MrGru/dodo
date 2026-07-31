@@ -75,6 +75,11 @@ pub enum AppIcon {
     /// The Inspect placeholder action on the round-3 pages. Resolves through
     /// `Assets`' fallback to `gpui_component_assets`.
     Eye,
+
+    /// The updater. Ships as our own `icons/download.svg`: the library carries
+    /// no download glyph, and `arrow-down` reads as "sort descending" beside a
+    /// list of tools.
+    Download,
 }
 
 impl IconNamed for AppIcon {
@@ -122,6 +127,7 @@ impl IconNamed for AppIcon {
             Self::Stop => "icons/square.svg",
             Self::Restart => "icons/rotate-ccw.svg",
             Self::Eye => "icons/eye.svg",
+            Self::Download => "icons/download.svg",
         }
         .into()
     }

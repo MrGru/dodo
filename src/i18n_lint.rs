@@ -36,7 +36,7 @@
 /// The view sources, embedded at compile time so the test needs no working
 /// directory. These are the files that build what the user sees; pure logic
 /// modules have no text sinks and are not worth scanning.
-const SOURCES: [(&str, &str); 17] = [
+const SOURCES: [(&str, &str); 18] = [
     ("src/layout.rs", include_str!("layout.rs")),
     ("src/json_formatter.rs", include_str!("json_formatter.rs")),
     ("src/encoder_decoder.rs", include_str!("encoder_decoder.rs")),
@@ -96,6 +96,15 @@ const SOURCES: [(&str, &str); 17] = [
     (
         "src/api_explorer/components/later_step.rs",
         include_str!("api_explorer/components/later_step.rs"),
+    ),
+    // The update dialog. Its *release notes* pane is deliberately not
+    // translated — that text arrives in `update.json` and belongs to the
+    // release, not to dodo — but it reaches the screen through a
+    // `SharedString::from(info.notes)`, not a literal, so it is not a finding
+    // and needs no exception here.
+    (
+        "src/updater/views/dialog.rs",
+        include_str!("updater/views/dialog.rs"),
     ),
 ];
 

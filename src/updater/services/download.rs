@@ -38,7 +38,7 @@ use reqwest::blocking::Client;
 use crate::updater::models::manifest::ManifestFile;
 use crate::updater::models::sha256::Sha256;
 use crate::updater::models::state::{DownloadProgress, UpdateError};
-use crate::updater::services::{DownloadedArchive, Downloader};
+use crate::updater::services::{DownloadedArchive, Downloader, Flow};
 
 /// How much is read from the socket at a time. Large enough that a 12 MB
 /// archive is a couple of hundred iterations, small enough that the progress
@@ -62,6 +62,11 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const OVERSHOOT_ALLOWANCE: u64 = 64 * 1024;
 
 const USER_AGENT: &str = concat!("dodo/", env!("CARGO_PKG_VERSION"), " (updater)");
+
+/// The detail an aborted transfer carries. Recognised by
+/// [`pipeline`](super::pipeline), which turns a cancelled download into no
+/// event at all rather than into an error the user has to dismiss.
+pub const CANCELLED: &str = "cancelled";
 
 /// Downloads over HTTPS, in chunks, hashing as it goes.
 #[derive(Default)]
@@ -94,7 +99,7 @@ impl Downloader for HttpDownloader {
         &self,
         file: &ManifestFile,
         destination: &Path,
-        progress: &dyn Fn(DownloadProgress),
+        progress: &dyn Fn(DownloadProgress) -> Flow,
     ) -> Result<DownloadedArchive, UpdateError> {
         // `models::manifest::parse` has already refused a non-https URL; this is
         // the belt to that braces, because this function is what turns a URL
@@ -131,7 +136,11 @@ impl Downloader for HttpDownloader {
         let mut written: u64 = 0;
         let limit = file.size.saturating_add(OVERSHOOT_ALLOWANCE);
 
-        progress(DownloadProgress::new(0, file.size));
+        if progress(DownloadProgress::new(0, file.size)) == Flow::Abort {
+            drop(out);
+            let _ = std::fs::remove_file(destination);
+            return Err(UpdateError::Download(CANCELLED.to_owned()));
+        }
 
         loop {
             let read = response
@@ -158,7 +167,13 @@ impl Downloader for HttpDownloader {
                 });
             }
 
-            progress(DownloadProgress::new(written, file.size));
+            // The abort path is checked once per chunk, so cancelling a
+            // download stops it within 64 KiB rather than at the end.
+            if progress(DownloadProgress::new(written, file.size)) == Flow::Abort {
+                drop(out);
+                let _ = std::fs::remove_file(destination);
+                return Err(UpdateError::Download(CANCELLED.to_owned()));
+            }
         }
 
         out.flush()
@@ -176,8 +191,11 @@ impl Downloader for HttpDownloader {
     }
 }
 
-/// A downloader that writes bytes it was handed, for tests and for driving the
-/// pipeline with no network. Shaped after `consent_store::InMemoryConsentStore`.
+/// A downloader that writes bytes it was handed, for driving the pipeline with
+/// no network. A test double only — see
+/// [`InMemoryManifestSource`](super::manifest_source::InMemoryManifestSource)
+/// for why that makes it `#[cfg(test)]`.
+#[cfg(test)]
 pub struct InMemoryDownloader {
     body: Result<Vec<u8>, UpdateError>,
     /// Every progress report it emitted, so a test can assert the callback
@@ -185,6 +203,7 @@ pub struct InMemoryDownloader {
     reported: std::sync::Mutex<Vec<DownloadProgress>>,
 }
 
+#[cfg(test)]
 impl InMemoryDownloader {
     pub fn serving(body: impl Into<Vec<u8>>) -> Self {
         Self {
@@ -208,12 +227,13 @@ impl InMemoryDownloader {
     }
 }
 
+#[cfg(test)]
 impl Downloader for InMemoryDownloader {
     fn download(
         &self,
         file: &ManifestFile,
         destination: &Path,
-        progress: &dyn Fn(DownloadProgress),
+        progress: &dyn Fn(DownloadProgress) -> Flow,
     ) -> Result<DownloadedArchive, UpdateError> {
         let body = self.body.clone()?;
 
@@ -229,21 +249,31 @@ impl Downloader for InMemoryDownloader {
         let mut out = File::create(destination)
             .map_err(|err| UpdateError::Io(format!("{}: {err}", destination.display())))?;
 
-        let report = |written: u64, this: &Self| {
+        let report = |written: u64, this: &Self| -> Flow {
             let update = DownloadProgress::new(written, file.size);
             if let Ok(mut reports) = this.reported.lock() {
                 reports.push(update);
             }
-            progress(update);
+            progress(update)
         };
 
-        report(0, self);
+        let abandon = |out: File, destination: &Path| {
+            drop(out);
+            let _ = std::fs::remove_file(destination);
+            Err(UpdateError::Download(CANCELLED.to_owned()))
+        };
+
+        if report(0, self) == Flow::Abort {
+            return abandon(out, destination);
+        }
         for chunk in body.chunks(8.max(body.len().div_ceil(4))) {
             out.write_all(chunk)
                 .map_err(|err| UpdateError::Io(format!("{}: {err}", destination.display())))?;
             hasher.update(chunk);
             written += chunk.len() as u64;
-            report(written, self);
+            if report(written, self) == Flow::Abort {
+                return abandon(out, destination);
+            }
         }
 
         Ok(DownloadedArchive {
@@ -276,7 +306,7 @@ mod tests {
     use crate::updater::models::manifest::ManifestFile;
     use crate::updater::models::sha256::Sha256;
     use crate::updater::models::state::{DownloadProgress, UpdateError};
-    use crate::updater::services::Downloader;
+    use crate::updater::services::{Downloader, Flow};
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -307,7 +337,7 @@ mod tests {
 
         let downloader = InMemoryDownloader::serving(body.clone());
         let archive = downloader
-            .download(&file, &path, &|_| {})
+            .download(&file, &path, &|_| Flow::Continue)
             .expect("the fake never fails");
 
         assert_eq!(std::fs::read(&path).expect("written"), body);
@@ -332,6 +362,7 @@ mod tests {
         downloader
             .download(&file, &path, &|update| {
                 seen.lock().expect("uncontended").push(update);
+                Flow::Continue
             })
             .expect("downloads");
 
@@ -356,13 +387,61 @@ mod tests {
         let downloader = InMemoryDownloader::failing(UpdateError::Download("reset".into()));
 
         assert_eq!(
-            downloader.download(&file_for(b"x"), &path, &|_| {}),
+            downloader.download(&file_for(b"x"), &path, &|_| Flow::Continue),
             Err(UpdateError::Download("reset".into()))
         );
         assert!(
             !path.exists(),
             "a failed download must leave no file behind"
         );
+
+        clean_temp_dir(&dir);
+    }
+
+    /// Cancellation has to stop the transfer *and* take the partial file with
+    /// it: half an archive that nothing verified must not be left where an
+    /// installer could find it.
+    #[test]
+    fn aborting_mid_transfer_stops_it_and_removes_the_partial_file() {
+        let dir = scratch();
+        let path = dir.join("dodo.tar.gz");
+        let body = vec![b'x'; 4000];
+        let file = file_for(&body);
+
+        let chunks = std::sync::atomic::AtomicU64::new(0);
+        let error = InMemoryDownloader::serving(body)
+            .download(&file, &path, &|_| {
+                // Continue for the first two reports, then abort — so this
+                // stops partway rather than before it starts.
+                if chunks.fetch_add(1, Ordering::Relaxed) < 2 {
+                    Flow::Continue
+                } else {
+                    Flow::Abort
+                }
+            })
+            .expect_err("aborted");
+
+        assert!(matches!(error, UpdateError::Download(_)), "{error:?}");
+        assert!(
+            !path.exists(),
+            "an abandoned transfer must not leave a partial archive behind"
+        );
+
+        clean_temp_dir(&dir);
+    }
+
+    #[test]
+    fn aborting_before_the_first_byte_writes_nothing() {
+        let dir = scratch();
+        let path = dir.join("dodo.tar.gz");
+        let body = vec![b'x'; 100];
+
+        assert!(
+            InMemoryDownloader::serving(body.clone())
+                .download(&file_for(&body), &path, &|_| Flow::Abort)
+                .is_err()
+        );
+        assert!(!path.exists());
 
         clean_temp_dir(&dir);
     }

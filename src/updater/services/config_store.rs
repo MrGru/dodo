@@ -27,6 +27,7 @@
 //! background executor, never the UI thread.
 
 use std::path::PathBuf;
+#[cfg(test)]
 use std::sync::Mutex;
 
 use serde_json::Value;
@@ -116,14 +117,19 @@ impl UpdaterConfigStore for DiskUpdaterConfigStore {
     }
 }
 
-/// Settings held in memory, for tests and as a session-only fallback behind the
-/// same trait. Shaped after `consent_store::InMemoryConsentStore`.
+/// Settings held in memory. A test double only — see
+/// [`InMemoryManifestSource`](super::manifest_source::InMemoryManifestSource)
+/// for why that makes it `#[cfg(test)]`.
+#[cfg(test)]
 #[derive(Default)]
 pub struct InMemoryConfigStore {
     config: Mutex<UpdaterConfig>,
 }
 
+#[cfg(test)]
 impl InMemoryConfigStore {
+    /// Starts from settings other than the defaults — the shape a test needs
+    /// when it is checking what a *stored* choice does.
     pub fn holding(config: UpdaterConfig) -> Self {
         Self {
             config: Mutex::new(config),
@@ -131,6 +137,7 @@ impl InMemoryConfigStore {
     }
 }
 
+#[cfg(test)]
 impl UpdaterConfigStore for InMemoryConfigStore {
     fn load(&self) -> Result<UpdaterConfig, UpdateError> {
         Ok(self
@@ -245,11 +252,30 @@ mod tests {
         }
     }
 
+    /// The twin has to be able to *start* from stored settings, not only to
+    /// remember what it was handed: that is the shape a test needs when it is
+    /// checking what an existing choice does on the next launch.
+    #[test]
+    fn the_in_memory_store_can_start_from_stored_settings() {
+        let mut stored = UpdaterConfig {
+            auto_update: false,
+            ..UpdaterConfig::default()
+        };
+        stored.skip("0.2.0");
+
+        let store = InMemoryConfigStore::holding(stored.clone());
+        let loaded = store.load().expect("loads");
+        assert_eq!(loaded, stored);
+        assert!(!loaded.checks_on_startup());
+    }
+
     #[test]
     fn the_in_memory_store_round_trips() {
         let store = InMemoryConfigStore::default();
-        let mut config = UpdaterConfig::default();
-        config.auto_update = false;
+        let config = UpdaterConfig {
+            auto_update: false,
+            ..UpdaterConfig::default()
+        };
         store.persist(&config).expect("persists");
         assert_eq!(store.load().expect("loads"), config);
     }

@@ -133,6 +133,7 @@ impl PlatformInstaller for WindowsInstaller {
 /// top level — but a future archive might nest it under a directory, so one
 /// level down is searched as well. Matching is by **the running executable's own
 /// filename**, which is what has to be replaced whatever it is called.
+#[allow(dead_code)] // Reached only through this platform's installer; see `installers/mod.rs`.
 fn find_executable(staging: &Path, running: &Path) -> Option<PathBuf> {
     let wanted = running.file_name()?;
 
@@ -155,7 +156,7 @@ mod tests {
     use super::{WindowsInstaller, find_executable};
     use crate::updater::models::state::InstallOutcome;
     use crate::updater::services::PlatformInstaller;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn scratch() -> PathBuf {
@@ -167,7 +168,7 @@ mod tests {
         dir
     }
 
-    fn pack_flat(dir: &PathBuf, name: &str, into: &PathBuf) {
+    fn pack_flat(dir: &Path, name: &str, into: &Path) {
         assert!(
             std::process::Command::new("tar")
                 .arg("-czf")

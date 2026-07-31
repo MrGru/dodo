@@ -53,11 +53,19 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["fo
 gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 anyhow = "1.0"
-# The HTTP client behind the API Explorer. `default-features = false` drops
-# `default-tls`, `charset` and `system-proxy`; `rustls` then selects rustls with
-# the platform certificate verifier, so no OpenSSL is required to build.
-# `blocking` is deliberate: `services::Transport` is a blocking trait that only
-# ever runs on GPUI's background executor, never on the UI thread.
+# The HTTP client behind the API Explorer and the in-app updater.
+# `default-features = false` drops `default-tls`, `charset` and `system-proxy`;
+# `rustls` then selects rustls with the platform certificate verifier, so no
+# OpenSSL is required to build. `blocking` is deliberate: `services::Transport`
+# is a blocking trait that only ever runs on GPUI's background executor, never
+# on the UI thread.
+#
+# **Exactly two modules may name this crate**: `api_explorer::services::http`
+# and `updater::services` (its `manifest_source` and `download`). The updater
+# was added to that list in the round that built it, rather than quietly
+# breaking a stated rule — and it needs the blocking client for a second
+# reason: `Response::bytes_stream()` is async and would need a tokio runtime,
+# which `docker::services` is the only place allowed to own.
 reqwest = { version = "0.13", default-features = false, features = [
     "rustls",
     "blocking",

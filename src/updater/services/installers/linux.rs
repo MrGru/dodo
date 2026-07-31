@@ -122,6 +122,7 @@ impl PlatformInstaller for LinuxInstaller {
 /// Finds the replacement binary, flat or one level down, by the running
 /// binary's own filename. Same rule as the Windows installer's, for the same
 /// reason: it is *this* file that has to be replaced.
+#[allow(dead_code)] // Reached only through this platform's installer; see `installers/mod.rs`.
 fn find_binary(staging: &Path, running: &Path) -> Option<PathBuf> {
     let wanted = running.file_name()?;
 
