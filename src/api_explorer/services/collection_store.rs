@@ -19,6 +19,7 @@ use std::sync::Mutex;
 
 use crate::api_explorer::models::collection::Node;
 use crate::i18n::Str;
+use crate::paths::data_dir;
 
 /// A persistence failure, in terms the UI can show.
 ///
@@ -50,23 +51,8 @@ pub trait CollectionStore: Send + Sync + 'static {
     fn persist(&self, roots: &[Node]) -> Result<(), StoreError>;
 }
 
-/// The app's config directory for user data, created on first save.
-///
-/// macOS keeps per-app data under `~/Library/Application Support`; this is the
-/// first location dodo persists anything, so the directory is dodo's to make.
-/// If `$HOME` is somehow unset, a relative fallback keeps the app working
-/// rather than panicking.
-pub fn data_dir() -> PathBuf {
-    match std::env::var_os("HOME") {
-        Some(home) => PathBuf::from(home)
-            .join("Library")
-            .join("Application Support")
-            .join("dodo"),
-        None => PathBuf::from(".dodo"),
-    }
-}
-
-/// The Collections tree, stored as one JSON file under [`data_dir`].
+/// The Collections tree, stored as one JSON file under
+/// [`data_dir`](crate::paths::data_dir).
 pub struct DiskCollectionStore {
     path: PathBuf,
 }
