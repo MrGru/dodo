@@ -923,7 +923,6 @@ pub enum Str {
     /// How many oversized cells were shortened to fit the page budget.
     DbFooterCapped(usize),
     DbStatementLabel,
-    DbNotices,
     DbColumnNull,
     DbSelectConnection,
     DbSelectConnectionHint,
@@ -2909,8 +2908,6 @@ impl Str {
             }
             (Str::DbStatementLabel, Language::English) => "Statement".into(),
             (Str::DbStatementLabel, Language::Vietnamese) => "Câu lệnh".into(),
-            (Str::DbNotices, Language::English) => "Server notices".into(),
-            (Str::DbNotices, Language::Vietnamese) => "Thông báo từ máy chủ".into(),
             // SQL's own word for "no value". The same four letters in both
             // languages; translating it would make a cell unreadable.
             (Str::DbColumnNull, _) => "NULL".into(),
@@ -3740,7 +3737,6 @@ mod tests {
             with(Str::DbFooterTruncated(NUMBER), &[NUMBER_TEXT]),
             with(Str::DbFooterCapped(NUMBER), &[NUMBER_TEXT]),
             plain(Str::DbStatementLabel),
-            plain(Str::DbNotices),
             term(Str::DbColumnNull),
             plain(Str::DbSelectConnection),
             plain(Str::DbSelectConnectionHint),
@@ -4320,16 +4316,15 @@ mod tests {
             Str::DbFooterTruncated(_) => 539,
             Str::DbFooterCapped(_) => 540,
             Str::DbStatementLabel => 541,
-            Str::DbNotices => 542,
-            Str::DbColumnNull => 543,
-            Str::DbSelectConnection => 544,
-            Str::DbSelectConnectionHint => 545,
-            Str::DbConnectionStoreError(_) => 546,
-            Str::DbConnectionStoreMissingVersion => 547,
-            Str::DbConnectionStoreUnsupportedVersion { .. } => 548,
-            Str::DbUnreachable(_) => 549,
-            Str::DbServerError(_) => 550,
-            Str::DbServerErrorCoded { .. } => 551,
+            Str::DbColumnNull => 542,
+            Str::DbSelectConnection => 543,
+            Str::DbSelectConnectionHint => 544,
+            Str::DbConnectionStoreError(_) => 545,
+            Str::DbConnectionStoreMissingVersion => 546,
+            Str::DbConnectionStoreUnsupportedVersion { .. } => 547,
+            Str::DbUnreachable(_) => 548,
+            Str::DbServerError(_) => 549,
+            Str::DbServerErrorCoded { .. } => 550,
         }
     }
 

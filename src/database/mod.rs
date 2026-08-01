@@ -65,3 +65,4 @@
 //! and the object tree are this module's own navigation, inside the page.
 
 pub mod models;
+pub mod services;
