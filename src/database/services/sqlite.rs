@@ -29,13 +29,25 @@
 //!
 //! `rusqlite::Connection` is `!Sync`, so it sits behind a `Mutex`. Blocking by
 //! contract, like every other driver.
+//!
+//! # Cancelling is `sqlite3_interrupt`, and the handle is taken at connect time
+//!
+//! `Connection::get_interrupt_handle()` needs the connection, which the running
+//! statement holds through the `Mutex` — so it is taken once in [`connect`] and
+//! kept beside it. The handle is `unsafe impl Send`/`Sync` in rusqlite for
+//! exactly this use: it holds the database pointer behind its own lock, so
+//! interrupting from another thread is what it is for.
+//!
+//! The interrupted statement fails with `SQLITE_INTERRUPT`, which
+//! [`server_error`] maps to [`DbError::Cancelled`] — from the library's own
+//! answer, not from the fact that a button was pressed.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, InterruptHandle, OpenFlags};
 
 use crate::database::models::catalog::{CatalogNode, GroupLabel, NodeId, NodeKind};
 use crate::database::models::connection::ConnectionProfile;
@@ -43,10 +55,14 @@ use crate::database::models::error::DbError;
 use crate::database::models::page::{Flow, RowSink};
 use crate::database::models::query::{Execution, QueryRequest};
 use crate::database::models::value::{ColumnMeta, ColumnOrigin, Value};
-use crate::database::services::{Capabilities, Driver};
+use crate::database::services::{CancelHandle, Capabilities, Driver};
 
 pub struct SqliteDriver {
     connection: Mutex<Connection>,
+    /// Taken once at connect time — see the module doc for why it cannot be
+    /// taken later. Behind an `Arc` because rusqlite's handle is not `Clone`
+    /// and a [`CancelHandle`] outlives the call that built it.
+    interrupt: Arc<InterruptHandle>,
 }
 
 /// Opens `profile`'s file.
@@ -72,11 +88,21 @@ pub fn connect(profile: &ConnectionProfile) -> Result<Arc<SqliteDriver>, DbError
     .map_err(|err| DbError::Unreachable(format!("{path}: {err}")))?;
 
     Ok(Arc::new(SqliteDriver {
+        interrupt: Arc::new(connection.get_interrupt_handle()),
         connection: Mutex::new(connection),
     }))
 }
 
 fn server_error(err: rusqlite::Error) -> DbError {
+    // An interrupted statement is not a fault: it is SQLite reporting that it
+    // stopped because dodo asked it to. Read from the library's own code rather
+    // than from the fact that a Cancel button was pressed, which is what makes
+    // `Cancelled` evidence.
+    if let rusqlite::Error::SqliteFailure(error, _) = &err
+        && error.code == rusqlite::ErrorCode::OperationInterrupted
+    {
+        return DbError::Cancelled;
+    }
     // SQLite's extended result code is the closest thing it has to a SQLSTATE,
     // and it is what distinguishes "constraint violated" from "file is locked".
     let code = match &err {
@@ -324,7 +350,18 @@ impl Driver for SqliteDriver {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             editor_language: "sql",
+            cancel: true,
         }
+    }
+
+    fn cancel_handle(&self) -> Option<CancelHandle> {
+        let interrupt = self.interrupt.clone();
+        Some(CancelHandle::new(move || {
+            // `sqlite3_interrupt` returns nothing and cannot fail: the
+            // interrupted statement is what reports it, as `SQLITE_INTERRUPT`.
+            interrupt.interrupt();
+            Ok(())
+        }))
     }
 
     fn ping(&self) -> Result<(), DbError> {
@@ -841,6 +878,59 @@ mod tests {
         assert_eq!(sink.rows().len(), 1);
         assert!(execution.truncated);
         assert!(sink.truncated());
+    }
+
+    /// Cancelling for real, against a real database — SQLite is the one backend
+    /// whose whole server fits in the test binary, so this needs no container
+    /// and no skip.
+    ///
+    /// The statement is a recursive CTE that would count to a hundred million;
+    /// it comes back as [`DbError::Cancelled`] — SQLite's own `SQLITE_INTERRUPT`
+    /// — in a fraction of the time it would have taken, which is only possible
+    /// if the library abandoned it rather than dodo abandoning the wait.
+    #[test]
+    fn interrupting_stops_the_statement_inside_sqlite_and_not_merely_in_dodo() {
+        let fixture = Fixture::new(SCHEMA);
+        let handle = fixture
+            .driver
+            .cancel_handle()
+            .expect("SQLite reports the cancel capability");
+
+        let cancelling = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            handle.cancel().expect("interrupt never fails");
+        });
+
+        let started = std::time::Instant::now();
+        let mut sink = PageBuffer::default();
+        let outcome = fixture.driver.execute(
+            &QueryRequest::new(
+                "WITH RECURSIVE counter(n) AS (\
+                    SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 100000000\
+                 ) SELECT max(n) FROM counter",
+            ),
+            &mut sink,
+        );
+        let elapsed = started.elapsed();
+        cancelling.join().expect("the cancelling thread finished");
+
+        assert!(
+            matches!(outcome, Err(DbError::Cancelled)),
+            "expected SQLITE_INTERRUPT to reach dodo as Cancelled, got {outcome:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "the statement ran to completion in {elapsed:?}: it was waited out, not interrupted"
+        );
+
+        // The connection survives, which is the other half: an interrupt that
+        // broke the handle would look the same to the cancelled statement.
+        let mut after = PageBuffer::default();
+        fixture
+            .driver
+            .execute(&QueryRequest::new("SELECT 1"), &mut after)
+            .expect("the connection still works");
+        assert_eq!(after.rows()[0][0], Value::Int(1));
     }
 
     #[test]

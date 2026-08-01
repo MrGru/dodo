@@ -30,8 +30,10 @@
 use gpui::{Entity, Task};
 use gpui_component::input::InputState;
 
+use crate::database::services::CancelHandle;
 use crate::database::state::editor::EditorLanguage;
 use crate::database::state::query::QueryState;
+use crate::i18n::Str;
 
 /// One open query tab.
 pub struct QueryTab {
@@ -48,9 +50,22 @@ pub struct QueryTab {
     /// own — see [`EditorLanguage`]'s module doc for what that cost round 1.
     pub language: EditorLanguage,
     pub query: QueryState,
+    /// How to stop the run in flight, **at the server**.
+    ///
+    /// Taken from the driver *before* the statement starts, because the
+    /// connection is locked for as long as it runs — see
+    /// [`CancelHandle`]'s notes in `services/mod.rs`. `None` between runs, and
+    /// for a backend that reports no cancel capability.
+    pub cancel: Option<CancelHandle>,
     /// Held so the tab keeps its own task: a run in one tab must not be
     /// cancelled by a run in another.
     pub run_task: Option<Task<()>>,
+    /// Held so a cancel that is still travelling is not dropped on the way.
+    pub cancel_task: Option<Task<()>>,
+    /// A one-line message about this tab that is not its result — dodo could
+    /// not deliver a cancel request, and later what an export did. Held as a
+    /// [`Str`] rather than rendered text so it re-translates.
+    pub notice: Option<Str>,
 }
 
 impl QueryTab {
@@ -61,13 +76,22 @@ impl QueryTab {
             editor,
             language: EditorLanguage::new(),
             query: QueryState::Idle,
+            cancel: None,
             run_task: None,
+            cancel_task: None,
+            notice: None,
         }
     }
 
     /// Whether a statement is in flight in this tab.
     pub fn is_running(&self) -> bool {
         matches!(self.query, QueryState::Running)
+    }
+
+    /// Whether Cancel is worth offering: something is running and there is a
+    /// handle that can stop it.
+    pub fn can_cancel(&self) -> bool {
+        self.is_running() && self.cancel.is_some()
     }
 }
 

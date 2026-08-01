@@ -7,14 +7,21 @@
 //! verbatim inside a translated frame, because there is nothing to translate it
 //! with.
 //!
-//! # Why there are only two variants
+//! # Why there are three variants
 //!
-//! The design report proposes a third, `Cancelled`, so the UI can say
-//! "cancelled" rather than "failed". Cancelling a running query is a later
-//! round and nothing in this one can produce that value, so it is not declared
-//! here — a variant no code constructs is a guess about a message nobody has
-//! written yet. The driver choice that makes cancellation *possible* is already
-//! made (see `Cargo.toml`); the variant lands with the button.
+//! Round 1 had two, and said the third — `Cancelled` — would land with the
+//! button that produces it. Round 2 is that round. It is a variant of its own
+//! rather than a `Server` error with a well-known code because the two mean
+//! opposite things to the user: a server error says the statement was wrong, a
+//! cancellation says they stopped it, and rendering the second as the first
+//! would report the user's own click as a fault.
+//!
+//! **Only a driver constructs it, and only from the server's own answer.** The
+//! PostgreSQL driver maps SQLSTATE `57014` (`query_canceled`) and the SQLite
+//! driver maps `SQLITE_INTERRUPT`; neither invents it from the fact that
+//! something was cancelled locally. That is what makes "the query really
+//! stopped at the server" the thing the UI is reporting, rather than "the UI
+//! stopped waiting".
 
 use crate::i18n::Str;
 
@@ -34,6 +41,13 @@ pub enum DbError {
         code: Option<String>,
         detail: String,
     },
+    /// The server stopped the statement because dodo asked it to.
+    ///
+    /// Constructed **only** from the backend's own report of a cancellation —
+    /// PostgreSQL's `57014`, SQLite's `SQLITE_INTERRUPT` — so it is evidence
+    /// that the work stopped where the work was happening, not a note that the
+    /// UI gave up waiting.
+    Cancelled,
 }
 
 impl DbError {
@@ -61,7 +75,26 @@ impl DbError {
                 detail: detail.clone(),
             },
             DbError::Server { code: None, detail } => Str::DbServerError(detail.clone()),
+            DbError::Cancelled => Str::DbCancelledMessage,
         }
+    }
+
+    /// The driver's own words, for a message that needs them inside a frame of
+    /// its own rather than the one [`message`](Self::message) picks. Empty for
+    /// a cancellation, which is dodo's own doing and has no driver text.
+    pub fn detail(&self) -> &str {
+        match self {
+            DbError::Unreachable(detail) | DbError::Server { detail, .. } => detail,
+            DbError::Cancelled => "",
+        }
+    }
+
+    /// Whether this is a cancellation the user asked for.
+    ///
+    /// Asked rather than matched at the call sites, so a future driver that
+    /// reports cancellation some other way has one place to be taught about.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, DbError::Cancelled)
     }
 }
 
@@ -113,5 +146,24 @@ mod tests {
             DbError::server("boom").message(),
             Str::DbServerError(_)
         ));
+    }
+
+    /// A cancellation is the user's own doing, so it must not read as a fault
+    /// and must not be mistaken for one by the code either.
+    #[test]
+    fn a_cancellation_is_its_own_thing_and_says_so_in_both_languages() {
+        let cancelled = DbError::Cancelled;
+        assert!(cancelled.is_cancelled());
+        assert!(!DbError::server("boom").is_cancelled());
+        assert!(!DbError::Unreachable("no listener".into()).is_cancelled());
+
+        for language in Language::ALL {
+            let text = cancelled.message().text(language).into_owned();
+            assert!(
+                !text.trim().is_empty(),
+                "{} has no wording",
+                language.code()
+            );
+        }
     }
 }

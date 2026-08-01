@@ -214,7 +214,12 @@ impl DatabaseView {
     /// Closing the **last** tab empties it rather than removing it: the page
     /// must always have an editor. `QueryTabs::close` refuses that case and
     /// this is where the replacement happens.
+    ///
+    /// Either way the tab's run is **cancelled at the server** first. Dropping
+    /// its task only stops dodo waiting; the statement would keep burning
+    /// server CPU and holding the connection for a tab nobody can see any more.
     pub(super) fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.stop_tab(index, cx);
         if self.tabs.close(index).is_none() {
             if index >= self.tabs.len() {
                 return;
@@ -229,6 +234,22 @@ impl DatabaseView {
         }
         self.show_active_result(cx);
         cx.notify();
+    }
+
+    /// Stops whatever the tab at `index` is running and forgets its handle.
+    ///
+    /// Detached rather than held, because the tab that would have held the task
+    /// is about to be dropped — and the request still has to reach the server.
+    /// Nothing waits for the answer: there is no tab left to tell.
+    fn stop_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(handle) = self.tabs.tab_mut(index).and_then(|tab| tab.cancel.take()) else {
+            return;
+        };
+        cx.background_executor()
+            .spawn(async move {
+                let _ = handle.cancel();
+            })
+            .detach();
     }
 
     /// Re-fills the shared grid from the active tab's result.
@@ -604,9 +625,15 @@ impl DatabaseView {
         let id = tab.id;
         let buffer = tab.editor.read(cx).value().to_string();
         let budget = PageBudget::default();
+        // **Before** the statement starts, not when Cancel is pressed: the
+        // driver's connection is locked for as long as the query runs, so a
+        // handle asked for later would block behind the query it must stop.
+        let cancel = driver.cancel_handle();
 
         if let Some(tab) = self.tabs.active_mut() {
             tab.query = QueryState::Running;
+            tab.cancel = cancel;
+            tab.notice = None;
         }
         // The grid is shared, so a run that leaves the previous result on
         // screen would attribute those rows to the statement now in flight.
@@ -632,6 +659,9 @@ impl DatabaseView {
                     // produced it.
                     Err(failure) => QueryState::Failed(failure),
                 };
+                // Nothing is running any more, so the handle would cancel
+                // whatever runs next.
+                tab.cancel = None;
                 // Only if this tab is the one being looked at — a run that
                 // finishes in a background tab must not repaint the grid the
                 // user is reading.
@@ -644,6 +674,55 @@ impl DatabaseView {
         if let Some(tab) = self.tabs.active_mut() {
             tab.run_task = Some(task);
         }
+    }
+
+    /// Asks the server to stop the active tab's statement.
+    ///
+    /// The handle is **not** taken from the tab: a cancel that lost the race is
+    /// not a reason to make a second press impossible, and the run's own
+    /// completion is what clears it. The call itself is blocking — PostgreSQL's
+    /// opens a second connection — so it goes to the background executor like
+    /// every other driver call in this file.
+    ///
+    /// Nothing here decides that the query stopped. The query says so, by
+    /// coming back as [`DbError::Cancelled`](crate::database::models::error::DbError::Cancelled)
+    /// from the server; until it does, the tab stays `Running` and the button
+    /// stays where it is.
+    pub(super) fn cancel(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let Some(handle) = tab.cancel.clone() else {
+            return;
+        };
+        let id = tab.id;
+
+        let task = cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { handle.cancel() })
+                .await;
+
+            // Only a failure to *reach* the server is worth saying anything
+            // about, and even then the query state is left alone: dodo could
+            // not ask, so it has no idea whether the statement is still
+            // running, and moving the tab out of `Running` would be a claim it
+            // cannot support.
+            if let Err(error) = result {
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(tab) = this.tabs.find_mut(id) {
+                        // Held as a `Str` rather than rendered text, so a
+                        // banner already on screen re-translates.
+                        tab.notice = Some(Str::DbCancelFailed(error.detail().to_string()));
+                    }
+                    cx.notify();
+                });
+            }
+        });
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.cancel_task = Some(task);
+        }
+        cx.notify();
     }
 
     pub(super) fn format(&mut self, window: &mut Window, cx: &mut Context<Self>) {

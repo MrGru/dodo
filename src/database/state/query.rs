@@ -68,6 +68,13 @@ pub enum Failure {
     /// A statement was rejected. Both halves matter: the message says what went
     /// wrong, and the statement says which of several it went wrong in.
     Rejected { statement: String, error: DbError },
+    /// The user cancelled, and the **server** said it stopped.
+    ///
+    /// Its own variant rather than a `Rejected` carrying
+    /// [`DbError::Cancelled`], because the pane draws it differently: a
+    /// cancellation is not a fault and must not be shown in the danger tone
+    /// beside a red triangle. [`Failure::is_cancelled`] is what the view asks.
+    Cancelled { statement: String },
 }
 
 impl Failure {
@@ -75,6 +82,7 @@ impl Failure {
         match self {
             Failure::Nothing => Str::DbNoStatement,
             Failure::Rejected { error, .. } => error.message(),
+            Failure::Cancelled { .. } => Str::DbCancelledMessage,
         }
     }
 
@@ -82,8 +90,14 @@ impl Failure {
     pub fn statement(&self) -> Option<&str> {
         match self {
             Failure::Nothing => None,
-            Failure::Rejected { statement, .. } => Some(statement),
+            Failure::Rejected { statement, .. } | Failure::Cancelled { statement } => {
+                Some(statement)
+            }
         }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Failure::Cancelled { .. })
     }
 }
 
@@ -104,9 +118,20 @@ pub fn run(driver: &dyn Driver, buffer: &str, budget: PageBudget) -> Result<Outc
         let mut sink = PageBuffer::new(budget);
         let execution = driver
             .execute(&QueryRequest::new(statement.clone()), &mut sink)
-            .map_err(|error| Failure::Rejected {
-                statement: statement.clone(),
-                error,
+            .map_err(|error| {
+                // A cancelled statement is the user's own doing and is reported
+                // as such — including the *rest* of a multi-statement buffer
+                // never running, which is the same rule a rejection follows.
+                if error.is_cancelled() {
+                    Failure::Cancelled {
+                        statement: statement.clone(),
+                    }
+                } else {
+                    Failure::Rejected {
+                        statement: statement.clone(),
+                        error,
+                    }
+                }
             })?;
 
         let (columns, rows, truncated, capped_cells) = sink.into_parts();
@@ -200,6 +225,7 @@ mod tests {
     use crate::database::models::error::DbError;
     use crate::database::models::page::PageBudget;
     use crate::database::models::value::Value;
+    use crate::database::services::Driver as _;
     use crate::database::services::fake::FakeDriver;
     use crate::i18n::{Language, Str};
     use std::time::Duration;
@@ -296,6 +322,50 @@ mod tests {
             1,
             "nothing after the failure should have been sent"
         );
+    }
+
+    /// A cancellation must reach the user as a cancellation — not as a server
+    /// error, and above all not as a silent empty result.
+    #[test]
+    fn a_cancelled_statement_is_its_own_outcome_and_names_the_statement() {
+        let driver = FakeDriver::sql();
+        driver
+            .cancel_handle()
+            .expect("the fake reports the capability")
+            .cancel()
+            .expect("the handle fires");
+
+        match run(&driver, "SELECT 1; SELECT 2;", budget()) {
+            Err(failure @ Failure::Cancelled { .. }) => {
+                assert!(failure.is_cancelled());
+                assert_eq!(failure.statement(), Some("SELECT 1"));
+                assert!(matches!(failure.message(), Str::DbCancelledMessage));
+            }
+            other => panic!("expected a cancellation, got {other:?}"),
+        }
+
+        assert_eq!(
+            driver.executed.lock().unwrap().len(),
+            1,
+            "the rest of the buffer must not run after a cancel, exactly as after a rejection"
+        );
+    }
+
+    #[test]
+    fn a_rejection_is_not_mistaken_for_a_cancellation() {
+        let driver = FakeDriver::sql().failing(DbError::server("syntax error"));
+        let failure = run(&driver, "SELECT FRUM", budget()).expect_err("fails");
+        assert!(!failure.is_cancelled());
+        assert!(!Failure::Nothing.is_cancelled());
+    }
+
+    /// A backend with no cancel mechanism is not a special case anywhere above
+    /// `services/`: it reports the capability as absent and offers no handle.
+    #[test]
+    fn a_driver_that_cannot_cancel_says_so_rather_than_pretending() {
+        let driver = FakeDriver::sql().without_cancel();
+        assert!(!driver.capabilities().cancel);
+        assert!(driver.cancel_handle().is_none());
     }
 
     #[test]
