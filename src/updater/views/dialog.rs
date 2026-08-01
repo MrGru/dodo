@@ -13,7 +13,16 @@
 //!
 //! The card's width is **stated**, never `w_full`: a percentage width resolves
 //! to `auto` inside the dialog's wrappers and content-sizes the body to its
-//! widest child.
+//! widest child. Everything inside it is bounded to that width and that height
+//! for one blunt reason: what overflows the card lands on the dialog's
+//! **overlay**, so a button pushed past the edge is not just clipped — clicking
+//! it dismisses the dialog. See [`UpdateDialog::render_footer`].
+//!
+//! # There is only ever one
+//!
+//! Two things open it — the sidebar button and a background check that found
+//! something — and they used to stack. [`claim`] gives them one slot between
+//! them, released by every close path.
 //!
 //! # It drives IO, and performs none
 //!
@@ -77,6 +86,9 @@ const PUMP_INTERVAL: Duration = Duration::from_millis(40);
 /// Opens the dialog and starts a check straight away — the **Check for
 /// updates** button in the sidebar footer.
 pub fn open(window: &mut Window, cx: &mut App) {
+    if !claim(window, cx) {
+        return;
+    }
     let services = Updater::services(cx);
     let config = Updater::config(cx);
     let view = cx.new(|cx| {
@@ -90,13 +102,82 @@ pub fn open(window: &mut Window, cx: &mut App) {
 /// Opens the dialog on an update a background check already found, so the check
 /// is not repeated.
 pub fn open_with(info: UpdateInfo, window: &mut Window, cx: &mut App) {
+    if !claim(window, cx) {
+        return;
+    }
     let services = Updater::services(cx);
     let config = Updater::config(cx);
     let view = cx.new(|_| UpdateDialog::new(UpdaterMachine::holding(info), services, config));
     present(view, window, cx);
 }
 
+/// Whether an update dialog is on screen.
+///
+/// There are two ways in — the sidebar button and a background check that found
+/// something — and nothing stopped them stacking, so a launch that found an
+/// update while the user was pressing **Check for updates** put two identical
+/// dialogs on top of each other. A global rather than a field because the thing
+/// being tracked is not a property of any one dialog.
+#[derive(Default)]
+struct DialogOnScreen(bool);
+
+impl gpui::Global for DialogOnScreen {}
+
+fn set_on_screen(on_screen: bool, cx: &mut App) {
+    cx.set_global(DialogOnScreen(on_screen));
+}
+
+/// What an open request should do, given what is believed and what is true.
+///
+/// Split out as a pure function so the recovery case has a test: the flag is set
+/// by [`present`] and cleared by every close path, and if one of them were ever
+/// missed the dialog could never be opened again. `window` is the authority on
+/// what is actually on screen, so a flag that outlived its dialog is corrected
+/// rather than believed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenDecision {
+    /// Nothing is showing; open one.
+    Open,
+    /// Ours is already showing; leave it alone.
+    AlreadyShowing,
+    /// The flag is stale — no dialog is on screen at all. Clear it and open.
+    ClearStaleAndOpen,
+}
+
+fn decide_open(believed_on_screen: bool, any_dialog_on_screen: bool) -> OpenDecision {
+    match (believed_on_screen, any_dialog_on_screen) {
+        (false, _) => OpenDecision::Open,
+        (true, true) => OpenDecision::AlreadyShowing,
+        (true, false) => OpenDecision::ClearStaleAndOpen,
+    }
+}
+
+/// Takes the single update-dialog slot, or reports that it is taken.
+fn claim(window: &mut Window, cx: &mut App) -> bool {
+    let believed = cx.try_global::<DialogOnScreen>().is_some_and(|d| d.0);
+    match decide_open(believed, window.has_active_dialog(cx)) {
+        OpenDecision::AlreadyShowing => false,
+        OpenDecision::Open => true,
+        OpenDecision::ClearStaleAndOpen => {
+            set_on_screen(false, cx);
+            true
+        }
+    }
+}
+
+/// Closes the dialog from one of its own buttons.
+///
+/// `window.close_dialog` does not run the `on_close` handler — that fires for
+/// the close button, the overlay and escape — so releasing the slot has to
+/// happen here too, or a dialog dismissed with **Later** would block every
+/// later one.
+fn close(window: &mut Window, cx: &mut App) {
+    set_on_screen(false, cx);
+    window.close_dialog(cx);
+}
+
 fn present(view: Entity<UpdateDialog>, window: &mut Window, cx: &mut App) {
+    set_on_screen(true, cx);
     window.open_dialog(cx, move |dialog, window, cx| {
         let view = view.clone();
         let closing = view.clone();
@@ -114,6 +195,7 @@ fn present(view: Entity<UpdateDialog>, window: &mut Window, cx: &mut App) {
             // the UI listening — so the flag has to be set explicitly.
             .on_close(move |_, _, cx| {
                 closing.update(cx, |this, _| this.abandon());
+                set_on_screen(false, cx);
             })
             // `content`, not `child`: plain children are wrapped in an
             // `overflow_y_scrollbar` box, which takes its width from its
@@ -284,7 +366,7 @@ impl UpdateDialog {
             self.config.skip(&version);
             self.persist_config(cx);
         }
-        window.close_dialog(cx);
+        close(window, cx);
     }
 
     fn restart(&mut self, cx: &mut Context<Self>) {
@@ -375,7 +457,16 @@ impl Render for UpdateDialog {
             .min_w_0()
             .justify_between()
             .gap_3()
-            .child(div().flex_1().min_h_0().child(self.render_body(cx)))
+            // `overflow_hidden` is the guarantee, not the sizing: whatever the
+            // body's own height arithmetic does, nothing it renders may paint
+            // over the footer and take the buttons' clicks with it.
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(self.render_body(cx)),
+            )
             .child(self.render_footer(cx))
     }
 }
@@ -445,6 +536,13 @@ impl UpdateDialog {
         v_flex()
             .gap_2()
             .min_w_0()
+            // The release notes are the only body that can be arbitrarily long,
+            // and the scroll box below only bounds itself if this column is
+            // bounded first: `h_full` ties it to the body's height so `flex_1`
+            // there has a remainder to compute, rather than a column that grows
+            // to whatever the release wrote.
+            .h_full()
+            .min_h_0()
             .child(div().font_bold().child(t(
                 Str::UpdateAvailableHeadline(info.parsed.to_display()),
                 cx,
@@ -545,24 +643,42 @@ impl UpdateDialog {
         Some(self.current_version_str())
     }
 
+    /// The checkbox and the action buttons on one row.
+    ///
+    /// The checkbox sits in a `flex_1().min_w_0()` cell and the buttons in a
+    /// `flex_shrink_0()` one, and that split is load-bearing rather than
+    /// decorative. A flex item defaults to `min-width: auto`, so a checkbox
+    /// allowed to claim its full label width pushes the buttons off the right of
+    /// the card — and a button pushed past the card's edge is not merely
+    /// truncated: the part outside the card belongs to the dialog's overlay, so
+    /// clicking what looks like **Download and install** dismisses the dialog
+    /// instead. That is exactly what "the download button does nothing" was.
+    /// The label wraps to a second line instead, which costs a few pixels of
+    /// height the body already yields (`justify_between` above), and no
+    /// translation of it can ever reach the buttons.
     fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
             .min_w_0()
             .items_center()
-            .justify_between()
             .gap_2()
             .child(
-                Checkbox::new("updater-auto-check")
-                    .label(t(Str::UpdateCheckAutomatically, cx))
-                    .checked(self.config.auto_update)
-                    .on_click(
-                        cx.listener(|this, checked: &bool, _, cx| {
+                div().flex_1().min_w_0().child(
+                    Checkbox::new("updater-auto-check")
+                        .label(t(Str::UpdateCheckAutomatically, cx))
+                        .checked(self.config.auto_update)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
                             this.set_auto_check(*checked, cx)
-                        }),
-                    ),
+                        })),
+                ),
             )
-            .child(h_flex().gap_2().flex_shrink_0().children(self.actions(cx)))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_shrink_0()
+                    .justify_end()
+                    .children(self.actions(cx)),
+            )
             .into_any_element()
     }
 
@@ -602,7 +718,7 @@ impl UpdateDialog {
                     Button::new("updater-later")
                         .ghost()
                         .label(t(Str::UpdateLater, cx))
-                        .on_click(|_, window, cx| window.close_dialog(cx))
+                        .on_click(|_, window, cx| close(window, cx))
                         .into_any_element(),
                 ];
                 // There is nothing to restart into when the install was refused;
@@ -621,14 +737,14 @@ impl UpdateDialog {
             UpdaterState::Completed => vec![
                 Button::new("updater-close")
                     .label(t(Str::UpdateLater, cx))
-                    .on_click(|_, window, cx| window.close_dialog(cx))
+                    .on_click(|_, window, cx| close(window, cx))
                     .into_any_element(),
             ],
             UpdaterState::Failed { .. } => vec![
                 Button::new("updater-close")
                     .ghost()
                     .label(t(Str::UpdateLater, cx))
-                    .on_click(|_, window, cx| window.close_dialog(cx))
+                    .on_click(|_, window, cx| close(window, cx))
                     .into_any_element(),
                 Button::new("updater-retry")
                     .primary()
@@ -698,7 +814,10 @@ pub(crate) fn default_services() -> UpdaterServices {
 
 #[cfg(test)]
 mod tests {
-    use super::{DIALOG_PADDING_X, PANEL_H, PANEL_MARGIN, PANEL_W, card_size_for, format_size};
+    use super::{
+        DIALOG_PADDING_X, OpenDecision, PANEL_H, PANEL_MARGIN, PANEL_W, card_size_for, decide_open,
+        format_size,
+    };
     use gpui::{px, size};
 
     /// The narrow end. dodo opens at 900x620 and its window can be dragged well
@@ -754,5 +873,35 @@ mod tests {
     #[test]
     fn a_size_larger_than_the_unit_ladder_still_renders() {
         assert!(format_size(u64::MAX).ends_with("TB"));
+    }
+
+    // ---- One dialog at a time ------------------------------------------------
+
+    /// The reported defect: a background check that found an update opened a
+    /// second, identical dialog over the one the user had opened themselves.
+    #[test]
+    fn a_second_open_request_does_not_stack_another_dialog() {
+        assert_eq!(decide_open(true, true), OpenDecision::AlreadyShowing);
+    }
+
+    #[test]
+    fn the_first_open_request_opens() {
+        for on_screen in [false, true] {
+            assert_eq!(
+                decide_open(false, on_screen),
+                OpenDecision::Open,
+                "with no update dialog of our own, another dialog on screen \
+                 (settings, say) must not block this one"
+            );
+        }
+    }
+
+    /// The recovery case, and the reason the decision is not just the flag: if a
+    /// close path ever failed to release the slot, believing the flag would make
+    /// the dialog unopenable for the rest of the session. The window is the
+    /// authority on what is actually there.
+    #[test]
+    fn a_flag_that_outlived_its_dialog_is_corrected_rather_than_believed() {
+        assert_eq!(decide_open(true, false), OpenDecision::ClearStaleAndOpen);
     }
 }
