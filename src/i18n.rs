@@ -834,6 +834,112 @@ pub enum Str {
     },
     UpdateErrorInstall(String),
     UpdateErrorIo(String),
+
+    // Database Explorer. Product names — PostgreSQL, SQLite — are proper nouns
+    // and live in `database::models::engine`, untranslated, the same treatment
+    // "Dodo" gets. Identifiers a server reports (a table's name, a column's
+    // type) are data and never reach this enum at all.
+    DatabaseTitle,
+    DbConnections,
+    DbNewConnection,
+    DbNoConnections,
+    DbNoConnectionsHint,
+    DbConnect,
+    DbDisconnect,
+    DbReconnect,
+    DbEditConnection,
+    DbEditConnectionTitle,
+    DbDuplicateConnection,
+    DbDeleteConnection,
+    /// Appended to a duplicated connection's name so the two are told apart.
+    DbCopySuffix,
+    DbStatusConnected,
+    DbStatusConnecting,
+    DbStatusDisconnected,
+    DbStatusError,
+    DbDeleteConnectionTitle,
+    /// The connection's display name.
+    DbDeleteConnectionMessage(String),
+    DbCancel,
+    DbSave,
+    DbFieldName,
+    DbFieldNamePlaceholder,
+    DbFieldEngine,
+    DbFieldHost,
+    DbFieldPort,
+    DbFieldDatabase,
+    DbFieldUser,
+    DbFieldPassword,
+    DbFieldFile,
+    DbFieldFilePlaceholder,
+    DbChooseFile,
+    DbFieldSsl,
+    DbSslDisable,
+    DbSslPrefer,
+    DbSslRequire,
+    /// Never hidden while a password field is on screen. See
+    /// `database::models::connection`'s module doc for why the posture is
+    /// plaintext-and-say-so rather than an OS keychain.
+    DbPasswordStorageNotice,
+    DbRevealPassword,
+    DbHidePassword,
+    DbTestConnection,
+    DbTesting,
+    DbTestSucceeded,
+    DbProfileHostMissing,
+    DbProfilePortMissing,
+    DbProfileDatabaseMissing,
+    DbProfileFileMissing,
+    DbObjects,
+    DbGroupTables,
+    DbGroupViews,
+    DbGroupColumns,
+    DbGroupIndexes,
+    DbGroupConstraints,
+    DbTreeLoading,
+    DbTreeEmpty,
+    DbTreeNotConnected,
+    DbTreeNotConnectedHint,
+    DbRefreshTree,
+    DbQuery,
+    DbQueryPlaceholder,
+    DbExecute,
+    DbFormat,
+    DbRunning,
+    DbNoStatement,
+    DbResult,
+    DbNoResultYet,
+    DbNoResultYetHint,
+    DbNoRows,
+    /// How many rows the grid is holding.
+    DbFooterRows(usize),
+    /// How many rows a statement changed.
+    DbFooterRowsAffected(u64),
+    /// The elapsed time, already formatted — the unit is chosen by magnitude,
+    /// so the value arrives as text rather than as a number plus a guess.
+    DbFooterElapsed(String),
+    /// The page bound stopped the read: how many rows are shown.
+    DbFooterTruncated(usize),
+    /// How many oversized cells were shortened to fit the page budget.
+    DbFooterCapped(usize),
+    DbStatementLabel,
+    DbNotices,
+    DbColumnNull,
+    DbSelectConnection,
+    DbSelectConnectionHint,
+    DbConnectionStoreError(String),
+    DbConnectionStoreMissingVersion,
+    DbConnectionStoreUnsupportedVersion {
+        found: u64,
+        supported: u32,
+    },
+    /// The driver's own message, kept verbatim inside a translated frame.
+    DbUnreachable(String),
+    DbServerError(String),
+    DbServerErrorCoded {
+        code: String,
+        detail: String,
+    },
 }
 
 impl Str {
@@ -2597,6 +2703,271 @@ impl Str {
             (Str::UpdateErrorIo(detail), Language::Vietnamese) => {
                 format!("Không thể ghi tệp: {detail}").into()
             }
+
+            (Str::DatabaseTitle, Language::English) => "Database".into(),
+            (Str::DatabaseTitle, Language::Vietnamese) => "Cơ sở dữ liệu".into(),
+            (Str::DbConnections, Language::English) => "Connections".into(),
+            (Str::DbConnections, Language::Vietnamese) => "Các kết nối".into(),
+            (Str::DbNewConnection, Language::English) => "New connection".into(),
+            (Str::DbNewConnection, Language::Vietnamese) => "Kết nối mới".into(),
+            (Str::DbNoConnections, Language::English) => "No connections yet".into(),
+            (Str::DbNoConnections, Language::Vietnamese) => "Chưa có kết nối nào".into(),
+            (Str::DbNoConnectionsHint, Language::English) => {
+                "Add one to browse a database and run queries.".into()
+            }
+            (Str::DbNoConnectionsHint, Language::Vietnamese) => {
+                "Thêm một kết nối để duyệt cơ sở dữ liệu và chạy truy vấn.".into()
+            }
+            (Str::DbConnect, Language::English) => "Connect".into(),
+            (Str::DbConnect, Language::Vietnamese) => "Kết nối".into(),
+            (Str::DbDisconnect, Language::English) => "Disconnect".into(),
+            (Str::DbDisconnect, Language::Vietnamese) => "Ngắt kết nối".into(),
+            (Str::DbReconnect, Language::English) => "Reconnect".into(),
+            (Str::DbReconnect, Language::Vietnamese) => "Kết nối lại".into(),
+            (Str::DbEditConnection, Language::English) => "Edit".into(),
+            (Str::DbEditConnection, Language::Vietnamese) => "Sửa".into(),
+            (Str::DbEditConnectionTitle, Language::English) => "Edit connection".into(),
+            (Str::DbEditConnectionTitle, Language::Vietnamese) => "Sửa kết nối".into(),
+            (Str::DbDuplicateConnection, Language::English) => "Duplicate".into(),
+            (Str::DbDuplicateConnection, Language::Vietnamese) => "Nhân bản".into(),
+            (Str::DbDeleteConnection, Language::English) => "Delete".into(),
+            (Str::DbDeleteConnection, Language::Vietnamese) => "Xoá".into(),
+            (Str::DbCopySuffix, Language::English) => "copy".into(),
+            (Str::DbCopySuffix, Language::Vietnamese) => "bản sao".into(),
+            (Str::DbStatusConnected, Language::English) => "Connected".into(),
+            (Str::DbStatusConnected, Language::Vietnamese) => "Đã kết nối".into(),
+            (Str::DbStatusConnecting, Language::English) => "Connecting…".into(),
+            (Str::DbStatusConnecting, Language::Vietnamese) => "Đang kết nối…".into(),
+            (Str::DbStatusDisconnected, Language::English) => "Disconnected".into(),
+            (Str::DbStatusDisconnected, Language::Vietnamese) => "Chưa kết nối".into(),
+            (Str::DbStatusError, Language::English) => "Error".into(),
+            (Str::DbStatusError, Language::Vietnamese) => "Lỗi".into(),
+            (Str::DbDeleteConnectionTitle, Language::English) => "Delete connection?".into(),
+            (Str::DbDeleteConnectionTitle, Language::Vietnamese) => "Xoá kết nối?".into(),
+            (Str::DbDeleteConnectionMessage(name), Language::English) => {
+                format!("\"{name}\" will be removed from this list. The database itself is left alone.")
+                    .into()
+            }
+            (Str::DbDeleteConnectionMessage(name), Language::Vietnamese) => format!(
+                "“{name}” sẽ bị xoá khỏi danh sách này. Bản thân cơ sở dữ liệu không bị đụng tới."
+            )
+            .into(),
+            (Str::DbCancel, Language::English) => "Cancel".into(),
+            (Str::DbCancel, Language::Vietnamese) => "Huỷ".into(),
+            (Str::DbSave, Language::English) => "Save".into(),
+            (Str::DbSave, Language::Vietnamese) => "Lưu".into(),
+            (Str::DbFieldName, Language::English) => "Name".into(),
+            (Str::DbFieldName, Language::Vietnamese) => "Tên".into(),
+            (Str::DbFieldNamePlaceholder, Language::English) => "Optional".into(),
+            (Str::DbFieldNamePlaceholder, Language::Vietnamese) => "Không bắt buộc".into(),
+            (Str::DbFieldEngine, Language::English) => "Type".into(),
+            (Str::DbFieldEngine, Language::Vietnamese) => "Loại".into(),
+            (Str::DbFieldHost, Language::English) => "Host".into(),
+            (Str::DbFieldHost, Language::Vietnamese) => "Máy chủ".into(),
+            (Str::DbFieldPort, Language::English) => "Port".into(),
+            (Str::DbFieldPort, Language::Vietnamese) => "Cổng".into(),
+            (Str::DbFieldDatabase, Language::English) => "Database".into(),
+            (Str::DbFieldDatabase, Language::Vietnamese) => "Cơ sở dữ liệu".into(),
+            (Str::DbFieldUser, Language::English) => "User".into(),
+            (Str::DbFieldUser, Language::Vietnamese) => "Người dùng".into(),
+            (Str::DbFieldPassword, Language::English) => "Password".into(),
+            (Str::DbFieldPassword, Language::Vietnamese) => "Mật khẩu".into(),
+            (Str::DbFieldFile, Language::English) => "File".into(),
+            (Str::DbFieldFile, Language::Vietnamese) => "Tệp".into(),
+            (Str::DbFieldFilePlaceholder, Language::English) => {
+                "Path to the database file".into()
+            }
+            (Str::DbFieldFilePlaceholder, Language::Vietnamese) => {
+                "Đường dẫn tới tệp cơ sở dữ liệu".into()
+            }
+            (Str::DbChooseFile, Language::English) => "Choose…".into(),
+            (Str::DbChooseFile, Language::Vietnamese) => "Chọn…".into(),
+            // The protocol's name, the same three letters in both languages.
+            (Str::DbFieldSsl, _) => "TLS".into(),
+            (Str::DbSslDisable, Language::English) => "Disable".into(),
+            (Str::DbSslDisable, Language::Vietnamese) => "Tắt".into(),
+            (Str::DbSslPrefer, Language::English) => "Prefer".into(),
+            (Str::DbSslPrefer, Language::Vietnamese) => "Ưu tiên".into(),
+            (Str::DbSslRequire, Language::English) => "Require".into(),
+            (Str::DbSslRequire, Language::Vietnamese) => "Bắt buộc".into(),
+            (Str::DbPasswordStorageNotice, Language::English) => {
+                "Saved passwords are stored unencrypted in dodo's data folder, like the API \
+                 Explorer's secret variables. Anyone who can read that folder can read them."
+                    .into()
+            }
+            (Str::DbPasswordStorageNotice, Language::Vietnamese) => {
+                "Mật khẩu đã lưu được giữ ở dạng không mã hoá trong thư mục dữ liệu của dodo, \
+                 giống các biến bí mật của API Explorer. Ai đọc được thư mục đó thì đọc được \
+                 mật khẩu."
+                    .into()
+            }
+            (Str::DbRevealPassword, Language::English) => "Show password".into(),
+            (Str::DbRevealPassword, Language::Vietnamese) => "Hiện mật khẩu".into(),
+            (Str::DbHidePassword, Language::English) => "Hide password".into(),
+            (Str::DbHidePassword, Language::Vietnamese) => "Ẩn mật khẩu".into(),
+            (Str::DbTestConnection, Language::English) => "Test connection".into(),
+            (Str::DbTestConnection, Language::Vietnamese) => "Thử kết nối".into(),
+            (Str::DbTesting, Language::English) => "Testing…".into(),
+            (Str::DbTesting, Language::Vietnamese) => "Đang thử…".into(),
+            (Str::DbTestSucceeded, Language::English) => "The connection works.".into(),
+            (Str::DbTestSucceeded, Language::Vietnamese) => "Kết nối hoạt động tốt.".into(),
+            (Str::DbProfileHostMissing, Language::English) => "Enter a host.".into(),
+            (Str::DbProfileHostMissing, Language::Vietnamese) => "Hãy nhập máy chủ.".into(),
+            (Str::DbProfilePortMissing, Language::English) => "Enter a port.".into(),
+            (Str::DbProfilePortMissing, Language::Vietnamese) => "Hãy nhập cổng.".into(),
+            (Str::DbProfileDatabaseMissing, Language::English) => {
+                "Enter a database name.".into()
+            }
+            (Str::DbProfileDatabaseMissing, Language::Vietnamese) => {
+                "Hãy nhập tên cơ sở dữ liệu.".into()
+            }
+            (Str::DbProfileFileMissing, Language::English) => "Choose a database file.".into(),
+            (Str::DbProfileFileMissing, Language::Vietnamese) => {
+                "Hãy chọn tệp cơ sở dữ liệu.".into()
+            }
+            (Str::DbObjects, Language::English) => "Objects".into(),
+            (Str::DbObjects, Language::Vietnamese) => "Đối tượng".into(),
+            (Str::DbGroupTables, Language::English) => "Tables".into(),
+            (Str::DbGroupTables, Language::Vietnamese) => "Bảng".into(),
+            (Str::DbGroupViews, Language::English) => "Views".into(),
+            (Str::DbGroupViews, Language::Vietnamese) => "Khung nhìn".into(),
+            (Str::DbGroupColumns, Language::English) => "Columns".into(),
+            (Str::DbGroupColumns, Language::Vietnamese) => "Cột".into(),
+            (Str::DbGroupIndexes, Language::English) => "Indexes".into(),
+            (Str::DbGroupIndexes, Language::Vietnamese) => "Chỉ mục".into(),
+            (Str::DbGroupConstraints, Language::English) => "Constraints".into(),
+            (Str::DbGroupConstraints, Language::Vietnamese) => "Ràng buộc".into(),
+            (Str::DbTreeLoading, Language::English) => "Loading…".into(),
+            (Str::DbTreeLoading, Language::Vietnamese) => "Đang tải…".into(),
+            (Str::DbTreeEmpty, Language::English) => "Nothing here".into(),
+            (Str::DbTreeEmpty, Language::Vietnamese) => "Không có gì".into(),
+            (Str::DbTreeNotConnected, Language::English) => "Not connected".into(),
+            (Str::DbTreeNotConnected, Language::Vietnamese) => "Chưa kết nối".into(),
+            (Str::DbTreeNotConnectedHint, Language::English) => {
+                "Connect to browse this database's objects.".into()
+            }
+            (Str::DbTreeNotConnectedHint, Language::Vietnamese) => {
+                "Hãy kết nối để duyệt các đối tượng của cơ sở dữ liệu này.".into()
+            }
+            (Str::DbRefreshTree, Language::English) => "Refresh".into(),
+            (Str::DbRefreshTree, Language::Vietnamese) => "Tải lại".into(),
+            (Str::DbQuery, Language::English) => "Query".into(),
+            (Str::DbQuery, Language::Vietnamese) => "Truy vấn".into(),
+            (Str::DbQueryPlaceholder, Language::English) => {
+                "Write SQL here, then press Execute.".into()
+            }
+            (Str::DbQueryPlaceholder, Language::Vietnamese) => {
+                "Viết SQL ở đây rồi nhấn Chạy.".into()
+            }
+            (Str::DbExecute, Language::English) => "Execute".into(),
+            (Str::DbExecute, Language::Vietnamese) => "Chạy".into(),
+            (Str::DbFormat, Language::English) => "Format".into(),
+            (Str::DbFormat, Language::Vietnamese) => "Định dạng".into(),
+            (Str::DbRunning, Language::English) => "Running…".into(),
+            (Str::DbRunning, Language::Vietnamese) => "Đang chạy…".into(),
+            (Str::DbNoStatement, Language::English) => "There is nothing to run.".into(),
+            (Str::DbNoStatement, Language::Vietnamese) => "Không có gì để chạy.".into(),
+            (Str::DbResult, Language::English) => "Result".into(),
+            (Str::DbResult, Language::Vietnamese) => "Kết quả".into(),
+            (Str::DbNoResultYet, Language::English) => "No result yet".into(),
+            (Str::DbNoResultYet, Language::Vietnamese) => "Chưa có kết quả".into(),
+            (Str::DbNoResultYetHint, Language::English) => {
+                "Run a statement to see its rows here.".into()
+            }
+            (Str::DbNoResultYetHint, Language::Vietnamese) => {
+                "Chạy một câu lệnh để xem các dòng của nó ở đây.".into()
+            }
+            (Str::DbNoRows, Language::English) => "The statement returned no rows.".into(),
+            (Str::DbNoRows, Language::Vietnamese) => "Câu lệnh không trả về dòng nào.".into(),
+            (Str::DbFooterRows(count), Language::English) => match count {
+                1 => "1 row".into(),
+                other => format!("{other} rows").into(),
+            },
+            (Str::DbFooterRows(count), Language::Vietnamese) => format!("{count} dòng").into(),
+            (Str::DbFooterRowsAffected(count), Language::English) => match count {
+                1 => "1 row affected".into(),
+                other => format!("{other} rows affected").into(),
+            },
+            (Str::DbFooterRowsAffected(count), Language::Vietnamese) => {
+                format!("{count} dòng bị ảnh hưởng").into()
+            }
+            (Str::DbFooterElapsed(elapsed), Language::English) => format!("in {elapsed}").into(),
+            (Str::DbFooterElapsed(elapsed), Language::Vietnamese) => {
+                format!("trong {elapsed}").into()
+            }
+            (Str::DbFooterTruncated(shown), Language::English) => {
+                format!("showing the first {shown} — the statement returned more").into()
+            }
+            (Str::DbFooterTruncated(shown), Language::Vietnamese) => {
+                format!("chỉ hiện {shown} dòng đầu — câu lệnh trả về nhiều hơn").into()
+            }
+            (Str::DbFooterCapped(count), Language::English) => {
+                format!("{count} large values shortened").into()
+            }
+            (Str::DbFooterCapped(count), Language::Vietnamese) => {
+                format!("{count} giá trị lớn đã được rút gọn").into()
+            }
+            (Str::DbStatementLabel, Language::English) => "Statement".into(),
+            (Str::DbStatementLabel, Language::Vietnamese) => "Câu lệnh".into(),
+            (Str::DbNotices, Language::English) => "Server notices".into(),
+            (Str::DbNotices, Language::Vietnamese) => "Thông báo từ máy chủ".into(),
+            // SQL's own word for "no value". The same four letters in both
+            // languages; translating it would make a cell unreadable.
+            (Str::DbColumnNull, _) => "NULL".into(),
+            (Str::DbSelectConnection, Language::English) => "Select a connection".into(),
+            (Str::DbSelectConnection, Language::Vietnamese) => "Chọn một kết nối".into(),
+            (Str::DbSelectConnectionHint, Language::English) => {
+                "Choose one on the left to browse it and run queries.".into()
+            }
+            (Str::DbSelectConnectionHint, Language::Vietnamese) => {
+                "Chọn một kết nối ở bên trái để duyệt và chạy truy vấn.".into()
+            }
+            (Str::DbConnectionStoreError(detail), Language::English) => {
+                format!("Connections could not be saved: {detail}").into()
+            }
+            (Str::DbConnectionStoreError(detail), Language::Vietnamese) => {
+                format!("Không thể lưu các kết nối: {detail}").into()
+            }
+            (Str::DbConnectionStoreMissingVersion, Language::English) => {
+                "The saved connections file carries no schema version, so it cannot be read.".into()
+            }
+            (Str::DbConnectionStoreMissingVersion, Language::Vietnamese) => {
+                "Tệp kết nối đã lưu không có phiên bản lược đồ nên không thể đọc được.".into()
+            }
+            (
+                Str::DbConnectionStoreUnsupportedVersion { found, supported },
+                Language::English,
+            ) => format!(
+                "The saved connections were written by a newer dodo (version {found}; this build \
+                 understands {supported}). Update dodo to open them."
+            )
+            .into(),
+            (
+                Str::DbConnectionStoreUnsupportedVersion { found, supported },
+                Language::Vietnamese,
+            ) => format!(
+                "Các kết nối đã lưu được ghi bởi một bản dodo mới hơn (phiên bản {found}; bản này \
+                 hiểu {supported}). Hãy cập nhật dodo để mở chúng."
+            )
+            .into(),
+            (Str::DbUnreachable(detail), Language::English) => {
+                format!("The database could not be reached: {detail}").into()
+            }
+            (Str::DbUnreachable(detail), Language::Vietnamese) => {
+                format!("Không thể kết nối tới cơ sở dữ liệu: {detail}").into()
+            }
+            (Str::DbServerError(detail), Language::English) => {
+                format!("The server rejected the statement: {detail}").into()
+            }
+            (Str::DbServerError(detail), Language::Vietnamese) => {
+                format!("Máy chủ từ chối câu lệnh: {detail}").into()
+            }
+            (Str::DbServerErrorCoded { code, detail }, Language::English) => {
+                format!("The server rejected the statement ({code}): {detail}").into()
+            }
+            (Str::DbServerErrorCoded { code, detail }, Language::Vietnamese) => {
+                format!("Máy chủ từ chối câu lệnh ({code}): {detail}").into()
+            }
         }
     }
 }
@@ -3296,6 +3667,101 @@ mod tests {
             ),
             with(Str::UpdateErrorInstall(DETAIL.into()), &[DETAIL]),
             with(Str::UpdateErrorIo(DETAIL.into()), &[DETAIL]),
+            plain(Str::DatabaseTitle),
+            plain(Str::DbConnections),
+            plain(Str::DbNewConnection),
+            plain(Str::DbNoConnections),
+            plain(Str::DbNoConnectionsHint),
+            plain(Str::DbConnect),
+            plain(Str::DbDisconnect),
+            plain(Str::DbReconnect),
+            plain(Str::DbEditConnection),
+            plain(Str::DbEditConnectionTitle),
+            plain(Str::DbDuplicateConnection),
+            plain(Str::DbDeleteConnection),
+            plain(Str::DbCopySuffix),
+            plain(Str::DbStatusConnected),
+            plain(Str::DbStatusConnecting),
+            plain(Str::DbStatusDisconnected),
+            plain(Str::DbStatusError),
+            plain(Str::DbDeleteConnectionTitle),
+            with(Str::DbDeleteConnectionMessage(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbCancel),
+            plain(Str::DbSave),
+            plain(Str::DbFieldName),
+            plain(Str::DbFieldNamePlaceholder),
+            plain(Str::DbFieldEngine),
+            plain(Str::DbFieldHost),
+            plain(Str::DbFieldPort),
+            plain(Str::DbFieldDatabase),
+            plain(Str::DbFieldUser),
+            plain(Str::DbFieldPassword),
+            plain(Str::DbFieldFile),
+            plain(Str::DbFieldFilePlaceholder),
+            plain(Str::DbChooseFile),
+            term(Str::DbFieldSsl),
+            plain(Str::DbSslDisable),
+            plain(Str::DbSslPrefer),
+            plain(Str::DbSslRequire),
+            plain(Str::DbPasswordStorageNotice),
+            plain(Str::DbRevealPassword),
+            plain(Str::DbHidePassword),
+            plain(Str::DbTestConnection),
+            plain(Str::DbTesting),
+            plain(Str::DbTestSucceeded),
+            plain(Str::DbProfileHostMissing),
+            plain(Str::DbProfilePortMissing),
+            plain(Str::DbProfileDatabaseMissing),
+            plain(Str::DbProfileFileMissing),
+            plain(Str::DbObjects),
+            plain(Str::DbGroupTables),
+            plain(Str::DbGroupViews),
+            plain(Str::DbGroupColumns),
+            plain(Str::DbGroupIndexes),
+            plain(Str::DbGroupConstraints),
+            plain(Str::DbTreeLoading),
+            plain(Str::DbTreeEmpty),
+            plain(Str::DbTreeNotConnected),
+            plain(Str::DbTreeNotConnectedHint),
+            plain(Str::DbRefreshTree),
+            plain(Str::DbQuery),
+            plain(Str::DbQueryPlaceholder),
+            plain(Str::DbExecute),
+            plain(Str::DbFormat),
+            plain(Str::DbRunning),
+            plain(Str::DbNoStatement),
+            plain(Str::DbResult),
+            plain(Str::DbNoResultYet),
+            plain(Str::DbNoResultYetHint),
+            plain(Str::DbNoRows),
+            with(Str::DbFooterRows(NUMBER), &[NUMBER_TEXT]),
+            with(Str::DbFooterRowsAffected(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::DbFooterElapsed(DETAIL.into()), &[DETAIL]),
+            with(Str::DbFooterTruncated(NUMBER), &[NUMBER_TEXT]),
+            with(Str::DbFooterCapped(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::DbStatementLabel),
+            plain(Str::DbNotices),
+            term(Str::DbColumnNull),
+            plain(Str::DbSelectConnection),
+            plain(Str::DbSelectConnectionHint),
+            with(Str::DbConnectionStoreError(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbConnectionStoreMissingVersion),
+            with(
+                Str::DbConnectionStoreUnsupportedVersion {
+                    found: NUMBER as u64,
+                    supported: 77,
+                },
+                &[NUMBER_TEXT, "77"],
+            ),
+            with(Str::DbUnreachable(DETAIL.into()), &[DETAIL]),
+            with(Str::DbServerError(DETAIL.into()), &[DETAIL]),
+            with(
+                Str::DbServerErrorCoded {
+                    code: "42P01".into(),
+                    detail: DETAIL.into(),
+                },
+                &["42P01", DETAIL],
+            ),
         ]
     }
 
@@ -3780,6 +4246,90 @@ mod tests {
             Str::UpdateErrorSize { .. } => 466,
             Str::UpdateErrorInstall(_) => 467,
             Str::UpdateErrorIo(_) => 468,
+
+            Str::DatabaseTitle => 469,
+            Str::DbConnections => 470,
+            Str::DbNewConnection => 471,
+            Str::DbNoConnections => 472,
+            Str::DbNoConnectionsHint => 473,
+            Str::DbConnect => 474,
+            Str::DbDisconnect => 475,
+            Str::DbReconnect => 476,
+            Str::DbEditConnection => 477,
+            Str::DbEditConnectionTitle => 478,
+            Str::DbDuplicateConnection => 479,
+            Str::DbDeleteConnection => 480,
+            Str::DbCopySuffix => 481,
+            Str::DbStatusConnected => 482,
+            Str::DbStatusConnecting => 483,
+            Str::DbStatusDisconnected => 484,
+            Str::DbStatusError => 485,
+            Str::DbDeleteConnectionTitle => 486,
+            Str::DbDeleteConnectionMessage(_) => 487,
+            Str::DbCancel => 488,
+            Str::DbSave => 489,
+            Str::DbFieldName => 490,
+            Str::DbFieldNamePlaceholder => 491,
+            Str::DbFieldEngine => 492,
+            Str::DbFieldHost => 493,
+            Str::DbFieldPort => 494,
+            Str::DbFieldDatabase => 495,
+            Str::DbFieldUser => 496,
+            Str::DbFieldPassword => 497,
+            Str::DbFieldFile => 498,
+            Str::DbFieldFilePlaceholder => 499,
+            Str::DbChooseFile => 500,
+            Str::DbFieldSsl => 501,
+            Str::DbSslDisable => 502,
+            Str::DbSslPrefer => 503,
+            Str::DbSslRequire => 504,
+            Str::DbPasswordStorageNotice => 505,
+            Str::DbRevealPassword => 506,
+            Str::DbHidePassword => 507,
+            Str::DbTestConnection => 508,
+            Str::DbTesting => 509,
+            Str::DbTestSucceeded => 510,
+            Str::DbProfileHostMissing => 511,
+            Str::DbProfilePortMissing => 512,
+            Str::DbProfileDatabaseMissing => 513,
+            Str::DbProfileFileMissing => 514,
+            Str::DbObjects => 515,
+            Str::DbGroupTables => 516,
+            Str::DbGroupViews => 517,
+            Str::DbGroupColumns => 518,
+            Str::DbGroupIndexes => 519,
+            Str::DbGroupConstraints => 520,
+            Str::DbTreeLoading => 521,
+            Str::DbTreeEmpty => 522,
+            Str::DbTreeNotConnected => 523,
+            Str::DbTreeNotConnectedHint => 524,
+            Str::DbRefreshTree => 525,
+            Str::DbQuery => 526,
+            Str::DbQueryPlaceholder => 527,
+            Str::DbExecute => 528,
+            Str::DbFormat => 529,
+            Str::DbRunning => 530,
+            Str::DbNoStatement => 531,
+            Str::DbResult => 532,
+            Str::DbNoResultYet => 533,
+            Str::DbNoResultYetHint => 534,
+            Str::DbNoRows => 535,
+            Str::DbFooterRows(_) => 536,
+            Str::DbFooterRowsAffected(_) => 537,
+            Str::DbFooterElapsed(_) => 538,
+            Str::DbFooterTruncated(_) => 539,
+            Str::DbFooterCapped(_) => 540,
+            Str::DbStatementLabel => 541,
+            Str::DbNotices => 542,
+            Str::DbColumnNull => 543,
+            Str::DbSelectConnection => 544,
+            Str::DbSelectConnectionHint => 545,
+            Str::DbConnectionStoreError(_) => 546,
+            Str::DbConnectionStoreMissingVersion => 547,
+            Str::DbConnectionStoreUnsupportedVersion { .. } => 548,
+            Str::DbUnreachable(_) => 549,
+            Str::DbServerError(_) => 550,
+            Str::DbServerErrorCoded { .. } => 551,
         }
     }
 
