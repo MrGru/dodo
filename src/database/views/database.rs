@@ -45,6 +45,7 @@ use crate::database::models::sql_format;
 use crate::database::services::connection_store::{ConnectionStore, DiskConnectionStore};
 use crate::database::services::{self, Driver};
 use crate::database::state::connections::{ConnectionsState, Status};
+use crate::database::state::editor::EditorLanguage;
 use crate::database::state::query::{self, QueryState};
 use crate::database::state::tree::{CatalogTree, Content, Notice};
 use crate::database::views::connection_form::{self, ConnectionForm, FormEvent};
@@ -76,6 +77,10 @@ pub struct DatabaseView {
     pub(super) tree_state: Entity<TreeState>,
 
     pub(super) editor: Entity<InputState>,
+    /// The grammar the editor is pointed at. Guards the per-frame
+    /// `set_highlighter` that made round 1's editor draw black text — see
+    /// [`EditorLanguage`]'s module doc.
+    editor_language: EditorLanguage,
     pub(super) table: Entity<TableState<ResultDelegate>>,
     pub(super) query: QueryState,
 
@@ -131,6 +136,7 @@ impl DatabaseView {
             tree: CatalogTree::new(),
             tree_state,
             editor,
+            editor_language: EditorLanguage::new(),
             table,
             query: QueryState::Idle,
             outer_split: cx.new(|_| ResizableState::default()),
@@ -484,6 +490,15 @@ impl DatabaseView {
 
     /// Re-points the editor's grammar at the selected connection's language,
     /// and re-pushes the placeholder after a language change.
+    ///
+    /// This runs from `render`, so **both** halves below are load-bearing and
+    /// both were missing in round 1, which is why the editor drew black text:
+    /// `set_highlighter` throws the highlighter away and cancels its parse task
+    /// without scheduling a new one, so calling it every frame guaranteed there
+    /// was never a highlighter to paint with, and calling it *at all* without a
+    /// following `refresh` leaves the editor uncoloured until the next
+    /// keystroke. [`EditorLanguage`] is where the whole diagnosis is written
+    /// down.
     fn sync_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The *driver* is the authority once one is connected — that is what
         // `Capabilities` is for, and it is how a backend whose console is not
@@ -497,9 +512,15 @@ impl DatabaseView {
                 .map(|profile| profile.engine.editor_language())
                 .unwrap_or_else(|| Engine::PostgreSql.editor_language()),
         };
-        self.editor.update(cx, |state, cx| {
-            state.set_highlighter(language, cx);
-        });
+        if self.editor_language.adopt(language) {
+            self.editor.update(cx, |state, cx| {
+                state.set_highlighter(language, cx);
+                // `refresh` is the only public way to say "re-run syntax
+                // highlighting on the next render"; without it the grammar is
+                // set and nothing ever parses with it.
+                state.refresh(cx);
+            });
+        }
 
         let current = Language::current(cx);
         if self.language != current {
