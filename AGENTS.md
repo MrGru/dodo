@@ -223,10 +223,12 @@ query, read the result — **PostgreSQL and SQLite only as of round 1**. Same fi
 the three modules above; **`src/database/mod.rs` is the authority** on the structure and on what
 R1 deliberately does not build. Seven things worth knowing before touching it:
 
-- **It is self-contained, and that is enforced by absence.** It names no other dodo module. In
-  particular `grep -rn 'docker' src/database/` staying empty is the invariant: the design report
-  proposed a "detect running database containers" prefill on the connection form and it was
-  dropped in *every* round, precisely so no compile-time edge exists between two tools.
+- **It is self-contained, and the invariant is checkable.** No `use crate::` line in the module
+  names another tool — only `crate::{database,i18n,app_icon,paths}` — so
+  `grep -rn '^use crate::' src/database/ | grep -vE 'crate::(database|i18n|app_icon|paths)'`
+  returns nothing. (Other modules are *mentioned* in its doc comments; a pointer is not an edge.)
+  The design report proposed a "detect running database containers" prefill on the connection form
+  and it was dropped in *every* round, precisely so no compile-time edge exists between two tools.
 - **The `Driver` trait is four methods and the capability set has one field.** That is not an
   oversight: the report proposes fields for transactions, Explain, cancel, column provenance and
   `LIMIT`/`OFFSET`, and each describes a control no round has built, so each would be a value
