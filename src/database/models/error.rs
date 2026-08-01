@@ -1,7 +1,9 @@
 //! Why a database operation did not complete, in terms the UI can act on.
 //!
-//! Mirrors [`DockerError`](crate::docker::services::DockerError) and
-//! `TransportError`: the driver's own message is third-party English kept
+//! Mirrors `docker::services::DockerError` and `api_explorer`'s
+//! `TransportError` — named in prose rather than linked, because this module
+//! reaches for nothing outside itself: the driver's own message is third-party
+//! English kept
 //! verbatim inside a translated frame, because there is nothing to translate it
 //! with.
 //!

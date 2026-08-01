@@ -54,8 +54,14 @@
 //! particular it does **not** name `crate::docker`: the design report proposed
 //! a read-only "detect running database containers" prefill on the connection
 //! form, and that feature was dropped in every round, precisely so this module
-//! keeps no compile-time edge onto another tool. `grep -rn 'docker' src/database/`
-//! staying empty is the invariant.
+//! keeps no compile-time edge onto another tool.
+//!
+//! The invariant, stated so it can be checked: **no `use crate::` line here
+//! names another tool.** `grep -rn '^use crate::' src/database/ | grep -vE
+//! 'crate::(database|i18n|app_icon|paths)'` returns nothing — the anchor keeps
+//! the check from matching its own description. Other modules are
+//! mentioned in prose all over these docs — that is a pointer, not an edge, and
+//! the two are worth telling apart.
 //!
 //! # Sidebar registration
 //!
