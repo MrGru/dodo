@@ -111,23 +111,28 @@ impl PageBuffer {
         }
     }
 
-    pub fn budget(&self) -> PageBudget {
-        self.budget
-    }
-
+    /// What the page is holding.
+    ///
+    /// The shipping path takes [`PageBuffer::into_parts`] instead, so that a
+    /// thousand rows move rather than being copied; these exist for the
+    /// assertions that keep the bounds honest.
+    #[cfg(test)]
     pub fn columns(&self) -> &[ColumnMeta] {
         &self.columns
     }
 
+    #[cfg(test)]
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
 
     /// Whether a bound stopped the read before the server ran out of rows.
+    #[cfg(test)]
     pub fn truncated(&self) -> bool {
         self.truncated
     }
 
+    #[cfg(test)]
     pub fn capped_cells(&self) -> usize {
         self.capped_cells
     }

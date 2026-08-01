@@ -96,21 +96,8 @@ pub enum SslMode {
 }
 
 impl SslMode {
+    /// Every mode, in the order the picker shows them.
     pub const ALL: [SslMode; 3] = [SslMode::Disable, SslMode::Prefer, SslMode::Require];
-
-    /// The stable identifier written to `connections.json` and used as the
-    /// dropdown's value.
-    pub fn id(self) -> &'static str {
-        match self {
-            SslMode::Disable => "disable",
-            SslMode::Prefer => "prefer",
-            SslMode::Require => "require",
-        }
-    }
-
-    pub fn from_id(id: &str) -> Option<SslMode> {
-        SslMode::ALL.into_iter().find(|mode| mode.id() == id)
-    }
 }
 
 /// One saved connection.
@@ -257,6 +244,14 @@ impl ConnectionProfile {
 }
 
 /// Why a profile cannot be connected yet.
+///
+/// Every variant names the field that is absent, so the shared `Missing`
+/// suffix is the point rather than an accident: the form shows one message and
+/// it has to say *which* field.
+#[allow(
+    clippy::enum_variant_names,
+    reason = "the shared suffix is the meaning"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProfileProblem {
     HostMissing,
@@ -405,12 +400,23 @@ mod tests {
         assert_eq!(ConnectionDocument::default().version, SCHEMA_VERSION);
     }
 
+    /// Like the engine's, these names are in `connections.json` and must not
+    /// drift.
     #[test]
-    fn ssl_modes_round_trip_through_their_stable_ids() {
+    fn ssl_modes_serialize_to_pinned_names_and_default_to_prefer() {
+        assert_eq!(
+            serde_json::to_string(&SslMode::Disable).expect("serializes"),
+            "\"disable\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SslMode::Require).expect("serializes"),
+            "\"require\""
+        );
         for mode in SslMode::ALL {
-            assert_eq!(SslMode::from_id(mode.id()), Some(mode));
+            let json = serde_json::to_string(&mode).expect("serializes");
+            let back: SslMode = serde_json::from_str(&json).expect("deserializes");
+            assert_eq!(back, mode);
         }
-        assert_eq!(SslMode::from_id("verify-full"), None);
         assert_eq!(SslMode::default(), SslMode::Prefer);
     }
 

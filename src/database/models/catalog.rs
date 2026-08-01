@@ -63,6 +63,16 @@ pub enum NodeKind {
     /// object the server has. Always carries a [`NodeLabel::Group`].
     Folder,
     /// Anything else a driver reports.
+    ///
+    /// Neither of this round's two drivers produces one — both speak SQL and
+    /// every object they report has a variant above. It exists because it is
+    /// the escape hatch that lets a backend with a concept dodo has not met
+    /// (a key/value store's keyspaces, say) appear in the tree without a new
+    /// variant, and `services::fake`'s key/value driver is what exercises it.
+    #[allow(
+        dead_code,
+        reason = "the escape hatch a non-SQL driver uses; see above"
+    )]
     Other,
 }
 

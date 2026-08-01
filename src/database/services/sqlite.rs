@@ -443,14 +443,14 @@ fn describe(statement: &rusqlite::Statement<'_>, column_count: usize) -> Vec<Col
                 .to_string();
 
             let mut column = ColumnMeta::new(name, type_name);
-            if let Some(origin) = metadata.get(index) {
-                if let (Some(table), Some(name)) = (origin.table_name(), origin.origin_name()) {
-                    column = column.with_origin(ColumnOrigin {
-                        schema: origin.database_name().map(str::to_string),
-                        table: table.to_string(),
-                        column: name.to_string(),
-                    });
-                }
+            if let Some(origin) = metadata.get(index)
+                && let (Some(table), Some(name)) = (origin.table_name(), origin.origin_name())
+            {
+                column = column.with_origin(ColumnOrigin {
+                    schema: origin.database_name().map(str::to_string),
+                    table: table.to_string(),
+                    column: name.to_string(),
+                });
             }
             column
         })

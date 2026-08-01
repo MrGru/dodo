@@ -80,6 +80,25 @@ pub enum AppIcon {
     /// no download glyph, and `arrow-down` reads as "sort descending" beside a
     /// list of tools.
     Download,
+
+    // Database Explorer. `database`, `table`, `columns` and `key` ship as our
+    // own SVGs — the library's icon set has no data-shaped glyph at all — and
+    // the rest resolve through `Assets`' fallback to `gpui_component_assets`.
+    /// The sidebar row, and a database node in the object tree.
+    Database,
+    /// A table node. Also the result grid's own empty state.
+    Table,
+    /// A column node, and the Columns group.
+    Columns,
+    /// A constraint node, and the Constraints group.
+    Key,
+    /// An index node. `sort-ascending` rather than a key: an index is an
+    /// ordering, and the library has no better glyph for one.
+    SortAscending,
+    /// The password-storage notice, which is never hidden.
+    Info,
+    /// The other half of the password reveal toggle.
+    EyeOff,
 }
 
 impl IconNamed for AppIcon {
@@ -128,6 +147,13 @@ impl IconNamed for AppIcon {
             Self::Restart => "icons/rotate-ccw.svg",
             Self::Eye => "icons/eye.svg",
             Self::Download => "icons/download.svg",
+            Self::Database => "icons/database.svg",
+            Self::Table => "icons/table.svg",
+            Self::Columns => "icons/columns.svg",
+            Self::Key => "icons/key.svg",
+            Self::SortAscending => "icons/sort-ascending.svg",
+            Self::Info => "icons/info.svg",
+            Self::EyeOff => "icons/eye-off.svg",
         }
         .into()
     }

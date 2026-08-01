@@ -16,8 +16,10 @@ use serde::{Deserialize, Serialize};
 
 /// A database product dodo can connect to.
 ///
-/// The serialized form is [`Engine::id`], not the variant name, so renaming a
-/// variant cannot orphan somebody's saved connections.
+/// The serialized form is the `serde(rename)` below, not the variant name, so
+/// renaming a variant cannot orphan somebody's saved connections. There is no
+/// `id()`/`from_id()` pair beside it: serde owns that mapping, and a second
+/// spelling of it would be one more thing to keep in step.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Engine {
     #[default]
@@ -42,20 +44,6 @@ impl Engine {
     /// Every engine this build can connect to, in the order the picker lists
     /// them.
     pub const ALL: [Engine; 2] = [Engine::PostgreSql, Engine::Sqlite];
-
-    /// The stable identifier written to `connections.json` and used as the
-    /// engine dropdown's value. Never shown to a user, never translated,
-    /// never changed.
-    pub fn id(self) -> &'static str {
-        match self {
-            Engine::PostgreSql => "postgresql",
-            Engine::Sqlite => "sqlite",
-        }
-    }
-
-    pub fn from_id(id: &str) -> Option<Engine> {
-        Engine::ALL.into_iter().find(|engine| engine.id() == id)
-    }
 
     /// The product's own name. A proper noun in every language, so it is a
     /// `&'static str` rather than a [`Str`](crate::i18n::Str) — the same
@@ -112,33 +100,27 @@ impl Engine {
 mod tests {
     use super::{Address, Engine};
 
+    /// The serialized names are what `connections.json` holds. Changing one
+    /// orphans every saved connection of that engine, so they are pinned by
+    /// literal here and every engine round trips.
     #[test]
-    fn every_engine_has_a_distinct_stable_id_that_round_trips() {
-        let mut ids: Vec<&str> = Engine::ALL.iter().map(|engine| engine.id()).collect();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), Engine::ALL.len());
+    fn the_serialized_names_are_pinned_and_round_trip() {
+        assert_eq!(
+            serde_json::to_string(&Engine::PostgreSql).expect("serializes"),
+            "\"postgresql\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Engine::Sqlite).expect("serializes"),
+            "\"sqlite\""
+        );
 
         for engine in Engine::ALL {
-            assert_eq!(Engine::from_id(engine.id()), Some(engine));
+            let json = serde_json::to_string(&engine).expect("serializes");
+            let back: Engine = serde_json::from_str(&json).expect("deserializes");
+            assert_eq!(back, engine);
         }
-        assert_eq!(Engine::from_id("mysql"), None);
-    }
 
-    /// The ids are what `connections.json` holds. Changing one orphans every
-    /// saved connection of that engine, so they are pinned by literal here.
-    #[test]
-    fn the_serialized_ids_are_pinned() {
-        assert_eq!(Engine::PostgreSql.id(), "postgresql");
-        assert_eq!(Engine::Sqlite.id(), "sqlite");
-    }
-
-    #[test]
-    fn serde_uses_the_id_not_the_variant_name() {
-        let json = serde_json::to_string(&Engine::PostgreSql).expect("serializes");
-        assert_eq!(json, "\"postgresql\"");
-        let back: Engine = serde_json::from_str("\"sqlite\"").expect("deserializes");
-        assert_eq!(back, Engine::Sqlite);
+        assert!(serde_json::from_str::<Engine>("\"mysql\"").is_err());
     }
 
     #[test]
