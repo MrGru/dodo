@@ -86,6 +86,15 @@ pub enum AppIcon {
     // the rest resolve through `Assets`' fallback to `gpui_component_assets`.
     /// The sidebar row, and a database node in the object tree.
     Database,
+    /// The engine marks on a connection's root row in the object tree. Our own
+    /// SVGs — the library has nothing product-shaped — and deliberately drawn
+    /// as ordinary outline glyphs in the set's Lucide-ish style rather than as
+    /// either vendor's registered logo: gpui paints an SVG as an alpha mask
+    /// tinted with the element's text colour, so a two-colour brand mark could
+    /// not survive the trip anyway, and a monochrome trace of one would be a
+    /// trademark dodo has no licence to use.
+    PostgreSql,
+    Sqlite,
     /// A table node. Also the result grid's own empty state.
     Table,
     /// A column node, and the Columns group.
@@ -148,6 +157,8 @@ impl IconNamed for AppIcon {
             Self::Eye => "icons/eye.svg",
             Self::Download => "icons/download.svg",
             Self::Database => "icons/database.svg",
+            Self::PostgreSql => "icons/postgresql.svg",
+            Self::Sqlite => "icons/sqlite.svg",
             Self::Table => "icons/table.svg",
             Self::Columns => "icons/columns.svg",
             Self::Key => "icons/key.svg",

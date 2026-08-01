@@ -1,5 +1,21 @@
-//! The Database Explorer's page: connections and objects on the left, the
-//! query editor and its result on the right.
+//! The Database Explorer's page: one tree on the left, the query editor and its
+//! result on the right.
+//!
+//! # The connections *are* the tree's roots
+//!
+//! Not a connection list above an object tree — one tree, whose top level is
+//! the saved connections and whose branches are their databases, schemas and
+//! tables. That is why nothing here clears "the tree": every connection has its
+//! own, they are all open at once, and
+//! [`Forest`](crate::database::state::tree::Forest) holds the lot. Selecting a
+//! connection therefore costs nothing, which is what lets the user read one
+//! database's columns while the editor runs against another.
+//!
+//! The per-connection actions — Connect, Disconnect, Edit, Duplicate, Delete —
+//! are a **right-click context menu on the root row**, built by
+//! `connections_panel`, not buttons on the row. The row itself carries the
+//! engine's mark, the status dot, and a hover card with the connection's
+//! details.
 //!
 //! # Everything that touches a database happens off the UI thread
 //!
@@ -19,14 +35,15 @@
 //!
 //! `TreeState::set_items` replaces the widget's items — and their expanded
 //! flags — so the widget cannot be the authority on what is open.
-//! [`CatalogTree`] is, and this view rebuilds the items from it whenever it
-//! changes. `state::tree`'s module doc has the second, sharper reason.
+//! [`Forest`](crate::database::state::tree::Forest) is, and this view rebuilds
+//! the items from it whenever it changes. `state::tree`'s module doc has the
+//! second, sharper reason.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, Hsla, InteractiveElement as _,
     IntoElement, ParentElement as _, Pixels, Render, SharedString, Styled as _, Subscription, Task,
     Window, div, px,
 };
@@ -47,7 +64,7 @@ use crate::database::services::{self, Driver};
 use crate::database::state::connections::{ConnectionsState, Status};
 use crate::database::state::editor::EditorLanguage;
 use crate::database::state::query::{self, QueryState};
-use crate::database::state::tree::{CatalogTree, Content, Notice};
+use crate::database::state::tree::{Content, Forest, Notice, Outline, RowRef};
 use crate::database::views::connection_form::{self, ConnectionForm, FormEvent};
 use crate::database::views::result_grid::ResultDelegate;
 use crate::i18n::{Language, Str, t};
@@ -73,7 +90,10 @@ pub struct DatabaseView {
     drivers: HashMap<u64, Arc<dyn Driver>>,
     store: Arc<dyn ConnectionStore>,
 
-    pub(super) tree: CatalogTree,
+    /// One [`CatalogTree`](crate::database::state::tree::CatalogTree) per
+    /// connection, plus which connection roots are open. The panel is one tree
+    /// whose roots are the connections; this is that arrangement.
+    pub(super) forest: Forest,
     pub(super) tree_state: Entity<TreeState>,
 
     pub(super) editor: Entity<InputState>,
@@ -133,7 +153,7 @@ impl DatabaseView {
             connections: ConnectionsState::new(),
             drivers: HashMap::new(),
             store: Arc::new(DiskConnectionStore::new()),
-            tree: CatalogTree::new(),
+            forest: Forest::new(),
             tree_state,
             editor,
             editor_language: EditorLanguage::new(),
@@ -207,16 +227,17 @@ impl DatabaseView {
 
     // ---- connections -----------------------------------------------------
 
+    /// Makes `id` the connection the query editor runs against.
+    ///
+    /// Selecting no longer touches the tree, and that is the point of one tree
+    /// with several roots: every connection's objects stay loaded and open
+    /// while the user reads one of them and runs a statement against another.
     pub(super) fn select(&mut self, id: u64, cx: &mut Context<Self>) {
         if self.connections.selected_id() == Some(id) {
             return;
         }
         self.connections.select(Some(id));
-        // The tree belongs to a connection, so switching connections starts a
-        // new one rather than showing the previous database's objects.
-        self.tree.clear();
         self.sync_tree_items(cx);
-        self.ensure_tree(cx);
         self.persist(cx);
         cx.notify();
     }
@@ -243,9 +264,11 @@ impl DatabaseView {
                     Ok(driver) => {
                         this.drivers.insert(id, driver);
                         this.connections.set_status(id, Status::Connected);
-                        if this.connections.selected_id() == Some(id) {
-                            this.tree.clear();
-                            this.ensure_tree(cx);
+                        // Only if the user has the root open. Connecting from
+                        // the context menu with the root shut should not load a
+                        // catalog nobody is looking at.
+                        if this.forest.is_open(id) {
+                            this.ensure_tree(id, cx);
                         }
                     }
                     Err(error) => {
@@ -263,10 +286,11 @@ impl DatabaseView {
     pub(super) fn disconnect(&mut self, id: u64, cx: &mut Context<Self>) {
         self.drivers.remove(&id);
         self.connections.set_status(id, Status::Disconnected);
-        if self.connections.selected_id() == Some(id) {
-            self.tree.clear();
-            self.sync_tree_items(cx);
-        }
+        // The whole tree under this root goes: the next session may be a
+        // different database entirely, so keeping the shape would be keeping a
+        // stranger's. Every other connection's tree is untouched.
+        self.forest.forget(id);
+        self.sync_tree_items(cx);
         cx.notify();
     }
 
@@ -291,9 +315,9 @@ impl DatabaseView {
         // in which case the live handle points at the old database and must go.
         if self.connections.save(profile) {
             self.drivers.remove(&id);
-            self.tree.clear();
-            self.sync_tree_items(cx);
+            self.forest.forget(id);
         }
+        self.sync_tree_items(cx);
         self.persist(cx);
         cx.notify();
     }
@@ -301,7 +325,6 @@ impl DatabaseView {
     pub(super) fn duplicate(&mut self, id: u64, cx: &mut Context<Self>) {
         let suffix = Str::DbCopySuffix.text(Language::current(cx)).into_owned();
         if self.connections.duplicate(id, &suffix).is_some() {
-            self.tree.clear();
             self.sync_tree_items(cx);
             self.persist(cx);
             cx.notify();
@@ -324,7 +347,7 @@ impl DatabaseView {
                     view.update(cx, |this, cx| {
                         this.drivers.remove(&id);
                         this.connections.delete(id);
-                        this.tree.clear();
+                        this.forest.forget(id);
                         this.sync_tree_items(cx);
                         this.persist(cx);
                         cx.notify();
@@ -337,23 +360,24 @@ impl DatabaseView {
 
     // ---- the object tree -------------------------------------------------
 
-    /// The driver behind the selected connection, if it is connected.
+    /// The driver behind the selected connection, if it is connected. What the
+    /// query editor runs against.
     pub(super) fn active_driver(&self) -> Option<Arc<dyn Driver>> {
         self.connections
             .selected_id()
             .and_then(|id| self.drivers.get(&id).cloned())
     }
 
-    /// Starts the root load if it is needed. Idempotent, so it is safe to call
-    /// from anywhere that might have made a tree relevant.
-    fn ensure_tree(&mut self, cx: &mut Context<Self>) {
-        let Some(driver) = self.active_driver() else {
+    /// Starts one connection's root load if it is needed. Idempotent, so it is
+    /// safe to call from anywhere that might have made a tree relevant.
+    fn ensure_tree(&mut self, connection: u64, cx: &mut Context<Self>) {
+        let Some(driver) = self.drivers.get(&connection).cloned() else {
             return;
         };
-        if !self.tree.needs_roots() {
+        if !self.forest.tree_mut(connection).needs_roots() {
             return;
         }
-        self.tree.begin_roots();
+        self.forest.tree_mut(connection).begin_roots();
         self.sync_tree_items(cx);
 
         self.children_task = Some(cx.spawn(async move |this, cx| {
@@ -363,7 +387,7 @@ impl DatabaseView {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                this.tree.set_roots(result);
+                this.forest.tree_mut(connection).set_roots(result);
                 this.sync_tree_items(cx);
                 this.children_task = None;
                 cx.notify();
@@ -371,20 +395,53 @@ impl DatabaseView {
         }));
     }
 
+    /// A row was opened. Which row is [`RowRef`]'s to say: the tree carries
+    /// several connections and their node ids can legitimately collide.
     fn on_expanded(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(row) = RowRef::parse(&id) else {
+            return;
+        };
+        match row.node {
+            None => self.on_connection_expanded(row.connection, cx),
+            Some(node) => self.on_node_expanded(row.connection, node, cx),
+        }
+    }
+
+    /// Opening a connection root **connects it**, the way every database client
+    /// does. A root that opened onto a dead end saying "not connected" would be
+    /// a worse answer than the one the user obviously wanted, and the status dot
+    /// and the context menu still give explicit control either way.
+    fn on_connection_expanded(&mut self, connection: u64, cx: &mut Context<Self>) {
+        self.forest.open(connection);
+        // Opening a connection is also choosing it: the editor below now has an
+        // obvious target, and the alternative is a tree whose open branch and
+        // whose Execute button disagree.
+        self.select(connection, cx);
+
+        match self.connections.status(connection) {
+            Status::Connected => self.ensure_tree(connection, cx),
+            Status::Connecting => {}
+            // Including `Error`: opening a root that failed last time is the
+            // natural way to ask for another go.
+            Status::Disconnected | Status::Error(_) => self.connect(connection, cx),
+        }
+        self.sync_tree_items(cx);
+        cx.notify();
+    }
+
+    fn on_node_expanded(&mut self, connection: u64, node: NodeId, cx: &mut Context<Self>) {
         // A placeholder row is not a node; the widget will not expand one, and
         // it has no children to fetch.
-        let node = NodeId::new(id);
-        if !self.tree.expand(&node) {
+        if !self.forest.tree_mut(connection).expand(&node) {
             self.sync_tree_items(cx);
             cx.notify();
             return;
         }
 
-        let Some(driver) = self.active_driver() else {
+        let Some(driver) = self.drivers.get(&connection).cloned() else {
             return;
         };
-        self.tree.begin_children(&node);
+        self.forest.tree_mut(connection).begin_children(&node);
         self.sync_tree_items(cx);
 
         self.children_task = Some(cx.spawn(async move |this, cx| {
@@ -395,7 +452,7 @@ impl DatabaseView {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                this.tree.set_children(&node, result);
+                this.forest.tree_mut(connection).set_children(&node, result);
                 this.sync_tree_items(cx);
                 this.children_task = None;
                 cx.notify();
@@ -404,24 +461,52 @@ impl DatabaseView {
     }
 
     fn on_collapsed(&mut self, id: String, cx: &mut Context<Self>) {
-        self.tree.collapse(&NodeId::new(id));
+        let Some(row) = RowRef::parse(&id) else {
+            return;
+        };
+        match row.node {
+            // Closing a root is not disconnecting: what was loaded stays loaded,
+            // so opening it again is instant.
+            None => self.forest.close(row.connection),
+            Some(node) => self.forest.tree_mut(row.connection).collapse(&node),
+        }
         cx.notify();
     }
 
+    /// Re-reads the selected connection's catalog, keeping what the user has
+    /// opened. Nothing else in the tree is disturbed.
     pub(super) fn refresh_tree(&mut self, cx: &mut Context<Self>) {
-        self.tree.refresh();
+        let Some(id) = self.connections.selected_id() else {
+            return;
+        };
+        self.forest.tree_mut(id).refresh();
         self.sync_tree_items(cx);
-        self.ensure_tree(cx);
+        self.ensure_tree(id, cx);
         cx.notify();
     }
 
-    /// Rebuilds the widget's items from [`CatalogTree`].
+    /// The whole panel as rows: one root per saved connection, in the order the
+    /// user arranged them, each carrying whatever its status allows.
+    ///
+    /// Both the widget's items and the per-row look map are built from this, so
+    /// the two cannot disagree about what is on screen.
+    pub(super) fn outline(&self) -> Vec<Outline> {
+        let statuses: Vec<(u64, Status)> = self
+            .connections
+            .profiles()
+            .iter()
+            .map(|profile| (profile.id, self.connections.status(profile.id).clone()))
+            .collect();
+        self.forest
+            .outline(statuses.iter().map(|(id, status)| (*id, status)))
+    }
+
+    /// Rebuilds the widget's items from [`Forest`].
     fn sync_tree_items(&mut self, cx: &mut Context<Self>) {
         let items: Vec<TreeItem> = self
-            .tree
             .outline()
             .iter()
-            .map(|outline| build_item(outline, cx))
+            .map(|row| build_item(row, &self.connections, cx))
             .collect();
         self.tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
@@ -533,22 +618,25 @@ impl DatabaseView {
     }
 }
 
-/// One outline node as a `TreeItem`.
+/// One outline row as a `TreeItem`.
 ///
-/// The label carries only the identifier; the icon and the dimmed detail are
-/// looked up by id when the row is drawn (see [`DatabaseView::render_tree`]),
-/// because `TreeItem` has room for a string and nothing else.
-fn build_item(outline: &crate::database::state::tree::Outline, cx: &App) -> TreeItem {
+/// The label carries only the identifier; everything else — the icon, the
+/// status dot, the dimmed detail, the hover card — is looked up by element id
+/// when the row is drawn (see [`DatabaseView::render_tree`]), because `TreeItem`
+/// has room for a string and nothing else.
+fn build_item(outline: &Outline, connections: &ConnectionsState, cx: &App) -> TreeItem {
     let label: SharedString = match &outline.content {
+        // A connection's own name — data, never translated, and the same
+        // fallback the connection form shows.
+        Content::Connection(id) => connections
+            .find(*id)
+            .map(|profile| SharedString::from(profile.display_name()))
+            .unwrap_or_default(),
         Content::Node(node) => match &node.label {
             NodeLabel::Name(name) => name.clone().into(),
             NodeLabel::Group(group) => t(group.text(), cx),
         },
-        Content::Notice(notice) => match notice {
-            Notice::Loading => t(Str::DbTreeLoading, cx),
-            Notice::Empty => t(Str::DbTreeEmpty, cx),
-            Notice::Failed(error) => t(error.message(), cx),
-        },
+        Content::Notice(notice) => notice_label(notice, cx),
     };
 
     let item = TreeItem::new(outline.id.clone(), label)
@@ -561,17 +649,55 @@ fn build_item(outline: &crate::database::state::tree::Outline, cx: &App) -> Tree
         outline
             .children
             .iter()
-            .map(|child| build_item(child, cx))
+            .map(|child| build_item(child, connections, cx))
             .collect::<Vec<_>>(),
     )
 }
 
+fn notice_label(notice: &Notice, cx: &App) -> SharedString {
+    match notice {
+        Notice::Loading => t(Str::DbTreeLoading, cx),
+        Notice::Empty => t(Str::DbTreeEmpty, cx),
+        Notice::Failed(error) => t(error.message(), cx),
+        Notice::NotConnected => t(Str::DbTreeNotConnected, cx),
+    }
+}
+
 /// How one tree row is drawn: everything `TreeItem`'s single label cannot hold.
+///
+/// A connection root needs strictly more than an object row — a status dot, a
+/// hover card, and which menu items apply — so the two are separate variants
+/// rather than one struct with four fields that are `None` most of the time.
 #[derive(Clone)]
-pub(super) struct RowLook {
+pub(super) enum RowLook {
+    Connection(ConnectionLook),
+    Object {
+        icon: AppIcon,
+        detail: Option<SharedString>,
+        muted: bool,
+    },
+}
+
+/// Everything a connection's root row draws, resolved once per frame.
+///
+/// Owned rather than borrowed, because the tree's render closure is `'static`
+/// and cannot hold a reference to the view.
+#[derive(Clone)]
+pub(super) struct ConnectionLook {
+    pub(super) id: u64,
     pub(super) icon: AppIcon,
-    pub(super) detail: Option<SharedString>,
-    pub(super) muted: bool,
+    /// The status dot's colour, and the colour of the word beside it.
+    pub(super) dot: Hsla,
+    pub(super) status: SharedString,
+    /// The hover card's rows, already translated. **Never the password** — see
+    /// [`ConnectionProfile::details`].
+    pub(super) details: Vec<(SharedString, SharedString)>,
+    pub(super) connected: bool,
+    pub(super) busy: bool,
+    /// The last attempt failed. Only changes a menu label — Reconnect rather
+    /// than Connect — but that word is the difference between "start" and "try
+    /// that again".
+    pub(super) failed: bool,
 }
 
 /// The icon for a node kind. The only place a `NodeKind` is matched on, which
@@ -591,19 +717,31 @@ fn node_icon(kind: NodeKind) -> AppIcon {
     }
 }
 
+/// The glyph on a connection's root row. The `Engine` → icon mapping lives here
+/// rather than on `Engine` because an icon is GPUI and `models/` names none.
+pub(super) fn engine_icon(engine: Engine) -> AppIcon {
+    match engine {
+        Engine::PostgreSql => AppIcon::PostgreSql,
+        Engine::Sqlite => AppIcon::Sqlite,
+    }
+}
+
 /// The look of every row in the outline, by element id.
 pub(super) fn row_looks(
-    outline: &[crate::database::state::tree::Outline],
+    outline: &[Outline],
+    connections: &ConnectionsState,
     into: &mut HashMap<SharedString, RowLook>,
+    cx: &App,
 ) {
     for row in outline {
         let look = match &row.content {
-            Content::Node(node) => RowLook {
+            Content::Connection(id) => RowLook::Connection(connection_look(*id, connections, cx)),
+            Content::Node(node) => RowLook::Object {
                 icon: node_icon(node.kind),
                 detail: node.detail.clone().map(SharedString::from),
                 muted: false,
             },
-            Content::Notice(notice) => RowLook {
+            Content::Notice(notice) => RowLook::Object {
                 icon: match notice {
                     Notice::Failed(_) => AppIcon::AlertTriangle,
                     _ => AppIcon::Ellipsis,
@@ -613,7 +751,39 @@ pub(super) fn row_looks(
             },
         };
         into.insert(SharedString::from(row.id.clone()), look);
-        row_looks(&row.children, into);
+        row_looks(&row.children, connections, into, cx);
+    }
+}
+
+fn connection_look(id: u64, connections: &ConnectionsState, cx: &App) -> ConnectionLook {
+    let status = connections.status(id);
+    let dot = match status {
+        Status::Connected => cx.theme().success,
+        Status::Connecting => cx.theme().warning,
+        Status::Error(_) => cx.theme().danger,
+        Status::Disconnected => cx.theme().muted_foreground,
+    };
+    let profile = connections.find(id);
+
+    ConnectionLook {
+        id,
+        icon: profile
+            .map(|profile| engine_icon(profile.engine))
+            .unwrap_or(AppIcon::Database),
+        dot,
+        status: t(status.label(), cx),
+        details: profile
+            .map(|profile| {
+                profile
+                    .details()
+                    .into_iter()
+                    .map(|(field, value)| (t(field.label(), cx), SharedString::from(value)))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        connected: status.is_connected(),
+        busy: status.is_busy(),
+        failed: matches!(status, Status::Error(_)),
     }
 }
 
