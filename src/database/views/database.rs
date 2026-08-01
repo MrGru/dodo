@@ -38,6 +38,15 @@
 //! [`Forest`](crate::database::state::tree::Forest) is, and this view rebuilds
 //! the items from it whenever it changes. `state::tree`'s module doc has the
 //! second, sharper reason.
+//!
+//! # Several query tabs, one result grid
+//!
+//! [`QueryTabs`] holds them: each tab has its own editor entity, its own run in
+//! flight and its own [`QueryState`]. The `TableState` is **shared** — only one
+//! grid is ever on screen — so switching tabs re-fills the delegate from the
+//! newly active tab's result ([`DatabaseView::show_active_result`]). A
+//! background run therefore has to look its tab up **by id**, not by index: the
+//! user may close a tab to its left, or switch away, while it is still running.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -62,8 +71,8 @@ use crate::database::models::sql_format;
 use crate::database::services::connection_store::{ConnectionStore, DiskConnectionStore};
 use crate::database::services::{self, Driver};
 use crate::database::state::connections::{ConnectionsState, Status};
-use crate::database::state::editor::EditorLanguage;
 use crate::database::state::query::{self, QueryState};
+use crate::database::state::tabs::{QueryTab, QueryTabs};
 use crate::database::state::tree::{Content, Forest, Notice, Outline, RowRef};
 use crate::database::views::connection_form::{self, ConnectionForm, FormEvent};
 use crate::database::views::result_grid::ResultDelegate;
@@ -96,13 +105,10 @@ pub struct DatabaseView {
     pub(super) forest: Forest,
     pub(super) tree_state: Entity<TreeState>,
 
-    pub(super) editor: Entity<InputState>,
-    /// The grammar the editor is pointed at. Guards the per-frame
-    /// `set_highlighter` that made round 1's editor draw black text — see
-    /// [`EditorLanguage`]'s module doc.
-    editor_language: EditorLanguage,
+    /// The open query tabs. Always at least one.
+    pub(super) tabs: QueryTabs,
+    /// Shared by every tab, because only one result is ever on screen.
     pub(super) table: Entity<TableState<ResultDelegate>>,
-    pub(super) query: QueryState,
 
     outer_split: Entity<ResizableState>,
     pub(super) inner_split: Entity<ResizableState>,
@@ -112,10 +118,11 @@ pub struct DatabaseView {
     _form_subscription: Option<Subscription>,
     _tree_subscription: Subscription,
 
-    /// In-flight work, held so a new request replaces the old one.
+    /// In-flight work, held so a new request replaces the old one. A query's
+    /// task is **not** here: it belongs to its tab, so a run in one tab is not
+    /// cancelled by a run in another.
     connect_task: Option<Task<()>>,
     children_task: Option<Task<()>>,
-    run_task: Option<Task<()>>,
     save_task: Option<Task<()>>,
 
     /// A failure from the store itself — the file could not be read or written.
@@ -128,18 +135,6 @@ pub struct DatabaseView {
 
 impl DatabaseView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let placeholder = t(Str::DbQueryPlaceholder, cx);
-        let editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                // `code_editor` first: it *replaces* the mode, so anything set
-                // before it is discarded.
-                .code_editor(Engine::PostgreSql.editor_language())
-                .multi_line(true)
-                .line_number(true)
-                .soft_wrap(false)
-                .placeholder(placeholder)
-        });
-
         let tree_state = cx.new(|cx| TreeState::new(cx));
         let tree_subscription =
             cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| match event {
@@ -155,10 +150,8 @@ impl DatabaseView {
             store: Arc::new(DiskConnectionStore::new()),
             forest: Forest::new(),
             tree_state,
-            editor,
-            editor_language: EditorLanguage::new(),
+            tabs: QueryTabs::new(),
             table,
-            query: QueryState::Idle,
             outer_split: cx.new(|_| ResizableState::default()),
             inner_split: cx.new(|_| ResizableState::default()),
             form: None,
@@ -166,14 +159,96 @@ impl DatabaseView {
             _tree_subscription: tree_subscription,
             connect_task: None,
             children_task: None,
-            run_task: None,
             save_task: None,
             store_error: None,
             focus_handle: cx.focus_handle(),
             language: Language::current(cx),
         };
+        // The page always has an editor: an empty tab strip with nothing under
+        // it is a dead end with no way back.
+        this.open_tab(window, cx);
         this.load_saved(cx);
         this
+    }
+
+    // ---- query tabs ------------------------------------------------------
+
+    /// Builds one editor. Every tab gets its own, so a switch keeps each tab's
+    /// cursor, scroll position and undo history.
+    fn new_editor(&self, window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
+        let placeholder = t(Str::DbQueryPlaceholder, cx);
+        cx.new(|cx| {
+            InputState::new(window, cx)
+                // `code_editor` first: it *replaces* the mode, so anything set
+                // before it is discarded.
+                .code_editor(Engine::PostgreSql.editor_language())
+                .multi_line(true)
+                .line_number(true)
+                .soft_wrap(false)
+                .placeholder(placeholder)
+        })
+    }
+
+    /// Opens a new tab and makes it the one on screen.
+    pub(super) fn open_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = self.new_editor(window, cx);
+        let (id, number) = self.tabs.allocate();
+        self.tabs.push(QueryTab::new(id, number, editor));
+        // The new tab has no result, so the shared grid must stop showing the
+        // old tab's rows under it.
+        self.show_active_result(cx);
+        cx.notify();
+    }
+
+    pub(super) fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index == self.tabs.active_index() {
+            return;
+        }
+        self.tabs.select(index);
+        self.show_active_result(cx);
+        cx.notify();
+    }
+
+    /// Closes the tab at `index`.
+    ///
+    /// Closing the **last** tab empties it rather than removing it: the page
+    /// must always have an editor. `QueryTabs::close` refuses that case and
+    /// this is where the replacement happens.
+    pub(super) fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.close(index).is_none() {
+            if index >= self.tabs.len() {
+                return;
+            }
+            let editor = self.new_editor(window, cx);
+            let (id, number) = self.tabs.allocate();
+            let tabs = &mut self.tabs;
+            tabs.select(0);
+            if let Some(tab) = tabs.active_mut() {
+                *tab = QueryTab::new(id, number, editor);
+            }
+        }
+        self.show_active_result(cx);
+        cx.notify();
+    }
+
+    /// Re-fills the shared grid from the active tab's result.
+    ///
+    /// One `TableState` serves every tab, so this is what stops a switched-to
+    /// tab showing the rows of the tab that was on screen before it.
+    fn show_active_result(&mut self, cx: &mut Context<Self>) {
+        let result = match self.tabs.active().map(|tab| &tab.query) {
+            Some(QueryState::Done(outcome)) => {
+                Some((outcome.columns.clone(), outcome.rows.clone()))
+            }
+            _ => None,
+        };
+        self.table.update(cx, |state, cx| {
+            match result {
+                Some((columns, rows)) => state.delegate_mut().set(columns, rows),
+                None => state.delegate_mut().clear(),
+            }
+            state.refresh(cx);
+        });
     }
 
     // ---- persistence -----------------------------------------------------
@@ -519,44 +594,56 @@ impl DatabaseView {
         let Some(driver) = self.active_driver() else {
             return;
         };
-        let buffer = self.editor.read(cx).value().to_string();
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        if tab.is_running() {
+            return;
+        }
+
+        let id = tab.id;
+        let buffer = tab.editor.read(cx).value().to_string();
         let budget = PageBudget::default();
 
-        self.query = QueryState::Running;
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.query = QueryState::Running;
+        }
+        // The grid is shared, so a run that leaves the previous result on
+        // screen would attribute those rows to the statement now in flight.
+        self.show_active_result(cx);
         cx.notify();
 
-        self.run_task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { query::run(driver.as_ref(), &buffer, budget) })
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(outcome) => {
-                        let columns = outcome.columns.clone();
-                        let rows = outcome.rows.clone();
-                        this.table.update(cx, |state, cx| {
-                            state.delegate_mut().set(columns, rows);
-                            state.refresh(cx);
-                        });
-                        this.query = QueryState::Done(outcome);
-                    }
-                    Err(failure) => {
-                        // The previous result is cleared: leaving it on screen
-                        // beside a failure makes it look like the failed
-                        // statement produced it.
-                        this.table.update(cx, |state, cx| {
-                            state.delegate_mut().clear();
-                            state.refresh(cx);
-                        });
-                        this.query = QueryState::Failed(failure);
-                    }
+                // By id, not by index: the user may have closed a tab to the
+                // left of this one, or closed this one, while it ran.
+                let Some(tab) = this.tabs.find_mut(id) else {
+                    return;
+                };
+                tab.query = match result {
+                    Ok(outcome) => QueryState::Done(outcome),
+                    // The previous result stays cleared: leaving it on screen
+                    // beside a failure makes it look like the failed statement
+                    // produced it.
+                    Err(failure) => QueryState::Failed(failure),
+                };
+                // Only if this tab is the one being looked at — a run that
+                // finishes in a background tab must not repaint the grid the
+                // user is reading.
+                if this.tabs.active().is_some_and(|active| active.id == id) {
+                    this.show_active_result(cx);
                 }
-                this.run_task = None;
                 cx.notify();
             });
-        }));
+        });
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.run_task = Some(task);
+        }
     }
 
     pub(super) fn format(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -565,16 +652,19 @@ impl DatabaseView {
             .selected()
             .map(|profile| profile.engine)
             .unwrap_or_default();
-        let formatted = sql_format::format(&self.editor.read(cx).value(), engine);
-        self.editor.update(cx, |state, cx| {
+        let Some(editor) = self.tabs.active().map(|tab| tab.editor.clone()) else {
+            return;
+        };
+        let formatted = sql_format::format(&editor.read(cx).value(), engine);
+        editor.update(cx, |state, cx| {
             // `replace_all` rather than `set_value`: formatting is undoable,
             // which is what makes it safe to try.
             state.replace_all(formatted, window, cx);
         });
     }
 
-    /// Re-points the editor's grammar at the selected connection's language,
-    /// and re-pushes the placeholder after a language change.
+    /// Re-points every tab's editor grammar at the selected connection's
+    /// language, and re-pushes the placeholder after a language change.
     ///
     /// This runs from `render`, so **both** halves below are load-bearing and
     /// both were missing in round 1, which is why the editor drew black text:
@@ -582,8 +672,10 @@ impl DatabaseView {
     /// without scheduling a new one, so calling it every frame guaranteed there
     /// was never a highlighter to paint with, and calling it *at all* without a
     /// following `refresh` leaves the editor uncoloured until the next
-    /// keystroke. [`EditorLanguage`] is where the whole diagnosis is written
-    /// down.
+    /// keystroke.
+    /// [`EditorLanguage`](crate::database::state::editor::EditorLanguage) is
+    /// where the whole diagnosis is written down, and it is per tab because
+    /// each tab has its own editor to guard.
     fn sync_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The *driver* is the authority once one is connected — that is what
         // `Capabilities` is for, and it is how a backend whose console is not
@@ -597,23 +689,40 @@ impl DatabaseView {
                 .map(|profile| profile.engine.editor_language())
                 .unwrap_or_else(|| Engine::PostgreSql.editor_language()),
         };
-        if self.editor_language.adopt(language) {
-            self.editor.update(cx, |state, cx| {
-                state.set_highlighter(language, cx);
-                // `refresh` is the only public way to say "re-run syntax
-                // highlighting on the next render"; without it the grammar is
-                // set and nothing ever parses with it.
-                state.refresh(cx);
-            });
-        }
 
         let current = Language::current(cx);
-        if self.language != current {
-            self.language = current;
-            let placeholder = t(Str::DbQueryPlaceholder, cx);
-            self.editor.update(cx, |state, cx| {
-                state.set_placeholder(placeholder, window, cx);
-            });
+        let retranslate = self.language != current;
+        self.language = current;
+        let placeholder = retranslate.then(|| t(Str::DbQueryPlaceholder, cx));
+
+        // Every tab, not just the active one: a background tab whose editor was
+        // never re-pointed would draw black text the moment it is switched to.
+        let editors: Vec<(usize, Entity<InputState>)> = self
+            .tabs
+            .tabs()
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| (index, tab.editor.clone()))
+            .collect();
+        for (index, editor) in editors {
+            let repoint = self
+                .tabs
+                .tab_mut(index)
+                .is_some_and(|tab| tab.language.adopt(language));
+            if repoint {
+                editor.update(cx, |state, cx| {
+                    state.set_highlighter(language, cx);
+                    // `refresh` is the only public way to say "re-run syntax
+                    // highlighting on the next render"; without it the grammar
+                    // is set and nothing ever parses with it.
+                    state.refresh(cx);
+                });
+            }
+            if let Some(placeholder) = placeholder.clone() {
+                editor.update(cx, |state, cx| {
+                    state.set_placeholder(placeholder, window, cx);
+                });
+            }
         }
     }
 }

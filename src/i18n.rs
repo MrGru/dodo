@@ -937,6 +937,12 @@ pub enum Str {
         code: String,
         detail: String,
     },
+
+    // Round 2: query tabs.
+    /// A tab's default title, numbered in the order tabs were opened.
+    DbQueryTabTitle(usize),
+    DbNewQueryTab,
+    DbCloseQueryTab,
 }
 
 impl Str {
@@ -2955,6 +2961,15 @@ impl Str {
             (Str::DbServerErrorCoded { code, detail }, Language::Vietnamese) => {
                 format!("Máy chủ từ chối câu lệnh ({code}): {detail}").into()
             }
+
+            (Str::DbQueryTabTitle(number), Language::English) => format!("Query {number}").into(),
+            (Str::DbQueryTabTitle(number), Language::Vietnamese) => {
+                format!("Truy vấn {number}").into()
+            }
+            (Str::DbNewQueryTab, Language::English) => "New query".into(),
+            (Str::DbNewQueryTab, Language::Vietnamese) => "Truy vấn mới".into(),
+            (Str::DbCloseQueryTab, Language::English) => "Close query".into(),
+            (Str::DbCloseQueryTab, Language::Vietnamese) => "Đóng truy vấn".into(),
         }
     }
 }
@@ -3746,6 +3761,9 @@ mod tests {
                 },
                 &["42P01", DETAIL],
             ),
+            with(Str::DbQueryTabTitle(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::DbNewQueryTab),
+            plain(Str::DbCloseQueryTab),
         ]
     }
 
@@ -4311,6 +4329,9 @@ mod tests {
             Str::DbUnreachable(_) => 546,
             Str::DbServerError(_) => 547,
             Str::DbServerErrorCoded { .. } => 548,
+            Str::DbQueryTabTitle(_) => 549,
+            Str::DbNewQueryTab => 550,
+            Str::DbCloseQueryTab => 551,
         }
     }
 
