@@ -117,7 +117,7 @@ div().flex_1().min_h_0()
     )
 ```
 
-### `code_editor` highlights only the three languages this build compiles
+### `code_editor` highlights only the languages this build compiles
 
 Highlighting lives behind gpui-component's `tree-sitter` cargo features, and without any of
 them `gpui_component::highlighter` compiles to `wasm_stub.rs`, whose
@@ -125,15 +125,43 @@ them `gpui_component::highlighter` compiles to `wasm_stub.rs`, whose
 find/replace and diagnostics, but no colour. That was dodo's state until the API Explorer
 needed a coloured response body.
 
-`dodo/Cargo.toml` now enables exactly **`tree-sitter` (JSON), `tree-sitter-html` and
-`tree-sitter-yaml`**. Every other language string falls back to `Language::Plain` and renders
+`dodo/Cargo.toml` enables **JSON, HTML, YAML and JavaScript** (the `syntax-highlighting`
+feature) plus **SQL** (its own `sql-highlighting` feature, kept separate because it is by far
+the most expensive). Every other language string falls back to `Language::Plain` and renders
 uncoloured — that is a graceful default, not a bug. Each language is separately feature-gated
-and matched by `highlighter::Language::from_name` (`"json"`, `"html"`, `"yaml"`, `"text"`), so
-adding one is a feature flag plus a `BodyKind` variant, not new highlighter code.
-`["tree-sitter-languages"]` would enable all ~35 grammars; it was deliberately not used.
+and matched by `highlighter::Language::from_name`, so adding one is a feature flag plus a
+`BodyKind` variant, not new highlighter code. `["tree-sitter-languages"]` would enable all ~35
+grammars; it was deliberately not used.
 
-`InputState::set_highlighter(lang, cx)` re-points an existing editor at another grammar without
-rebuilding it — how the response viewer switches per `Content-Type`.
+### `set_highlighter` destroys a highlighter and builds none — always pair it with `refresh`
+
+The name reads like "re-point this editor at another grammar", and that is what dodo's Database
+Explorer assumed. What it actually does is set the language, drop the `Option<SyntaxHighlighter>`
+to `None` and cancel the in-flight parse task. **Nothing schedules a new one.** Only two things
+build a highlighter: an edit (`replace_text_in_range`, forced) and a render with the private
+`_pending_update` flag set. `set_value` / `replace_all` set that flag; `set_highlighter` does not.
+
+So the two rules, both learned the expensive way — the SQL editor shipped drawing black text:
+
+```rust
+// Right: on a change, and paired.
+self.editor.update(cx, |state, cx| {
+    state.set_highlighter(language, cx);
+    state.refresh(cx);   // "the next render re-runs syntax highlighting", per its own doc
+});
+```
+
+- **Never call it from `render`.** It `cx.notify()`s, which guarantees another frame, which wipes
+  the highlighter that frame built — a loop in which no coloured frame ever survives. Guard it so
+  it fires only when the language actually changed
+  (`database::state::editor::EditorLanguage`), or call it from the change handler instead
+  (`api_explorer::state::request::apply_body_language` says so in its own doc comment).
+- **Never call it alone.** Without a following `refresh` — or a `set_value` right after, which is
+  how `api_explorer::state::tab` gets away with it — the editor stays uncoloured until the user's
+  next keystroke.
+
+`src/database/state/editor.rs`'s module doc is the full diagnosis, including why the colour
+appeared for one frame after Format and never while typing.
 
 ## Inline diagnostics (wavy underline)
 

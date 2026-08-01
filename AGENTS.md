@@ -221,8 +221,24 @@ Six things worth knowing before touching it:
 **`src/database/`** is the Database Explorer — create a connection, browse its objects, run a
 query, read the result — **PostgreSQL and SQLite only as of round 1**. Same five-layer split as
 the three modules above; **`src/database/mod.rs` is the authority** on the structure and on what
-R1 deliberately does not build. Seven things worth knowing before touching it:
+R1 deliberately does not build. Ten things worth knowing before touching it:
 
+- **The left panel is one tree and the connections are its roots**, not a list stacked on a
+  tree. `state::tree::Forest` holds one `CatalogTree` per connection, so selecting a connection
+  clears nothing and several are browsable at once; `state::tree::RowRef` qualifies every element
+  id by its connection, because two servers routinely produce the same node id. Opening a root
+  connects it. The per-connection actions are a right-click menu built with the tree widget's own
+  `context_menu`, and **the disclosure chevron is dodo's** — `gpui_component`'s tree draws none.
+- **The connection hover card must never carry the password.** `ConnectionProfile::details`
+  cannot produce one, `DetailField` has no `Password` variant, and a test asserts both. Same
+  posture as the plain-text store below: say what is stored, never put it where a glance or a
+  screenshot reaches.
+- **`DataTable` has one height knob for the header row and the body rows**
+  (`Size::table_row_height`), and each cell is `overflow_hidden` with the size's own vertical
+  padding taken out. That is why round 1's two-line header clipped, why the columns carry their
+  own zero-vertical `paddings`, and why `views/result_grid.rs` expresses the row height and both
+  header lines as multiples of the base text size — so "it fits at 14, 16 and 18px" is arithmetic
+  four unit tests check rather than something eyeballed once.
 - **It is self-contained, and the invariant is checkable.** No `use crate::` line in the module
   names another tool — only `crate::{database,i18n,app_icon,paths}` — so
   `grep -rn '^use crate::' src/database/ | grep -vE 'crate::(database|i18n|app_icon|paths)'`
@@ -378,7 +394,7 @@ fires — they are written to be read at the moment of need, not up front.
 
 | Skill | Load it when |
 |---|---|
-| `gpui-component-recipes` | Writing or editing any `render` / `new` that builds a gpui-component widget (input, code editor, diagnostics, select, dialog, settings panel, sidebar, button, icon); a widget call will not compile; or a widget builds but nothing appears on screen. |
+| `gpui-component-recipes` | Writing or editing any `render` / `new` that builds a gpui-component widget (input, code editor, diagnostics, select, dialog, settings panel, sidebar, button, icon); a widget call will not compile; a widget builds but nothing appears on screen; or a code editor draws uncoloured text. |
 | `dodo-tool-view` | Adding, renaming, reordering or removing a sidebar tool; a new sidebar entry does not appear or renders blank. |
 | `dodo-i18n-text` | Writing or changing **any** text a user reads — a label, title, placeholder, description, error, dropdown option; or an `i18n` / `i18n_lint` test fails. |
 | `dodo-theming-settings` | Adding or changing a setting, adding or removing a theme or a language, or a settings change does not apply until restart. |
