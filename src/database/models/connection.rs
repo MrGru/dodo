@@ -232,6 +232,53 @@ impl ConnectionProfile {
         }
     }
 
+    /// The connection as one URL — what the hover card's `URL` row shows.
+    ///
+    /// **The password is not in it**, in any form, not even masked. A URL is
+    /// the one string a user is most likely to copy out of a client and paste
+    /// somewhere else, so the rule this module opens with matters here more
+    /// than anywhere: the password lives in `connections.json` and in the form
+    /// behind a reveal toggle, and nowhere a glance or a screenshot reaches.
+    pub fn url(&self) -> String {
+        let scheme = self.engine.url_scheme();
+        match self.engine.address() {
+            Address::Network => format!("{scheme}://{}", self.target()),
+            // Three slashes: the target is already an absolute path, so
+            // `sqlite://` plus `/tmp/app.db` is the conventional form.
+            Address::File => format!("{scheme}://{}", self.file),
+        }
+    }
+
+    /// The connection as label/value rows, for the hover card on its tree row.
+    ///
+    /// Only the fields that mean something for this engine, and only the ones
+    /// that are filled in — a blank row says nothing and costs a line. The
+    /// labels are [`DetailField`]s rather than text, because the view is what
+    /// translates; the values are data and are never translated.
+    ///
+    /// The password is not a [`DetailField`] at all. That is the point, and
+    /// there is a test that says so.
+    pub fn details(&self) -> Vec<(DetailField, String)> {
+        let mut rows = vec![
+            (DetailField::Name, self.display_name()),
+            (DetailField::Url, self.url()),
+        ];
+        match self.engine.address() {
+            Address::Network => {
+                rows.push((DetailField::Host, self.host.clone()));
+                if self.port != 0 {
+                    rows.push((DetailField::Port, self.port.to_string()));
+                }
+                rows.push((DetailField::Database, self.database.clone()));
+                rows.push((DetailField::User, self.user.clone()));
+            }
+            Address::File => rows.push((DetailField::File, self.file.clone())),
+        }
+        rows.push((DetailField::Type, self.engine.display_name().to_string()));
+        rows.retain(|(_, value)| !value.trim().is_empty());
+        rows
+    }
+
     /// A copy of this profile under a new id, named so the two are told apart
     /// in the list. Mirrors the API Explorer's environment duplication.
     pub fn duplicated(&self, id: u64, suffix: &str) -> Self {
@@ -239,6 +286,58 @@ impl ConnectionProfile {
             id,
             name: format!("{} {suffix}", self.display_name()),
             ..self.clone()
+        }
+    }
+}
+
+/// One row of a connection's hover card.
+///
+/// There is deliberately **no `Password` variant**. The card is shown on hover
+/// over a tree row — a glance, a screenshot, a shared screen — and a masked
+/// password there would say "there is one" while teaching nobody anything. See
+/// [`ConnectionProfile::details`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetailField {
+    Name,
+    Url,
+    Host,
+    Port,
+    Database,
+    User,
+    File,
+    Type,
+}
+
+impl DetailField {
+    /// Every field, in the order the card lists them. Nothing draws from it —
+    /// the card draws what [`ConnectionProfile::details`] gives it — so it
+    /// exists for the tests that prove the set is what it claims to be, the
+    /// password one above all.
+    #[cfg(test)]
+    pub const ALL: [DetailField; 8] = [
+        DetailField::Name,
+        DetailField::Url,
+        DetailField::Host,
+        DetailField::Port,
+        DetailField::Database,
+        DetailField::User,
+        DetailField::File,
+        DetailField::Type,
+    ];
+
+    /// The word beside the value. These are the connection form's own labels:
+    /// the card and the form name the same thing the same way.
+    pub fn label(self) -> crate::i18n::Str {
+        use crate::i18n::Str;
+        match self {
+            DetailField::Name => Str::DbFieldName,
+            DetailField::Url => Str::DbFieldUrl,
+            DetailField::Host => Str::DbFieldHost,
+            DetailField::Port => Str::DbFieldPort,
+            DetailField::Database => Str::DbFieldDatabase,
+            DetailField::User => Str::DbFieldUser,
+            DetailField::File => Str::DbFieldFile,
+            DetailField::Type => Str::DbFieldEngine,
         }
     }
 }
@@ -274,7 +373,9 @@ impl ProfileProblem {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionDocument, ConnectionProfile, ProfileProblem, SCHEMA_VERSION, SslMode};
+    use super::{
+        ConnectionDocument, ConnectionProfile, DetailField, ProfileProblem, SCHEMA_VERSION, SslMode,
+    };
     use crate::database::models::engine::Engine;
 
     fn postgres() -> ConnectionProfile {
@@ -370,6 +471,93 @@ mod tests {
 
         let file = ConnectionProfile::new(1, Engine::Sqlite);
         assert_eq!(file.problem(), Some(ProfileProblem::FileMissing));
+    }
+
+    #[test]
+    fn a_network_url_is_the_scheme_and_the_target() {
+        assert_eq!(
+            postgres().url(),
+            "postgresql://postgres@127.0.0.1:5432/shop"
+        );
+    }
+
+    #[test]
+    fn a_file_url_names_the_file() {
+        let mut profile = ConnectionProfile::new(2, Engine::Sqlite);
+        profile.file = "/tmp/app.db".into();
+        assert_eq!(profile.url(), "sqlite:///tmp/app.db");
+    }
+
+    /// The rule this module opens with, checked where it is easiest to break:
+    /// the hover card is a glance, a screenshot, a shared screen.
+    #[test]
+    fn no_detail_row_carries_the_password_in_any_form() {
+        let mut profile = postgres();
+        profile.password = "hunter2-do-not-leak".into();
+
+        for (field, value) in profile.details() {
+            assert!(
+                !value.contains("hunter2"),
+                "{field:?} leaked the password: {value}"
+            );
+        }
+        assert!(!profile.url().contains("hunter2"));
+        assert!(
+            !DetailField::ALL
+                .iter()
+                .any(|field| matches!(field.label(), crate::i18n::Str::DbFieldPassword)),
+            "no card row may even be labelled Password"
+        );
+    }
+
+    #[test]
+    fn a_network_connections_card_names_the_server_and_a_file_ones_names_the_file() {
+        let fields: Vec<DetailField> = postgres().details().into_iter().map(|(f, _)| f).collect();
+        assert_eq!(
+            fields,
+            vec![
+                DetailField::Name,
+                DetailField::Url,
+                DetailField::Host,
+                DetailField::Port,
+                DetailField::Database,
+                DetailField::User,
+                DetailField::Type,
+            ]
+        );
+
+        let mut file = ConnectionProfile::new(2, Engine::Sqlite);
+        file.file = "/tmp/app.db".into();
+        let fields: Vec<DetailField> = file.details().into_iter().map(|(f, _)| f).collect();
+        assert_eq!(
+            fields,
+            vec![
+                DetailField::Name,
+                DetailField::Url,
+                DetailField::File,
+                DetailField::Type,
+            ],
+            "a file connection has no host, port or user to show"
+        );
+    }
+
+    /// A blank row says nothing and costs a line, so it is not drawn.
+    #[test]
+    fn a_field_the_user_left_empty_is_left_out() {
+        let mut profile = postgres();
+        profile.user = "  ".into();
+        let fields: Vec<DetailField> = profile.details().into_iter().map(|(f, _)| f).collect();
+        assert!(!fields.contains(&DetailField::User));
+        assert!(fields.contains(&DetailField::Host));
+    }
+
+    #[test]
+    fn every_card_row_has_a_label_in_every_language() {
+        for field in DetailField::ALL {
+            for language in crate::i18n::Language::ALL {
+                assert!(!field.label().text(language).trim().is_empty());
+            }
+        }
     }
 
     #[test]

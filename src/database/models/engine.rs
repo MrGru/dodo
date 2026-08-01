@@ -94,6 +94,16 @@ impl Engine {
             Engine::PostgreSql | Engine::Sqlite => "sql",
         }
     }
+
+    /// The scheme of the connection URL shown on hover. The product's own
+    /// conventional one, so the string is something a user could paste into
+    /// `psql` or a driver config and recognise.
+    pub fn url_scheme(self) -> &'static str {
+        match self {
+            Engine::PostgreSql => "postgresql",
+            Engine::Sqlite => "sqlite",
+        }
+    }
 }
 
 #[cfg(test)]

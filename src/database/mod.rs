@@ -63,12 +63,37 @@
 //! mentioned in prose all over these docs — that is a pointer, not an edge, and
 //! the two are worth telling apart.
 //!
+//! # The left panel is one tree, and the connections are its roots
+//!
+//! Round 1 shipped a connection list stacked above a separate object tree, and
+//! the captain asked for one tree instead: a connection *is* a root node, its
+//! databases and tables hang under it, and several connections are several
+//! roots that are all browsable at once. [`state::tree::Forest`] is that
+//! arrangement and `views::connections_panel` draws it.
+//!
+//! Three consequences worth knowing before changing any of it:
+//!
+//! - **Selecting a connection no longer clears anything.** It only says which
+//!   one the query editor runs against. Every connection keeps its own loaded,
+//!   expanded tree.
+//! - **Opening a connection root connects it**, the way every database client
+//!   does. Connect stays in the context menu for the explicit path, and a root
+//!   that is not connected says so in a placeholder child rather than opening
+//!   onto nothing.
+//! - **Element ids are qualified by connection** ([`state::tree::RowRef`]), and
+//!   that is not decoration: two connections routinely produce the same node id,
+//!   and two rows sharing an element id is a gpui bug that is miserable to find.
+//!
+//! The per-connection actions are a right-click context menu on the root, built
+//! with the tree widget's own `context_menu`; the disclosure chevron is
+//! **dodo's**, because the widget draws none.
+//!
 //! # Sidebar registration
 //!
 //! **One flat top-level row.** Not a group with children: an icon-collapsed
 //! sidebar renders no children at all, which is what made Docker's four pages
-//! unreachable and moved them onto that module's own rail. The connection list
-//! and the object tree are this module's own navigation, inside the page.
+//! unreachable and moved them onto that module's own rail. The tree of
+//! connections is this module's own navigation, inside the page.
 
 pub mod components;
 pub mod models;

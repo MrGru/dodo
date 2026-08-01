@@ -1,5 +1,18 @@
 //! The object tree's load state, and the outline the view draws from it.
 //!
+//! # One tree, several roots
+//!
+//! The left panel is a single tree whose **roots are the saved connections**;
+//! a connection's databases, schemas and tables hang under it. [`Forest`] is
+//! that arrangement: one [`CatalogTree`] per connection, plus which connection
+//! roots the user has opened.
+//!
+//! Two connections can perfectly well produce the same node id — `postgres`
+//! twice over, on two servers — so every element id in the combined outline is
+//! qualified by the connection it belongs to. [`RowRef`] is the whole of that
+//! encoding, in both directions, and it is what a widget event is turned back
+//! into.
+//!
 //! # Nothing is loaded until it is expanded
 //!
 //! This type holds one [`Load`] per node — never asked for, being asked for,
@@ -25,10 +38,11 @@
 //! "Loading…", "Nothing here" or the error, and it is what makes the triangle
 //! exist.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::database::models::catalog::{CatalogNode, NodeId};
 use crate::database::models::error::DbError;
+use crate::database::state::connections::Status;
 
 /// How far along one node's children are.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -49,11 +63,18 @@ pub enum Notice {
     /// group that simply collapses again looks like a bug.
     Empty,
     Failed(DbError),
+    /// Under a connection root that is not connected. Only a connection can be
+    /// in this state; a catalog node's parent is by definition connected.
+    NotConnected,
 }
 
-/// A row of the outline: either a real catalog node or a placeholder.
+/// A row of the outline: a connection root, a real catalog node, or a
+/// placeholder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Content {
+    /// One saved connection, by id. The name, engine and status are the view's
+    /// to look up — this layer holds no copy of them, so the two cannot drift.
+    Connection(u64),
     Node(CatalogNode),
     Notice(Notice),
 }
@@ -73,6 +94,159 @@ pub struct Outline {
 /// The suffix that makes a placeholder's element id unmistakably not a node's.
 const NOTICE_SUFFIX: &str = "\u{1f}·notice";
 
+/// The separator between the parts of a qualified element id. A unit separator,
+/// which no server puts in an identifier and no driver puts in a node id.
+const SEPARATOR: char = '\u{1f}';
+/// What every qualified element id starts with, so a stray id from somewhere
+/// else fails to parse rather than resolving to connection 0.
+const ROW_PREFIX: &str = "c";
+
+/// Which connection a row of the combined outline belongs to, and which node
+/// inside it.
+///
+/// The tree widget knows one string per row, so this is both halves of the
+/// encoding: [`root`](Self::root) and [`child`](Self::child) build the id the
+/// outline carries, and [`parse`](Self::parse) turns a widget event back into
+/// something this layer can act on. Qualifying is not decoration — two
+/// connections to two servers routinely produce the same node id, and two rows
+/// sharing an element id is a class of gpui bug that is miserable to find.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowRef {
+    pub connection: u64,
+    /// `None` for the connection's own root row.
+    pub node: Option<NodeId>,
+}
+
+impl RowRef {
+    /// The element id of a connection's own root row.
+    pub fn root(connection: u64) -> String {
+        format!("{ROW_PREFIX}{SEPARATOR}{connection}")
+    }
+
+    /// The element id of a row *under* `connection`.
+    pub fn child(connection: u64, node: &str) -> String {
+        format!("{ROW_PREFIX}{SEPARATOR}{connection}{SEPARATOR}{node}")
+    }
+
+    /// Reads an element id back. `None` for anything this module did not write.
+    pub fn parse(id: &str) -> Option<Self> {
+        let rest = id.strip_prefix(ROW_PREFIX)?.strip_prefix(SEPARATOR)?;
+        // The node id may itself contain separators — a driver's ids do — so
+        // only the *first* one after the connection number is ours.
+        let (number, node) = match rest.split_once(SEPARATOR) {
+            Some((number, node)) => (number, Some(NodeId::new(node.to_string()))),
+            None => (rest, None),
+        };
+        Some(Self {
+            connection: number.parse().ok()?,
+            node,
+        })
+    }
+}
+
+/// One tree per connection, and which connection roots are open.
+///
+/// The connections themselves live in
+/// [`ConnectionsState`](crate::database::state::connections::ConnectionsState);
+/// this holds only what browsing them costs. A connection with no entry here
+/// has simply never been opened, which is the ordinary state of most of them.
+#[derive(Default)]
+pub struct Forest {
+    trees: HashMap<u64, CatalogTree>,
+    open: HashSet<u64>,
+}
+
+impl Forest {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// One connection's tree, if it has ever been opened. The view reaches for
+    /// [`tree_mut`](Self::tree_mut) instead — it is always about to change
+    /// something — so this is here for the assertions below.
+    #[cfg(test)]
+    pub fn tree(&self, connection: u64) -> Option<&CatalogTree> {
+        self.trees.get(&connection)
+    }
+
+    /// The tree for `connection`, created empty if this is the first time it
+    /// has been asked for.
+    pub fn tree_mut(&mut self, connection: u64) -> &mut CatalogTree {
+        self.trees.entry(connection).or_default()
+    }
+
+    pub fn is_open(&self, connection: u64) -> bool {
+        self.open.contains(&connection)
+    }
+
+    pub fn open(&mut self, connection: u64) {
+        self.open.insert(connection);
+    }
+
+    pub fn close(&mut self, connection: u64) {
+        self.open.remove(&connection);
+    }
+
+    /// Forgets everything about `connection` — what was loaded and that it was
+    /// open. This is a disconnect or a delete: the next session may be a
+    /// different database entirely, so keeping the shape would be keeping a
+    /// stranger's.
+    pub fn forget(&mut self, connection: u64) {
+        self.trees.remove(&connection);
+        self.open.remove(&connection);
+    }
+
+    /// The whole panel as the view should draw it: one root per connection, in
+    /// the order given, each carrying whatever its status allows.
+    pub fn outline<'a>(&self, roots: impl IntoIterator<Item = (u64, &'a Status)>) -> Vec<Outline> {
+        roots
+            .into_iter()
+            .map(|(connection, status)| self.root_of(connection, status))
+            .collect()
+    }
+
+    fn root_of(&self, connection: u64, status: &Status) -> Outline {
+        // Always at least one child, open or not: `TreeItem::is_folder` is
+        // `children.len() > 0`, so a childless root would draw no disclosure
+        // arrow and could never be opened — the same trap the catalog nodes
+        // below have, for the same reason.
+        let children = match status {
+            Status::Connected => match self.trees.get(&connection) {
+                Some(tree) => qualify(tree.outline(), connection),
+                None => vec![self.placeholder(connection, Notice::Loading)],
+            },
+            Status::Connecting => vec![self.placeholder(connection, Notice::Loading)],
+            Status::Error(error) => {
+                vec![self.placeholder(connection, Notice::Failed(error.clone()))]
+            }
+            Status::Disconnected => vec![self.placeholder(connection, Notice::NotConnected)],
+        };
+
+        Outline {
+            id: RowRef::root(connection),
+            content: Content::Connection(connection),
+            expanded: self.is_open(connection),
+            children,
+        }
+    }
+
+    fn placeholder(&self, connection: u64, message: Notice) -> Outline {
+        notice(message, &RowRef::root(connection))
+    }
+}
+
+/// Re-ids one connection's outline so its rows cannot collide with another's.
+fn qualify(rows: Vec<Outline>, connection: u64) -> Vec<Outline> {
+    rows.into_iter()
+        .map(|row| Outline {
+            id: RowRef::child(connection, &row.id),
+            content: row.content,
+            expanded: row.expanded,
+            children: qualify(row.children, connection),
+        })
+        .collect()
+}
+
 #[derive(Default)]
 pub struct CatalogTree {
     roots: Load,
@@ -81,10 +255,6 @@ pub struct CatalogTree {
 }
 
 impl CatalogTree {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn load_of(&self, id: &NodeId) -> &Load {
         self.children.get(id).unwrap_or(&Load::Idle)
     }
@@ -140,15 +310,6 @@ impl CatalogTree {
     pub fn refresh(&mut self) {
         self.roots = Load::Idle;
         self.children.clear();
-    }
-
-    /// Forgets everything, expansion included. This is a disconnect: the tree
-    /// belongs to a connection, and the next one may be a different database
-    /// entirely.
-    pub fn clear(&mut self) {
-        self.roots = Load::Idle;
-        self.children.clear();
-        self.expanded.clear();
     }
 
     /// The whole tree as the view should draw it.
@@ -235,20 +396,20 @@ mod tests {
     fn notice_of(outline: &Outline) -> Option<&Notice> {
         match &outline.content {
             Content::Notice(notice) => Some(notice),
-            Content::Node(_) => None,
+            Content::Node(_) | Content::Connection(_) => None,
         }
     }
 
     fn node_of(outline: &Outline) -> &CatalogNode {
         match &outline.content {
             Content::Node(node) => node,
-            Content::Notice(notice) => panic!("expected a node, got {notice:?}"),
+            other => panic!("expected a node, got {other:?}"),
         }
     }
 
     #[test]
     fn a_fresh_tree_needs_its_roots_and_says_it_is_loading() {
-        let tree = CatalogTree::new();
+        let tree = CatalogTree::default();
         assert!(tree.needs_roots());
 
         let outline = tree.outline();
@@ -258,7 +419,7 @@ mod tests {
 
     #[test]
     fn asking_for_the_roots_twice_only_loads_them_once() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         tree.begin_roots();
         assert!(
             !tree.needs_roots(),
@@ -271,7 +432,7 @@ mod tests {
     /// no triangle and can never emit the expand event that would load it.
     #[test]
     fn an_expandable_node_has_a_child_before_anything_is_loaded() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         tree.set_roots(Ok(vec![database()]));
 
         let outline = tree.outline();
@@ -287,14 +448,14 @@ mod tests {
 
     #[test]
     fn a_leaf_gets_no_placeholder_and_so_no_triangle() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         tree.set_roots(Ok(vec![column("id")]));
         assert!(tree.outline()[0].children.is_empty());
     }
 
     #[test]
     fn expanding_an_unloaded_node_asks_for_a_load_and_expanding_it_again_does_not() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         let id = NodeId::new("db");
 
         assert!(tree.expand(&id), "the first expand must fetch");
@@ -317,7 +478,7 @@ mod tests {
 
     #[test]
     fn loaded_children_replace_the_placeholder_and_nest() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         let db = NodeId::new("db");
         tree.set_roots(Ok(vec![database()]));
         tree.expand(&db);
@@ -336,7 +497,7 @@ mod tests {
 
     #[test]
     fn an_empty_result_says_so_rather_than_collapsing_silently() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         let db = NodeId::new("db");
         tree.set_roots(Ok(vec![database()]));
         tree.set_children(&db, Ok(Vec::new()));
@@ -347,7 +508,7 @@ mod tests {
 
     #[test]
     fn an_empty_database_says_so_at_the_root() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         tree.set_roots(Ok(Vec::new()));
         assert_eq!(notice_of(&tree.outline()[0]), Some(&Notice::Empty));
     }
@@ -356,7 +517,7 @@ mod tests {
     /// and the failure is reported where it happened.
     #[test]
     fn a_node_that_fails_to_load_reports_it_in_place() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         let db = NodeId::new("db");
         let error = DbError::server("permission denied");
 
@@ -377,7 +538,7 @@ mod tests {
 
     #[test]
     fn a_failed_root_load_is_reported_at_the_root() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         let error = DbError::Unreachable("connection reset".into());
         tree.set_roots(Err(error.clone()));
         assert_eq!(notice_of(&tree.outline()[0]), Some(&Notice::Failed(error)));
@@ -387,7 +548,7 @@ mod tests {
     /// mean re-opening four levels to see a new column.
     #[test]
     fn refresh_forgets_the_data_and_keeps_the_expansion() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         let db = NodeId::new("db");
         tree.set_roots(Ok(vec![database()]));
         tree.expand(&db);
@@ -403,29 +564,12 @@ mod tests {
         );
     }
 
-    /// Disconnecting is different: the next connection may be another database
-    /// entirely, so keeping expansion would be keeping a stranger's shape.
-    #[test]
-    fn clearing_forgets_the_expansion_too() {
-        let mut tree = CatalogTree::new();
-        let db = NodeId::new("db");
-        tree.set_roots(Ok(vec![database()]));
-        tree.expand(&db);
-        tree.set_children(&db, Ok(vec![table("users")]));
-
-        tree.clear();
-
-        assert!(tree.needs_roots());
-        assert!(!tree.is_expanded(&db));
-        assert_eq!(tree.load_of(&db), &Load::Idle);
-    }
-
     /// A placeholder shares the tree's id space with real nodes, so its id must
     /// be one no driver can produce — two rows with the same element id is a
     /// class of gpui bug that is miserable to find.
     #[test]
     fn a_placeholders_id_can_never_collide_with_a_nodes() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         tree.set_roots(Ok(vec![database()]));
 
         let outline = tree.outline();
@@ -437,7 +581,7 @@ mod tests {
 
     #[test]
     fn every_id_in_the_outline_is_unique() {
-        let mut tree = CatalogTree::new();
+        let mut tree = CatalogTree::default();
         let db = NodeId::new("db");
         tree.set_roots(Ok(vec![database()]));
         tree.expand(&db);
@@ -455,6 +599,181 @@ mod tests {
         for node in outline {
             into.push(node.id.clone());
             collect_ids(&node.children, into);
+        }
+    }
+
+    // ---- the forest ------------------------------------------------------
+
+    mod forest {
+        use super::super::{Content, Forest, Notice, Outline, RowRef};
+        use super::{database, notice_of, table};
+        use crate::database::models::catalog::NodeId;
+        use crate::database::models::error::DbError;
+        use crate::database::state::connections::Status;
+
+        fn connection_of(outline: &Outline) -> u64 {
+            match &outline.content {
+                Content::Connection(id) => *id,
+                other => panic!("expected a connection root, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_row_id_round_trips_through_its_connection() {
+            let root = RowRef::parse(&RowRef::root(7)).expect("parses");
+            assert_eq!(root.connection, 7);
+            assert_eq!(root.node, None);
+
+            let child = RowRef::child(7, "db\u{1f}shop");
+            let parsed = RowRef::parse(&child).expect("parses");
+            assert_eq!(parsed.connection, 7);
+            assert_eq!(
+                parsed.node,
+                Some(NodeId::new("db\u{1f}shop")),
+                "a driver's own separators belong to the node, not to the encoding"
+            );
+        }
+
+        #[test]
+        fn an_id_this_module_did_not_write_does_not_parse() {
+            for id in ["", "db", "c", "c\u{1f}", "c\u{1f}x", "x\u{1f}1"] {
+                assert_eq!(RowRef::parse(id), None, "{id:?} must not resolve");
+            }
+        }
+
+        /// The reason ids are qualified at all: two connections to two servers
+        /// routinely hold the same node id.
+        #[test]
+        fn two_connections_showing_the_same_object_have_different_element_ids() {
+            let mut forest = Forest::new();
+            forest.open(1);
+            forest.open(2);
+            for connection in [1, 2] {
+                forest
+                    .tree_mut(connection)
+                    .set_roots(Ok(vec![database(), table("users")]));
+            }
+
+            let outline = forest.outline([(1, &Status::Connected), (2, &Status::Connected)]);
+            let mut ids = Vec::new();
+            super::collect_ids(&outline, &mut ids);
+            let mut sorted = ids.clone();
+            sorted.sort();
+            sorted.dedup();
+            assert_eq!(sorted.len(), ids.len(), "duplicate ids in {ids:?}");
+
+            // And every one of them still says which connection it came from.
+            for id in &ids {
+                let parsed = RowRef::parse(id).expect("every row id parses");
+                assert!(parsed.connection == 1 || parsed.connection == 2);
+            }
+        }
+
+        /// Without a child a root draws no disclosure arrow and can never be
+        /// opened — `TreeItem::is_folder` is `children.len() > 0`. That holds
+        /// for a connection exactly as it does for a catalog node.
+        #[test]
+        fn every_connection_root_has_a_child_whatever_its_status() {
+            let forest = Forest::new();
+            for status in [
+                Status::Disconnected,
+                Status::Connecting,
+                Status::Connected,
+                Status::Error(DbError::server("boom")),
+            ] {
+                let outline = forest.outline([(1, &status)]);
+                assert_eq!(outline.len(), 1);
+                assert_eq!(connection_of(&outline[0]), 1);
+                assert_eq!(
+                    outline[0].children.len(),
+                    1,
+                    "no child means no disclosure arrow ({status:?})"
+                );
+            }
+        }
+
+        #[test]
+        fn a_disconnected_root_says_so_and_a_failed_one_says_why() {
+            let forest = Forest::new();
+            let error = DbError::server("permission denied");
+
+            let outline = forest.outline([(1, &Status::Disconnected)]);
+            assert_eq!(
+                notice_of(&outline[0].children[0]),
+                Some(&Notice::NotConnected)
+            );
+
+            let outline = forest.outline([(1, &Status::Error(error.clone()))]);
+            assert_eq!(
+                notice_of(&outline[0].children[0]),
+                Some(&Notice::Failed(error))
+            );
+        }
+
+        #[test]
+        fn opening_a_root_is_what_expands_it_and_closing_it_is_not_forgetting_it() {
+            let mut forest = Forest::new();
+            forest.tree_mut(1).set_roots(Ok(vec![database()]));
+
+            assert!(!forest.outline([(1, &Status::Connected)])[0].expanded);
+            forest.open(1);
+            assert!(forest.outline([(1, &Status::Connected)])[0].expanded);
+
+            forest.close(1);
+            assert!(!forest.is_open(1));
+            assert!(
+                forest.tree(1).is_some_and(|tree| !tree.needs_roots()),
+                "closing a root must not throw away what was loaded"
+            );
+        }
+
+        /// Disconnecting is different from collapsing: the next session may be
+        /// another database entirely.
+        #[test]
+        fn forgetting_a_connection_drops_its_tree_and_closes_it() {
+            let mut forest = Forest::new();
+            forest.open(1);
+            forest.tree_mut(1).set_roots(Ok(vec![database()]));
+
+            forest.forget(1);
+            assert!(!forest.is_open(1));
+            assert!(forest.tree(1).is_none());
+        }
+
+        /// One connection's state is its own. A failure on one root must leave
+        /// the connection beside it usable.
+        #[test]
+        fn connections_do_not_share_load_state() {
+            let mut forest = Forest::new();
+            let db = NodeId::new("db");
+            forest.open(1);
+            forest.open(2);
+            forest.tree_mut(1).set_roots(Ok(vec![database()]));
+            forest.tree_mut(1).expand(&db);
+            forest
+                .tree_mut(1)
+                .set_children(&db, Ok(vec![table("users")]));
+            forest.tree_mut(2).set_roots(Ok(vec![database()]));
+
+            let outline = forest.outline([(1, &Status::Connected), (2, &Status::Connected)]);
+            assert_eq!(outline[0].children[0].children.len(), 1);
+            assert_eq!(
+                notice_of(&outline[1].children[0].children[0]),
+                Some(&Notice::Loading),
+                "the second connection has loaded nothing under its database"
+            );
+        }
+
+        #[test]
+        fn the_roots_keep_the_order_the_caller_gave() {
+            let forest = Forest::new();
+            let outline = forest.outline([
+                (3, &Status::Disconnected),
+                (1, &Status::Disconnected),
+                (2, &Status::Disconnected),
+            ]);
+            let ids: Vec<u64> = outline.iter().map(connection_of).collect();
+            assert_eq!(ids, vec![3, 1, 2]);
         }
     }
 }
