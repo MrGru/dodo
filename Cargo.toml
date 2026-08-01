@@ -159,7 +159,13 @@ rustls-platform-verifier = "0.7"
 # `SQLITE_ENABLE_COLUMN_METADATA`, which is what lets a result column report
 # the base table and column it came from — the precondition for ever editing a
 # result safely, and cheap to enable now rather than in a rebuild later.
-rusqlite = { version = "0.40", features = ["bundled", "column_metadata"] }
+# `column_decltype` is what reports a result column's declared type, which is
+# the second line of every grid header.
+rusqlite = { version = "0.40", features = [
+    "bundled",
+    "column_decltype",
+    "column_metadata",
+] }
 # The Format action in the query editor. A real SQL formatter for four crates,
 # two of which (`winnow`, `memchr`) dodo already links — the opposite of the
 # `dprint-plugin-typescript` situation that made `models::script_format` a

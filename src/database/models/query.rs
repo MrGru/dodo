@@ -25,6 +25,13 @@ impl QueryRequest {
 }
 
 /// What running one statement produced, beside its rows.
+///
+/// The design report also puts server notices here — a PostgreSQL `NOTICE`, a
+/// `RAISE NOTICE` from a function. There is no field for them, because neither
+/// driver in this round can produce one: the blocking `postgres` client exposes
+/// no notice handler (`Client::notifications` is `LISTEN`/`NOTIFY`, which is a
+/// different thing), and SQLite has no such concept. A field every driver fills
+/// with an empty vector is a console pane nobody can ever see text in.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Execution {
     /// The row count for a statement that changed rows; `None` for one that
@@ -35,10 +42,6 @@ pub struct Execution {
     /// driver, from the sink's own answer — see `models::page`.
     pub truncated: bool,
     pub elapsed: Duration,
-    /// Server notices and warnings — a PostgreSQL `NOTICE`, a
-    /// `RAISE NOTICE` from a function. Kept verbatim: they are the server's
-    /// English and there is nothing to translate them with.
-    pub notices: Vec<String>,
 }
 
 #[cfg(test)]
@@ -56,7 +59,6 @@ mod tests {
         let execution = Execution::default();
         assert_eq!(execution.rows_affected, None);
         assert!(!execution.truncated);
-        assert!(execution.notices.is_empty());
         assert_eq!(execution.elapsed.as_nanos(), 0);
     }
 }
