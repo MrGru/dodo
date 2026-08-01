@@ -14,6 +14,7 @@ mod app;
 mod app_icon;
 mod assets;
 mod build_info;
+mod database;
 mod docker;
 mod encoder_decoder;
 mod i18n;

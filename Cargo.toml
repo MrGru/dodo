@@ -22,7 +22,7 @@ exclude = ["tools/*"]
 # `docs/build-optimization.md` for the same question about a `docker` feature,
 # which is real but not worth the ~550 `Str` variants it would have to gate.
 [features]
-default = ["syntax-highlighting"]
+default = ["syntax-highlighting", "sql-highlighting"]
 # The four tree-sitter grammars the code editor highlights with. Turning this
 # off (`--no-default-features`) drops the grammar crates and their generated C
 # parsers entirely and the editor falls back to plain, unhighlighted text —
@@ -39,6 +39,18 @@ syntax-highlighting = [
     # something the user *writes* rather than something a server sent.
     "gpui-component/tree-sitter-javascript",
 ]
+# SQL, for the Database Explorer's query editor. **Its own feature, deliberately
+# not folded into `syntax-highlighting` above**, because it is by far the most
+# expensive thing in this crate's feature list and the trade has to stay visible
+# and reversible: `tree-sitter-sequel`'s generated `parser.c` is 17.4 MB, and
+# switching this on measures at roughly 6.8× what the JavaScript grammar costs —
+# see the "SQL syntax highlighting" row in `docs/build-optimization.md` for the
+# exact bytes and the comparison to `dprint-plugin-typescript`, which this
+# project rejected at a similar price. Default on because the captain accepted
+# the cost knowing the number; `--no-default-features` (or dropping just this
+# one) leaves the query editor a plain code editor — gutter, selection,
+# multi-cursor, search, soft wrap, no colour.
+sql-highlighting = ["gpui-component/tree-sitter", "gpui-component/tree-sitter-sql"]
 
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed" }
@@ -105,6 +117,56 @@ futures-util = "0.3.33"
 # compiles four C files with `cc` and pointedly not `quickjs-libc.c`, which is
 # what would have supplied file, process and socket access.
 rquickjs = { version = "0.12.1", default-features = false, features = ["std"] }
+
+# ---------------------------------------------------------------------------
+# Database Explorer drivers.
+#
+# **Only `database::services` may name any of the five crates below**, the same
+# containment rule `reqwest`, `bollard` and `rquickjs` follow. Everything above
+# that layer sees the `Driver` trait and `database::models`' plain data.
+#
+# All of them are *blocking* clients, chosen over `sqlx` for one decisive
+# reason recorded in the design report: every SQL backend here exposes a real
+# out-of-band query cancel (`Client::cancel_token`, `sqlite3_interrupt`) and
+# `sqlx` exposes none, so "Cancel" could only ever mean "drop the future and
+# let the server keep grinding". Cancel itself is a later round; the driver
+# choice that makes it possible is made here.
+# ---------------------------------------------------------------------------
+
+# PostgreSQL. A *synchronous façade* over `tokio-postgres`: it builds a private
+# **current-thread** runtime per `Client` and blocks on it, so it adds no
+# threads and no scheduler — the calling thread is already one of GPUI's
+# background-executor threads, exactly as `reqwest::blocking` already works
+# here. `src/database/services/postgres.rs` never names `tokio`. This is why
+# `AGENTS.md` says `docker::services` owns the only tokio runtime dodo
+# *constructs* rather than the only one that exists.
+postgres = "0.19"
+# The TLS connector for the above. rustls only: no `openssl-sys` and no
+# `native-tls` enters the graph by this route (verified with `cargo tree -i`),
+# so dodo's OpenSSL-free posture is unchanged.
+tokio-postgres-rustls = "0.14"
+# Named directly only to build the one `ClientConfig` the connector above
+# needs. Both were already in the graph transitively via `reqwest`'s `rustls`
+# feature, at the same versions, so naming them costs no new crate — and the
+# platform verifier is what makes a hosted Postgres (which requires TLS) work
+# without dodo shipping its own root store.
+rustls = "0.23"
+rustls-platform-verifier = "0.7"
+# SQLite. `bundled` compiles the SQLite C amalgamation into the binary, which
+# is the single largest line item in this round's size: deliberate, because the
+# alternative is linking the host's `libsqlite3`, whose version varies by
+# platform and which is absent on Windows. `column_metadata` turns on
+# `SQLITE_ENABLE_COLUMN_METADATA`, which is what lets a result column report
+# the base table and column it came from — the precondition for ever editing a
+# result safely, and cheap to enable now rather than in a rebuild later.
+rusqlite = { version = "0.40", features = ["bundled", "column_metadata"] }
+# The Format action in the query editor. A real SQL formatter for four crates,
+# two of which (`winnow`, `memchr`) dodo already links — the opposite of the
+# `dprint-plugin-typescript` situation that made `models::script_format` a
+# deliberately narrow hand-rolled re-indenter, because SQL formatting as
+# developers want it is tokenize-and-reindent rather than parse-and-print.
+# `database::models::sql_format` is the only module that may name it.
+sqlformat = "0.5"
 
 # Two kernel32 calls only — `GetStdHandle` and `AttachConsole` — so that
 # `--version` / `--build-info` still print from a GUI-subsystem binary. See
