@@ -9,6 +9,7 @@ use gpui_component::{ActiveTheme, StyledExt as _, h_flex, v_flex};
 
 use crate::api_explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
+use crate::database::DatabaseView;
 use crate::docker::{DockerPage, DockerView};
 use crate::encoder_decoder::EncoderDecoder;
 use crate::i18n::{Str, t};
@@ -33,15 +34,17 @@ enum View {
     EncoderDecoder,
     ApiExplorer,
     Docker,
+    Database,
 }
 
 impl View {
     /// Every tool, in sidebar order.
-    const ALL: [View; 4] = [
+    const ALL: [View; 5] = [
         View::JsonFormatter,
         View::EncoderDecoder,
         View::ApiExplorer,
         View::Docker,
+        View::Database,
     ];
 
     /// The tool's own name — what the sidebar row reads. The main pane's title
@@ -53,6 +56,7 @@ impl View {
             View::EncoderDecoder => Str::EncoderDecoderTitle,
             View::ApiExplorer => Str::ApiExplorerTitle,
             View::Docker => Str::Docker,
+            View::Database => Str::DatabaseTitle,
         }
     }
 
@@ -62,6 +66,7 @@ impl View {
             View::EncoderDecoder => AppIcon::Binary,
             View::ApiExplorer => AppIcon::Globe,
             View::Docker => AppIcon::Container,
+            View::Database => AppIcon::Database,
         }
     }
 }
@@ -85,6 +90,7 @@ pub struct Layout {
     encoder_decoder: Entity<EncoderDecoder>,
     api_explorer: Entity<ApiExplorer>,
     docker: Entity<DockerView>,
+    database: Entity<DatabaseView>,
 }
 
 impl Layout {
@@ -97,6 +103,7 @@ impl Layout {
             encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
             api_explorer: cx.new(|cx| ApiExplorer::new(window, cx)),
             docker: cx.new(|cx| DockerView::new(window, cx)),
+            database: cx.new(|cx| DatabaseView::new(window, cx)),
         }
     }
 
@@ -248,6 +255,7 @@ impl Render for Layout {
                         View::EncoderDecoder => this.child(self.encoder_decoder.clone()),
                         View::ApiExplorer => this.child(self.api_explorer.clone()),
                         View::Docker => this.child(self.docker.clone()),
+                        View::Database => this.child(self.database.clone()),
                     })),
             )
     }
@@ -274,10 +282,13 @@ mod tests {
                 View::EncoderDecoder,
                 View::ApiExplorer,
                 View::Docker,
+                View::Database,
             ]
         );
-        // One row per tool: Docker is a single entry, not a group of five.
-        assert_eq!(View::ALL.len(), 4);
+        // One row per tool: Docker and Database are each a single entry, not a
+        // group of children — an icon-collapsed sidebar renders no children at
+        // all, which is what made Docker's four pages unreachable.
+        assert_eq!(View::ALL.len(), 5);
     }
 
     #[test]
@@ -303,7 +314,12 @@ mod tests {
 
     #[test]
     fn the_other_tools_ignore_the_docker_page() {
-        for view in [View::JsonFormatter, View::EncoderDecoder, View::ApiExplorer] {
+        for view in [
+            View::JsonFormatter,
+            View::EncoderDecoder,
+            View::ApiExplorer,
+            View::Database,
+        ] {
             for page in DockerPage::ALL {
                 assert_eq!(title_of(view, page), discriminant(&view.title()));
             }

@@ -481,23 +481,18 @@ impl Driver for PostgresDriver {
         let mut count = 0u64;
         let mut truncated = false;
 
-        loop {
-            match rows.next().map_err(server_error)? {
-                Some(row) => {
-                    if !described {
-                        types = describe(&row, sink);
-                        described = true;
-                    }
-                    count += 1;
-                    let values = (0..types.len())
-                        .map(|index| decode::cell(&row, index, &types[index]))
-                        .collect();
-                    if sink.row(values) == Flow::Stop {
-                        truncated = true;
-                        break;
-                    }
-                }
-                None => break,
+        while let Some(row) = rows.next().map_err(server_error)? {
+            if !described {
+                types = describe(&row, sink);
+                described = true;
+            }
+            count += 1;
+            let values = (0..types.len())
+                .map(|index| decode::cell(&row, index, &types[index]))
+                .collect();
+            if sink.row(values) == Flow::Stop {
+                truncated = true;
+                break;
             }
         }
 

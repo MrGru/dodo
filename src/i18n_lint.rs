@@ -36,7 +36,7 @@
 /// The view sources, embedded at compile time so the test needs no working
 /// directory. These are the files that build what the user sees; pure logic
 /// modules have no text sinks and are not worth scanning.
-const SOURCES: [(&str, &str); 18] = [
+const SOURCES: [(&str, &str); 25] = [
     ("src/layout.rs", include_str!("layout.rs")),
     ("src/json_formatter.rs", include_str!("json_formatter.rs")),
     ("src/encoder_decoder.rs", include_str!("encoder_decoder.rs")),
@@ -105,6 +105,42 @@ const SOURCES: [(&str, &str); 18] = [
     (
         "src/updater/views/dialog.rs",
         include_str!("updater/views/dialog.rs"),
+    ),
+    // The Database Explorer. Its result *cells* and tree *labels* are data —
+    // a server's own identifiers and values — but they arrive as
+    // `SharedString::from(String)`, never as literals, so they are not findings
+    // and need no exception. Everything a user reads as language here is a
+    // label, a placeholder, a status word or an error.
+    (
+        "src/database/views/database.rs",
+        include_str!("database/views/database.rs"),
+    ),
+    (
+        "src/database/views/connections_panel.rs",
+        include_str!("database/views/connections_panel.rs"),
+    ),
+    (
+        "src/database/views/connection_form.rs",
+        include_str!("database/views/connection_form.rs"),
+    ),
+    (
+        "src/database/views/query_pane.rs",
+        include_str!("database/views/query_pane.rs"),
+    ),
+    (
+        "src/database/views/result_grid.rs",
+        include_str!("database/views/result_grid.rs"),
+    ),
+    // The two shared elements. They take text that is already translated, so a
+    // literal in one of them would be a new, untranslated string rather than a
+    // pass-through — which is exactly what this scan is for.
+    (
+        "src/database/components/notice.rs",
+        include_str!("database/components/notice.rs"),
+    ),
+    (
+        "src/database/components/states.rs",
+        include_str!("database/components/states.rs"),
     ),
 ];
 
@@ -346,7 +382,9 @@ mod tests {
     /// per-region `impl ApiExplorer` blocks, which draw translated text without
     /// implementing `Render` themselves; `AnyElement` is in the list because a
     /// region renderer whose result outlives the `cx` borrow has to return it
-    /// boxed. The guard that actually matters —
+    /// boxed, in either its qualified or its imported spelling. `-> Div` covers
+    /// the shared elements that hand an unfinished frame back to their caller.
+    /// The guard that actually matters —
     /// `view_code_draws_no_untranslated_literals` — is unchanged.
     #[test]
     fn scanned_sources_are_the_view_sources() {
@@ -356,7 +394,9 @@ mod tests {
                     || source.contains("impl RenderOnce for")
                     || source.contains("open_dialog")
                     || source.contains("-> impl IntoElement")
-                    || source.contains("-> gpui::AnyElement"),
+                    || source.contains("-> gpui::AnyElement")
+                    || source.contains("-> AnyElement")
+                    || source.contains("-> Div"),
                 "{path} no longer renders anything — it does not belong in SOURCES"
             );
         }

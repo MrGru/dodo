@@ -36,6 +36,10 @@ pub enum DbError {
 
 impl DbError {
     /// A server error whose code the driver did not report.
+    ///
+    /// Test-only: a real driver always knows whether its backend gave it a
+    /// code, and builds the variant directly.
+    #[cfg(test)]
     pub fn server(detail: impl Into<String>) -> Self {
         Self::Server {
             code: None,

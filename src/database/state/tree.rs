@@ -41,12 +41,6 @@ pub enum Load {
     Failed(DbError),
 }
 
-impl Load {
-    pub fn is_loaded(&self) -> bool {
-        matches!(self, Load::Loaded(_))
-    }
-}
-
 /// What a placeholder row under an expandable node says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Notice {
@@ -89,10 +83,6 @@ pub struct CatalogTree {
 impl CatalogTree {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn roots(&self) -> &Load {
-        &self.roots
     }
 
     pub fn load_of(&self, id: &NodeId) -> &Load {
@@ -466,13 +456,5 @@ mod tests {
             into.push(node.id.clone());
             collect_ids(&node.children, into);
         }
-    }
-
-    #[test]
-    fn load_reports_whether_it_holds_data() {
-        assert!(!Load::Idle.is_loaded());
-        assert!(!Load::Loading.is_loaded());
-        assert!(Load::Loaded(Vec::new()).is_loaded());
-        assert!(!Load::Failed(DbError::server("x")).is_loaded());
     }
 }

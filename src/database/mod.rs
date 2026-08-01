@@ -64,6 +64,10 @@
 //! unreachable and moved them onto that module's own rail. The connection list
 //! and the object tree are this module's own navigation, inside the page.
 
+pub mod components;
 pub mod models;
 pub mod services;
 pub mod state;
+pub mod views;
+
+pub use views::DatabaseView;
