@@ -11,14 +11,15 @@
 //!    and a non-SQL console, and everything above takes it without a special
 //!    case. If a future change makes that awkward, this is where it shows.
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::database::models::catalog::{CatalogNode, GroupLabel, NodeId, NodeKind};
 use crate::database::models::error::DbError;
 use crate::database::models::page::{Flow, RowSink};
 use crate::database::models::query::{Execution, QueryRequest};
 use crate::database::models::value::{ColumnMeta, Row, Value};
-use crate::database::services::{Capabilities, Driver};
+use crate::database::services::{CancelHandle, Capabilities, Driver};
 
 /// What a fake answers with for one node.
 type Children = Vec<CatalogNode>;
@@ -32,6 +33,13 @@ pub struct FakeDriver {
     rows: Vec<Row>,
     /// What `execute` returns instead of rows, when set.
     failure: Option<DbError>,
+    /// Whether this fake offers a [`CancelHandle`] at all — the `false` case is
+    /// how a backend that cannot cancel is exercised.
+    cancel: bool,
+    /// Set by the handle. A subsequent `execute` fails with
+    /// [`DbError::Cancelled`], which is the *server's* half of the deal: no
+    /// real driver reports a cancellation it was not told about either.
+    cancelled: Arc<AtomicBool>,
     /// Every statement the driver was asked to run, in order. The whole point
     /// of holding it: a test can assert dodo sent the statement *verbatim*.
     pub executed: Mutex<Vec<String>>,
@@ -112,6 +120,8 @@ impl FakeDriver {
                 .map(|n| vec![Value::Int(n), Value::Text(format!("row-{n}"))])
                 .collect(),
             failure: None,
+            cancel: true,
+            cancelled: Arc::new(AtomicBool::new(false)),
             executed: Mutex::new(Vec::new()),
             offered: Mutex::new(0),
         }
@@ -145,6 +155,8 @@ impl FakeDriver {
             columns: vec![ColumnMeta::new("reply", "string")],
             rows: vec![vec![Value::Text("PONG".into())]],
             failure: None,
+            cancel: true,
+            cancelled: Arc::new(AtomicBool::new(false)),
             executed: Mutex::new(Vec::new()),
             offered: Mutex::new(0),
         }
@@ -165,6 +177,15 @@ impl FakeDriver {
         self
     }
 
+    /// The same driver, with no way to cancel — a backend whose protocol has
+    /// none. `capabilities().cancel` is false and `cancel_handle` is `None`,
+    /// and nothing above `services/` may need a branch for it beyond hiding the
+    /// control.
+    pub fn without_cancel(mut self) -> Self {
+        self.cancel = false;
+        self
+    }
+
     fn lookup(&self, parent: Option<&NodeId>) -> Result<Children, DbError> {
         let key = parent.map(NodeId::as_str).unwrap_or("");
         self.tree
@@ -179,7 +200,19 @@ impl Driver for FakeDriver {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             editor_language: self.editor_language,
+            cancel: self.cancel,
         }
+    }
+
+    fn cancel_handle(&self) -> Option<CancelHandle> {
+        if !self.cancel {
+            return None;
+        }
+        let cancelled = self.cancelled.clone();
+        Some(CancelHandle::new(move || {
+            cancelled.store(true, Ordering::SeqCst);
+            Ok(())
+        }))
     }
 
     fn ping(&self) -> Result<(), DbError> {
@@ -197,6 +230,12 @@ impl Driver for FakeDriver {
     ) -> Result<Execution, DbError> {
         if let Ok(mut executed) = self.executed.lock() {
             executed.push(request.statement.clone());
+        }
+        // Checked before the failure, so a driver told to cancel reports the
+        // cancellation rather than whatever else it was going to say — which is
+        // what a real server does too.
+        if self.cancelled.swap(false, Ordering::SeqCst) {
+            return Err(DbError::Cancelled);
         }
         if let Some(error) = &self.failure {
             return Err(error.clone());

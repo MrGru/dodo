@@ -23,16 +23,31 @@
 //!
 //! # The capability set is small on purpose
 //!
-//! [`Capabilities`] carries what *this round's UI reads*, and nothing else.
-//! The design report proposes fields for transactions, Explain, cancellation,
-//! column provenance and `LIMIT`/`OFFSET` support — every one of which
-//! describes a feature that is not built, so every one would be a value no code
-//! reads. That is the same reasoning `Cargo.toml` records for the marker
-//! features this crate declined to add: a flag nothing reads is decoration, and
-//! decoration has to be maintained, tested and kept honest.
+//! [`Capabilities`] carries what *the shipped UI reads*, and nothing else. The
+//! design report proposes fields for transactions, column provenance and
+//! `LIMIT`/`OFFSET` support — every one of which describes a control that is
+//! not built, so every one would be a value no code reads. That is the same
+//! reasoning `Cargo.toml` records for the marker features this crate declined
+//! to add: a flag nothing reads is decoration, and decoration has to be
+//! maintained, tested and kept honest.
 //!
 //! The extension point is the struct and [`Driver::capabilities`], not a
-//! pre-filled list of guesses. A field arrives with the control that reads it.
+//! pre-filled list of guesses. **A field arrives with the control that reads
+//! it**: round 2 added `cancel`, with the Cancel button.
+//!
+//! # Cancellation is against the server, and that is the whole point
+//!
+//! Dropping the GPUI task that is waiting for a query is *not* cancelling it:
+//! the blocking call keeps running on its background thread, the server keeps
+//! burning CPU, and the connection stays held. [`CancelHandle`] is the real
+//! thing — PostgreSQL's protocol CancelRequest on a second connection, SQLite's
+//! `sqlite3_interrupt` — and both drivers take theirs **at connect time**,
+//! because the connection's `Mutex` is held for as long as the statement runs
+//! and a handle fetched afterwards would block behind the query it is meant to
+//! stop.
+//!
+//! A handle is blocking IO like everything else here (PostgreSQL's opens a
+//! whole second connection), so it is invoked from the background executor too.
 //!
 //! # How a driver that is not a SQL server fits
 //!
@@ -68,12 +83,52 @@ use crate::database::models::error::DbError;
 use crate::database::models::page::RowSink;
 use crate::database::models::query::{Execution, QueryRequest};
 
-/// What a driver can do, as far as this round's UI needs to know.
+/// What a driver can do, as far as the UI needs to know.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Capabilities {
     /// The language id handed to the query editor's `code_editor`, so a backend
     /// whose console is not SQL is never coloured as though it were.
     pub editor_language: &'static str,
+    /// [`Driver::cancel_handle`] returns something. Read by the Cancel button,
+    /// which is not offered at all when this is `false` — a control that
+    /// silently does nothing teaches the user the wrong thing about their
+    /// database.
+    pub cancel: bool,
+}
+
+/// A way to stop whatever a connection is running, **from another thread**.
+///
+/// Cloneable and `Send + Sync` because the UI hands one to a background task
+/// while the query it stops is executing on a different one. Calling it when
+/// nothing is running is harmless on both backends, but the UI only offers it
+/// while a run is in flight.
+///
+/// Blocking: PostgreSQL's implementation opens a second connection to send the
+/// protocol's CancelRequest. Never call it on the UI thread.
+#[derive(Clone)]
+pub struct CancelHandle(Arc<dyn Fn() -> Result<(), DbError> + Send + Sync>);
+
+impl CancelHandle {
+    pub fn new(cancel: impl Fn() -> Result<(), DbError> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(cancel))
+    }
+
+    /// Asks the server to stop the statement in flight.
+    ///
+    /// `Ok` means the *request* was delivered, not that anything stopped —
+    /// PostgreSQL's protocol says nothing back about whether a cancellation
+    /// took effect, and a query that finished a microsecond earlier was never
+    /// cancelled at all. The evidence that it worked is the driver returning
+    /// [`DbError::Cancelled`] from `execute`, which comes from the server.
+    pub fn cancel(&self) -> Result<(), DbError> {
+        (self.0)()
+    }
+}
+
+impl std::fmt::Debug for CancelHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CancelHandle")
+    }
 }
 
 /// One live connection to one database.
@@ -102,6 +157,15 @@ pub trait Driver: Send + Sync + 'static {
     /// what the server said.
     fn execute(&self, request: &QueryRequest, sink: &mut dyn RowSink)
     -> Result<Execution, DbError>;
+
+    /// A handle that stops whatever this connection is running.
+    ///
+    /// `None` exactly when `capabilities().cancel` is false. Callers take one
+    /// **before** starting a statement: a driver that serialises on a `Mutex`
+    /// cannot hand one out while the statement it would stop holds the lock.
+    fn cancel_handle(&self) -> Option<CancelHandle> {
+        None
+    }
 }
 
 /// Opens a connection for `profile`.

@@ -943,6 +943,17 @@ pub enum Str {
     DbQueryTabTitle(usize),
     DbNewQueryTab,
     DbCloseQueryTab,
+
+    // Round 2: cancelling a running statement, at the server.
+    DbCancelQuery,
+    /// What [`DbError::Cancelled`](crate::database::models::error::DbError)
+    /// reads as wherever a driver error is shown.
+    DbCancelledMessage,
+    DbCancelledTitle,
+    DbCancelledHint,
+    /// dodo could not reach the server to *ask* it to stop. The driver's own
+    /// words, kept verbatim inside a translated frame.
+    DbCancelFailed(String),
 }
 
 impl Str {
@@ -2970,6 +2981,33 @@ impl Str {
             (Str::DbNewQueryTab, Language::Vietnamese) => "Truy vấn mới".into(),
             (Str::DbCloseQueryTab, Language::English) => "Close query".into(),
             (Str::DbCloseQueryTab, Language::Vietnamese) => "Đóng truy vấn".into(),
+
+            (Str::DbCancelQuery, Language::English) => "Cancel".into(),
+            (Str::DbCancelQuery, Language::Vietnamese) => "Huỷ".into(),
+            (Str::DbCancelledMessage, Language::English) => {
+                "The server stopped the statement because you cancelled it.".into()
+            }
+            (Str::DbCancelledMessage, Language::Vietnamese) => {
+                "Máy chủ đã dừng câu lệnh vì bạn huỷ nó.".into()
+            }
+            (Str::DbCancelledTitle, Language::English) => "Cancelled".into(),
+            (Str::DbCancelledTitle, Language::Vietnamese) => "Đã huỷ".into(),
+            (Str::DbCancelledHint, Language::English) => {
+                "The server confirmed it stopped, so nothing is still running there.".into()
+            }
+            (Str::DbCancelledHint, Language::Vietnamese) => {
+                "Máy chủ xác nhận đã dừng, nên không còn gì đang chạy ở đó.".into()
+            }
+            (Str::DbCancelFailed(detail), Language::English) => format!(
+                "dodo could not reach the server to cancel, so the statement may still be \
+                 running: {detail}"
+            )
+            .into(),
+            (Str::DbCancelFailed(detail), Language::Vietnamese) => format!(
+                "Dodo không liên hệ được máy chủ để huỷ, nên câu lệnh có thể vẫn đang chạy: \
+                 {detail}"
+            )
+            .into(),
         }
     }
 }
@@ -3764,6 +3802,11 @@ mod tests {
             with(Str::DbQueryTabTitle(NUMBER), &[NUMBER_TEXT]),
             plain(Str::DbNewQueryTab),
             plain(Str::DbCloseQueryTab),
+            plain(Str::DbCancelQuery),
+            plain(Str::DbCancelledMessage),
+            plain(Str::DbCancelledTitle),
+            plain(Str::DbCancelledHint),
+            with(Str::DbCancelFailed(DETAIL.into()), &[DETAIL]),
         ]
     }
 
@@ -4332,6 +4375,11 @@ mod tests {
             Str::DbQueryTabTitle(_) => 549,
             Str::DbNewQueryTab => 550,
             Str::DbCloseQueryTab => 551,
+            Str::DbCancelQuery => 552,
+            Str::DbCancelledMessage => 553,
+            Str::DbCancelledTitle => 554,
+            Str::DbCancelledHint => 555,
+            Str::DbCancelFailed(_) => 556,
         }
     }
 

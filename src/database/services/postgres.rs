@@ -14,8 +14,22 @@
 //! Every `postgres::Client` method takes `&mut self`, and [`Driver`] hands out
 //! `&self` because a live connection is shared as an `Arc`. Serializing is also
 //! the right model: a desktop client runs one statement per connection at a
-//! time, which is what will later make "cancel" refer to an unambiguous
-//! statement.
+//! time, which is what makes "cancel" refer to an unambiguous statement.
+//!
+//! # Cancelling, and why the token is taken at connect time
+//!
+//! `Client::cancel_token()` needs the client, and the client is behind the
+//! `Mutex` that the running statement holds — so asking for a token *while* a
+//! query runs would block behind the query it is meant to stop. The token is
+//! therefore taken once, in [`connect`], and kept beside the client: it is a
+//! plain `Clone` value (the socket config, the backend process id and its
+//! secret key) with no borrow of the connection at all.
+//!
+//! `CancelToken::cancel_query` opens a **second** connection and sends the
+//! protocol's CancelRequest, which is why it needs the same TLS decision the
+//! first one made — hence [`PostgresDriver::tls`]. The server answers nothing;
+//! the evidence a cancel worked is the running statement failing with SQLSTATE
+//! `57014`, which [`server_error`] maps to [`DbError::Cancelled`].
 //!
 //! # Rows arrive as binary, and this module decodes them
 //!
@@ -74,7 +88,7 @@ use crate::database::models::error::DbError;
 use crate::database::models::page::{Flow, RowSink};
 use crate::database::models::query::{Execution, QueryRequest};
 use crate::database::models::value::{ColumnMeta, Value};
-use crate::database::services::{Capabilities, Driver};
+use crate::database::services::{CancelHandle, Capabilities, Driver};
 
 /// How long to wait for a server to answer the connection attempt. Long enough
 /// for a container that is still starting, short enough that a wrong host does
@@ -85,8 +99,19 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A courtesy to whoever is looking at their server wondering who is connected.
 const APPLICATION_NAME: &str = "dodo";
 
+/// The SQLSTATE PostgreSQL reports for a statement it stopped because a
+/// CancelRequest arrived: `query_canceled`. Named rather than inlined because
+/// it is the one code this module reads rather than merely reports.
+const SQLSTATE_QUERY_CANCELED: &str = "57014";
+
 pub struct PostgresDriver {
     client: Mutex<Client>,
+    /// Taken once at connect time — see the module doc for why it cannot be
+    /// taken later.
+    cancel: postgres::CancelToken,
+    /// Whether the cancel connection uses TLS, which has to match the decision
+    /// the first connection made.
+    tls: bool,
 }
 
 /// Opens a connection for `profile`.
@@ -107,16 +132,19 @@ pub fn connect(profile: &ConnectionProfile) -> Result<Arc<PostgresDriver>, DbErr
         config.password(&profile.password);
     }
 
-    let client = match profile.ssl_mode {
+    let tls = !matches!(profile.ssl_mode, SslMode::Disable);
+    let client = match tls {
         // No connector is built at all when TLS is off, rather than building
         // one and asking the server not to use it.
-        SslMode::Disable => config.connect(NoTls),
-        _ => config.connect(tls_connector()?),
+        false => config.connect(NoTls),
+        true => config.connect(tls_connector()?),
     }
     .map_err(unreachable)?;
 
     Ok(Arc::new(PostgresDriver {
+        cancel: client.cancel_token(),
         client: Mutex::new(client),
+        tls,
     }))
 }
 
@@ -151,8 +179,16 @@ fn unreachable(err: postgres::Error) -> DbError {
 /// A driver error from a statement the server refused, carrying the SQLSTATE
 /// when there is one — so the few cases worth special-casing later can be,
 /// without re-parsing English.
+///
+/// One case is special-cased already: `57014` is not a fault, it is the server
+/// reporting that it stopped the statement because dodo asked. Reading it here
+/// — from the *server's* answer, not from the fact that a Cancel button was
+/// pressed — is what makes [`DbError::Cancelled`] evidence rather than a label.
 fn server_error(err: postgres::Error) -> DbError {
     let code = err.code().map(|code| code.code().to_string());
+    if code.as_deref() == Some(SQLSTATE_QUERY_CANCELED) {
+        return DbError::Cancelled;
+    }
     DbError::Server {
         code,
         detail: error_detail(&err),
@@ -428,7 +464,27 @@ impl Driver for PostgresDriver {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             editor_language: "sql",
+            cancel: true,
         }
+    }
+
+    fn cancel_handle(&self) -> Option<CancelHandle> {
+        let token = self.cancel.clone();
+        let tls = self.tls;
+        Some(CancelHandle::new(move || {
+            // Blocking, and it opens a second connection: the caller runs it on
+            // the background executor. The TLS choice has to match the one the
+            // first connection made, or the server refuses the cancel socket.
+            let sent = if tls {
+                token.cancel_query(tls_connector()?)
+            } else {
+                token.cancel_query(NoTls)
+            };
+            // A failure here means dodo could not *reach* the server to ask —
+            // not that the query survived — so it is reported as unreachable
+            // rather than as a rejected statement.
+            sent.map_err(unreachable)
+        }))
     }
 
     fn ping(&self) -> Result<(), DbError> {
@@ -1238,6 +1294,109 @@ INSERT INTO users (name, balance, active, tags, profile, token, born, seen, avat
         assert_eq!(sink.rows().len(), 25);
         assert!(execution.truncated);
         assert!(sink.truncated());
+    }
+
+    /// **The round's centrepiece, proved against a real server.**
+    ///
+    /// Dropping a task is not cancelling: the statement keeps running, the
+    /// server keeps burning CPU and the connection stays held. So this asserts
+    /// three separate things, and the third is the one that matters:
+    ///
+    /// 1. The interrupted `execute` comes back as [`DbError::Cancelled`] — the
+    ///    server's own `57014`, mapped in [`server_error`], not a label dodo
+    ///    applied because it pressed a button.
+    /// 2. It comes back *early*. `pg_sleep(30)` finishing in under a second is
+    ///    only possible if the server abandoned it.
+    /// 3. **A second connection sees no trace of it left running.** That is the
+    ///    only observation made from outside the cancelled session, and it is
+    ///    what rules out "dodo stopped waiting while the server carried on":
+    ///    `pg_stat_activity` is the server's own account of what it is doing.
+    #[test]
+    fn cancelling_stops_the_statement_at_the_server_and_not_merely_in_dodo() {
+        let fixture = fixture!("");
+        let Some(profile) = profile() else { return };
+        // A second connection, so the check is made from outside the session
+        // being cancelled — the same way a DBA would look.
+        let observer = connect(&profile).expect("a second connection");
+
+        // The query names itself, so `pg_stat_activity` can be searched for it
+        // without matching this test's own lookup.
+        const MARKER: &str = "dodo_r2_cancel_probe";
+        let statement = format!("SELECT pg_sleep(30) /* {MARKER} */");
+
+        let handle = fixture
+            .driver
+            .cancel_handle()
+            .expect("PostgreSQL reports the cancel capability");
+        let started = std::time::Instant::now();
+        let cancelling = std::thread::spawn(move || {
+            // Long enough for the sleep to be underway, so this is a genuine
+            // cancellation of a running statement rather than a race with its
+            // start-up.
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            handle
+                .cancel()
+                .expect("the cancel request reaches the server")
+        });
+
+        let mut sink = PageBuffer::default();
+        let outcome = fixture
+            .driver
+            .execute(&QueryRequest::new(statement), &mut sink);
+        let elapsed = started.elapsed();
+        cancelling.join().expect("the cancelling thread finished");
+
+        assert!(
+            matches!(outcome, Err(DbError::Cancelled)),
+            "expected the server's own 57014, got {outcome:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "a 30-second sleep that took {elapsed:?} was not cancelled, it was waited out"
+        );
+
+        // The proof. `pg_sleep` is interruptible, so the backend either stopped
+        // or is still sitting in it; only the server can say which. The
+        // `pg_stat_activity` clause excludes this very lookup, which also
+        // contains the marker.
+        let mut observed = PageBuffer::default();
+        observer
+            .execute(
+                &QueryRequest::new(format!(
+                    "SELECT count(*) FROM pg_stat_activity \
+                     WHERE state = 'active' AND query LIKE '%{MARKER}%' \
+                     AND query NOT LIKE '%pg_stat_activity%'"
+                )),
+                &mut observed,
+            )
+            .expect("the observer can read pg_stat_activity");
+        assert_eq!(
+            observed.rows()[0][0],
+            Value::Int(0),
+            "the statement is still active on the server: it was abandoned, not cancelled"
+        );
+    }
+
+    /// The connection is usable afterwards, which is the other half of "the
+    /// server stopped it": a cancel that killed the session would look the same
+    /// from the cancelled statement's point of view and be far worse.
+    #[test]
+    fn a_cancelled_connection_still_works_for_the_next_statement() {
+        let fixture = fixture!("");
+        let handle = fixture.driver.cancel_handle().expect("a handle");
+        let cancelling = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let _ = handle.cancel();
+        });
+
+        let mut sink = PageBuffer::default();
+        let _ = fixture
+            .driver
+            .execute(&QueryRequest::new("SELECT pg_sleep(30)"), &mut sink);
+        cancelling.join().expect("the cancelling thread finished");
+
+        let page = fixture.query("SELECT 1 AS still_here");
+        assert_eq!(page.rows()[0][0], Value::Int(1));
     }
 
     #[test]

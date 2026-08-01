@@ -159,6 +159,8 @@ impl DatabaseView {
     fn render_editor(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let connected = self.active_driver().is_some();
         let running = self.tabs.active().is_some_and(|tab| tab.is_running());
+        let can_cancel = self.tabs.active().is_some_and(|tab| tab.can_cancel());
+        let notice_text = self.tabs.active().and_then(|tab| tab.notice.clone());
         let editor = self.tabs.active().map(|tab| tab.editor.clone());
         let strip = self.render_tab_strip(cx);
 
@@ -195,6 +197,20 @@ impl DatabaseView {
                                         cx.listener(|this, _, window, cx| this.format(window, cx)),
                                     ),
                             )
+                            // Only while there is something to stop, and only
+                            // when the backend can really stop it: a Cancel
+                            // that dropped the wait and left the server working
+                            // would be a lie the user cannot see through.
+                            .when(can_cancel, |this| {
+                                this.child(
+                                    Button::new("db-cancel")
+                                        .xsmall()
+                                        .danger()
+                                        .icon(AppIcon::Stop)
+                                        .label(t(Str::DbCancelQuery, cx))
+                                        .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
+                                )
+                            })
                             .child(
                                 Button::new("db-execute")
                                     .xsmall()
@@ -213,6 +229,15 @@ impl DatabaseView {
                             ),
                     ),
             )
+            // A message about the tab that is not its result: dodo could not
+            // deliver a cancel request, or what an export did.
+            .children(notice_text.map(|text| {
+                div()
+                    .w_full()
+                    .px_2()
+                    .pb_1p5()
+                    .child(notice(Tone::Warning, t(text, cx), cx))
+            }))
             .children(editor.map(|editor| {
                 div()
                     .flex_1()
@@ -250,18 +275,31 @@ impl DatabaseView {
                 let statement = failure
                     .statement()
                     .map(|text| SharedString::from(text.to_string()));
-                error_state(t(Str::DbStatusError, cx), t(failure.message(), cx), cx)
-                    .when_some(statement, |this, statement| {
-                        this.child(
-                            div()
-                                .max_w(px(520.))
-                                .text_xs()
-                                .font_family(cx.theme().mono_font_family.clone())
-                                .text_color(cx.theme().muted_foreground)
-                                .child(statement),
-                        )
-                    })
-                    .into_any_element()
+                // A cancellation is not a fault. It gets the neutral empty
+                // state and the Stop glyph rather than the danger tone and a
+                // red triangle, because the user is the one who did it — and
+                // it is still a *distinct* outcome, never a silent empty grid.
+                let body = if failure.is_cancelled() {
+                    empty_state(
+                        AppIcon::Stop,
+                        t(Str::DbCancelledTitle, cx),
+                        Some(t(Str::DbCancelledHint, cx)),
+                        cx,
+                    )
+                } else {
+                    error_state(t(Str::DbStatusError, cx), t(failure.message(), cx), cx)
+                };
+                body.when_some(statement, |this, statement| {
+                    this.child(
+                        div()
+                            .max_w(px(520.))
+                            .text_xs()
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_color(cx.theme().muted_foreground)
+                            .child(statement),
+                    )
+                })
+                .into_any_element()
             }
 
             QueryState::Done(outcome) if !outcome.has_grid() => {
