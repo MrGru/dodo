@@ -188,25 +188,68 @@ below) and two aliases, `cargo dist` and `cargo dist-debug`.
 
 ## Feature flags
 
-Only one feature exists, and it gates real code:
+Two features exist, and both gate real code:
 
 ```toml
-default = ["syntax-highlighting"]
+default = ["syntax-highlighting", "sql-highlighting"]
 syntax-highlighting = [
     "gpui-component/tree-sitter",
     "gpui-component/tree-sitter-html",
     "gpui-component/tree-sitter-yaml",
     "gpui-component/tree-sitter-javascript",
 ]
+sql-highlighting = ["gpui-component/tree-sitter", "gpui-component/tree-sitter-sql"]
 ```
 
-Turning it off drops four tree-sitter grammar crates and their generated C
-parsers. The three that were there before the JavaScript grammar were measured
-at **515,168 bytes, 2.5%** of the shipped binary; the JavaScript grammar's own
-cost is measured below. The code editor then
+Turning `syntax-highlighting` off drops four tree-sitter grammar crates and
+their generated C parsers. The three that were there before the JavaScript
+grammar were measured at **515,168 bytes, 2.5%** of the shipped binary; the
+JavaScript grammar's own cost is measured below. The code editor then
 renders plain unhighlighted text, which is exactly what gpui-component's
 highlighter does when no grammar feature is set — so the degraded state is one
 the library already supports, not one this project has to maintain.
+
+**`sql-highlighting` is separate on purpose**, and the next section is why: it
+costs more than every other grammar in this crate put together, several times
+over, and folding it into `syntax-highlighting` would hide that behind a flag
+nobody would think to question. Two features that could have been one is the
+price of keeping the trade visible and reversible.
+
+### What the SQL grammar costs
+
+**+2,460,432 bytes, +10.79%** — measured, not estimated, as the difference
+between two release builds of the same commit that differ only in this feature.
+
+| Change | Δ bytes | Δ % | Note |
+|---|---:|---:|---|
+| `tree-sitter-javascript` (shipped) | +363,440 | +1.65% | the Scripts tab's two editors |
+| **`sql-highlighting` (shipped)** | **+2,460,432** | **+10.79%** | the Database Explorer's query editor |
+| `dprint-plugin-typescript` (**rejected**) | +2,829,280 | +12.7% | a real JavaScript formatter |
+
+So the SQL grammar is **6.8× the JavaScript grammar** and **87% of what this
+project refused to pay for JavaScript formatting**. The cause is not subtle and
+is not something a build flag can shrink: `tree-sitter-sequel`'s generated
+`parser.c` is **17,383,606 bytes** against `tree-sitter-javascript`'s
+**2,487,319** — a 7.0× ratio, against a 6.8× binary-size ratio.
+
+It ships anyway. The captain was shown this number, the comparison above and a
+recommendation to ship without it, and chose to take it: a database client's
+query editor is the one place in dodo where the user *writes* the language
+rather than reading what a server sent, and colour there is worth 2.4 MB. The
+condition attached was this row and the separate feature.
+
+Two things that make the trade reversible rather than permanent:
+`--no-default-features --features syntax-highlighting` produces a 25,907,616-byte
+binary whose query editor still has a gutter, selection, multi-cursor, search
+and soft wrap — the library's own graceful default, not a broken state — and
+`database::models::engine::editor_language` is the single place that decides
+what grammar the editor asks for.
+
+A note on the measurement, because it is unusually clean for a fat-LTO build:
+the design round predicted +2,460,448 B for this grammar from an isolated spike
+on a different tree, and the shipped feature measures **16 bytes** from that.
+The control (`a8cd40d`, 22,805,152 B) also reproduced byte-for-byte across the
+two rounds. Deltas below ~15 KB on this graph are still noise; these are not.
 
 ### What the script engine costs
 
@@ -401,6 +444,56 @@ The test doubles cost nothing either: unlike
 `consent_store::InMemoryConsentStore`, which is `#[allow(dead_code)]` because it
 doubles as a runtime fallback, the updater's four are `#[cfg(test)]` and are not
 compiled into the shipped binary at all.
+
+### What the Database Explorer cost
+
+Round 1 of `src/database/`: the five layers, the `Driver` trait, the PostgreSQL
+and SQLite drivers, `connections.json`, the lazy object tree, the query editor
+and the bounded result grid — roughly 7,000 lines, about half of them tests,
+plus 82 new `Str` variants in both languages. **It is by far the largest single
+addition this project has taken, and the only round to add five dependencies.**
+
+| Configuration | Bytes | Δ vs control | Δ % |
+|---|---:|---:|---:|
+| Control — `a8cd40d`, the commit before the round | 22,805,152 | — | — |
+| The round, **without** `sql-highlighting` | 25,907,616 | **+3,102,464** | **+13.60%** |
+| The round as it ships, **with** `sql-highlighting` | 28,368,048 | **+5,562,896** | **+24.39%** |
+
+All three are genuine `cargo build --release` compiles on the same machine and
+the same warm `target/`, with `SOURCE_DATE_EPOCH` pinned so `build.rs`'s
+embedded timestamp cannot move bytes between rows.
+
+Where the +3,102,464 goes, in rough order:
+
+- **The drivers.** The design round measured `postgres` + its rustls connector
+  + `rusqlite`/bundled, exercised from a real entry point, at **+2,275,472 B**
+  on this same control. `rusqlite`'s `bundled` feature is the single biggest
+  line item in that: it compiles the whole SQLite C amalgamation into the
+  binary. That is deliberate — the alternative is linking the host's
+  `libsqlite3`, whose version varies by platform and which is absent on Windows
+  — and it is the lever to examine first if this number ever has to come down.
+- **`sqlformat`**, measured by that round at **+165,232 B** for a real SQL
+  formatter. Two genuinely new crates; `winnow` and `memchr` were already here.
+- **The rest — roughly 660 KB — is dodo's own code**, and it is much more than
+  the ~70 KB a round of new Rust has cost before. That is not a surprise at
+  this size: it is 82 new `match` arms in `Str::text` (in two languages), a
+  `TableDelegate` and a `TreeState` feed monomorphised against gpui's element
+  types, two drivers' worth of catalog SQL, and a hand-written binary decoder
+  for PostgreSQL's wire format — all through `codegen-units = 1`.
+
+Two costs the round deliberately did **not** pay:
+
+- **No `keyring`.** Not on any platform. A database password is stored the way
+  the API Explorer already stores a secret variable, so the round adds no
+  credential backend, no `security-framework` on macOS, and — the one that
+  mattered — none of the 97-crate `secret-service` subtree and its D-Bus daemon
+  requirement on Linux.
+- **No `sqlx`.** The design round measured the same four backends through it at
+  **+3,087,472 B**, which is 248,880 bytes *more* than the native crates for a
+  strictly smaller feature set: `sqlx` exposes no query-cancel API at all, and
+  its compile-time-checked-query macros — the reason to use it — are exactly
+  the part a client running user-typed SQL against an unknown database cannot
+  use.
 
 ### Features deliberately not added
 
