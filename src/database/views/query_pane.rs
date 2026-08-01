@@ -1,7 +1,15 @@
-//! The right-hand side: the query editor above, the result below.
+//! The right-hand side: the tab strip and query editor above, the result below.
 //!
 //! The two are a `v_resizable` pair with the editor sized and the result taking
 //! the rest, because the result is what grows.
+//!
+//! # The tab strip
+//!
+//! One row per open query, drawn from
+//! [`QueryTabs`](crate::database::state::tabs::QueryTabs). A tab's label is
+//! short, fixed-length text, so it is `flex_shrink_0().whitespace_nowrap()`: a
+//! `flex_1().min_w_0()` label wraps the moment anything competes for width, and
+//! a strip of tabs is exactly that.
 //!
 //! # The footer is the point of this file
 //!
@@ -18,6 +26,7 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
 use gpui_component::resizable::{resizable_panel, v_resizable};
+use gpui_component::tab::{Tab, TabBar};
 use gpui_component::table::DataTable;
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
@@ -69,13 +78,94 @@ impl DatabaseView {
             .into_any_element()
     }
 
+    /// The strip of open queries above the editor.
+    fn render_tab_strip(&self, cx: &mut Context<Self>) -> AnyElement {
+        let active = self.tabs.active_index();
+        let closable = self.tabs.len() > 1;
+
+        let tabs: Vec<Tab> = self
+            .tabs
+            .tabs()
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                let running = tab.is_running();
+                Tab::new()
+                    .px_2()
+                    .label(t(Str::DbQueryTabTitle(tab.number), cx))
+                    .suffix(
+                        h_flex()
+                            .items_center()
+                            .gap_1()
+                            .when(running, |this| {
+                                // A run in flight in a tab nobody is looking at
+                                // is otherwise invisible.
+                                this.child(div().size(px(6.)).rounded_full().bg(cx.theme().primary))
+                            })
+                            // The only tab has no close button rather than a
+                            // dead one: closing it cannot remove it, and a
+                            // control that does not do what it says is worse
+                            // than an absent one.
+                            .when(closable, |this| {
+                                this.child(
+                                    Button::new(("db-close-tab", index))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(AppIcon::Close)
+                                        .tooltip(t(Str::DbCloseQueryTab, cx))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.close_tab(index, window, cx);
+                                        })),
+                                )
+                            }),
+                    )
+            })
+            .collect();
+
+        h_flex()
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .overflow_hidden()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(
+                TabBar::new("db-query-tabs")
+                    .selected_index(active)
+                    .children(tabs)
+                    .suffix(
+                        h_flex()
+                            .size(px(28.))
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Button::new("db-new-tab")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(AppIcon::Plus)
+                                    .tooltip(t(Str::DbNewQueryTab, cx))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_tab(window, cx);
+                                    })),
+                            ),
+                    )
+                    .on_click(cx.listener(|this, index: &usize, _, cx| {
+                        this.select_tab(*index, cx);
+                    })),
+            )
+            .into_any_element()
+    }
+
     fn render_editor(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let connected = self.active_driver().is_some();
-        let running = matches!(self.query, QueryState::Running);
+        let running = self.tabs.active().is_some_and(|tab| tab.is_running());
+        let editor = self.tabs.active().map(|tab| tab.editor.clone());
+        let strip = self.render_tab_strip(cx);
 
         v_flex()
             .size_full()
             .min_w_0()
+            .child(strip)
             .child(
                 h_flex()
                     .w_full()
@@ -86,6 +176,8 @@ impl DatabaseView {
                     .justify_between()
                     .child(
                         div()
+                            .flex_shrink_0()
+                            .whitespace_nowrap()
                             .text_xs()
                             .font_medium()
                             .text_color(cx.theme().muted_foreground)
@@ -121,7 +213,7 @@ impl DatabaseView {
                             ),
                     ),
             )
-            .child(
+            .children(editor.map(|editor| {
                 div()
                     .flex_1()
                     .min_h_0()
@@ -129,17 +221,19 @@ impl DatabaseView {
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .child(
-                        Input::new(&self.editor)
+                        Input::new(&editor)
                             .font_family(cx.theme().mono_font_family.clone())
                             .text_size(cx.theme().mono_font_size)
                             .size_full(),
-                    ),
-            )
+                    )
+            }))
             .into_any_element()
     }
 
     fn render_result(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let body = match &self.query {
+        let idle = QueryState::Idle;
+        let query = self.tabs.active().map_or(&idle, |tab| &tab.query);
+        let body = match query {
             QueryState::Idle => empty_state(
                 AppIcon::Table,
                 t(Str::DbNoResultYet, cx),
@@ -223,7 +317,7 @@ impl DatabaseView {
 
     /// The footer, or nothing when there is no result to describe.
     fn render_footer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let QueryState::Done(outcome) = &self.query else {
+        let QueryState::Done(outcome) = &self.tabs.active()?.query else {
             return None;
         };
 

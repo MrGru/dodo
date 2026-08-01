@@ -11,10 +11,14 @@
 //!   ordering and the reporting testable with a fake.
 //! - [`editor`] — which grammar the query editor is pointed at. One field, and
 //!   its module doc is the record of why the SQL highlighting did not work.
+//! - [`tabs`] — the open query tabs: each one's text, run in flight and
+//!   result, and the index arithmetic that decides which tab shows after a
+//!   close.
 //!
 //! [`run`]: query::run
 
 pub mod connections;
 pub mod editor;
 pub mod query;
+pub mod tabs;
 pub mod tree;
