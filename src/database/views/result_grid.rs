@@ -22,13 +22,39 @@
 //! muted colour instead. Otherwise a `text` column containing the four
 //! characters `NULL` would be indistinguishable from an absent value, which in
 //! a database client is a real way to misread a result.
+//!
+//! # The grid is measured in text sizes, not in pixels
+//!
+//! Round 1 drew a clipped header: the column name and the type under it were
+//! both cut off. The mechanism is worth stating, because it is not obvious and
+//! it constrains everything below.
+//!
+//! `DataTable` has **one** height knob. `Size::table_row_height()` sets the
+//! header row *and* the body rows, and each cell is `overflow_hidden` with the
+//! size's own vertical padding taken out of it — so the header's two lines had
+//! `32px − 8px = 24px` to live in, while two `text_xs` lines with gpui's default
+//! `phi` line height need about `40px`. Nothing about that is fixable by
+//! styling the header container: the inner row's height is set by the widget.
+//!
+//! So the row height is bought back from the padding — every [`Column`] carries
+//! its own `paddings` with **no vertical padding**, which `render_cell` uses in
+//! place of the size's — and both the row height and the two header lines are
+//! expressed as multiples of the base text size. That is what makes
+//! [`fits`](tests) checkable arithmetic rather than a thing somebody eyeballed
+//! once at one font size: dodo's Settings dialog offers 14, 16 and 18 px, and
+//! the invariant has to hold at all three.
+//!
+//! Long values are **truncated and the grid scrolls**; a column never grows to
+//! fit its widest cell. That is the `COLUMN_WIDTH` below plus the widget's own
+//! horizontal scrolling, and it is why one full-width UUID cannot push the rest
+//! of the result off the right of the window.
 
 use gpui::{
-    App, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
-    SharedString, Stateful, Styled as _, Window, div, px,
+    App, Context, Div, Edges, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
+    SharedString, Stateful, Styled as _, Window, div, px, relative, rems,
 };
 use gpui_component::table::{Column, TableDelegate, TableState};
-use gpui_component::{ActiveTheme as _, StyledExt as _, v_flex};
+use gpui_component::{ActiveTheme as _, Size, StyledExt as _, h_flex, v_flex};
 
 use crate::database::models::value::{ColumnMeta, Row, Value};
 use crate::i18n::{Str, t};
@@ -37,6 +63,61 @@ use crate::i18n::{Str, t};
 /// thing most result sets have; every column is resizable from there.
 const COLUMN_WIDTH: Pixels = px(160.);
 const COLUMN_MIN_WIDTH: Pixels = px(60.);
+
+/// A row's height, and the header's, as a multiple of the base text size —
+/// `DataTable` has one knob for both (see this module's doc).
+const ROW_HEIGHT_REMS: f32 = 1.875;
+
+/// The header's two lines: the column's name, then the server's type name
+/// under it. Both as multiples of the base text size.
+///
+/// `NAME_REMS` is deliberately the same `0.75` that `text_xs` is, so the header
+/// name and the body text match; the type is a step smaller because it is
+/// secondary, exactly as the reference tool draws it.
+const NAME_REMS: f32 = 0.75;
+const TYPE_REMS: f32 = 0.625;
+/// How tall each header line is, relative to its own font size. Tighter than
+/// gpui's default `phi` (1.618), because two stacked lines have to fit a row
+/// that is also the body's.
+const HEADER_LINE_RATIO: f32 = 1.15;
+/// gpui's default line height (`phi`), which the single-line body cells keep.
+/// Not set anywhere — it is what the body already gets — so it exists to be
+/// checked against the row height below.
+#[cfg(test)]
+const BODY_LINE_RATIO: f32 = 1.618_034;
+
+/// Cell padding. **No vertical padding at all**, and that is the whole reason
+/// the header fits: `render_cell` uses a column's own `paddings` in place of the
+/// size's, whose 4px top and bottom would take a third of the row away.
+/// Vertical centring is done by the cell contents instead.
+const CELL_PADDING: Edges<Pixels> = Edges {
+    top: px(0.),
+    bottom: px(0.),
+    left: px(8.),
+    right: px(8.),
+};
+
+/// The height of one row, header included, for a given base text size.
+///
+/// Split out from [`row_height`] so the tests can check the arithmetic at every
+/// size the Settings dialog offers without a `Window`.
+fn row_height_for(font_size: f32) -> f32 {
+    font_size * ROW_HEIGHT_REMS
+}
+
+/// The height of one row, header included, at the current base text size.
+pub(super) fn row_height(cx: &App) -> Pixels {
+    px(row_height_for(cx.theme().font_size.into()))
+}
+
+/// The size to give [`DataTable`](gpui_component::table::DataTable).
+///
+/// `Size::Size` rather than one of the named sizes: the named ones are fixed
+/// pixel heights that ignore the font-size setting, and the arithmetic this
+/// module rests on is in text sizes.
+pub(super) fn table_size(cx: &App) -> Size {
+    Size::Size(row_height(cx))
+}
 
 /// The rows and columns currently on screen.
 #[derive(Default)]
@@ -92,6 +173,7 @@ impl TableDelegate for ResultDelegate {
             .width(COLUMN_WIDTH)
             .min_width(COLUMN_MIN_WIDTH)
             .resizable(true)
+            .paddings(CELL_PADDING)
     }
 
     fn render_th(
@@ -105,20 +187,24 @@ impl TableDelegate for ResultDelegate {
         };
         let type_name = column.type_name.clone();
 
+        // No `gap`: the two lines carry their own tight line heights, and a gap
+        // on top of them is exactly the kind of extra height that does not show
+        // up in the arithmetic the tests check.
         v_flex()
             .size_full()
             .justify_center()
-            .gap_0p5()
             .child(
                 div()
-                    .text_xs()
-                    .font_medium()
+                    .text_size(rems(NAME_REMS))
+                    .line_height(relative(HEADER_LINE_RATIO))
+                    .font_semibold()
                     .truncate()
                     .child(SharedString::from(column.name.clone())),
             )
             .child(
                 div()
-                    .text_xs()
+                    .text_size(rems(TYPE_REMS))
+                    .line_height(relative(HEADER_LINE_RATIO))
                     .truncate()
                     .text_color(cx.theme().muted_foreground)
                     .child(SharedString::from(type_name)),
@@ -133,16 +219,27 @@ impl TableDelegate for ResultDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        // `h_flex().size_full()` rather than a bare div: the cell has no
+        // vertical padding left to centre the text for it (see this module's
+        // doc), so the content centres itself.
+        let cell = h_flex().size_full().min_w_0().text_size(rems(NAME_REMS));
         match self.cell(row_ix, col_ix) {
             // `NULL` is drawn in the muted colour rather than written into the
             // value, so text that spells NULL cannot be mistaken for one.
-            Some(Value::Null) | None => div()
+            Some(Value::Null) | None => cell
                 .text_color(cx.theme().muted_foreground)
                 .child(t(Str::DbColumnNull, cx))
                 .into_any_element(),
-            Some(value) => div()
-                .truncate()
-                .child(SharedString::from(value.display()))
+            // Truncated, never wrapped and never widening: a full-width UUID
+            // scrolls with the grid rather than pushing the columns beside it
+            // off the window.
+            Some(value) => cell
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(SharedString::from(value.display())),
+                )
                 .into_any_element(),
         }
     }
@@ -159,8 +256,98 @@ impl TableDelegate for ResultDelegate {
 
 #[cfg(test)]
 mod tests {
-    use super::ResultDelegate;
+    use super::{
+        BODY_LINE_RATIO, HEADER_LINE_RATIO, NAME_REMS, ROW_HEIGHT_REMS, ResultDelegate, TYPE_REMS,
+        row_height_for,
+    };
     use crate::database::models::value::{ColumnMeta, Value};
+
+    /// Every base text size the Settings dialog offers, and the default. The
+    /// header has to fit at all of them, not just at the default.
+    const FONT_SIZES: [f32; 3] = [14., 16., 18.];
+    const DEFAULT_FONT_SIZE: f32 = 16.;
+
+    /// How tall the header's two lines are together, in the same units as
+    /// [`ROW_HEIGHT_REMS`].
+    fn header_content_rems() -> f32 {
+        NAME_REMS * HEADER_LINE_RATIO + TYPE_REMS * HEADER_LINE_RATIO
+    }
+
+    /// The defect: the header row was 32px with 8px of padding taken out of it,
+    /// and two lines of `text_xs` at gpui's default `phi` line height need
+    /// about 40px, so both lines were cut off.
+    ///
+    /// Nothing here can prove the glyphs are drawn — that needs a rendered
+    /// frame — but the clipping was arithmetic, and the arithmetic is checkable.
+    #[test]
+    fn the_headers_two_lines_fit_the_row_the_widget_gives_them() {
+        assert!(
+            header_content_rems() <= ROW_HEIGHT_REMS,
+            "the header needs {} rems and the row is {ROW_HEIGHT_REMS}",
+            header_content_rems()
+        );
+    }
+
+    /// The same in pixels, at every font size the user can choose. A ratio that
+    /// holds in the abstract but rounds badly at 14px is still a clipped header.
+    #[test]
+    fn the_header_fits_at_every_font_size_the_settings_dialog_offers() {
+        for font_size in FONT_SIZES {
+            let row = font_size * ROW_HEIGHT_REMS;
+            let header = font_size * header_content_rems();
+            assert!(
+                header <= row,
+                "at {font_size}px the header wants {header}px in a {row}px row"
+            );
+        }
+    }
+
+    /// The body is one line, and it keeps gpui's default line height, so it has
+    /// to fit the same row.
+    #[test]
+    fn a_body_line_fits_the_row_at_every_font_size() {
+        for font_size in FONT_SIZES {
+            let row = font_size * ROW_HEIGHT_REMS;
+            let line = font_size * NAME_REMS * BODY_LINE_RATIO;
+            assert!(
+                line <= row,
+                "at {font_size}px a body line wants {line}px in a {row}px row"
+            );
+        }
+    }
+
+    /// Round 1 took `Size::Medium`: a **fixed** 32px row carrying body text at
+    /// the full base size. Two things changed and both are checked here.
+    ///
+    /// The grid is more compact at the default font size — which is what the
+    /// captain asked for — and the row height now *tracks* the setting, where
+    /// round 1's did not. At 18px the row is taller than 32px, and that is the
+    /// point rather than a regression: round 1 clipped its body text there too.
+    #[test]
+    fn the_grid_is_more_compact_at_the_default_size_and_tracks_the_setting() {
+        /// What `Size::Medium` — the widget's default, and round 1's — gave
+        /// every row at every font size.
+        const ROUND_1_ROW_HEIGHT: f32 = 32.;
+
+        let row = row_height_for(DEFAULT_FONT_SIZE);
+        assert!(
+            row < ROUND_1_ROW_HEIGHT,
+            "a {row}px row is not shorter than round 1's {ROUND_1_ROW_HEIGHT}px"
+        );
+        for font_size in FONT_SIZES {
+            let text = font_size * NAME_REMS;
+            assert!(
+                text < font_size,
+                "at {font_size}px cell text of {text}px is not smaller than the base size"
+            );
+        }
+
+        let heights: Vec<f32> = FONT_SIZES.iter().copied().map(row_height_for).collect();
+        assert!(
+            heights.windows(2).all(|pair| pair[0] < pair[1]),
+            "a bigger font must buy a taller row, unlike round 1's fixed {ROUND_1_ROW_HEIGHT}px: {heights:?}"
+        );
+    }
 
     #[test]
     fn a_fresh_delegate_has_nothing_to_draw() {
