@@ -28,6 +28,7 @@ use crate::database::components::notice::{Tone, notice};
 use crate::database::components::states::{empty_state, error_state};
 use crate::database::state::query::QueryState;
 use crate::database::views::database::{DatabaseView, EDITOR_HEIGHT, EDITOR_MIN};
+use crate::database::views::result_grid;
 use crate::i18n::{Str, t};
 
 impl DatabaseView {
@@ -176,10 +177,19 @@ impl DatabaseView {
                 empty_state(AppIcon::Table, t(Str::DbNoRows, cx), None, cx).into_any_element()
             }
 
+            // `with_size` is what stops the header clipping its two lines, and
+            // `scrollbar_visible(_, true)` is what keeps a wide value inside
+            // the grid instead of pushing the columns beside it off the window.
+            // `result_grid`'s module doc has the arithmetic behind both.
             QueryState::Done(_) => div()
                 .size_full()
                 .min_w_0()
-                .child(DataTable::new(&self.table).stripe(true))
+                .child(
+                    DataTable::new(&self.table)
+                        .stripe(true)
+                        .scrollbar_visible(true, true)
+                        .with_size(result_grid::table_size(cx)),
+                )
                 .into_any_element(),
         };
 
