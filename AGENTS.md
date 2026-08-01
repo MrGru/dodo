@@ -2,7 +2,7 @@
 
 `dodo` is a Rust desktop app: a single window with a collapsible sidebar, where each sidebar
 entry swaps the main pane to a self-contained developer tool (JSON formatter, Encoder/Decoder,
-API Explorer, Docker) plus, in the sidebar footer, a Settings dialog and a **Check for updates**
+API Explorer, Docker, Database Explorer) plus, in the sidebar footer, a Settings dialog and a **Check for updates**
 dialog. It is built on GPUI (Zed's UI framework) and the `gpui-component` widget
 library, both pulled from git and pinned only by `Cargo.lock`. See `README.md` for the user-facing
 description and `Cargo.toml` for exact dependency sources.
@@ -24,10 +24,10 @@ not a callback that force-quits) plus a macOS-only `cmd-w` binding, needed becau
 no menu bar for that shortcut to hang off. The doc comments there carry the reasoning;
 `docs/release.md` records that the Windows half has never run on a Windows host.
 
-Most tools are a single `src/<tool>.rs`. **`src/api_explorer/` and `src/docker/` are the
-exceptions** and the pattern to copy when a tool outgrows one file: `models/` (plain data, no GPUI,
-unit tested), `services/` (the trait that is the only place naming the outside-world crate),
-`state/`, `components/`, `views/`. Each `mod.rs` doc comments explain the split and where later
+Most tools are a single `src/<tool>.rs`. **`src/api_explorer/`, `src/docker/` and
+`src/database/` are the exceptions** and the pattern to copy when a tool outgrows one file:
+`models/` (plain data, no GPUI, unit tested), `services/` (the trait that is the only place naming
+the outside-world crate), `state/`, `components/`, `views/`. Each `mod.rs` doc comments explain the split and where later
 phases plug in. `api_explorer` is also the only tool that registers a key binding
 (`api_explorer::init`, called from `main` after `gpui_component::init`, same ordering rule as
 `settings::init`).
@@ -155,9 +155,13 @@ Six things about the module that are not obvious from any one file:
   *dangling* symlink on a Mac that once ran Docker Desktop, and `connect_with_podman_defaults()`
   only probes Linux paths, so it never finds the per-user
   `$TMPDIR/podman/podman-machine-default-api.sock` a macOS `podman machine` actually listens on.
-- **`services/` is the only place that may name `bollard`**, and the only place a **tokio runtime**
-  lives. `bollard` is async, so `BollardEngine` drives every call with `Runtime::block_on` on the
-  background executor, keeping the blocking-by-contract discipline `Transport` follows. Inspect
+- **`services/` is the only place that may name `bollard`**, and the only place dodo
+  **constructs a tokio runtime**. (The precision matters since the Database Explorer landed: the
+  `postgres` crate builds a private current-thread runtime *per client*, and
+  `src/database/services/postgres.rs` never names `tokio` — so this is the only runtime dodo
+  builds, not the only one that exists.) `bollard` is async, so `BollardEngine` drives every call
+  with `Runtime::block_on` on the background executor, keeping the blocking-by-contract discipline
+  `Transport` follows. Inspect
   responses cross that boundary as `serde_json::Value`, so the field extraction in
   `models/inspect.rs` stays testable without a daemon.
 - **`docker::init` registers the module's key bindings** and must run from `main` after
@@ -214,11 +218,55 @@ Six things worth knowing before touching it:
   a genuinely new runtime dependency and a `Cargo.lock` edit. Both are exhaustively table-tested
   (NIST FIPS 180-4 vectors; SemVer §11 precedence).
 
-**dodo persists four things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
+**`src/database/`** is the Database Explorer — create a connection, browse its objects, run a
+query, read the result — **PostgreSQL and SQLite only as of round 1**. Same five-layer split as
+the three modules above; **`src/database/mod.rs` is the authority** on the structure and on what
+R1 deliberately does not build. Seven things worth knowing before touching it:
+
+- **It is self-contained, and that is enforced by absence.** It names no other dodo module. In
+  particular `grep -rn 'docker' src/database/` staying empty is the invariant: the design report
+  proposed a "detect running database containers" prefill on the connection form and it was
+  dropped in *every* round, precisely so no compile-time edge exists between two tools.
+- **The `Driver` trait is four methods and the capability set has one field.** That is not an
+  oversight: the report proposes fields for transactions, Explain, cancel, column provenance and
+  `LIMIT`/`OFFSET`, and each describes a control no round has built, so each would be a value
+  nothing reads — the same reasoning `Cargo.toml` records for the marker features this crate
+  declined. `services/mod.rs` states it, and states how a non-SQL backend fits without contorting
+  the trait. A field arrives with the control that reads it.
+- **The object tree is a *question*, not a ladder.** A driver answers "the children of this node";
+  nothing above `services/` knows PostgreSQL puts schemas under a database and SQLite does not.
+  That is the whole reason a second backend is one file. `models/catalog.rs` also keeps a server's
+  identifiers (data, never translated) apart from dodo's own grouping words (translated) in
+  `NodeLabel`, which is what gives the i18n guard something to enforce.
+- **`state/tree.rs` owns expansion, and the sharp reason is a widget bug waiting to happen**:
+  `TreeItem::is_folder` is `children.len() > 0`, so a node whose children have not been fetched
+  draws no disclosure triangle and emits no expand event — the tree could never be opened. Every
+  expandable node therefore gets a placeholder child until its real children arrive.
+- **The memory bound is a type, not a comment.** `models/page.rs`'s `PageBuffer` stops the driver
+  when rows, total bytes or one cell trips the budget, and **a full page still answers
+  `Continue`** — being offered one further row is what proves there was more, which is what makes
+  the footer's truncation notice trustworthy. **No `LIMIT` is ever injected into a statement the
+  user wrote**; that module says why bounding at the sink is the only honest way.
+- **PostgreSQL rows arrive as binary and `services/postgres.rs` decodes them.** `query_raw`
+  streams (the blocking client's `simple_query` would give text for free but materialises the
+  whole result, defeating the budget); `numeric` is rendered as text rather than through an `f64`,
+  because not rounding is the entire reason a column is `numeric`. Undecodable types fall back to
+  UTF-8-as-text — right for an enum, whose binary form *is* its label — or to bytes, and the
+  header always carries the server's own `format_type` name. Its `live` test module skips itself
+  unless `DODO_PG_TEST_HOST` is set and carries the container command in its doc.
+- **No OS keychain, on any platform, and no `keyring` dependency.** A database password is stored
+  the way the API Explorer stores a secret variable: plain text under `data_dir()`, masked in the
+  UI, with a notice that is never absent. The report's `CredentialStore` trait is deliberately not
+  built — one storage behaviour does not need a trait. `models/connection.rs` states the posture
+  and a store test asserts the password really is in the file, so nobody later assumes otherwise.
+
+**dodo persists five things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
 behind a trait so the state layer never learns where they live: `collections.json`
 (`api_explorer::services::collection_store`), `environments.json` (`services::variable_store`),
-`script-consent.json` (`services::consent_store`, the imported scripts the user has approved) and
-`updater.json` (`updater::services::config_store`). The `dodo-theming-settings` skill's "nothing
+`script-consent.json` (`services::consent_store`, the imported scripts the user has approved),
+`updater.json` (`updater::services::config_store`) and `connections.json`
+(`database::services::connection_store`, which also holds database passwords in plain text — see
+above). The `dodo-theming-settings` skill's "nothing
 is persisted across restarts" is therefore scoped to appearance/language settings only —
 including the **Run scripts** setting, which is a `ScriptPolicy` global and deliberately starts
 each launch at the cautious `Ask for imported`. `updater.json` is the one exception and the
@@ -234,7 +282,8 @@ of them; copy that trick rather than a `cfg` split for anything else platform-sh
 
 The files version differently, and the difference is deliberate. A `RequestSnapshot` inside
 `collections.json` is versioned only by `#[serde(default)]`, which copes with *added* fields and
-nothing else. `environments.json`, `script-consent.json` and `updater.json` carry an explicit
+nothing else. `environments.json`, `script-consent.json`, `updater.json` and `connections.json`
+carry an explicit
 `"version"` from their very first write, and their `parse_document` **refuses** a file whose
 version is higher rather than half-reading it. Copy that pattern for any new file; do not copy
 `collections.json`'s.
@@ -271,7 +320,7 @@ experimental ones included, because a silently absent platform means those users
 an update; and the publish step is **create-or-update**, because `gh release create` cannot repair
 a tag that already exists and tags here are immutable. `src/updater/` is what reads it.
 
-Six things about build and release that catch people:
+Seven things about build and release that catch people:
 
 - **Two of the four `cargo check` targets cannot be run from this Mac at all.**
   Linux and Windows both die in `aws-lc-sys`'s C build script (no cross C toolchain, no
@@ -302,6 +351,14 @@ Six things about build and release that catch people:
   distribution question explicitly **open**. `deny.toml` deliberately carries no `allow` or
   `exceptions` entry for those crates so `cargo deny` keeps reporting them — do not silence it,
   and do not write a conclusion about that question into the repo.
+- **`rusqlite` and `sqlx` cannot be in the same graph, even switched off.** Both declare
+  `links = "sqlite3"` through `libsqlite3-sys` — at versions that do not overlap (`rusqlite 0.40`
+  needs `0.38`, `sqlx 0.9` needs `>=0.30.1, <0.38`) — and cargo refuses to resolve a graph
+  containing two packages linking the same native library, `optional = true` or not. The error
+  names `libsqlite3-sys` and says nothing about which of your dependencies wanted it. This rules
+  out a "sqlx for the network backends, rusqlite for SQLite" mix unless the versions are pinned to
+  a compatible pair; it cost the design round one failed build and is recorded here so it costs
+  the next one none.
 - **`Cargo.lock` really is the only possible pin on the four git dependencies.** Explicit
   `rev = "…"` pins were tried and cannot work here — upstream depends on itself through unpinned
   default-branch refs, and the three resulting cargo errors are recorded in
