@@ -35,6 +35,7 @@ use gpui_component::{
 use crate::app_icon::AppIcon;
 use crate::database::components::notice::{Tone, notice};
 use crate::database::components::states::{empty_state, error_state};
+use crate::database::services::export::ExportFormat;
 use crate::database::state::query::QueryState;
 use crate::database::views::database::{DatabaseView, EDITOR_HEIGHT, EDITOR_MIN};
 use crate::database::views::result_grid;
@@ -164,7 +165,10 @@ impl DatabaseView {
             .is_some_and(|driver| driver.capabilities().explain)
             && !running;
         let can_cancel = self.tabs.active().is_some_and(|tab| tab.can_cancel());
-        let notice_text = self.tabs.active().and_then(|tab| tab.notice.clone());
+        let tab_notice = self
+            .tabs
+            .active()
+            .and_then(|tab| tab.notice.clone().map(|text| (text, tab.notice_success)));
         let editor = self.tabs.active().map(|tab| tab.editor.clone());
         let strip = self.render_tab_strip(cx);
 
@@ -247,12 +251,16 @@ impl DatabaseView {
             )
             // A message about the tab that is not its result: dodo could not
             // deliver a cancel request, or what an export did.
-            .children(notice_text.map(|text| {
-                div()
-                    .w_full()
-                    .px_2()
-                    .pb_1p5()
-                    .child(notice(Tone::Warning, t(text, cx), cx))
+            .children(tab_notice.map(|(text, success)| {
+                div().w_full().px_2().pb_1p5().child(notice(
+                    if success {
+                        Tone::Success
+                    } else {
+                        Tone::Warning
+                    },
+                    t(text, cx),
+                    cx,
+                ))
             }))
             .children(editor.map(|editor| {
                 div()
@@ -375,6 +383,7 @@ impl DatabaseView {
             return None;
         };
 
+        let running = self.tabs.active().is_some_and(|tab| tab.is_running());
         let parts: Vec<SharedString> = outcome
             .footer()
             .into_iter()
@@ -419,6 +428,35 @@ impl DatabaseView {
                                 t(Str::DbFooterTruncated(outcome.rows.len()), cx),
                                 cx,
                             )))
+                        })
+                        .when(outcome.has_grid(), |this| {
+                            this.child(
+                                h_flex()
+                                    .flex_shrink_0()
+                                    .gap_1()
+                                    .child(
+                                        Button::new("db-export-csv")
+                                            .xsmall()
+                                            .ghost()
+                                            .icon(AppIcon::Download)
+                                            .disabled(running)
+                                            .label(t(Str::DbExportCsv, cx))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.export(ExportFormat::Csv, cx)
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("db-export-json")
+                                            .xsmall()
+                                            .ghost()
+                                            .icon(AppIcon::Download)
+                                            .disabled(running)
+                                            .label(t(Str::DbExportJson, cx))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.export(ExportFormat::Json, cx)
+                                            })),
+                                    ),
+                            )
                         }),
                 )
                 // The statement the result came from, so a buffer of several

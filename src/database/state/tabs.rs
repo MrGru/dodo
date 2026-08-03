@@ -57,6 +57,9 @@ pub struct QueryTab {
     /// [`CancelHandle`]'s notes in `services/mod.rs`. `None` between runs, and
     /// for a backend that reports no cancel capability.
     pub cancel: Option<CancelHandle>,
+    /// Export re-runs the displayed statement into a file. It keeps the result
+    /// on screen, but still counts as this tab's one run in flight.
+    pub exporting: bool,
     /// Held so the tab keeps its own task: a run in one tab must not be
     /// cancelled by a run in another.
     pub run_task: Option<Task<()>>,
@@ -66,6 +69,9 @@ pub struct QueryTab {
     /// not deliver a cancel request, and later what an export did. Held as a
     /// [`Str`] rather than rendered text so it re-translates.
     pub notice: Option<Str>,
+    /// The only successful notice today is a completed export; everything else
+    /// means the requested operation did not complete.
+    pub notice_success: bool,
 }
 
 impl QueryTab {
@@ -77,15 +83,17 @@ impl QueryTab {
             language: EditorLanguage::new(),
             query: QueryState::Idle,
             cancel: None,
+            exporting: false,
             run_task: None,
             cancel_task: None,
             notice: None,
+            notice_success: false,
         }
     }
 
     /// Whether a statement is in flight in this tab.
     pub fn is_running(&self) -> bool {
-        matches!(self.query, QueryState::Running)
+        self.exporting || matches!(self.query, QueryState::Running)
     }
 
     /// Whether Cancel is worth offering: something is running and there is a
