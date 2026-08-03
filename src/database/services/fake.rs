@@ -17,10 +17,16 @@ use std::sync::{Arc, Mutex};
 use crate::database::models::catalog::{CatalogNode, GroupLabel, NodeId, NodeKind};
 use crate::database::models::detail::{DATA_PAGE_SIZE, DdlSource, DetailRequest, DetailTab};
 use crate::database::models::error::DbError;
+use crate::database::models::identity::{
+    Editability, IdentityMetadata, ReadOnlyReason, TableRef, UniqueKey, prove,
+};
 use crate::database::models::page::{Flow, RowSink};
 use crate::database::models::query::{Execution, QueryRequest};
-use crate::database::models::value::{ColumnMeta, Row, Value};
-use crate::database::services::{CancelHandle, Capabilities, DetailResult, Driver};
+use crate::database::models::statement::GeneratedBatch;
+use crate::database::models::value::{ColumnMeta, ColumnOrigin, Row, Value};
+use crate::database::services::{
+    CancelHandle, Capabilities, DetailResult, Driver, MutationFailure,
+};
 
 /// What a fake answers with for one node.
 type Children = Vec<CatalogNode>;
@@ -47,6 +53,9 @@ pub struct FakeDriver {
     /// How many rows the last `execute` actually handed over before the sink
     /// said stop — the evidence that streaming is streaming.
     pub offered: Mutex<usize>,
+    mutation_counts: Vec<Result<u64, DbError>>,
+    pub committed: Arc<AtomicBool>,
+    pub rolled_back: Arc<AtomicBool>,
 }
 
 impl Default for FakeDriver {
@@ -114,8 +123,16 @@ impl FakeDriver {
                 ),
             ],
             columns: vec![
-                ColumnMeta::new("id", "int4"),
-                ColumnMeta::new("name", "text"),
+                ColumnMeta::new("id", "int4").with_origin(ColumnOrigin {
+                    schema: Some("public".into()),
+                    table: "users".into(),
+                    column: "id".into(),
+                }),
+                ColumnMeta::new("name", "text").with_origin(ColumnOrigin {
+                    schema: Some("public".into()),
+                    table: "users".into(),
+                    column: "name".into(),
+                }),
             ],
             rows: (1..=3)
                 .map(|n| vec![Value::Int(n), Value::Text(format!("row-{n}"))])
@@ -125,6 +142,9 @@ impl FakeDriver {
             cancelled: Arc::new(AtomicBool::new(false)),
             executed: Mutex::new(Vec::new()),
             offered: Mutex::new(0),
+            mutation_counts: Vec::new(),
+            committed: Arc::new(AtomicBool::new(false)),
+            rolled_back: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -160,6 +180,9 @@ impl FakeDriver {
             cancelled: Arc::new(AtomicBool::new(false)),
             executed: Mutex::new(Vec::new()),
             offered: Mutex::new(0),
+            mutation_counts: Vec::new(),
+            committed: Arc::new(AtomicBool::new(false)),
+            rolled_back: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -187,6 +210,11 @@ impl FakeDriver {
         self
     }
 
+    pub fn with_mutation_counts(mut self, counts: Vec<Result<u64, DbError>>) -> Self {
+        self.mutation_counts = counts;
+        self
+    }
+
     fn lookup(&self, parent: Option<&NodeId>) -> Result<Children, DbError> {
         let key = parent.map(NodeId::as_str).unwrap_or("");
         self.tree
@@ -209,6 +237,8 @@ impl Driver for FakeDriver {
             } else {
                 DdlSource::None
             },
+            mutation: (self.editor_language == "sql")
+                .then_some(crate::database::models::statement::Dialect::Sqlite),
         }
     }
 
@@ -314,6 +344,49 @@ impl Driver for FakeDriver {
             truncated: offered < self.rows.len() || offered == 0 && !self.rows.is_empty(),
             elapsed: std::time::Duration::from_millis(1),
         })
+    }
+
+    fn editability(&self, columns: &[ColumnMeta]) -> Editability {
+        if self.editor_language != "sql" {
+            return Editability::ReadOnly(ReadOnlyReason::Unsupported);
+        }
+        let mut metadata = IdentityMetadata::new(TableRef {
+            schema: Some("public".into()),
+            table: "users".into(),
+        });
+        metadata.keys.push(UniqueKey {
+            columns: vec!["id".into()],
+            primary: true,
+            all_non_null: true,
+        });
+        metadata.generated_columns.insert("id".into());
+        prove(columns, metadata)
+    }
+
+    fn commit(&self, batch: &GeneratedBatch) -> Result<(), MutationFailure> {
+        for (index, statement) in batch.statements.iter().enumerate() {
+            match self.mutation_counts.get(index).cloned().unwrap_or(Ok(1)) {
+                Err(error) => {
+                    self.rolled_back.store(true, Ordering::SeqCst);
+                    return Err(MutationFailure::Statement {
+                        index,
+                        sql: statement.sql.clone(),
+                        error,
+                    });
+                }
+                Ok(actual) if actual != 1 => {
+                    self.rolled_back.store(true, Ordering::SeqCst);
+                    return Err(MutationFailure::Affected {
+                        index,
+                        sql: statement.sql.clone(),
+                        actual,
+                    });
+                }
+                Ok(_) => {}
+            }
+        }
+        self.committed.store(true, Ordering::SeqCst);
+        Ok(())
     }
 }
 

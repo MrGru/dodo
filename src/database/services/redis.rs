@@ -306,6 +306,7 @@ impl Driver for RedisDriver {
             explain: false,
             detail: true,
             ddl: DdlSource::None,
+            mutation: None,
         }
     }
 
@@ -885,7 +886,7 @@ mod live {
         )
         .expect("one command per line runs");
         assert_eq!(outcome.statements_run, 2);
-        assert_eq!(outcome.rows[0][0], Value::Text("hello".into()));
+        assert_eq!(outcome.grid.rows()[0][0], Value::Text("hello".into()));
 
         let roots = fixture.driver.children(None).expect("databases load");
         assert!(
@@ -933,7 +934,7 @@ mod live {
             panic!("hash detail did not load")
         };
         assert_eq!(detail.columns[0].name, "field");
-        assert!(detail.rows.iter().any(|row| {
+        assert!(detail.grid.rows().iter().any(|row| {
             row[0] == Value::Text("name".into()) && row[1] == Value::Text("Ada".into())
         }));
 

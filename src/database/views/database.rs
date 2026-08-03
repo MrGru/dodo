@@ -66,22 +66,29 @@ use gpui_component::{ActiveTheme as _, WindowExt as _};
 use crate::app_icon::AppIcon;
 use crate::database::models::catalog::{NodeId, NodeKind, NodeLabel};
 use crate::database::models::connection::ConnectionProfile;
-use crate::database::models::detail::DetailTarget;
+use crate::database::models::detail::{DetailRequest, DetailTarget};
 use crate::database::models::engine::Engine;
 use crate::database::models::page::PageBudget;
 use crate::database::models::sql_format;
+use crate::database::models::statement::{GeneratedBatch, generate};
+use crate::database::models::value::{ColumnMeta, Value};
 use crate::database::services::connection_store::{ConnectionStore, DiskConnectionStore};
 use crate::database::services::export::{self, ExportFormat};
 use crate::database::services::{self, Driver};
 use crate::database::state::connections::{ConnectionsState, Status};
 use crate::database::state::detail::{self, DetailLoad, DetailState};
+use crate::database::state::edit::{EditError, PendingGrid};
 use crate::database::state::history::History;
 use crate::database::state::query::{self, QueryState};
 use crate::database::state::tabs::{QueryTab, QueryTabs};
 use crate::database::state::tree::{Content, Forest, Notice, Outline, RowRef};
+use crate::database::views::commit_dialog;
 use crate::database::views::connection_form::{self, ConnectionForm, FormEvent};
 use crate::database::views::history;
 use crate::database::views::result_grid::ResultDelegate;
+use crate::database::views::row_editor::{
+    self, Action as RowEditorAction, Draft as RowEditorDraft,
+};
 use crate::database::{DatabaseCopyCell, DatabaseCopyRow, KEY_CONTEXT};
 use crate::i18n::{Language, Str, t};
 use crate::paths::data_dir;
@@ -99,6 +106,12 @@ pub(super) const EDITOR_MIN: Pixels = px(90.);
 /// How far each tree level is indented, and the padding of the first.
 pub(super) const TREE_INDENT: Pixels = px(14.);
 pub(super) const TREE_PADDING: Pixels = px(8.);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum MutationTarget {
+    Query(u64),
+    Detail(DetailRequest),
+}
 
 pub struct DatabaseView {
     pub(super) connections: ConnectionsState,
@@ -136,11 +149,15 @@ pub struct DatabaseView {
     connect_task: Option<Task<()>>,
     children_task: Option<Task<()>>,
     detail_task: Option<Task<()>>,
+    mutation_task: Option<Task<()>>,
     save_task: Option<Task<()>>,
 
     /// A failure from the store itself — the file could not be read or written.
     /// Held as a [`Str`] rather than rendered text so it re-translates.
     pub(super) store_error: Option<Str>,
+    /// Result/detail mutation feedback, held untranslated so language changes
+    /// update a message already on screen.
+    pub(super) edit_notice: Option<(Str, bool)>,
 
     focus_handle: FocusHandle,
     language: Language,
@@ -179,8 +196,10 @@ impl DatabaseView {
             connect_task: None,
             children_task: None,
             detail_task: None,
+            mutation_task: None,
             save_task: None,
             store_error: None,
+            edit_notice: None,
             focus_handle: cx.focus_handle(),
             language: Language::current(cx),
         };
@@ -255,6 +274,13 @@ impl DatabaseView {
     /// its task only stops dodo waiting; the statement would keep burning
     /// server CPU and holding the connection for a tab nobody can see any more.
     pub(super) fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.tabs().get(index).is_some_and(
+            |tab| matches!(&tab.query, QueryState::Done(outcome) if outcome.grid.has_pending()),
+        ) {
+            self.edit_notice = Some((Str::DbResolvePending, false));
+            cx.notify();
+            return;
+        }
         self.stop_tab(index, cx);
         if self.tabs.close(index).is_none() {
             if index >= self.tabs.len() {
@@ -298,7 +324,7 @@ impl DatabaseView {
         }
         let result = match self.tabs.active().map(|tab| &tab.query) {
             Some(QueryState::Done(outcome)) => {
-                Some((outcome.columns.clone(), outcome.rows.clone()))
+                Some((outcome.columns.clone(), outcome.grid.rows().to_vec()))
             }
             _ => None,
         };
@@ -379,6 +405,11 @@ impl DatabaseView {
     }
 
     pub(super) fn connect(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.connection_has_pending(id) {
+            self.edit_notice = Some((Str::DbResolvePending, false));
+            cx.notify();
+            return;
+        }
         let Some(profile) = self.connections.find(id).cloned() else {
             return;
         };
@@ -420,6 +451,11 @@ impl DatabaseView {
     }
 
     pub(super) fn disconnect(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.connection_has_pending(id) {
+            self.edit_notice = Some((Str::DbResolvePending, false));
+            cx.notify();
+            return;
+        }
         self.drivers.remove(&id);
         self.close_detail_for(id, cx);
         self.connections.set_status(id, Status::Disconnected);
@@ -438,6 +474,11 @@ impl DatabaseView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if editing && self.connection_has_pending(profile.id) {
+            self.edit_notice = Some((Str::DbResolvePending, false));
+            cx.notify();
+            return;
+        }
         let form = connection_form::open(profile, editing, window, cx);
         self._form_subscription = Some(cx.subscribe(&form, |this, _, event: &FormEvent, cx| {
             let FormEvent::Saved(profile) = event;
@@ -470,6 +511,11 @@ impl DatabaseView {
     }
 
     pub(super) fn delete(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.connection_has_pending(id) {
+            self.edit_notice = Some((Str::DbResolvePending, false));
+            cx.notify();
+            return;
+        }
         let Some(profile) = self.connections.find(id) else {
             return;
         };
@@ -660,6 +706,11 @@ impl DatabaseView {
         target: DetailTarget,
         cx: &mut Context<Self>,
     ) {
+        if self.detail_has_pending() {
+            self.edit_notice = Some((Str::DbResolvePending, false));
+            cx.notify();
+            return;
+        }
         let Some(driver) = self.drivers.get(&connection).cloned() else {
             return;
         };
@@ -703,6 +754,11 @@ impl DatabaseView {
     }
 
     pub(super) fn select_detail_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.detail_has_pending() {
+            self.edit_notice = Some((Str::DbResolvePending, false));
+            cx.notify();
+            return;
+        }
         let Some(tab) = self
             .detail
             .as_ref()
@@ -729,6 +785,11 @@ impl DatabaseView {
     }
 
     pub(super) fn detail_previous(&mut self, cx: &mut Context<Self>) {
+        if self.detail_has_pending() {
+            self.edit_notice = Some((Str::DbResolvePending, false));
+            cx.notify();
+            return;
+        }
         if !self.detail.as_mut().is_some_and(DetailState::previous) {
             return;
         }
@@ -736,6 +797,11 @@ impl DatabaseView {
     }
 
     pub(super) fn detail_next(&mut self, cx: &mut Context<Self>) {
+        if self.detail_has_pending() {
+            self.edit_notice = Some((Str::DbResolvePending, false));
+            cx.notify();
+            return;
+        }
         if !self.detail.as_mut().is_some_and(DetailState::next) {
             return;
         }
@@ -755,6 +821,11 @@ impl DatabaseView {
     }
 
     pub(super) fn close_detail(&mut self, cx: &mut Context<Self>) {
+        if self.detail_has_pending() {
+            self.edit_notice = Some((Str::DbResolvePending, false));
+            cx.notify();
+            return;
+        }
         self.detail = None;
         self.detail_task = None;
         self.show_active_result(cx);
@@ -780,7 +851,7 @@ impl DatabaseView {
                         column.name = t(field.label(), cx).to_string();
                     }
                 }
-                Some((columns, grid.rows.clone()))
+                Some((columns, grid.grid.rows().to_vec()))
             }
             _ => None,
         });
@@ -791,6 +862,389 @@ impl DatabaseView {
             }
             state.refresh(cx);
         });
+    }
+
+    // ---- pending table-data mutations -----------------------------------
+
+    fn detail_has_pending(&self) -> bool {
+        self.detail.as_ref().is_some_and(
+            |detail| matches!(&detail.load, DetailLoad::Grid(grid) if grid.grid.has_pending()),
+        )
+    }
+
+    fn connection_has_pending(&self, connection: u64) -> bool {
+        self.detail.as_ref().is_some_and(|detail| {
+            detail.connection == connection
+                && matches!(&detail.load, DetailLoad::Grid(grid) if grid.grid.has_pending())
+        }) || self.tabs.tabs().iter().any(|tab| {
+            tab.result_connection == Some(connection)
+                && matches!(&tab.query, QueryState::Done(outcome) if outcome.grid.has_pending())
+        })
+    }
+
+    pub(super) fn active_grid(&self) -> Option<(&[ColumnMeta], &PendingGrid)> {
+        if let Some(detail) = &self.detail {
+            let DetailLoad::Grid(grid) = &detail.load else {
+                return None;
+            };
+            return Some((&grid.columns, &grid.grid));
+        }
+        let tab = self.tabs.active()?;
+        let QueryState::Done(outcome) = &tab.query else {
+            return None;
+        };
+        outcome
+            .has_grid()
+            .then_some((&outcome.columns, &outcome.grid))
+    }
+
+    fn with_active_grid_mut<R>(&mut self, edit: impl FnOnce(&mut PendingGrid) -> R) -> Option<R> {
+        if let Some(detail) = &mut self.detail {
+            let DetailLoad::Grid(grid) = &mut detail.load else {
+                return None;
+            };
+            return Some(edit(&mut grid.grid));
+        }
+        let tab = self.tabs.active_mut()?;
+        let QueryState::Done(outcome) = &mut tab.query else {
+            return None;
+        };
+        outcome.has_grid().then(|| edit(&mut outcome.grid))
+    }
+
+    fn active_mutation_driver(&self) -> Option<Arc<dyn Driver>> {
+        let connection = if let Some(detail) = &self.detail {
+            detail.connection
+        } else {
+            self.tabs.active()?.result_connection?
+        };
+        self.drivers.get(&connection).cloned()
+    }
+
+    fn mutation_target(&self) -> Option<MutationTarget> {
+        if let Some(detail) = &self.detail {
+            return Some(MutationTarget::Detail(detail.request()));
+        }
+        Some(MutationTarget::Query(self.tabs.active()?.id))
+    }
+
+    pub(super) fn is_committing(&self) -> bool {
+        self.mutation_task.is_some()
+    }
+
+    pub(super) fn selected_cell(&self, cx: &App) -> Option<(usize, usize)> {
+        self.table.read(cx).selected_cell()
+    }
+
+    pub(super) fn selected_row(&self, cx: &App) -> Option<usize> {
+        self.table
+            .read(cx)
+            .selected_cell()
+            .map(|(row, _)| row)
+            .or_else(|| self.table.read(cx).selected_row())
+    }
+
+    pub(super) fn edit_error_text(error: EditError) -> Str {
+        match error {
+            EditError::ReadOnly(reason) => reason.message(),
+            EditError::IdentityColumn => Str::DbEditIdentityColumn,
+            EditError::IdentityUnavailable => Str::DbEditIdentityUnavailable,
+            EditError::UnsupportedCell | EditError::MissingColumn | EditError::MissingRow => {
+                Str::DbEditUnsupportedCell
+            }
+            EditError::MissingRequiredIdentity(columns) => {
+                Str::DbIdentityRequired(columns.join(", "))
+            }
+        }
+    }
+
+    fn set_edit_error(&mut self, error: EditError, cx: &mut Context<Self>) {
+        self.edit_notice = Some((Self::edit_error_text(error), false));
+        cx.notify();
+    }
+
+    fn refresh_pending_grid(&mut self, cx: &mut Context<Self>) {
+        if self.detail.is_some() {
+            self.show_detail_result(cx);
+        } else {
+            self.show_active_result(cx);
+        }
+        self.edit_notice = None;
+        cx.notify();
+    }
+
+    pub(super) fn open_cell_editor(
+        &mut self,
+        row: usize,
+        column: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = self.active_grid().and_then(|(columns, grid)| {
+            grid.cell_error(row, column).map_or_else(
+                || Some(Ok((columns.to_vec(), grid.row(row)?.clone()))),
+                |error| Some(Err(error)),
+            )
+        });
+        let Some(snapshot) = snapshot else {
+            self.set_edit_error(EditError::MissingRow, cx);
+            return;
+        };
+        let (columns, values) = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.set_edit_error(error, cx);
+                return;
+            }
+        };
+        let title = Str::DbEditCellTitle(
+            columns
+                .get(column)
+                .map(|column| column.name.clone())
+                .unwrap_or_default(),
+        );
+        row_editor::open(
+            cx.entity(),
+            RowEditorDraft {
+                title,
+                columns,
+                values,
+                included: vec![column],
+                required_identity: Vec::new(),
+                action: RowEditorAction::EditCell { row, column },
+            },
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn open_add_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let snapshot = self.active_grid().map(|(columns, grid)| {
+            let source = grid.source()?;
+            let values = grid.add_template()?;
+            let included = source
+                .columns()
+                .iter()
+                .filter(|column| !column.generated)
+                .map(|column| column.result_index)
+                .collect();
+            let required = grid.required_identity_columns()?;
+            Ok::<_, EditError>((columns.to_vec(), values, included, required))
+        });
+        let Some(snapshot) = snapshot else {
+            return;
+        };
+        let (columns, values, included, required) = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.set_edit_error(error, cx);
+                return;
+            }
+        };
+        row_editor::open(
+            cx.entity(),
+            RowEditorDraft {
+                title: Str::DbAddRowTitle,
+                columns,
+                values,
+                included,
+                required_identity: required,
+                action: RowEditorAction::Insert,
+            },
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn open_duplicate_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.selected_row(cx) else {
+            self.edit_notice = Some((Str::DbEditSelectRow, false));
+            cx.notify();
+            return;
+        };
+        let snapshot = self.active_grid().map(|(columns, grid)| {
+            let source = grid.source()?;
+            let values = grid.duplicate_template(row)?;
+            let included = source
+                .columns()
+                .iter()
+                .filter(|column| !column.generated)
+                .map(|column| column.result_index)
+                .collect();
+            let required = grid.required_identity_columns()?;
+            Ok::<_, EditError>((columns.to_vec(), values, included, required))
+        });
+        let Some(snapshot) = snapshot else {
+            return;
+        };
+        let (columns, values, included, required) = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.set_edit_error(error, cx);
+                return;
+            }
+        };
+        row_editor::open(
+            cx.entity(),
+            RowEditorDraft {
+                title: Str::DbDuplicateRowTitle,
+                columns,
+                values,
+                included,
+                required_identity: required,
+                action: RowEditorAction::Insert,
+            },
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn apply_cell_edit(
+        &mut self,
+        row: usize,
+        column: usize,
+        value: Value,
+        cx: &mut Context<Self>,
+    ) {
+        match self.with_active_grid_mut(|grid| grid.edit(row, column, value)) {
+            Some(Ok(())) => self.refresh_pending_grid(cx),
+            Some(Err(error)) => self.set_edit_error(error, cx),
+            None => {}
+        }
+    }
+
+    pub(super) fn apply_insert(&mut self, values: Vec<(usize, Value)>, cx: &mut Context<Self>) {
+        let result = self.with_active_grid_mut(|grid| {
+            let mut row = grid.add_template()?;
+            for (column, value) in values {
+                let Some(cell) = row.get_mut(column) else {
+                    return Err(EditError::MissingColumn);
+                };
+                *cell = value;
+            }
+            grid.insert(row)
+        });
+        match result {
+            Some(Ok(())) => self.refresh_pending_grid(cx),
+            Some(Err(error)) => self.set_edit_error(error, cx),
+            None => {}
+        }
+    }
+
+    pub(super) fn delete_selected_row(&mut self, cx: &mut Context<Self>) {
+        let Some(row) = self.selected_row(cx) else {
+            self.edit_notice = Some((Str::DbEditSelectRow, false));
+            cx.notify();
+            return;
+        };
+        match self.with_active_grid_mut(|grid| grid.delete(row)) {
+            Some(Ok(())) => self.refresh_pending_grid(cx),
+            Some(Err(error)) => self.set_edit_error(error, cx),
+            None => {}
+        }
+    }
+
+    pub(super) fn rollback_edits(&mut self, cx: &mut Context<Self>) {
+        if self.with_active_grid_mut(|grid| grid.rollback()).is_some() {
+            self.refresh_pending_grid(cx);
+        }
+    }
+
+    pub(super) fn open_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(driver) = self.active_mutation_driver() else {
+            return;
+        };
+        let Some(dialect) = driver.capabilities().mutation else {
+            self.edit_notice = Some((Str::DbEditUnsupported, false));
+            cx.notify();
+            return;
+        };
+        let Some(target) = self.mutation_target() else {
+            return;
+        };
+        let batch = self.active_grid().and_then(|(_, grid)| {
+            let source = grid.source().ok()?;
+            let mutations = grid.mutations();
+            (!mutations.is_empty()).then(|| generate(source, &mutations, dialect))
+        });
+        let Some(Ok(batch)) = batch else {
+            self.edit_notice = Some((
+                if batch.is_none() {
+                    Str::DbEditNoPending
+                } else {
+                    Str::DbCommitBuildFailed
+                },
+                false,
+            ));
+            cx.notify();
+            return;
+        };
+        commit_dialog::open(cx.entity(), driver, batch, target, window, cx);
+    }
+
+    pub(super) fn start_commit(
+        &mut self,
+        driver: Arc<dyn Driver>,
+        batch: GeneratedBatch,
+        target: MutationTarget,
+        cx: &mut Context<Self>,
+    ) {
+        if self.mutation_task.is_some() {
+            return;
+        }
+        let expected = batch.expected_rows();
+        self.edit_notice = Some((Str::DbCommitRunning, true));
+        cx.notify();
+        self.mutation_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { driver.commit(&batch) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.mutation_task = None;
+                match &target {
+                    MutationTarget::Query(id) => {
+                        let active = this.tabs.active().is_some_and(|tab| tab.id == *id);
+                        if let Some(tab) = this.tabs.find_mut(*id) {
+                            match result {
+                                Ok(()) => {
+                                    tab.query = QueryState::Idle;
+                                    tab.result_connection = None;
+                                    tab.notice = Some(Str::DbCommitSucceeded(expected));
+                                    tab.notice_success = true;
+                                }
+                                Err(error) => {
+                                    tab.notice = Some(error.message());
+                                    tab.notice_success = false;
+                                }
+                            }
+                        }
+                        this.edit_notice = None;
+                        if active {
+                            this.show_active_result(cx);
+                        }
+                    }
+                    MutationTarget::Detail(request) => {
+                        let current = this
+                            .detail
+                            .as_ref()
+                            .is_some_and(|detail| detail.request() == *request);
+                        match result {
+                            Ok(()) => {
+                                this.edit_notice = Some((Str::DbCommitSucceeded(expected), true));
+                                if current {
+                                    this.reload_detail(cx);
+                                }
+                            }
+                            Err(error) => {
+                                this.edit_notice = Some((error.message(), false));
+                            }
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        }));
     }
 
     // ---- the query -------------------------------------------------------
@@ -813,6 +1267,14 @@ impl DatabaseView {
         let Some(tab) = self.tabs.active() else {
             return;
         };
+        if matches!(&tab.query, QueryState::Done(outcome) if outcome.grid.has_pending()) {
+            if let Some(tab) = self.tabs.active_mut() {
+                tab.notice = Some(Str::DbResolvePending);
+                tab.notice_success = false;
+            }
+            cx.notify();
+            return;
+        }
         if tab.is_running() {
             return;
         }
@@ -949,7 +1411,7 @@ impl DatabaseView {
             return false;
         };
         !tab.is_running()
-            && matches!(&tab.query, QueryState::Done(outcome) if outcome.has_grid())
+            && matches!(&tab.query, QueryState::Done(outcome) if outcome.has_grid() && !outcome.grid.has_pending())
             && tab
                 .result_connection
                 .is_some_and(|id| self.drivers.contains_key(&id))

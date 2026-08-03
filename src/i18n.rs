@@ -1007,6 +1007,57 @@ pub enum Str {
     DbProfileRedisDatabaseInvalid,
     DbGroupMore,
     DbCommandPlaceholder,
+
+    // Database Explorer round 5: safe pending table-data mutations.
+    DbEditUnsupported,
+    DbEditNoColumns,
+    DbEditMissingOrigin(String),
+    DbEditMultipleTables,
+    DbEditDuplicateColumn(String),
+    DbEditNoUniqueIdentity(String),
+    DbEditMissingIdentityColumns {
+        table: String,
+        columns: String,
+    },
+    DbEditMetadataFailed(String),
+    DbEditCell,
+    DbAddRow,
+    DbDeleteRow,
+    DbDuplicateRow,
+    DbCommit,
+    DbRollback,
+    DbEditSelectRow,
+    DbEditIdentityColumn,
+    DbEditIdentityUnavailable,
+    DbEditUnsupportedCell,
+    DbEditNoPending,
+    DbPendingChanges(usize),
+    DbEditCellTitle(String),
+    DbAddRowTitle,
+    DbDuplicateRowTitle,
+    DbSetNull,
+    DbIdentityRequired(String),
+    DbCommitTitle,
+    DbCommitSummary(usize),
+    DbCommitExactStatements,
+    DbCommitParameters,
+    DbCommitLostUpdateNotice,
+    DbCommitRunning,
+    DbCommitSucceeded(usize),
+    DbCommitAffectedMismatch {
+        statement: usize,
+        actual: u64,
+    },
+    DbCommitFailed {
+        statement: usize,
+        detail: String,
+    },
+    DbCommitTransactionFailed(String),
+    DbCommitStatementLabel(usize),
+    DbExpectedOneRow,
+    DbCommitBuildFailed,
+    DbResolvePending,
+    DbEditDuplicateRows,
 }
 
 impl Str {
@@ -3183,6 +3234,210 @@ impl Str {
             (Str::DbCommandPlaceholder, Language::Vietnamese) => {
                 "Nhập một lệnh Redis trên mỗi dòng.".into()
             }
+            (Str::DbEditUnsupported, Language::English) => {
+                "This result is read-only: this database does not support safe table editing.".into()
+            }
+            (Str::DbEditUnsupported, Language::Vietnamese) => {
+                "Kết quả này chỉ đọc: cơ sở dữ liệu này không hỗ trợ chỉnh sửa bảng an toàn.".into()
+            }
+            (Str::DbEditNoColumns, Language::English) => {
+                "This result is read-only because it has no columns.".into()
+            }
+            (Str::DbEditNoColumns, Language::Vietnamese) => {
+                "Kết quả này chỉ đọc vì không có cột.".into()
+            }
+            (Str::DbEditMissingOrigin(column), Language::English) => format!(
+                "This result is read-only: column {column} does not come from one base table."
+            )
+            .into(),
+            (Str::DbEditMissingOrigin(column), Language::Vietnamese) => format!(
+                "Kết quả này chỉ đọc: cột {column} không đến từ một bảng cơ sở."
+            )
+            .into(),
+            (Str::DbEditMultipleTables, Language::English) => {
+                "This result is read-only because it combines several tables.".into()
+            }
+            (Str::DbEditMultipleTables, Language::Vietnamese) => {
+                "Kết quả này chỉ đọc vì kết hợp nhiều bảng.".into()
+            }
+            (Str::DbEditDuplicateColumn(column), Language::English) => format!(
+                "This result is read-only because base column {column} appears more than once."
+            )
+            .into(),
+            (Str::DbEditDuplicateColumn(column), Language::Vietnamese) => format!(
+                "Kết quả này chỉ đọc vì cột cơ sở {column} xuất hiện nhiều lần."
+            )
+            .into(),
+            (Str::DbEditNoUniqueIdentity(table), Language::English) => format!(
+                "This result is read-only: {table} has no primary key or non-null unique index."
+            )
+            .into(),
+            (Str::DbEditNoUniqueIdentity(table), Language::Vietnamese) => format!(
+                "Kết quả này chỉ đọc: {table} không có khóa chính hoặc chỉ mục duy nhất không NULL."
+            )
+            .into(),
+            (
+                Str::DbEditMissingIdentityColumns { table, columns },
+                Language::English,
+            ) => format!(
+                "This result is read-only: identity column(s) {columns} from {table} are not in the result."
+            )
+            .into(),
+            (
+                Str::DbEditMissingIdentityColumns { table, columns },
+                Language::Vietnamese,
+            ) => format!(
+                "Kết quả này chỉ đọc: (các) cột định danh {columns} của {table} không có trong kết quả."
+            )
+            .into(),
+            (Str::DbEditMetadataFailed(detail), Language::English) => {
+                format!("This result is read-only because identity metadata could not be loaded: {detail}").into()
+            }
+            (Str::DbEditMetadataFailed(detail), Language::Vietnamese) => {
+                format!("Kết quả này chỉ đọc vì không thể tải siêu dữ liệu định danh: {detail}").into()
+            }
+            (Str::DbEditCell, Language::English) => "Edit cell".into(),
+            (Str::DbEditCell, Language::Vietnamese) => "Sửa ô".into(),
+            (Str::DbAddRow, Language::English) => "Add row".into(),
+            (Str::DbAddRow, Language::Vietnamese) => "Thêm dòng".into(),
+            (Str::DbDeleteRow, Language::English) => "Delete row".into(),
+            (Str::DbDeleteRow, Language::Vietnamese) => "Xóa dòng".into(),
+            (Str::DbDuplicateRow, Language::English) => "Duplicate row".into(),
+            (Str::DbDuplicateRow, Language::Vietnamese) => "Nhân đôi dòng".into(),
+            (Str::DbCommit, Language::English) => "Commit".into(),
+            (Str::DbCommit, Language::Vietnamese) => "Ghi thay đổi".into(),
+            (Str::DbRollback, Language::English) => "Rollback".into(),
+            (Str::DbRollback, Language::Vietnamese) => "Hoàn tác".into(),
+            (Str::DbEditSelectRow, Language::English) => "Select a row first.".into(),
+            (Str::DbEditSelectRow, Language::Vietnamese) => "Trước tiên hãy chọn một dòng.".into(),
+            (Str::DbEditIdentityColumn, Language::English) => {
+                "Identity columns cannot be edited in place.".into()
+            }
+            (Str::DbEditIdentityColumn, Language::Vietnamese) => {
+                "Không thể sửa trực tiếp cột định danh.".into()
+            }
+            (Str::DbEditIdentityUnavailable, Language::English) => {
+                "This row cannot be changed because its complete identity value is unavailable.".into()
+            }
+            (Str::DbEditIdentityUnavailable, Language::Vietnamese) => {
+                "Không thể thay đổi dòng này vì giá trị định danh đầy đủ không có sẵn.".into()
+            }
+            (Str::DbEditUnsupportedCell, Language::English) => {
+                "This cell cannot be edited safely in this result.".into()
+            }
+            (Str::DbEditUnsupportedCell, Language::Vietnamese) => {
+                "Không thể chỉnh sửa ô này một cách an toàn trong kết quả này.".into()
+            }
+            (Str::DbEditNoPending, Language::English) => "There are no pending changes.".into(),
+            (Str::DbEditNoPending, Language::Vietnamese) => "Không có thay đổi đang chờ.".into(),
+            (Str::DbPendingChanges(count), Language::English) => {
+                format!("{count} pending row change(s)").into()
+            }
+            (Str::DbPendingChanges(count), Language::Vietnamese) => {
+                format!("{count} thay đổi dòng đang chờ").into()
+            }
+            (Str::DbEditCellTitle(column), Language::English) => {
+                format!("Edit {column}").into()
+            }
+            (Str::DbEditCellTitle(column), Language::Vietnamese) => {
+                format!("Sửa {column}").into()
+            }
+            (Str::DbAddRowTitle, Language::English) => "Add row".into(),
+            (Str::DbAddRowTitle, Language::Vietnamese) => "Thêm dòng".into(),
+            (Str::DbDuplicateRowTitle, Language::English) => "Duplicate row".into(),
+            (Str::DbDuplicateRowTitle, Language::Vietnamese) => "Nhân đôi dòng".into(),
+            (Str::DbSetNull, Language::English) => "NULL".into(),
+            (Str::DbSetNull, Language::Vietnamese) => "NULL".into(),
+            (Str::DbIdentityRequired(columns), Language::English) => format!(
+                "Enter a new value for non-generated identity column(s): {columns}."
+            )
+            .into(),
+            (Str::DbIdentityRequired(columns), Language::Vietnamese) => format!(
+                "Nhập giá trị mới cho (các) cột định danh không tự sinh: {columns}."
+            )
+            .into(),
+            (Str::DbCommitTitle, Language::English) => "Confirm database changes".into(),
+            (Str::DbCommitTitle, Language::Vietnamese) => "Xác nhận thay đổi cơ sở dữ liệu".into(),
+            (Str::DbCommitSummary(count), Language::English) => format!(
+                "This transaction expects exactly {count} affected row(s). Review every statement before committing."
+            )
+            .into(),
+            (Str::DbCommitSummary(count), Language::Vietnamese) => format!(
+                "Giao dịch này dự kiến tác động chính xác {count} dòng. Hãy xem từng câu lệnh trước khi ghi thay đổi."
+            )
+            .into(),
+            (Str::DbCommitExactStatements, Language::English) => "Generated statements".into(),
+            (Str::DbCommitExactStatements, Language::Vietnamese) => "Các câu lệnh đã tạo".into(),
+            (Str::DbCommitParameters, Language::English) => "Bound parameters".into(),
+            (Str::DbCommitParameters, Language::Vietnamese) => "Tham số liên kết".into(),
+            (Str::DbCommitLostUpdateNotice, Language::English) => {
+                "Concurrent changes are not detected in this version; committing may overwrite a newer value from another client.".into()
+            }
+            (Str::DbCommitLostUpdateNotice, Language::Vietnamese) => {
+                "Phiên bản này không phát hiện thay đổi đồng thời; ghi thay đổi có thể ghi đè giá trị mới hơn từ máy khách khác.".into()
+            }
+            (Str::DbCommitRunning, Language::English) => "Committing changes…".into(),
+            (Str::DbCommitRunning, Language::Vietnamese) => "Đang ghi thay đổi…".into(),
+            (Str::DbCommitSucceeded(count), Language::English) => {
+                format!("Committed {count} row change(s).").into()
+            }
+            (Str::DbCommitSucceeded(count), Language::Vietnamese) => {
+                format!("Đã ghi {count} thay đổi dòng.").into()
+            }
+            (
+                Str::DbCommitAffectedMismatch { statement, actual },
+                Language::English,
+            ) => format!(
+                "Statement {statement} matched {actual} rows instead of exactly 1. The whole transaction was rolled back."
+            )
+            .into(),
+            (
+                Str::DbCommitAffectedMismatch { statement, actual },
+                Language::Vietnamese,
+            ) => format!(
+                "Câu lệnh {statement} khớp {actual} dòng thay vì chính xác 1. Toàn bộ giao dịch đã được hoàn tác."
+            )
+            .into(),
+            (Str::DbCommitFailed { statement, detail }, Language::English) => format!(
+                "Statement {statement} failed: {detail}. The whole transaction was rolled back."
+            )
+            .into(),
+            (Str::DbCommitFailed { statement, detail }, Language::Vietnamese) => format!(
+                "Câu lệnh {statement} thất bại: {detail}. Toàn bộ giao dịch đã được hoàn tác."
+            )
+            .into(),
+            (Str::DbCommitTransactionFailed(detail), Language::English) => {
+                format!("The transaction could not complete: {detail}").into()
+            }
+            (Str::DbCommitTransactionFailed(detail), Language::Vietnamese) => {
+                format!("Không thể hoàn tất giao dịch: {detail}").into()
+            }
+            (Str::DbCommitStatementLabel(number), Language::English) => {
+                format!("Statement {number}").into()
+            }
+            (Str::DbCommitStatementLabel(number), Language::Vietnamese) => {
+                format!("Câu lệnh {number}").into()
+            }
+            (Str::DbExpectedOneRow, Language::English) => "Expected affected rows: 1".into(),
+            (Str::DbExpectedOneRow, Language::Vietnamese) => "Số dòng dự kiến tác động: 1".into(),
+            (Str::DbCommitBuildFailed, Language::English) => {
+                "The pending changes could not be generated safely.".into()
+            }
+            (Str::DbCommitBuildFailed, Language::Vietnamese) => {
+                "Không thể tạo các thay đổi đang chờ một cách an toàn.".into()
+            }
+            (Str::DbResolvePending, Language::English) => {
+                "Commit or Rollback the pending changes first.".into()
+            }
+            (Str::DbResolvePending, Language::Vietnamese) => {
+                "Trước tiên hãy Ghi thay đổi hoặc Hoàn tác các thay đổi đang chờ.".into()
+            }
+            (Str::DbEditDuplicateRows, Language::English) => {
+                "This result is read-only because more than one displayed row has the same unique identity.".into()
+            }
+            (Str::DbEditDuplicateRows, Language::Vietnamese) => {
+                "Kết quả này chỉ đọc vì nhiều dòng đang hiển thị có cùng một định danh duy nhất.".into()
+            }
         }
     }
 }
@@ -4029,6 +4284,64 @@ mod tests {
             plain(Str::DbProfileRedisDatabaseInvalid),
             plain(Str::DbGroupMore),
             plain(Str::DbCommandPlaceholder),
+            plain(Str::DbEditUnsupported),
+            plain(Str::DbEditNoColumns),
+            with(Str::DbEditMissingOrigin(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbEditMultipleTables),
+            with(Str::DbEditDuplicateColumn(DETAIL.into()), &[DETAIL]),
+            with(Str::DbEditNoUniqueIdentity(DETAIL.into()), &[DETAIL]),
+            with(
+                Str::DbEditMissingIdentityColumns {
+                    table: DETAIL.into(),
+                    columns: "sentinel-columns".into(),
+                },
+                &[DETAIL, "sentinel-columns"],
+            ),
+            with(Str::DbEditMetadataFailed(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbEditCell),
+            plain(Str::DbAddRow),
+            plain(Str::DbDeleteRow),
+            plain(Str::DbDuplicateRow),
+            plain(Str::DbCommit),
+            plain(Str::DbRollback),
+            plain(Str::DbEditSelectRow),
+            plain(Str::DbEditIdentityColumn),
+            plain(Str::DbEditIdentityUnavailable),
+            plain(Str::DbEditUnsupportedCell),
+            plain(Str::DbEditNoPending),
+            with(Str::DbPendingChanges(NUMBER), &[NUMBER_TEXT]),
+            with(Str::DbEditCellTitle(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbAddRowTitle),
+            plain(Str::DbDuplicateRowTitle),
+            term(Str::DbSetNull),
+            with(Str::DbIdentityRequired(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbCommitTitle),
+            with(Str::DbCommitSummary(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::DbCommitExactStatements),
+            plain(Str::DbCommitParameters),
+            plain(Str::DbCommitLostUpdateNotice),
+            plain(Str::DbCommitRunning),
+            with(Str::DbCommitSucceeded(NUMBER), &[NUMBER_TEXT]),
+            with(
+                Str::DbCommitAffectedMismatch {
+                    statement: NUMBER,
+                    actual: 77,
+                },
+                &[NUMBER_TEXT, "77"],
+            ),
+            with(
+                Str::DbCommitFailed {
+                    statement: NUMBER,
+                    detail: DETAIL.into(),
+                },
+                &[NUMBER_TEXT, DETAIL],
+            ),
+            with(Str::DbCommitTransactionFailed(DETAIL.into()), &[DETAIL]),
+            with(Str::DbCommitStatementLabel(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::DbExpectedOneRow),
+            plain(Str::DbCommitBuildFailed),
+            plain(Str::DbResolvePending),
+            plain(Str::DbEditDuplicateRows),
         ]
     }
 
@@ -4637,6 +4950,46 @@ mod tests {
             Str::DbProfileRedisDatabaseInvalid => 589,
             Str::DbGroupMore => 590,
             Str::DbCommandPlaceholder => 591,
+            Str::DbEditUnsupported => 592,
+            Str::DbEditNoColumns => 593,
+            Str::DbEditMissingOrigin(_) => 594,
+            Str::DbEditMultipleTables => 595,
+            Str::DbEditDuplicateColumn(_) => 596,
+            Str::DbEditNoUniqueIdentity(_) => 597,
+            Str::DbEditMissingIdentityColumns { .. } => 598,
+            Str::DbEditMetadataFailed(_) => 599,
+            Str::DbEditCell => 600,
+            Str::DbAddRow => 601,
+            Str::DbDeleteRow => 602,
+            Str::DbDuplicateRow => 603,
+            Str::DbCommit => 604,
+            Str::DbRollback => 605,
+            Str::DbEditSelectRow => 606,
+            Str::DbEditIdentityColumn => 607,
+            Str::DbEditIdentityUnavailable => 608,
+            Str::DbEditUnsupportedCell => 609,
+            Str::DbEditNoPending => 610,
+            Str::DbPendingChanges(_) => 611,
+            Str::DbEditCellTitle(_) => 612,
+            Str::DbAddRowTitle => 613,
+            Str::DbDuplicateRowTitle => 614,
+            Str::DbSetNull => 615,
+            Str::DbIdentityRequired(_) => 616,
+            Str::DbCommitTitle => 617,
+            Str::DbCommitSummary(_) => 618,
+            Str::DbCommitExactStatements => 619,
+            Str::DbCommitParameters => 620,
+            Str::DbCommitLostUpdateNotice => 621,
+            Str::DbCommitRunning => 622,
+            Str::DbCommitSucceeded(_) => 623,
+            Str::DbCommitAffectedMismatch { .. } => 624,
+            Str::DbCommitFailed { .. } => 625,
+            Str::DbCommitTransactionFailed(_) => 626,
+            Str::DbCommitStatementLabel(_) => 627,
+            Str::DbExpectedOneRow => 628,
+            Str::DbCommitBuildFailed => 629,
+            Str::DbResolvePending => 630,
+            Str::DbEditDuplicateRows => 631,
         }
     }
 

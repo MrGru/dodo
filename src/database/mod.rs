@@ -19,7 +19,7 @@
 //! - [`components`] — the small elements the widget library does not have.
 //! - [`views`] — the page itself.
 //!
-//! # What rounds 1–4 ship, and what they deliberately do not
+//! # What rounds 1–5 ship, and what they deliberately do not
 //!
 //! Round 1 built the foundation against **PostgreSQL and SQLite only**: saved
 //! connections, the lazy object tree, one editor and one bounded result grid.
@@ -33,14 +33,38 @@
 //! Round 4 adds MySQL and MariaDB through one shared-protocol driver, plus
 //! Redis as the trait's first non-SQL store. Redis's tree is numbered logical
 //! databases → type groups → cursor-paged keys; the console runs one command
-//! per line, and only an opened key fetches its value.
+//! per line, and only an opened key fetches its value. Round 5 adds pending
+//! table-data edits, add/delete/duplicate row, and explicit Commit/Rollback for
+//! PostgreSQL, SQLite and MySQL/MariaDB; Redis remains read-only.
 //!
-//! Still not built, and nothing is reserved for them: editing or CRUD,
-//! favourites, pinned queries, persisted history or tab restore, autocomplete,
+//! Still not built, and nothing is reserved for them: favourites, pinned
+//! queries, persisted history or tab restore, autocomplete,
 //! or global search. **Column sorting is not built either**: the
 //! result grid's headers carry the column name and its type and no sort
 //! affordance at all, because sorting one bounded page would be dishonest and
 //! server-side sorting was not part of round 3's accepted scope.
+//!
+//! # Safe table-data editing
+//!
+//! [`models::identity`] is the safety boundary: wire column origins plus
+//! catalog primary/unique-key metadata are the only route to an
+//! `EditableSource`; SQL text is never parsed for identity. A primary key wins,
+//! otherwise a unique index is accepted only when all key columns are NOT NULL,
+//! and every key value must be present and untruncated in the result. SQLite's
+//! rowid is accepted only when the result actually contains it. Joins, unions,
+//! aggregates, computed columns, missing keys and Redis stay read-only with a
+//! localized reason. dodo never falls back to old-value predicates, `LIMIT 1`,
+//! guessed keys, or every displayed column.
+//!
+//! [`models::statement`] alone quotes mutation identifiers and builds bound
+//! parameters. [`state::edit::PendingGrid`] holds edits locally and derives the
+//! batch shown in [`views::commit_dialog`] before execution. Each SQL driver
+//! runs that exact batch in one transaction and rolls it all back unless every
+//! statement reports exactly one matched row. MySQL requests
+//! `CLIENT_FOUND_ROWS`, so assigning an unchanged value still reports the one
+//! safely matched row. Round 5 deliberately does not detect concurrent lost
+//! updates; the confirmation says so rather than inventing old-value or version
+//! predicates.
 //!
 //! # Threading
 //!

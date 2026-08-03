@@ -44,6 +44,15 @@ impl DatabaseView {
             .map(|tab| Tab::new().px_2().label(t(tab.label(), cx)))
             .collect::<Vec<_>>();
         let body = self.render_detail_body(active, &load, ddl_source, cx);
+        let show_edit_toolbar = active == DetailTab::Data && matches!(load, DetailLoad::Grid(_));
+        let read_only_notice = show_edit_toolbar
+            .then(|| {
+                self.active_grid()
+                    .and_then(|(_, grid)| grid.editability().reason())
+                    .map(|reason| reason.message())
+            })
+            .flatten();
+        let edit_notice = self.edit_notice.clone();
 
         v_flex()
             .size_full()
@@ -92,6 +101,34 @@ impl DatabaseView {
                         }),
                     ),
             )
+            .children(show_edit_toolbar.then(|| {
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .px_2()
+                    .py_1p5()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(self.render_edit_toolbar(cx))
+            }))
+            .children(read_only_notice.map(|message| {
+                div()
+                    .w_full()
+                    .px_2()
+                    .pb_1p5()
+                    .child(notice(Tone::Info, t(message, cx), cx))
+            }))
+            .children(edit_notice.map(|(message, success)| {
+                div().w_full().px_2().pb_1p5().child(notice(
+                    if success {
+                        Tone::Success
+                    } else {
+                        Tone::Warning
+                    },
+                    t(message, cx),
+                    cx,
+                ))
+            }))
             .child(
                 div()
                     .flex_1()
@@ -181,7 +218,7 @@ impl DatabaseView {
                 .children((tab != DetailTab::Data && grid.has_more).then(|| {
                     div().w_full().px_2().pt_1p5().child(notice(
                         Tone::Warning,
-                        t(Str::DbDetailMetadataTruncated(grid.rows.len()), cx),
+                        t(Str::DbDetailMetadataTruncated(grid.grid.rows().len()), cx),
                         cx,
                     ))
                 }))
@@ -250,9 +287,10 @@ impl DatabaseView {
         let detail = self.detail.as_ref()?;
         let first = detail.first_row_number();
         let rows = match load {
-            DetailLoad::Grid(grid) => grid.rows.len() as u64,
+            DetailLoad::Grid(grid) => grid.grid.rows().len() as u64,
             _ => 0,
         };
+        let pending = matches!(load, DetailLoad::Grid(grid) if grid.grid.has_pending());
         let range = (rows > 0).then(|| {
             t(
                 Str::DbDetailRowsRange {
@@ -287,7 +325,7 @@ impl DatabaseView {
                             Button::new("db-detail-previous")
                                 .ghost()
                                 .xsmall()
-                                .disabled(!detail.can_previous())
+                                .disabled(!detail.can_previous() || pending)
                                 .label(t(Str::DbDetailPrevious, cx))
                                 .on_click(cx.listener(|this, _, _, cx| this.detail_previous(cx))),
                         )
@@ -301,7 +339,7 @@ impl DatabaseView {
                             Button::new("db-detail-next")
                                 .ghost()
                                 .xsmall()
-                                .disabled(!detail.can_next())
+                                .disabled(!detail.can_next() || pending)
                                 .label(t(Str::DbDetailNext, cx))
                                 .on_click(cx.listener(|this, _, _, cx| this.detail_next(cx))),
                         ),

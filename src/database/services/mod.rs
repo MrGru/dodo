@@ -24,19 +24,16 @@
 //! # The capability set is small on purpose
 //!
 //! [`Capabilities`] carries what *the shipped UI reads*, and nothing else. The
-//! design report proposes fields for transactions, column provenance and
-//! `LIMIT`/`OFFSET` support — every one of which describes a control that is
-//! not built, so every one would be a value no code reads. That is the same
-//! reasoning `Cargo.toml` records for the marker features this crate declined
-//! to add: a flag nothing reads is decoration, and decoration has to be
-//! maintained, tested and kept honest.
+//! same reasoning `Cargo.toml` records for declined marker features applies: a
+//! flag nothing reads is decoration, and decoration has to be maintained,
+//! tested and kept honest.
 //!
 //! The extension point is the struct and [`Driver::capabilities`], not a
 //! pre-filled list of guesses. **A field arrives with the control that reads
-//! it**: round 2 added `cancel` and `explain`; round 3 adds `detail` and the DDL
-//! source with the object-detail surface. Round 4 needs no new capability:
-//! MySQL fills the existing SQL fields, while Redis reports only plain-text
-//! editing and key detail and leaves cancel, Explain and DDL absent.
+//! it**: round 2 added `cancel` and `explain`; round 3 added `detail` and the
+//! DDL source; round 5 adds the optional mutation dialect read by the editing
+//! toolbar and statement generator. PostgreSQL, SQLite and MySQL/MariaDB supply
+//! one; Redis supplies none and cannot reach [`Driver::commit`].
 //!
 //! # Cancellation is against the server, and that is the whole point
 //!
@@ -87,8 +84,12 @@ use crate::database::models::connection::ConnectionProfile;
 use crate::database::models::detail::{DdlSource, DetailField, DetailNotice, DetailRequest};
 use crate::database::models::engine::Engine;
 use crate::database::models::error::DbError;
+use crate::database::models::identity::{Editability, ReadOnlyReason};
 use crate::database::models::page::RowSink;
 use crate::database::models::query::{Execution, QueryRequest};
+use crate::database::models::statement::{Dialect, GeneratedBatch};
+use crate::database::models::value::ColumnMeta;
+use crate::i18n::Str;
 
 /// What a driver can do, as far as the UI needs to know.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +111,10 @@ pub struct Capabilities {
     pub detail: bool,
     /// Where this backend obtains the DDL shown in that surface.
     pub ddl: DdlSource,
+    /// The generated-mutation dialect, or `None` when results are always
+    /// read-only (Redis). The same value selects identifier quoting and bound
+    /// parameter placeholders in `models::statement`.
+    pub mutation: Option<Dialect>,
 }
 
 /// What one object-detail load produced beside rows sent to its sink.
@@ -123,6 +128,44 @@ pub enum DetailResult {
     },
     Ddl(String),
     Unavailable,
+}
+
+/// Why a generated mutation batch did not commit.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MutationFailure {
+    /// BEGIN or COMMIT itself failed rather than one generated statement.
+    Transaction(DbError),
+    /// The server rejected one statement. `index` is zero-based internally;
+    /// [`message`](Self::message) presents it as one-based.
+    Statement {
+        index: usize,
+        sql: String,
+        error: DbError,
+    },
+    /// Every generated mutation is expected to match exactly one row. Zero is
+    /// a stale/missing identity and two means the catalog proof no longer
+    /// agrees with the server; either rolls back the whole batch.
+    Affected {
+        index: usize,
+        sql: String,
+        actual: u64,
+    },
+}
+
+impl MutationFailure {
+    pub fn message(&self) -> Str {
+        match self {
+            Self::Transaction(error) => Str::DbCommitTransactionFailed(error.detail().into()),
+            Self::Statement { index, error, .. } => Str::DbCommitFailed {
+                statement: index + 1,
+                detail: error.detail().into(),
+            },
+            Self::Affected { index, actual, .. } => Str::DbCommitAffectedMismatch {
+                statement: index + 1,
+                actual: *actual,
+            },
+        }
+    }
 }
 
 /// A way to stop whatever a connection is running, **from another thread**.
@@ -225,6 +268,23 @@ pub trait Driver: Send + Sync + 'static {
     ) -> Result<DetailResult, DbError> {
         Ok(DetailResult::Unavailable)
     }
+
+    /// Proves whether these wire-described columns have a catalog-backed
+    /// unique row identity. It never reads or parses the user's SQL text.
+    fn editability(&self, _columns: &[ColumnMeta]) -> Editability {
+        Editability::ReadOnly(ReadOnlyReason::Unsupported)
+    }
+
+    /// Executes a previously generated batch in one transaction.
+    ///
+    /// The generated SQL was already shown to the user. Each statement must
+    /// report exactly one affected row or the implementation rolls everything
+    /// back and identifies that statement.
+    fn commit(&self, _batch: &GeneratedBatch) -> Result<(), MutationFailure> {
+        Err(MutationFailure::Transaction(DbError::Unreachable(
+            "safe table editing is not supported by this driver".into(),
+        )))
+    }
 }
 
 /// Opens a connection for `profile`.
@@ -265,6 +325,7 @@ mod tests {
         let driver: std::sync::Arc<dyn Driver> = std::sync::Arc::new(FakeDriver::key_value());
         assert_eq!(driver.capabilities().editor_language, "text");
         assert!(!driver.capabilities().explain);
+        assert_eq!(driver.capabilities().mutation, None);
         assert_eq!(driver.explain_statement("GET key"), None);
 
         let roots = driver.children(None).expect("roots load");

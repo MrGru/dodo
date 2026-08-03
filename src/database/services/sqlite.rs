@@ -19,11 +19,12 @@
 //!
 //! The `bundled` build is compiled with `SQLITE_ENABLE_COLUMN_METADATA`, so
 //! `Statement::column_table_name` / `column_origin_name` report which base
-//! table and column each result column came from. Nothing in this round reads
-//! it — editing a result safely is a later round, and that is what will need it
-//! — but it is filled in here because it is free at describe time, and because
-//! having it lets a later round find out whether the feature really is enabled
-//! in a shipped build without a rebuild to check.
+//! table and column each result column came from. Round 5 combines that with
+//! the catalog's primary/unique keys. One SQLite-specific correction is
+//! load-bearing: column metadata attributes a UNION to its first arm, so dodo
+//! also asks SQLite for `EXPLAIN QUERY PLAN` and retains origins only for one
+//! direct SCAN/SEARCH with no compound node. That is database-supplied plan
+//! metadata, not dodo parsing or rewriting the user's SQL.
 //!
 //! # Threading
 //!
@@ -47,8 +48,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use rusqlite::types::ValueRef;
-use rusqlite::{Connection, InterruptHandle, OpenFlags};
+use rusqlite::types::{Value as SqlValue, ValueRef};
+use rusqlite::{Connection, InterruptHandle, OpenFlags, params_from_iter};
 
 use crate::database::models::catalog::{CatalogNode, GroupLabel, NodeId, NodeKind};
 use crate::database::models::connection::ConnectionProfile;
@@ -56,10 +57,16 @@ use crate::database::models::detail::{
     DATA_PAGE_SIZE, DdlSource, DetailField, DetailNotice, DetailRequest, DetailTab,
 };
 use crate::database::models::error::DbError;
+use crate::database::models::identity::{
+    Editability, IdentityMetadata, ReadOnlyReason, TableRef, UniqueKey, prove,
+};
 use crate::database::models::page::{Flow, RowSink};
 use crate::database::models::query::{Execution, QueryRequest};
+use crate::database::models::statement::{Dialect, GeneratedBatch};
 use crate::database::models::value::{ColumnMeta, ColumnOrigin, Value};
-use crate::database::services::{CancelHandle, Capabilities, DetailResult, Driver};
+use crate::database::services::{
+    CancelHandle, Capabilities, DetailResult, Driver, MutationFailure,
+};
 
 pub struct SqliteDriver {
     connection: Mutex<Connection>,
@@ -576,6 +583,142 @@ pub(crate) fn foreign_key_detail(from: &str, target: &str, to: Option<&str>) -> 
     }
 }
 
+impl SqliteDriver {
+    fn identity_metadata(
+        &self,
+        origin: &ColumnOrigin,
+        columns: &[ColumnMeta],
+    ) -> Result<IdentityMetadata, DbError> {
+        if origin
+            .schema
+            .as_deref()
+            .is_some_and(|schema| schema != "main")
+        {
+            return Err(DbError::Server {
+                code: None,
+                detail: "safe editing of an attached SQLite database is not supported".into(),
+            });
+        }
+        self.with_connection(|connection| {
+            let mut table_info = connection.prepare(
+                "SELECT name, type, \"notnull\", pk, hidden, dflt_value \
+                 FROM pragma_table_xinfo(?1) ORDER BY cid",
+            )?;
+            let column_rows = table_info
+                .query_map([&origin.table], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)? != 0,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)? != 0,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let table = TableRef {
+                schema: origin.schema.clone(),
+                table: origin.table.clone(),
+            };
+            let mut metadata = IdentityMetadata::new(table);
+            let mut primary = column_rows
+                .iter()
+                .filter(|(_, _, _, ordinal, _, _)| *ordinal > 0)
+                .map(|(name, _, _, ordinal, _, _)| (*ordinal, name.clone()))
+                .collect::<Vec<_>>();
+            primary.sort_by_key(|(ordinal, _)| *ordinal);
+            if !primary.is_empty() {
+                metadata.keys.push(UniqueKey {
+                    columns: primary.iter().map(|(_, name)| name.clone()).collect(),
+                    primary: true,
+                    all_non_null: true,
+                });
+            }
+
+            for (name, type_name, _, ordinal, hidden, default) in &column_rows {
+                let integer_primary =
+                    primary.len() == 1 && *ordinal > 0 && type_name.eq_ignore_ascii_case("INTEGER");
+                if *hidden || default.is_some() || integer_primary {
+                    metadata.generated_columns.insert(name.clone());
+                }
+            }
+
+            let nullability = column_rows
+                .iter()
+                .map(|(name, _, not_null, _, _, _)| (name.clone(), *not_null))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let mut indexes = connection.prepare(
+                "SELECT name, partial FROM pragma_index_list(?1) \
+                 WHERE \"unique\" = 1 ORDER BY (origin = 'pk') DESC, seq",
+            )?;
+            let index_rows = indexes
+                .query_map([&origin.table], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            for (name, partial) in index_rows {
+                if partial {
+                    continue;
+                }
+                let mut info =
+                    connection.prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")?;
+                let key_columns = info
+                    .query_map([name], |row| row.get::<_, Option<String>>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let Some(key_columns) = key_columns.into_iter().collect::<Option<Vec<_>>>() else {
+                    continue;
+                };
+                if key_columns.is_empty()
+                    || metadata.keys.iter().any(|key| key.columns == key_columns)
+                {
+                    continue;
+                }
+                metadata.keys.push(UniqueKey {
+                    all_non_null: key_columns
+                        .iter()
+                        .all(|column| nullability.get(column).copied().unwrap_or(false)),
+                    columns: key_columns,
+                    primary: false,
+                });
+            }
+
+            // SQLite's hidden rowid is accepted only when the query actually
+            // selected it and the table is not WITHOUT ROWID.
+            if !metadata.keys.iter().any(|key| key.primary) {
+                let rowid = columns.iter().find_map(|column| {
+                    let origin = column.origin.as_ref()?;
+                    ["rowid", "_rowid_", "oid"]
+                        .iter()
+                        .any(|name| origin.column.eq_ignore_ascii_case(name))
+                        .then(|| origin.column.clone())
+                });
+                if let Some(rowid) = rowid {
+                    let ddl: Option<String> = connection.query_row(
+                        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        [&origin.table],
+                        |row| row.get(0),
+                    )?;
+                    if !ddl
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_ascii_uppercase()
+                        .contains("WITHOUT ROWID")
+                    {
+                        metadata.keys.push(UniqueKey {
+                            columns: vec![rowid.clone()],
+                            primary: true,
+                            all_non_null: true,
+                        });
+                        metadata.generated_columns.insert(rowid);
+                    }
+                }
+            }
+            Ok(metadata)
+        })
+    }
+}
+
 impl Driver for SqliteDriver {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -590,6 +733,7 @@ impl Driver for SqliteDriver {
             explain: false,
             detail: true,
             ddl: DdlSource::Server,
+            mutation: Some(Dialect::Sqlite),
         }
     }
 
@@ -691,6 +835,12 @@ impl Driver for SqliteDriver {
             .lock()
             .map_err(|_| DbError::Unreachable("the connection was poisoned by a panic".into()))?;
 
+        // SQLite's column-origin API alone attributes a UNION to its first
+        // arm. Its own query plan supplies the missing provenance without dodo
+        // parsing SQL: exactly one SCAN/SEARCH and no compound-query node is
+        // required before origins are eligible for editing.
+        let direct_single_table = direct_single_table_query(&connection, &request.statement);
+
         // Exactly what the user wrote, with no parameters and no appended
         // `LIMIT`. The bound on what comes back is the sink's.
         let mut statement = connection
@@ -711,7 +861,7 @@ impl Driver for SqliteDriver {
             });
         }
 
-        sink.columns(describe(&statement, column_count));
+        sink.columns(describe(&statement, column_count, direct_single_table));
 
         let mut rows = statement.raw_query();
         let mut truncated = false;
@@ -735,6 +885,76 @@ impl Driver for SqliteDriver {
             elapsed: started.elapsed(),
         })
     }
+
+    fn editability(&self, columns: &[ColumnMeta]) -> Editability {
+        let Some(first) = columns.first() else {
+            return Editability::ReadOnly(ReadOnlyReason::NoColumns);
+        };
+        let Some(origin) = first.origin.as_ref() else {
+            return Editability::ReadOnly(ReadOnlyReason::MissingOrigin(first.name.clone()));
+        };
+        match self.identity_metadata(origin, columns) {
+            Ok(metadata) => prove(columns, metadata),
+            Err(error) => Editability::ReadOnly(ReadOnlyReason::Metadata(error.detail().into())),
+        }
+    }
+
+    fn commit(&self, batch: &GeneratedBatch) -> Result<(), MutationFailure> {
+        if batch.dialect != Dialect::Sqlite {
+            return Err(MutationFailure::Transaction(DbError::Server {
+                code: None,
+                detail: "generated mutation dialect did not match SQLite".into(),
+            }));
+        }
+        let mut connection = self.connection.lock().map_err(|_| {
+            MutationFailure::Transaction(DbError::Unreachable(
+                "the connection was poisoned by a panic".into(),
+            ))
+        })?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| MutationFailure::Transaction(server_error(error)))?;
+
+        for (index, statement) in batch.statements.iter().enumerate() {
+            let params = statement.params.iter().map(sql_value).collect::<Vec<_>>();
+            let affected = match transaction.execute(&statement.sql, params_from_iter(params)) {
+                Ok(affected) => affected as u64,
+                Err(error) => {
+                    let failure = MutationFailure::Statement {
+                        index,
+                        sql: statement.sql.clone(),
+                        error: server_error(error),
+                    };
+                    let _ = transaction.rollback();
+                    return Err(failure);
+                }
+            };
+            if affected != 1 {
+                let failure = MutationFailure::Affected {
+                    index,
+                    sql: statement.sql.clone(),
+                    actual: affected,
+                };
+                let _ = transaction.rollback();
+                return Err(failure);
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|error| MutationFailure::Transaction(server_error(error)))
+    }
+}
+
+fn sql_value(value: &Value) -> SqlValue {
+    match value {
+        Value::Null => SqlValue::Null,
+        Value::Bool(value) => SqlValue::Integer(i64::from(*value)),
+        Value::Int(value) => SqlValue::Integer(*value),
+        Value::Float(value) => SqlValue::Real(*value),
+        Value::Text(value) | Value::Json(value) => SqlValue::Text(value.clone()),
+        Value::Bytes(value) => SqlValue::Blob(value.clone()),
+        Value::Truncated { .. } => unreachable!("statement generation rejects truncated values"),
+    }
 }
 
 /// The result's shape.
@@ -742,7 +962,35 @@ impl Driver for SqliteDriver {
 /// `decl_type` is what the column was *declared* as in its table — SQLite has
 /// no per-value type in the schema sense — and is absent for an expression, in
 /// which case the header says nothing rather than guessing.
-fn describe(statement: &rusqlite::Statement<'_>, column_count: usize) -> Vec<ColumnMeta> {
+fn direct_single_table_query(connection: &Connection, sql: &str) -> bool {
+    let Ok(mut plan) = connection.prepare(&format!("EXPLAIN QUERY PLAN {sql}")) else {
+        return false;
+    };
+    let Ok(details) = plan.query_map([], |row| row.get::<_, String>(3)) else {
+        return false;
+    };
+    let Ok(details) = details.collect::<Result<Vec<_>, _>>() else {
+        return false;
+    };
+    let accesses = details
+        .iter()
+        .filter(|detail| {
+            let detail = detail.trim_start();
+            detail.starts_with("SCAN ") || detail.starts_with("SEARCH ")
+        })
+        .count();
+    accesses == 1
+        && !details.iter().any(|detail| {
+            let detail = detail.to_ascii_uppercase();
+            detail.contains("COMPOUND QUERY") || detail.contains("UNION")
+        })
+}
+
+fn describe(
+    statement: &rusqlite::Statement<'_>,
+    column_count: usize,
+    direct_single_table: bool,
+) -> Vec<ColumnMeta> {
     let declared = statement.columns();
     let metadata = statement.columns_with_metadata();
 
@@ -759,7 +1007,8 @@ fn describe(statement: &rusqlite::Statement<'_>, column_count: usize) -> Vec<Col
                 .to_string();
 
             let mut column = ColumnMeta::new(name, type_name);
-            if let Some(origin) = metadata.get(index)
+            if direct_single_table
+                && let Some(origin) = metadata.get(index)
                 && let (Some(table), Some(name)) = (origin.table_name(), origin.origin_name())
             {
                 column = column.with_origin(ColumnOrigin {
@@ -796,11 +1045,14 @@ mod tests {
     use crate::database::models::detail::{DetailRequest, DetailTab, DetailTarget};
     use crate::database::models::engine::Engine;
     use crate::database::models::error::DbError;
+    use crate::database::models::identity::{Editability, ReadOnlyReason};
     use crate::database::models::page::{PageBudget, PageBuffer};
     use crate::database::models::query::QueryRequest;
+    use crate::database::models::statement::{Dialect, Mutation, generate};
     use crate::database::models::value::Value;
     use crate::database::services::Driver;
     use crate::database::state::detail::{DetailLoad, load as load_detail};
+    use crate::database::state::edit::PendingGrid;
     use rusqlite::types::ValueRef;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -1140,9 +1392,9 @@ mod tests {
         else {
             panic!("columns did not load");
         };
-        assert_eq!(columns.rows.len(), 5);
-        assert_eq!(columns.rows[0][0], Value::Text("id".into()));
-        assert_eq!(columns.rows[0][1], Value::Text("INTEGER".into()));
+        assert_eq!(columns.grid.rows().len(), 5);
+        assert_eq!(columns.grid.rows()[0][0], Value::Text("id".into()));
+        assert_eq!(columns.grid.rows()[0][1], Value::Text("INTEGER".into()));
 
         let DetailLoad::Grid(indexes) =
             load_detail(fixture.driver.as_ref(), &request(DetailTab::Indexes))
@@ -1151,7 +1403,8 @@ mod tests {
         };
         assert!(
             indexes
-                .rows
+                .grid
+                .rows()
                 .iter()
                 .any(|row| row[0] == Value::Text("users_name".into()))
         );
@@ -1167,7 +1420,8 @@ mod tests {
         );
         assert!(
             constraints
-                .rows
+                .grid
+                .rows()
                 .iter()
                 .any(|row| row[1].display().contains("PRIMARY KEY"))
         );
@@ -1204,7 +1458,8 @@ mod tests {
             panic!("constraints did not load");
         };
         let definitions: Vec<String> = constraints
-            .rows
+            .grid
+            .rows()
             .iter()
             .map(|row| row[1].display())
             .collect();
@@ -1267,9 +1522,9 @@ mod tests {
         let DetailLoad::Grid(first) = first else {
             panic!("first page did not load")
         };
-        assert_eq!(first.rows.len(), 100);
+        assert_eq!(first.grid.rows().len(), 100);
         assert!(first.has_more);
-        assert_eq!(first.rows[0][0], Value::Int(1));
+        assert_eq!(first.grid.rows()[0][0], Value::Int(1));
 
         let DetailLoad::Grid(last) = load_detail(
             fixture.driver.as_ref(),
@@ -1277,9 +1532,9 @@ mod tests {
         ) else {
             panic!("last page did not load");
         };
-        assert_eq!(last.rows.len(), 5);
+        assert_eq!(last.grid.rows().len(), 5);
         assert!(!last.has_more);
-        assert_eq!(last.rows[0][0], Value::Int(201));
+        assert_eq!(last.grid.rows()[0][0], Value::Int(201));
     }
 
     #[test]
@@ -1404,6 +1659,227 @@ mod tests {
             )
             .expect("runs");
         assert_eq!(sink.columns()[0].name, "odd; name");
+    }
+
+    // ---- safe table-data mutation --------------------------------------
+
+    #[test]
+    fn identity_proof_rejects_joins_missing_keys_and_nullable_unique_indexes() {
+        let fixture = Fixture::new(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL); \
+             CREATE TABLE roles (id INTEGER PRIMARY KEY, name TEXT NOT NULL); \
+             CREATE TABLE nullable_only (email TEXT UNIQUE, name TEXT); \
+             INSERT INTO users VALUES (1, 'Ada'); INSERT INTO roles VALUES (1, 'admin');",
+        );
+        let load = |sql: &str| {
+            let mut sink = PageBuffer::default();
+            fixture
+                .driver
+                .execute(&QueryRequest::new(sql), &mut sink)
+                .unwrap();
+            fixture.driver.editability(sink.columns())
+        };
+
+        assert!(matches!(
+            load("SELECT users.id, roles.name FROM users JOIN roles ON roles.id = users.id"),
+            Editability::ReadOnly(
+                ReadOnlyReason::MultipleTables | ReadOnlyReason::MissingOrigin(_)
+            )
+        ));
+        assert!(matches!(
+            load("SELECT name FROM users"),
+            Editability::ReadOnly(ReadOnlyReason::MissingIdentityColumns { .. })
+        ));
+        assert!(matches!(
+            load("SELECT email, name FROM nullable_only"),
+            Editability::ReadOnly(ReadOnlyReason::NoUniqueIdentity(_))
+        ));
+        assert!(matches!(
+            load("SELECT id, name FROM users UNION SELECT id, name FROM users"),
+            Editability::ReadOnly(ReadOnlyReason::MissingOrigin(_))
+        ));
+    }
+
+    #[test]
+    fn sqlite_rowid_is_identity_only_when_its_value_is_in_the_result() {
+        let fixture = Fixture::new(
+            "CREATE TABLE notes (name TEXT); INSERT INTO notes VALUES ('one'), ('two');",
+        );
+        let editability = |sql: &str| {
+            let mut sink = PageBuffer::default();
+            fixture
+                .driver
+                .execute(&QueryRequest::new(sql), &mut sink)
+                .unwrap();
+            fixture.driver.editability(sink.columns())
+        };
+        assert!(matches!(
+            editability("SELECT rowid, name FROM notes"),
+            Editability::Editable(_)
+        ));
+        assert!(matches!(
+            editability("SELECT name FROM notes"),
+            Editability::ReadOnly(ReadOnlyReason::NoUniqueIdentity(_))
+        ));
+    }
+
+    #[test]
+    fn sqlite_cell_add_delete_and_duplicate_commit_as_one_batch() {
+        let fixture = Fixture::new(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL); \
+             INSERT INTO users(name) VALUES ('Ada'), ('Grace');",
+        );
+        let mut sink = PageBuffer::default();
+        fixture
+            .driver
+            .execute(
+                &QueryRequest::new("SELECT id, name FROM users ORDER BY id"),
+                &mut sink,
+            )
+            .unwrap();
+        let (columns, rows, _, _) = sink.into_parts();
+        let mut pending = PendingGrid::new(rows, fixture.driver.editability(&columns));
+        pending
+            .edit(0, 1, Value::Text("Ada Lovelace".into()))
+            .unwrap();
+        pending.delete(1).unwrap();
+        let mut duplicate = pending.duplicate_template(0).unwrap();
+        duplicate[1] = Value::Text("Ada Copy".into());
+        pending.insert(duplicate).unwrap();
+        let mut added = pending.add_template().unwrap();
+        added[1] = Value::Text("Katherine".into());
+        pending.insert(added).unwrap();
+
+        let batch = generate(
+            pending.source().unwrap(),
+            &pending.mutations(),
+            Dialect::Sqlite,
+        )
+        .unwrap();
+        fixture.driver.commit(&batch).unwrap();
+
+        let mut result = PageBuffer::default();
+        fixture
+            .driver
+            .execute(
+                &QueryRequest::new("SELECT name FROM users ORDER BY id"),
+                &mut result,
+            )
+            .unwrap();
+        assert_eq!(
+            result
+                .rows()
+                .iter()
+                .map(|row| row[0].display())
+                .collect::<Vec<_>>(),
+            ["Ada Lovelace", "Ada Copy", "Katherine"]
+        );
+    }
+
+    #[test]
+    fn sqlite_rolls_back_an_earlier_mutation_when_the_middle_fails() {
+        let fixture = Fixture::new(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL CHECK(name <> 'boom')); \
+             INSERT INTO users VALUES (1, 'Ada'), (2, 'Grace');",
+        );
+        let mut sink = PageBuffer::default();
+        fixture
+            .driver
+            .execute(
+                &QueryRequest::new("SELECT id, name FROM users ORDER BY id"),
+                &mut sink,
+            )
+            .unwrap();
+        let (columns, rows, _, _) = sink.into_parts();
+        let mut pending = PendingGrid::new(rows, fixture.driver.editability(&columns));
+        pending.edit(0, 1, Value::Text("changed".into())).unwrap();
+        pending.edit(1, 1, Value::Text("boom".into())).unwrap();
+        let batch = generate(
+            pending.source().unwrap(),
+            &pending.mutations(),
+            Dialect::Sqlite,
+        )
+        .unwrap();
+        assert!(fixture.driver.commit(&batch).is_err());
+
+        let mut result = PageBuffer::default();
+        fixture
+            .driver
+            .execute(
+                &QueryRequest::new("SELECT name FROM users ORDER BY id"),
+                &mut result,
+            )
+            .unwrap();
+        assert_eq!(result.rows()[0][0], Value::Text("Ada".into()));
+        assert_eq!(result.rows()[1][0], Value::Text("Grace".into()));
+    }
+
+    #[test]
+    fn sqlite_rejects_zero_or_two_matches_after_identity_goes_stale() {
+        let fixture = Fixture::new(
+            "CREATE TABLE users (id INTEGER NOT NULL, name TEXT NOT NULL); \
+             CREATE UNIQUE INDEX users_id ON users(id); \
+             INSERT INTO users VALUES (1, 'Ada');",
+        );
+        let mut sink = PageBuffer::default();
+        fixture
+            .driver
+            .execute(&QueryRequest::new("SELECT id, name FROM users"), &mut sink)
+            .unwrap();
+        let source = match fixture.driver.editability(sink.columns()) {
+            Editability::Editable(source) => source,
+            other => panic!("expected editable source, got {other:?}"),
+        };
+
+        let zero = generate(
+            &source,
+            &[Mutation::Update {
+                identity: vec![Value::Int(999)],
+                values: vec![(1, Value::Text("nobody".into()))],
+            }],
+            Dialect::Sqlite,
+        )
+        .unwrap();
+        assert!(matches!(
+            fixture.driver.commit(&zero),
+            Err(crate::database::services::MutationFailure::Affected { actual: 0, .. })
+        ));
+
+        let mut ignored = PageBuffer::default();
+        fixture
+            .driver
+            .execute(&QueryRequest::new("DROP INDEX users_id"), &mut ignored)
+            .unwrap();
+        fixture
+            .driver
+            .execute(
+                &QueryRequest::new("INSERT INTO users VALUES (1, 'Duplicate')"),
+                &mut ignored,
+            )
+            .unwrap();
+        let two = generate(
+            &source,
+            &[Mutation::Update {
+                identity: vec![Value::Int(1)],
+                values: vec![(1, Value::Text("must rollback".into()))],
+            }],
+            Dialect::Sqlite,
+        )
+        .unwrap();
+        assert!(matches!(
+            fixture.driver.commit(&two),
+            Err(crate::database::services::MutationFailure::Affected { actual: 2, .. })
+        ));
+        let mut result = PageBuffer::default();
+        fixture
+            .driver
+            .execute(
+                &QueryRequest::new("SELECT name FROM users ORDER BY rowid"),
+                &mut result,
+            )
+            .unwrap();
+        assert_eq!(result.rows()[0][0], Value::Text("Ada".into()));
+        assert_eq!(result.rows()[1][0], Value::Text("Duplicate".into()));
     }
 
     // ---- pure helpers ---------------------------------------------------

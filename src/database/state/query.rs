@@ -27,8 +27,9 @@ use std::time::Duration;
 use crate::database::models::error::DbError;
 use crate::database::models::page::{PageBudget, PageBuffer};
 use crate::database::models::query::QueryRequest;
-use crate::database::models::value::{ColumnMeta, Row};
+use crate::database::models::value::ColumnMeta;
 use crate::database::services::Driver;
+use crate::database::state::edit::PendingGrid;
 use crate::i18n::Str;
 
 /// Where the query pane is.
@@ -48,7 +49,8 @@ pub struct Outcome {
     /// The statement whose result is on screen, exactly as the user wrote it.
     pub statement: String,
     pub columns: Vec<ColumnMeta>,
-    pub rows: Vec<Row>,
+    /// The rows on screen plus all local changes waiting for Commit.
+    pub grid: PendingGrid,
     /// `Some` for a statement that changed rows rather than returning them.
     pub rows_affected: Option<u64>,
     pub truncated: bool,
@@ -134,10 +136,11 @@ pub fn run(driver: &dyn Driver, buffer: &str, budget: PageBudget) -> Result<Outc
             })?;
 
         let (columns, rows, truncated, capped_cells) = sink.into_parts();
+        let editability = driver.editability(&columns);
         let outcome = Outcome {
             statement,
             columns,
-            rows,
+            grid: PendingGrid::new(rows, editability),
             rows_affected: execution.rows_affected,
             truncated: truncated || execution.truncated,
             capped_cells,
@@ -204,11 +207,11 @@ impl Outcome {
 
         match self.rows_affected {
             Some(count) => parts.push(Str::DbFooterRowsAffected(count)),
-            None => parts.push(Str::DbFooterRows(self.rows.len())),
+            None => parts.push(Str::DbFooterRows(self.grid.rows().len())),
         }
 
         if self.truncated {
-            parts.push(Str::DbFooterTruncated(self.rows.len()));
+            parts.push(Str::DbFooterTruncated(self.grid.rows().len()));
         }
         if self.capped_cells > 0 {
             parts.push(Str::DbFooterCapped(self.capped_cells));
@@ -249,6 +252,7 @@ mod tests {
     use crate::database::models::value::Value;
     use crate::database::services::Driver as _;
     use crate::database::services::fake::FakeDriver;
+    use crate::database::state::edit::PendingGrid;
     use crate::i18n::{Language, Str};
     use std::time::Duration;
 
@@ -262,7 +266,7 @@ mod tests {
         let outcome = run(&driver, "SELECT * FROM users", budget()).expect("runs");
 
         assert_eq!(outcome.statement, "SELECT * FROM users");
-        assert_eq!(outcome.rows.len(), 3);
+        assert_eq!(outcome.grid.rows().len(), 3);
         assert_eq!(outcome.columns.len(), 2);
         assert_eq!(outcome.statements_run, 1);
         assert!(outcome.has_grid());
@@ -334,7 +338,7 @@ mod tests {
         let driver = FakeDriver::sql();
         let outcome = run(&driver, "SELECT * FROM users; SELECT 2;", budget()).expect("runs");
         assert!(outcome.has_grid());
-        assert_eq!(outcome.rows.len(), 3);
+        assert_eq!(outcome.grid.rows().len(), 3);
         assert_eq!(outcome.statements_run, 2);
     }
 
@@ -497,7 +501,7 @@ mod tests {
                 .iter()
                 .any(|part| matches!(part, Str::DbFooterCapped(_)))
         );
-        assert!(matches!(outcome.rows[0][1], Value::Truncated { .. }));
+        assert!(matches!(outcome.grid.rows()[0][1], Value::Truncated { .. }));
     }
 
     #[test]
@@ -505,7 +509,12 @@ mod tests {
         let outcome = super::Outcome {
             statement: "UPDATE users SET a = 1".into(),
             columns: Vec::new(),
-            rows: Vec::new(),
+            grid: PendingGrid::new(
+                Vec::new(),
+                crate::database::models::identity::Editability::ReadOnly(
+                    crate::database::models::identity::ReadOnlyReason::NoColumns,
+                ),
+            ),
             rows_affected: Some(7),
             truncated: false,
             capped_cells: 0,

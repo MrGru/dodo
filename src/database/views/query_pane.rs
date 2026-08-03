@@ -374,21 +374,57 @@ impl DatabaseView {
                 .into_any_element(),
         };
 
+        let show_edit_toolbar = matches!(query, QueryState::Done(outcome) if outcome.has_grid());
+        let read_only_notice = show_edit_toolbar
+            .then(|| {
+                self.active_grid()
+                    .and_then(|(_, grid)| grid.editability().reason())
+                    .map(|reason| reason.message())
+            })
+            .flatten();
+        let edit_notice = self.edit_notice.clone();
         v_flex()
             .size_full()
             .min_w_0()
             .border_t_1()
             .border_color(cx.theme().border)
             .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .px_2()
+                    .py_1p5()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .font_medium()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(Str::DbResult, cx)),
+                    )
+                    .children(show_edit_toolbar.then(|| self.render_edit_toolbar(cx))),
+            )
+            .children(read_only_notice.map(|message| {
                 div()
                     .w_full()
                     .px_2()
-                    .py_1p5()
-                    .text_xs()
-                    .font_medium()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::DbResult, cx)),
-            )
+                    .pb_1p5()
+                    .child(notice(Tone::Info, t(message, cx), cx))
+            }))
+            .children(edit_notice.map(|(message, success)| {
+                div().w_full().px_2().pb_1p5().child(notice(
+                    if success {
+                        Tone::Success
+                    } else {
+                        Tone::Warning
+                    },
+                    t(message, cx),
+                    cx,
+                ))
+            }))
             .child(
                 div()
                     .flex_1()
@@ -399,6 +435,136 @@ impl DatabaseView {
                     .child(body),
             )
             .children(self.render_footer(cx))
+            .into_any_element()
+    }
+
+    pub(super) fn render_edit_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let selected_cell = self.selected_cell(cx);
+        let selected_row = self.selected_row(cx);
+        let committing = self.is_committing();
+        let (read_only, cell_error, row_error, duplicate_error, pending) = self
+            .active_grid()
+            .map(|(_, grid)| {
+                (
+                    grid.editability().reason().cloned(),
+                    selected_cell.and_then(|(row, column)| grid.cell_error(row, column)),
+                    selected_row.and_then(|row| grid.row_error(row)),
+                    selected_row.and_then(|row| grid.duplicate_error(row)),
+                    grid.pending_rows(),
+                )
+            })
+            .unwrap_or((
+                Some(crate::database::models::identity::ReadOnlyReason::NoColumns),
+                None,
+                None,
+                None,
+                0,
+            ));
+        let read_only = read_only.map(|reason| reason.message());
+        let busy = committing.then_some(Str::DbCommitRunning);
+        let cell_reason = busy.clone().or_else(|| read_only.clone()).or_else(|| {
+            selected_cell
+                .is_none()
+                .then_some(Str::DbEditSelectRow)
+                .or_else(|| cell_error.map(Self::edit_error_text))
+        });
+        let row_reason = busy.clone().or_else(|| read_only.clone()).or_else(|| {
+            selected_row
+                .is_none()
+                .then_some(Str::DbEditSelectRow)
+                .or_else(|| row_error.map(Self::edit_error_text))
+        });
+        let duplicate_reason = busy.clone().or_else(|| read_only.clone()).or_else(|| {
+            selected_row
+                .is_none()
+                .then_some(Str::DbEditSelectRow)
+                .or_else(|| duplicate_error.map(Self::edit_error_text))
+        });
+        let add_reason = busy.clone().or_else(|| read_only.clone());
+        let pending_reason = busy
+            .or(read_only)
+            .or_else(|| (pending == 0).then_some(Str::DbEditNoPending));
+
+        h_flex()
+            .min_w_0()
+            .items_center()
+            .gap_1()
+            .children((pending > 0).then(|| {
+                div()
+                    .mr_1()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t(Str::DbPendingChanges(pending), cx))
+            }))
+            .child(
+                Button::new("db-edit-cell")
+                    .ghost()
+                    .xsmall()
+                    .disabled(cell_reason.is_some())
+                    .label(t(Str::DbEditCell, cx))
+                    .when_some(cell_reason, |button, reason| button.tooltip(t(reason, cx)))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some((row, column)) = this.selected_cell(cx) {
+                            this.open_cell_editor(row, column, window, cx);
+                        }
+                    })),
+            )
+            .child(
+                Button::new("db-add-row")
+                    .ghost()
+                    .xsmall()
+                    .icon(AppIcon::Plus)
+                    .disabled(add_reason.is_some())
+                    .label(t(Str::DbAddRow, cx))
+                    .when_some(add_reason, |button, reason| button.tooltip(t(reason, cx)))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_add_row(window, cx))),
+            )
+            .child(
+                Button::new("db-duplicate-row")
+                    .ghost()
+                    .xsmall()
+                    .disabled(duplicate_reason.is_some())
+                    .label(t(Str::DbDuplicateRow, cx))
+                    .when_some(duplicate_reason, |button, reason| {
+                        button.tooltip(t(reason, cx))
+                    })
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_duplicate_row(window, cx)),
+                    ),
+            )
+            .child(
+                Button::new("db-delete-row")
+                    .ghost()
+                    .danger()
+                    .xsmall()
+                    .icon(AppIcon::Trash)
+                    .disabled(row_reason.is_some())
+                    .label(t(Str::DbDeleteRow, cx))
+                    .when_some(row_reason, |button, reason| button.tooltip(t(reason, cx)))
+                    .on_click(cx.listener(|this, _, _, cx| this.delete_selected_row(cx))),
+            )
+            .child(
+                Button::new("db-rollback")
+                    .ghost()
+                    .xsmall()
+                    .disabled(pending_reason.is_some())
+                    .label(t(Str::DbRollback, cx))
+                    .when_some(pending_reason.clone(), |button, reason| {
+                        button.tooltip(t(reason, cx))
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.rollback_edits(cx))),
+            )
+            .child(
+                Button::new("db-commit")
+                    .primary()
+                    .xsmall()
+                    .disabled(pending_reason.is_some())
+                    .label(t(Str::DbCommit, cx))
+                    .when_some(pending_reason, |button, reason| {
+                        button.tooltip(t(reason, cx))
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| this.open_commit(window, cx))),
+            )
             .into_any_element()
     }
 
@@ -450,7 +616,7 @@ impl DatabaseView {
                             // skim past.
                             this.child(div().flex_1().min_w_0().child(notice(
                                 Tone::Warning,
-                                t(Str::DbFooterTruncated(outcome.rows.len()), cx),
+                                t(Str::DbFooterTruncated(outcome.grid.rows().len()), cx),
                                 cx,
                             )))
                         })
