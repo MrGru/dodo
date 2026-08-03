@@ -55,7 +55,13 @@
 //! would work and is what some clients do, but it means rewriting a statement
 //! the user wrote, which this module does not do anywhere.
 //!
-//! # The catalog
+//! # Safe-write provenance and the catalog
+//!
+//! Preparing a result exposes each column's table OID and attribute number;
+//! this driver resolves those to exact schema/table/column names, then reads
+//! `pg_index`/`pg_attribute` for the primary or all-NOT-NULL unique key. The
+//! state and views never inspect SQL text, and generated writes come back only
+//! through `models::statement` as bound parameters.
 //!
 //! Roots are **the connected database, and only it**. Listing the server's
 //! other databases is easy; letting the user *open* one is not — a
@@ -79,8 +85,8 @@ use postgres::config::SslMode as PgSslMode;
 // `rusqlite`), and naming the wrong one produces a "no method named `next`"
 // error that says nothing about versions.
 use postgres::fallible_iterator::FallibleIterator as _;
-use postgres::types::{FromSql, Kind, Type};
-use postgres::{Client, Config, NoTls, Row as PgRow};
+use postgres::types::{Format, FromSql, IsNull, Kind, ToSql, Type};
+use postgres::{Client, Config, NoTls, Statement};
 
 use crate::database::models::catalog::{CatalogNode, GroupLabel, NodeId, NodeKind};
 use crate::database::models::connection::{ConnectionProfile, SslMode};
@@ -88,10 +94,16 @@ use crate::database::models::detail::{
     DATA_PAGE_SIZE, DdlSource, DetailField, DetailRequest, DetailTab,
 };
 use crate::database::models::error::DbError;
+use crate::database::models::identity::{
+    Editability, IdentityMetadata, ReadOnlyReason, TableRef, UniqueKey, prove,
+};
 use crate::database::models::page::{Flow, RowSink};
 use crate::database::models::query::{Execution, QueryRequest};
-use crate::database::models::value::{ColumnMeta, Value};
-use crate::database::services::{CancelHandle, Capabilities, DetailResult, Driver};
+use crate::database::models::statement::{Dialect, GeneratedBatch};
+use crate::database::models::value::{ColumnMeta, ColumnOrigin, Value};
+use crate::database::services::{
+    CancelHandle, Capabilities, DetailResult, Driver, MutationFailure,
+};
 
 /// How long to wait for a server to answer the connection attempt. Long enough
 /// for a container that is still starting, short enough that a wrong host does
@@ -358,6 +370,68 @@ impl PostgresDriver {
             .lock()
             .map_err(|_| DbError::Unreachable("the connection was poisoned by a panic".into()))?;
         f(&mut client).map_err(server_error)
+    }
+
+    fn identity_metadata(&self, origin: &ColumnOrigin) -> Result<IdentityMetadata, DbError> {
+        self.with_client(|client| {
+            let table = TableRef {
+                schema: origin.schema.clone(),
+                table: origin.table.clone(),
+            };
+            let mut metadata = IdentityMetadata::new(table);
+            let rows = client.query(
+                "SELECT i.indexrelid::oid, i.indisprimary, i.indnkeyatts::int4, \
+                        a.attname, ord.ordinality::int4, a.attnotnull \
+                 FROM pg_catalog.pg_index i \
+                 JOIN pg_catalog.pg_class c ON c.oid = i.indrelid \
+                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+                 JOIN LATERAL unnest(i.indkey) WITH ORDINALITY ord(attnum, ordinality) \
+                      ON ord.ordinality <= i.indnkeyatts \
+                 JOIN pg_catalog.pg_attribute a \
+                      ON a.attrelid = c.oid AND a.attnum = ord.attnum \
+                 WHERE n.nspname = $1 AND c.relname = $2 AND i.indisunique \
+                   AND i.indisvalid AND i.indpred IS NULL AND i.indexprs IS NULL \
+                 ORDER BY i.indisprimary DESC, i.indexrelid, ord.ordinality",
+                &[&origin.schema.as_deref().unwrap_or("public"), &origin.table],
+            )?;
+            type KeyRows = std::collections::BTreeMap<(u32, bool, i32), Vec<(i32, String, bool)>>;
+            let mut grouped = KeyRows::new();
+            for row in rows {
+                grouped
+                    .entry((row.get(0), row.get(1), row.get(2)))
+                    .or_default()
+                    .push((row.get(4), row.get(3), row.get(5)));
+            }
+            let mut keys = Vec::new();
+            for ((_, primary, expected), mut columns) in grouped {
+                columns.sort_by_key(|(ordinal, _, _)| *ordinal);
+                if columns.len() == expected as usize {
+                    keys.push(UniqueKey {
+                        columns: columns.iter().map(|(_, name, _)| name.clone()).collect(),
+                        primary,
+                        all_non_null: primary || columns.iter().all(|(_, _, not_null)| *not_null),
+                    });
+                }
+            }
+            keys.sort_by_key(|key| !key.primary);
+            metadata.keys = keys;
+
+            let generated = client.query(
+                "SELECT a.attname \
+                 FROM pg_catalog.pg_attribute a \
+                 JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
+                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 \
+                   AND NOT a.attisdropped \
+                   AND (a.attidentity <> '' OR a.attgenerated <> '' OR a.atthasdef)",
+                &[&origin.schema.as_deref().unwrap_or("public"), &origin.table],
+            )?;
+            metadata.generated_columns = generated
+                .into_iter()
+                .map(|row| row.get::<_, String>(0))
+                .collect();
+            Ok(metadata)
+        })
     }
 
     fn roots(&self) -> Result<Vec<CatalogNode>, DbError> {
@@ -700,6 +774,7 @@ impl Driver for PostgresDriver {
             explain: true,
             detail: true,
             ddl: DdlSource::Reconstructed,
+            mutation: Some(crate::database::models::statement::Dialect::PostgreSql),
         }
     }
 
@@ -813,23 +888,20 @@ impl Driver for PostgresDriver {
             .lock()
             .map_err(|_| DbError::Unreachable("the connection was poisoned by a panic".into()))?;
 
-        // The statement goes out exactly as the user wrote it, with no
-        // parameters — there is nowhere in this UI to supply one — and no
-        // appended `LIMIT`. The bound on what comes back is the sink's.
+        // Preparing is how PostgreSQL exposes table OIDs and column numbers
+        // before the first row. It does not execute or rewrite the statement.
+        let statement = client.prepare(&request.statement).map_err(server_error)?;
+        let (columns, types) = describe(&mut client, &statement).map_err(server_error)?;
+        if !columns.is_empty() {
+            sink.columns(columns);
+        }
         let mut rows = client
-            .query_raw::<_, &str, _>(request.statement.as_str(), [])
+            .query_raw::<_, &str, _>(&statement, [])
             .map_err(server_error)?;
 
-        let mut described = false;
-        let mut types: Vec<Type> = Vec::new();
         let mut count = 0u64;
         let mut truncated = false;
-
         while let Some(row) = rows.next().map_err(server_error)? {
-            if !described {
-                types = describe(&row, sink);
-                described = true;
-            }
             count += 1;
             let values = (0..types.len())
                 .map(|index| decode::cell(&row, index, &types[index]))
@@ -840,16 +912,10 @@ impl Driver for PostgresDriver {
             }
         }
 
-        // `rows_affected` is only meaningful once the stream is finished, and
-        // is `None` for a statement that returned a result set — which is why
-        // it is read from the server rather than guessed from the first word of
-        // the statement.
         let rows_affected = match count {
             0 => rows.rows_affected(),
             _ => None,
         };
-        // The iterator borrows the client; dropping it releases the portal
-        // before the lock goes.
         drop(rows);
 
         Ok(Execution {
@@ -858,29 +924,164 @@ impl Driver for PostgresDriver {
             elapsed: started.elapsed(),
         })
     }
+
+    fn editability(&self, columns: &[ColumnMeta]) -> Editability {
+        let Some(first) = columns.first() else {
+            return Editability::ReadOnly(ReadOnlyReason::NoColumns);
+        };
+        let Some(origin) = first.origin.as_ref() else {
+            return Editability::ReadOnly(ReadOnlyReason::MissingOrigin(first.name.clone()));
+        };
+        match self.identity_metadata(origin) {
+            Ok(metadata) => prove(columns, metadata),
+            Err(error) => Editability::ReadOnly(ReadOnlyReason::Metadata(error.detail().into())),
+        }
+    }
+
+    fn commit(&self, batch: &GeneratedBatch) -> Result<(), MutationFailure> {
+        if batch.dialect != Dialect::PostgreSql {
+            return Err(MutationFailure::Transaction(DbError::Server {
+                code: None,
+                detail: "generated mutation dialect did not match PostgreSQL".into(),
+            }));
+        }
+        let mut client = self.client.lock().map_err(|_| {
+            MutationFailure::Transaction(DbError::Unreachable(
+                "the connection was poisoned by a panic".into(),
+            ))
+        })?;
+        let mut transaction = client
+            .transaction()
+            .map_err(|error| MutationFailure::Transaction(server_error(error)))?;
+
+        for (index, statement) in batch.statements.iter().enumerate() {
+            let parameters = statement.params.iter().map(PgParameter).collect::<Vec<_>>();
+            let refs = parameters
+                .iter()
+                .map(|parameter| parameter as &(dyn ToSql + Sync))
+                .collect::<Vec<_>>();
+            let affected = match transaction.execute(&statement.sql, &refs) {
+                Ok(affected) => affected,
+                Err(error) => {
+                    let failure = MutationFailure::Statement {
+                        index,
+                        sql: statement.sql.clone(),
+                        error: server_error(error),
+                    };
+                    let _ = transaction.rollback();
+                    return Err(failure);
+                }
+            };
+            if affected != 1 {
+                let failure = MutationFailure::Affected {
+                    index,
+                    sql: statement.sql.clone(),
+                    actual: affected,
+                };
+                let _ = transaction.rollback();
+                return Err(failure);
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|error| MutationFailure::Transaction(server_error(error)))
+    }
+}
+
+#[derive(Debug)]
+struct PgParameter<'a>(&'a Value);
+
+impl ToSql for PgParameter<'_> {
+    fn to_sql(
+        &self,
+        _: &Type,
+        out: &mut postgres::types::private::BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        let text = match self.0 {
+            Value::Null => return Ok(IsNull::Yes),
+            Value::Bool(value) => value.to_string(),
+            Value::Int(value) => value.to_string(),
+            Value::Float(value) if value.is_infinite() && value.is_sign_positive() => {
+                "Infinity".into()
+            }
+            Value::Float(value) if value.is_infinite() => "-Infinity".into(),
+            Value::Float(value) => value.to_string(),
+            Value::Text(value) | Value::Json(value) => value.clone(),
+            Value::Bytes(value) => {
+                let hex: String = value.iter().map(|byte| format!("{byte:02x}")).collect();
+                format!(r"\x{hex}")
+            }
+            Value::Truncated { .. } => unreachable!("statement generation rejects truncation"),
+        };
+        out.extend_from_slice(text.as_bytes());
+        Ok(IsNull::No)
+    }
+
+    fn accepts(_: &Type) -> bool {
+        true
+    }
+
+    fn encode_format(&self, _: &Type) -> Format {
+        Format::Text
+    }
+
+    postgres::types::to_sql_checked!();
 }
 
 /// Hands the sink the result's shape and keeps the types the rows are decoded
 /// with.
-fn describe(row: &PgRow, sink: &mut dyn RowSink) -> Vec<Type> {
-    let columns: Vec<ColumnMeta> = row
+fn describe(
+    client: &mut Client,
+    statement: &Statement,
+) -> Result<(Vec<ColumnMeta>, Vec<Type>), postgres::Error> {
+    let mut origins = std::collections::BTreeMap::new();
+    let table_oids = statement
         .columns()
         .iter()
-        .map(|column| ColumnMeta::new(column.name(), type_name(column.type_())))
+        .filter_map(|column| column.table_oid())
+        .collect::<std::collections::BTreeSet<_>>();
+    for table_oid in table_oids {
+        let rows = client.query(
+            "SELECT n.nspname, c.relname, a.attnum, a.attname \
+             FROM pg_catalog.pg_class c \
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid \
+             WHERE c.oid = $1 AND a.attnum > 0 AND NOT a.attisdropped",
+            &[&table_oid],
+        )?;
+        for row in rows {
+            origins.insert(
+                (table_oid, row.get::<_, i16>(2)),
+                ColumnOrigin {
+                    schema: Some(row.get(0)),
+                    table: row.get(1),
+                    column: row.get(3),
+                },
+            );
+        }
+    }
+
+    let columns = statement
+        .columns()
+        .iter()
+        .map(|column| {
+            let mut meta = ColumnMeta::new(column.name(), type_name(column.type_()));
+            if let (Some(table_oid), Some(column_id)) = (column.table_oid(), column.column_id())
+                && let Some(origin) = origins.get(&(table_oid, column_id))
+            {
+                meta = meta.with_origin(origin.clone());
+            }
+            meta
+        })
         .collect();
-    let types = row
+    let types = statement
         .columns()
         .iter()
         .map(|column| column.type_().clone())
         .collect();
-    sink.columns(columns);
-    types
+    Ok((columns, types))
 }
 
-/// The server's own name for a type, as the column header shows it.
-///
-/// An array reads `int4[]` rather than `_int4`, which is the internal name
-/// PostgreSQL gives array types and which nobody writes.
 fn type_name(ty: &Type) -> String {
     match ty.kind() {
         Kind::Array(element) => format!("{}[]", type_name(element)),
@@ -1261,11 +1462,14 @@ mod live {
     use crate::database::models::detail::{DetailRequest, DetailTab, DetailTarget};
     use crate::database::models::engine::Engine;
     use crate::database::models::error::DbError;
+    use crate::database::models::identity::{Editability, ReadOnlyReason};
     use crate::database::models::page::{PageBudget, PageBuffer};
     use crate::database::models::query::QueryRequest;
+    use crate::database::models::statement::{Dialect, generate};
     use crate::database::models::value::Value;
     use crate::database::services::Driver;
     use crate::database::state::detail::{DetailLoad, load as load_detail};
+    use crate::database::state::edit::PendingGrid;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1392,6 +1596,90 @@ INSERT INTO users (name, balance, active, tags, profile, token, born, seen, avat
         assert!(fixture.driver.ping().is_ok());
     }
 
+    #[test]
+    fn safe_mutations_use_wire_identity_and_one_atomic_transaction() {
+        let fixture = fixture!(
+            "CREATE TABLE users (id serial PRIMARY KEY, name text NOT NULL CHECK(name <> 'boom'));
+INSERT INTO users(name) VALUES ('Ada'), ('Grace');
+CREATE TABLE roles (id serial PRIMARY KEY, name text NOT NULL);
+INSERT INTO roles(name) VALUES ('admin');
+CREATE TABLE nullable_only (email text UNIQUE, name text)"
+        );
+        let page = fixture.query("SELECT id, name FROM users ORDER BY id");
+        let editable = fixture.driver.editability(page.columns());
+        assert!(matches!(editable, Editability::Editable(_)));
+
+        let join = fixture
+            .query("SELECT users.id, roles.name FROM users JOIN roles ON roles.id = users.id");
+        assert!(matches!(
+            fixture.driver.editability(join.columns()),
+            Editability::ReadOnly(ReadOnlyReason::MultipleTables)
+        ));
+        let missing = fixture.query("SELECT name FROM users");
+        assert!(matches!(
+            fixture.driver.editability(missing.columns()),
+            Editability::ReadOnly(ReadOnlyReason::MissingIdentityColumns { .. })
+        ));
+        let nullable = fixture.query("SELECT email, name FROM nullable_only");
+        assert!(matches!(
+            fixture.driver.editability(nullable.columns()),
+            Editability::ReadOnly(ReadOnlyReason::NoUniqueIdentity(_))
+        ));
+        let union = fixture.query("SELECT id, name FROM users UNION SELECT id, name FROM users");
+        assert!(matches!(
+            fixture.driver.editability(union.columns()),
+            Editability::ReadOnly(ReadOnlyReason::MissingOrigin(_))
+        ));
+
+        let mut pending = PendingGrid::new(page.rows().to_vec(), editable);
+        pending
+            .edit(0, 1, Value::Text("Ada Lovelace".into()))
+            .unwrap();
+        pending.delete(1).unwrap();
+        let mut duplicate = pending.duplicate_template(0).unwrap();
+        duplicate[1] = Value::Text("Ada Copy".into());
+        pending.insert(duplicate).unwrap();
+        let mut added = pending.add_template().unwrap();
+        added[1] = Value::Text("Katherine".into());
+        pending.insert(added).unwrap();
+        let batch = generate(
+            pending.source().unwrap(),
+            &pending.mutations(),
+            Dialect::PostgreSql,
+        )
+        .unwrap();
+        fixture.driver.commit(&batch).unwrap();
+        assert_eq!(
+            fixture
+                .query("SELECT name FROM users ORDER BY id")
+                .rows()
+                .iter()
+                .map(|row| row[0].display())
+                .collect::<Vec<_>>(),
+            ["Ada Lovelace", "Ada Copy", "Katherine"]
+        );
+
+        let page = fixture.query("SELECT id, name FROM users ORDER BY id");
+        let mut pending = PendingGrid::new(
+            page.rows().to_vec(),
+            fixture.driver.editability(page.columns()),
+        );
+        pending.edit(0, 1, Value::Text("changed".into())).unwrap();
+        pending.edit(1, 1, Value::Text("boom".into())).unwrap();
+        let batch = generate(
+            pending.source().unwrap(),
+            &pending.mutations(),
+            Dialect::PostgreSql,
+        )
+        .unwrap();
+        assert!(fixture.driver.commit(&batch).is_err());
+        assert_eq!(
+            fixture.query("SELECT name FROM users ORDER BY id").rows()[0][0],
+            Value::Text("Ada Lovelace".into()),
+            "the first update must roll back when the second fails"
+        );
+    }
+
     /// The catalog SQL is the half of this module that cannot be faked: it is
     /// only correct if a real server accepts it and answers what was expected.
     #[test]
@@ -1485,10 +1773,11 @@ INSERT INTO users (name, balance, active, tags, profile, token, born, seen, avat
         else {
             panic!("columns did not load");
         };
-        assert_eq!(columns.rows[0][0], Value::Text("id".into()));
+        assert_eq!(columns.grid.rows()[0][0], Value::Text("id".into()));
         assert!(
             columns
-                .rows
+                .grid
+                .rows()
                 .iter()
                 .any(|row| { row[1] == Value::Text("character varying(50)".into()) })
         );
@@ -1500,7 +1789,8 @@ INSERT INTO users (name, balance, active, tags, profile, token, born, seen, avat
         };
         assert!(
             indexes
-                .rows
+                .grid
+                .rows()
                 .iter()
                 .any(|row| { row[0] == Value::Text("users_name_idx".into()) })
         );
@@ -1512,7 +1802,8 @@ INSERT INTO users (name, balance, active, tags, profile, token, born, seen, avat
         };
         assert!(
             constraints
-                .rows
+                .grid
+                .rows()
                 .iter()
                 .any(|row| { row[1].display().contains("PRIMARY KEY") })
         );

@@ -10,7 +10,9 @@
 //! ([`page`]), the way an oversized cell is reported ([`value`]), the rule for
 //! where one statement ends and the next begins ([`split`]), what a saved
 //! connection is and when it is incomplete ([`connection`]), and how the object
-//! tree names things without any backend owning the vocabulary ([`catalog`]).
+//! tree names things without any backend owning the vocabulary ([`catalog`]),
+//! the proof that a row has a catalog-backed unique identity ([`identity`]),
+//! and the sole generated-mutation SQL owner ([`statement`]).
 //!
 //! The two exceptions to "nothing but data", both deliberate:
 //!
@@ -25,8 +27,10 @@ pub mod connection;
 pub mod detail;
 pub mod engine;
 pub mod error;
+pub mod identity;
 pub mod page;
 pub mod query;
 pub mod split;
 pub mod sql_format;
+pub mod statement;
 pub mod value;

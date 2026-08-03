@@ -4,13 +4,21 @@
 //! connection and sends `KILL QUERY <connection_id>`; error 1317 from the
 //! running connection is the evidence that the server stopped it. Query rows
 //! use the text protocol and are handed to `RowSink` one at a time.
+//!
+//! Safe writes request `CLIENT_FOUND_ROWS` at connect time: Commit checks for
+//! exactly one *matched* row, so assigning an unchanged value must not be
+//! misreported as zero changed rows. Column origins plus
+//! `information_schema.STATISTICS`/`COLUMNS` prove the identity before
+//! `models::statement` can generate anything.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mysql::consts::{ColumnFlags, ColumnType};
+use mysql::consts::{CapabilityFlags, ColumnFlags, ColumnType};
 use mysql::prelude::Queryable as _;
-use mysql::{Column, Conn, Opts, OptsBuilder, Row as MyRow, SslOpts, Value as MyValue};
+use mysql::{
+    Column, Conn, Opts, OptsBuilder, Params, Row as MyRow, SslOpts, TxOpts, Value as MyValue,
+};
 
 use crate::database::models::catalog::{CatalogNode, GroupLabel, NodeId, NodeKind};
 use crate::database::models::connection::{ConnectionProfile, SslMode};
@@ -18,10 +26,16 @@ use crate::database::models::detail::{
     DATA_PAGE_SIZE, DdlSource, DetailField, DetailRequest, DetailTab,
 };
 use crate::database::models::error::DbError;
+use crate::database::models::identity::{
+    Editability, IdentityMetadata, ReadOnlyReason, TableRef, UniqueKey, prove,
+};
 use crate::database::models::page::{Flow, RowSink};
 use crate::database::models::query::{Execution, QueryRequest};
+use crate::database::models::statement::{Dialect, GeneratedBatch};
 use crate::database::models::value::{ColumnMeta, ColumnOrigin, Value};
-use crate::database::services::{CancelHandle, Capabilities, DetailResult, Driver};
+use crate::database::services::{
+    CancelHandle, Capabilities, DetailResult, Driver, MutationFailure,
+};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const ER_QUERY_INTERRUPTED: u16 = 1317;
@@ -63,7 +77,10 @@ fn options(profile: &ConnectionProfile, tls: bool) -> Opts {
         .tcp_port(profile.port)
         .db_name(Some(profile.database.trim()))
         .tcp_connect_timeout(Some(CONNECT_TIMEOUT))
-        .prefer_socket(false);
+        .prefer_socket(false)
+        // UPDATE must report matched rows, not only changed rows: assigning an
+        // unchanged value is still one safely identified row, not a false zero.
+        .additional_capabilities(CapabilityFlags::CLIENT_FOUND_ROWS);
     if !profile.user.trim().is_empty() {
         builder = builder.user(Some(profile.user.trim()));
     }
@@ -126,6 +143,66 @@ impl MySqlDriver {
             .lock()
             .map_err(|_| DbError::Unreachable("the connection was poisoned by a panic".into()))?;
         f(&mut connection).map_err(server_error)
+    }
+
+    fn identity_metadata(&self, origin: &ColumnOrigin) -> Result<IdentityMetadata, DbError> {
+        self.with_connection(|connection| {
+            let schema = origin.schema.as_deref().unwrap_or(&self.database);
+            let rows: Vec<(String, u64, Option<String>, String)> = connection.exec(
+                "SELECT s.INDEX_NAME, s.SEQ_IN_INDEX, s.COLUMN_NAME, c.IS_NULLABLE \
+                 FROM information_schema.STATISTICS s \
+                 JOIN information_schema.COLUMNS c \
+                   ON c.TABLE_SCHEMA = s.TABLE_SCHEMA \
+                  AND c.TABLE_NAME = s.TABLE_NAME \
+                  AND c.COLUMN_NAME = s.COLUMN_NAME \
+                 WHERE s.TABLE_SCHEMA = ? AND s.TABLE_NAME = ? AND s.NON_UNIQUE = 0 \
+                 ORDER BY (s.INDEX_NAME = 'PRIMARY') DESC, s.INDEX_NAME, s.SEQ_IN_INDEX",
+                (schema, &origin.table),
+            )?;
+            let mut grouped: std::collections::BTreeMap<String, Vec<(u64, Option<String>, bool)>> =
+                std::collections::BTreeMap::new();
+            for (index, ordinal, column, nullable) in rows {
+                grouped.entry(index).or_default().push((
+                    ordinal,
+                    column,
+                    nullable.eq_ignore_ascii_case("NO"),
+                ));
+            }
+            let mut metadata = IdentityMetadata::new(TableRef {
+                schema: origin.schema.clone(),
+                table: origin.table.clone(),
+            });
+            for (name, mut columns) in grouped {
+                columns.sort_by_key(|(ordinal, _, _)| *ordinal);
+                let Some(names) = columns
+                    .iter()
+                    .map(|(_, name, _)| name.clone())
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    continue;
+                };
+                metadata.keys.push(UniqueKey {
+                    primary: name == "PRIMARY",
+                    all_non_null: name == "PRIMARY"
+                        || columns.iter().all(|(_, _, not_null)| *not_null),
+                    columns: names,
+                });
+            }
+            metadata.keys.sort_by_key(|key| !key.primary);
+
+            let generated: Vec<String> = connection.exec_map(
+                "SELECT COLUMN_NAME FROM information_schema.COLUMNS \
+                 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
+                   AND (EXTRA LIKE '%auto_increment%' \
+                        OR EXTRA LIKE '%GENERATED%' \
+                        OR GENERATION_EXPRESSION <> '' \
+                        OR COLUMN_DEFAULT IS NOT NULL)",
+                (schema, &origin.table),
+                |name: String| name,
+            )?;
+            metadata.generated_columns = generated.into_iter().collect();
+            Ok(metadata)
+        })
     }
 
     fn relations(
@@ -337,6 +414,7 @@ impl Driver for MySqlDriver {
             explain: true,
             detail: true,
             ddl: DdlSource::Server,
+            mutation: Some(crate::database::models::statement::Dialect::MySql),
         }
     }
 
@@ -471,6 +549,74 @@ impl Driver for MySqlDriver {
             truncated,
             elapsed: started.elapsed(),
         })
+    }
+
+    fn editability(&self, columns: &[ColumnMeta]) -> Editability {
+        let Some(first) = columns.first() else {
+            return Editability::ReadOnly(ReadOnlyReason::NoColumns);
+        };
+        let Some(origin) = first.origin.as_ref() else {
+            return Editability::ReadOnly(ReadOnlyReason::MissingOrigin(first.name.clone()));
+        };
+        match self.identity_metadata(origin) {
+            Ok(metadata) => prove(columns, metadata),
+            Err(error) => Editability::ReadOnly(ReadOnlyReason::Metadata(error.detail().into())),
+        }
+    }
+
+    fn commit(&self, batch: &GeneratedBatch) -> Result<(), MutationFailure> {
+        if batch.dialect != Dialect::MySql {
+            return Err(MutationFailure::Transaction(DbError::Server {
+                code: None,
+                detail: "generated mutation dialect did not match MySQL".into(),
+            }));
+        }
+        let mut connection = self.connection.lock().map_err(|_| {
+            MutationFailure::Transaction(DbError::Unreachable(
+                "the connection was poisoned by a panic".into(),
+            ))
+        })?;
+        let mut transaction = connection
+            .start_transaction(TxOpts::default())
+            .map_err(|error| MutationFailure::Transaction(server_error(error)))?;
+
+        for (index, statement) in batch.statements.iter().enumerate() {
+            let params = Params::Positional(statement.params.iter().map(my_value).collect());
+            if let Err(error) = transaction.exec_drop(&statement.sql, params) {
+                let failure = MutationFailure::Statement {
+                    index,
+                    sql: statement.sql.clone(),
+                    error: server_error(error),
+                };
+                let _ = transaction.rollback();
+                return Err(failure);
+            }
+            let affected = transaction.affected_rows();
+            if affected != 1 {
+                let failure = MutationFailure::Affected {
+                    index,
+                    sql: statement.sql.clone(),
+                    actual: affected,
+                };
+                let _ = transaction.rollback();
+                return Err(failure);
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|error| MutationFailure::Transaction(server_error(error)))
+    }
+}
+
+fn my_value(value: &Value) -> MyValue {
+    match value {
+        Value::Null => MyValue::NULL,
+        Value::Bool(value) => MyValue::Int(i64::from(*value)),
+        Value::Int(value) => MyValue::Int(*value),
+        Value::Float(value) => MyValue::Double(*value),
+        Value::Text(value) | Value::Json(value) => MyValue::Bytes(value.as_bytes().to_vec()),
+        Value::Bytes(value) => MyValue::Bytes(value.clone()),
+        Value::Truncated { .. } => unreachable!("statement generation rejects truncation"),
     }
 }
 
@@ -634,12 +780,16 @@ mod live {
     use crate::database::models::detail::{DetailRequest, DetailTab, DetailTarget};
     use crate::database::models::engine::Engine;
     use crate::database::models::error::DbError;
+    use crate::database::models::identity::{Editability, ReadOnlyReason};
     use crate::database::models::page::PageBuffer;
     use crate::database::models::query::QueryRequest;
+    use crate::database::models::statement::{Dialect, generate};
     use crate::database::models::value::Value;
     use crate::database::services::Driver;
     use crate::database::state::detail::{DetailLoad, load as load_detail};
+    use crate::database::state::edit::PendingGrid;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     fn profile() -> Option<ConnectionProfile> {
         let host = std::env::var("DODO_MYSQL_TEST_HOST").ok()?;
@@ -666,19 +816,30 @@ mod live {
         driver: Arc<MySqlDriver>,
         table: String,
         view: String,
+        other: String,
+        nullable: String,
     }
 
     impl Fixture {
         fn new() -> Option<Self> {
             let driver = connect(&profile()?).expect("connects to configured MySQL/MariaDB");
-            let table = format!("dodo_r4_{}", std::process::id());
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let table = format!(
+                "dodo_r5_{}_{}",
+                std::process::id(),
+                COUNTER.fetch_add(1, Ordering::Relaxed)
+            );
             let view = format!("{table}_view");
+            let other = format!("{table}_other");
+            let nullable = format!("{table}_nullable");
             let _ = execute(
                 driver.as_ref(),
                 format!(
-                    "DROP VIEW IF EXISTS {}; DROP TABLE IF EXISTS {}",
+                    "DROP VIEW IF EXISTS {}; DROP TABLE IF EXISTS {}, {}, {}",
                     quote_identifier(&view),
-                    quote_identifier(&table)
+                    quote_identifier(&table),
+                    quote_identifier(&other),
+                    quote_identifier(&nullable)
                 ),
             );
             execute(
@@ -686,11 +847,17 @@ mod live {
                 format!(
                     "CREATE TABLE {} (id BIGINT PRIMARY KEY, name VARCHAR(50) NOT NULL, payload JSON); \
                      INSERT INTO {} VALUES (1, 'ada', '{{\"ok\":true}}'), (2, 'grace', NULL); \
-                     CREATE VIEW {} AS SELECT id, name FROM {}",
+                     CREATE VIEW {} AS SELECT id, name FROM {}; \
+                     CREATE TABLE {} (id BIGINT PRIMARY KEY, name VARCHAR(50)); \
+                     INSERT INTO {} VALUES (1, 'admin'); \
+                     CREATE TABLE {} (email VARCHAR(50) UNIQUE NULL, name VARCHAR(50))",
                     quote_identifier(&table),
                     quote_identifier(&table),
                     quote_identifier(&view),
                     quote_identifier(&table),
+                    quote_identifier(&other),
+                    quote_identifier(&other),
+                    quote_identifier(&nullable),
                 ),
             )
             .expect("seeds live fixture");
@@ -698,6 +865,8 @@ mod live {
                 driver,
                 table,
                 view,
+                other,
+                nullable,
             })
         }
     }
@@ -707,9 +876,11 @@ mod live {
             let _ = execute(
                 self.driver.as_ref(),
                 format!(
-                    "DROP VIEW IF EXISTS {}; DROP TABLE IF EXISTS {}",
+                    "DROP VIEW IF EXISTS {}; DROP TABLE IF EXISTS {}, {}, {}",
                     quote_identifier(&self.view),
-                    quote_identifier(&self.table)
+                    quote_identifier(&self.table),
+                    quote_identifier(&self.other),
+                    quote_identifier(&self.nullable)
                 ),
             );
         }
@@ -764,14 +935,14 @@ mod live {
         ) else {
             panic!("table data did not load")
         };
-        assert_eq!(data.rows.len(), 2);
+        assert_eq!(data.grid.rows().len(), 2);
         let DetailLoad::Grid(detail_columns) = load_detail(
             fixture.driver.as_ref(),
             &DetailRequest::new(target.clone(), DetailTab::Columns, 0),
         ) else {
             panic!("column metadata did not load")
         };
-        assert_eq!(detail_columns.rows.len(), 3);
+        assert_eq!(detail_columns.grid.rows().len(), 3);
         let DetailLoad::Grid(indexes) = load_detail(
             fixture.driver.as_ref(),
             &DetailRequest::new(target.clone(), DetailTab::Indexes, 0),
@@ -780,7 +951,8 @@ mod live {
         };
         assert!(
             indexes
-                .rows
+                .grid
+                .rows()
                 .iter()
                 .any(|row| row[0] == Value::Text("PRIMARY".into()))
         );
@@ -792,7 +964,8 @@ mod live {
         };
         assert!(
             constraints
-                .rows
+                .grid
+                .rows()
                 .iter()
                 .any(|row| { row[1] == Value::Text("PRIMARY KEY".into()) })
         );
@@ -822,5 +995,145 @@ mod live {
             matches!(cancelled, Err(DbError::Cancelled)),
             "server returned {cancelled:?}"
         );
+    }
+
+    #[test]
+    fn mysql_and_mariadb_safe_mutations_are_atomic_and_use_matched_rows() {
+        let Some(fixture) = Fixture::new() else {
+            return;
+        };
+        let page = execute(
+            fixture.driver.as_ref(),
+            format!(
+                "SELECT id, name FROM {} ORDER BY id",
+                quote_identifier(&fixture.table)
+            ),
+        )
+        .unwrap();
+        let editable = fixture.driver.editability(page.columns());
+        assert!(matches!(editable, Editability::Editable(_)));
+
+        let join = execute(
+            fixture.driver.as_ref(),
+            format!(
+                "SELECT a.id, b.name FROM {} a JOIN {} b ON b.id = a.id",
+                quote_identifier(&fixture.table),
+                quote_identifier(&fixture.other)
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            fixture.driver.editability(join.columns()),
+            Editability::ReadOnly(ReadOnlyReason::MultipleTables)
+        ));
+        let missing = execute(
+            fixture.driver.as_ref(),
+            format!("SELECT name FROM {}", quote_identifier(&fixture.table)),
+        )
+        .unwrap();
+        assert!(matches!(
+            fixture.driver.editability(missing.columns()),
+            Editability::ReadOnly(ReadOnlyReason::MissingIdentityColumns { .. })
+        ));
+        let nullable = execute(
+            fixture.driver.as_ref(),
+            format!(
+                "SELECT email, name FROM {}",
+                quote_identifier(&fixture.nullable)
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            fixture.driver.editability(nullable.columns()),
+            Editability::ReadOnly(ReadOnlyReason::NoUniqueIdentity(_))
+        ));
+        let union = execute(
+            fixture.driver.as_ref(),
+            format!(
+                "SELECT id, name FROM {} UNION SELECT id, name FROM {}",
+                quote_identifier(&fixture.table),
+                quote_identifier(&fixture.table)
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            fixture.driver.editability(union.columns()),
+            Editability::ReadOnly(ReadOnlyReason::MissingOrigin(_))
+        ));
+
+        // CLIENT_FOUND_ROWS makes this unchanged assignment report one matched
+        // row instead of zero changed rows.
+        let mut unchanged = PendingGrid::new(page.rows().to_vec(), editable.clone());
+        unchanged.edit(0, 1, Value::Text("ada".into())).unwrap();
+        // Force an UPDATE even though the displayed value decodes identically.
+        let batch = crate::database::models::statement::generate(
+            unchanged.source().unwrap(),
+            &[crate::database::models::statement::Mutation::Update {
+                identity: vec![Value::Int(1)],
+                values: vec![(1, Value::Text("ada".into()))],
+            }],
+            Dialect::MySql,
+        )
+        .unwrap();
+        fixture.driver.commit(&batch).unwrap();
+
+        let mut pending = PendingGrid::new(page.rows().to_vec(), editable);
+        pending
+            .edit(0, 1, Value::Text("Ada Lovelace".into()))
+            .unwrap();
+        pending.delete(1).unwrap();
+        let mut duplicate = pending.duplicate_template(0).unwrap();
+        duplicate[0] = Value::Int(3);
+        duplicate[1] = Value::Text("Ada Copy".into());
+        pending.insert(duplicate).unwrap();
+        let mut added = pending.add_template().unwrap();
+        added[0] = Value::Int(4);
+        added[1] = Value::Text("Katherine".into());
+        pending.insert(added).unwrap();
+        let batch = generate(
+            pending.source().unwrap(),
+            &pending.mutations(),
+            Dialect::MySql,
+        )
+        .unwrap();
+        fixture.driver.commit(&batch).unwrap();
+
+        let page = execute(
+            fixture.driver.as_ref(),
+            format!(
+                "SELECT id, name FROM {} ORDER BY id",
+                quote_identifier(&fixture.table)
+            ),
+        )
+        .unwrap();
+        assert_eq!(page.rows().len(), 3);
+
+        // The duplicate primary key fails after the first UPDATE; the UPDATE
+        // must not survive the transaction rollback.
+        let mut atomic = PendingGrid::new(
+            page.rows().to_vec(),
+            fixture.driver.editability(page.columns()),
+        );
+        atomic.edit(0, 1, Value::Text("changed".into())).unwrap();
+        let mut duplicate = atomic.add_template().unwrap();
+        duplicate[0] = Value::Int(1);
+        duplicate[1] = Value::Text("duplicate key".into());
+        atomic.insert(duplicate).unwrap();
+        let batch = generate(
+            atomic.source().unwrap(),
+            &atomic.mutations(),
+            Dialect::MySql,
+        )
+        .unwrap();
+        assert!(fixture.driver.commit(&batch).is_err());
+        let observed = execute(
+            fixture.driver.as_ref(),
+            format!(
+                "SELECT name FROM {} WHERE id = 1",
+                quote_identifier(&fixture.table)
+            ),
+        )
+        .unwrap();
+        assert_eq!(observed.rows()[0][0], Value::Text("Ada Lovelace".into()));
     }
 }

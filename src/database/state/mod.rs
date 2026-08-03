@@ -14,11 +14,14 @@
 //! - [`tabs`] — the open query tabs: each one's text, run in flight and
 //!   result, and the index arithmetic that decides which tab shows after a
 //!   close.
+//! - [`edit`] — original/displayed rows together, so edits, inserts and deletes
+//!   remain local until Commit and Rollback is one exact reset.
 //!
 //! [`run`]: query::run
 
 pub mod connections;
 pub mod detail;
+pub mod edit;
 pub mod editor;
 pub mod history;
 pub mod query;

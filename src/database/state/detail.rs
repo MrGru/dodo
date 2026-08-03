@@ -9,15 +9,16 @@ use crate::database::models::detail::{
 };
 use crate::database::models::error::DbError;
 use crate::database::models::page::{PageBudget, PageBuffer};
-use crate::database::models::value::{ColumnMeta, Row};
+use crate::database::models::value::ColumnMeta;
 use crate::database::services::{DetailResult, Driver};
+use crate::database::state::edit::PendingGrid;
 
 #[derive(Clone, Debug)]
 pub struct DetailGrid {
     pub columns: Vec<ColumnMeta>,
     /// `None` for table data, whose headings are database identifiers.
     pub fields: Option<Vec<DetailField>>,
-    pub rows: Vec<Row>,
+    pub grid: PendingGrid,
     pub has_more: bool,
     pub capped_cells: usize,
     pub notice: Option<DetailNotice>,
@@ -98,7 +99,7 @@ impl DetailState {
 
     pub fn can_next(&self) -> bool {
         self.tab == DetailTab::Data
-            && matches!(&self.load, DetailLoad::Grid(grid) if grid.has_more && !grid.rows.is_empty())
+            && matches!(&self.load, DetailLoad::Grid(grid) if grid.has_more && !grid.grid.rows().is_empty())
     }
 
     pub fn previous(&mut self) -> bool {
@@ -114,10 +115,10 @@ impl DetailState {
         let DetailLoad::Grid(grid) = &self.load else {
             return false;
         };
-        if !grid.has_more || grid.rows.is_empty() {
+        if !grid.has_more || grid.grid.rows().is_empty() {
             return false;
         }
-        let Some(next) = self.offset.checked_add(grid.rows.len() as u64) else {
+        let Some(next) = self.offset.checked_add(grid.grid.rows().len() as u64) else {
             return false;
         };
         self.previous_offsets.push(self.offset);
@@ -163,13 +164,14 @@ pub fn load(driver: &dyn Driver, request: &DetailRequest) -> DetailLoad {
             notice,
         }) => {
             let (columns, rows, sink_truncated, capped_cells) = sink.into_parts();
-            if rows.is_empty() {
+            if rows.is_empty() && request.tab != DetailTab::Data {
                 DetailLoad::Empty(notice)
             } else {
+                let editability = driver.editability(&columns);
                 DetailLoad::Grid(DetailGrid {
                     columns,
                     fields,
-                    rows,
+                    grid: PendingGrid::new(rows, editability),
                     has_more: truncated || sink_truncated,
                     capped_cells,
                     notice,
@@ -186,6 +188,7 @@ mod tests {
     use crate::database::models::detail::{DdlSource, DetailTab, DetailTarget};
     use crate::database::models::error::DbError;
     use crate::database::services::fake::FakeDriver;
+    use crate::database::state::edit::PendingGrid;
 
     fn state() -> DetailState {
         DetailState::new(
@@ -201,7 +204,12 @@ mod tests {
         state.load = DetailLoad::Grid(super::DetailGrid {
             columns: Vec::new(),
             fields: None,
-            rows: vec![Vec::new(); 37],
+            grid: PendingGrid::new(
+                vec![Vec::new(); 37],
+                crate::database::models::identity::Editability::ReadOnly(
+                    crate::database::models::identity::ReadOnlyReason::NoColumns,
+                ),
+            ),
             has_more: true,
             capped_cells: 0,
             notice: None,
@@ -224,7 +232,12 @@ mod tests {
         state.load = DetailLoad::Grid(super::DetailGrid {
             columns: Vec::new(),
             fields: None,
-            rows: vec![Vec::new()],
+            grid: PendingGrid::new(
+                vec![Vec::new()],
+                crate::database::models::identity::Editability::ReadOnly(
+                    crate::database::models::identity::ReadOnlyReason::NoColumns,
+                ),
+            ),
             has_more: false,
             capped_cells: 0,
             notice: None,
@@ -249,7 +262,7 @@ mod tests {
         assert!(matches!(load(&ready, &request), DetailLoad::Grid(_)));
 
         let empty = FakeDriver::sql().with_rows(0);
-        assert!(matches!(load(&empty, &request), DetailLoad::Empty(None)));
+        assert!(matches!(load(&empty, &request), DetailLoad::Grid(_)));
 
         let unavailable = FakeDriver::key_value();
         assert!(matches!(
