@@ -19,6 +19,7 @@
 
 pub mod connections;
 pub mod editor;
+pub mod history;
 pub mod query;
 pub mod tabs;
 pub mod tree;

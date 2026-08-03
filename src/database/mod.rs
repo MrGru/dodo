@@ -14,23 +14,27 @@
 //!   `docker::services` the only place that names `bollard`. Also where
 //!   `connections.json` is read and written.
 //! - [`state`] — the saved connections and their live status, the object
-//!   tree's per-node load state, and the one query tab. Plain data over an
-//!   `Arc<dyn Driver>`.
+//!   tree's per-node load state, open query tabs and in-session history. Plain
+//!   data over an `Arc<dyn Driver>`.
 //! - [`components`] — the small elements the widget library does not have.
 //! - [`views`] — the page itself.
 //!
-//! # What round 1 ships, and what it deliberately does not
+//! # What rounds 1–2 ship, and what they deliberately do not
 //!
-//! Create a connection, browse its objects, run a query, read the result —
-//! against **PostgreSQL and SQLite only**.
+//! Round 1 built the foundation against **PostgreSQL and SQLite only**: saved
+//! connections, the lazy object tree, one editor and one bounded result grid.
+//! Round 2 adds several session-only query tabs, protocol-level cancellation,
+//! PostgreSQL's non-executing `EXPLAIN`, cell/row copy, streamed CSV/JSON export
+//! and searchable in-session history. Export re-runs the statement into a file
+//! sink; it never serialises the bounded page and never injects `LIMIT`.
 //!
-//! Not built, and nothing is reserved for them: multiple query tabs,
-//! cancelling a running query, Explain, copy/export, object detail tabs and
-//! DDL, any editing or CRUD, query history, favourites, MySQL and Redis.
-//! **Column sorting is not built either**, and that goes further than the
-//! design report proposed: the result grid's headers carry the column name and
-//! its type and no sort affordance at all, because an absent control is honest
-//! where a disabled one invites the question.
+//! Still not built, and nothing is reserved for them: object detail tabs and
+//! DDL, any editing or CRUD, favourites, pinned queries, persisted history or
+//! tab restore, autocomplete, global search, MySQL and Redis. **Column sorting
+//! is not built either**, and that goes further than the design report proposed:
+//! the result grid's headers carry the column name and its type and no sort
+//! affordance at all, because an absent control is honest where a disabled one
+//! invites the question.
 //!
 //! # Threading
 //!

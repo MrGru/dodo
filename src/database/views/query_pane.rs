@@ -197,6 +197,16 @@ impl DatabaseView {
                         h_flex()
                             .gap_1()
                             .child(
+                                Button::new("db-history")
+                                    .xsmall()
+                                    .ghost()
+                                    .icon(AppIcon::Clock)
+                                    .label(t(Str::DbHistory, cx))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_history(window, cx)
+                                    })),
+                            )
+                            .child(
                                 Button::new("db-format")
                                     .xsmall()
                                     .ghost()

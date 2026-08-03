@@ -11,6 +11,7 @@
 pub mod connection_form;
 pub mod connections_panel;
 pub mod database;
+pub mod history;
 pub mod query_pane;
 pub mod result_grid;
 

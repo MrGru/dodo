@@ -26,9 +26,9 @@
 //!
 //! **There is no on-disk spill.** That is a second storage system — lifecycle,
 //! cleanup, its own failure modes — to serve a case (a human scrolling past row
-//! 1,000 in a GUI) that does not happen. Exporting the full result, which
-//! streams straight to a file with a peak footprint of one row, is the answer
-//! to the real need, and it is a later round.
+//! 1,000 in a GUI) that does not happen. Exporting the full result re-runs the
+//! statement into a file-backed sink with a peak footprint of one row; that is
+//! the answer to the real need.
 
 use super::value::{ColumnMeta, Row, cap_row, row_bytes};
 
