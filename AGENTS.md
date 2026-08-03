@@ -219,9 +219,9 @@ Six things worth knowing before touching it:
   (NIST FIPS 180-4 vectors; SemVer §11 precedence).
 
 **`src/database/`** is the Database Explorer — create a connection, browse its objects, run a
-query, read the result — **PostgreSQL and SQLite only as of round 2**. Same five-layer split as
+query, read the result — **PostgreSQL and SQLite only as of round 3**. Same five-layer split as
 the three modules above; **`src/database/mod.rs` is the authority** on the structure, shipped
-rounds and deliberate cuts. Eleven things worth knowing before touching it:
+rounds and deliberate cuts. Twelve things worth knowing before touching it:
 
 - **The left panel is one tree and the connections are its roots**, not a list stacked on a
   tree. `state::tree::Forest` holds one `CatalogTree` per connection, so selecting a connection
@@ -246,9 +246,9 @@ rounds and deliberate cuts. Eleven things worth knowing before touching it:
   The design report proposed a "detect running database containers" prefill on the connection form
   and it was dropped in *every* round, precisely so no compile-time edge exists between two tools.
 - **The `Driver` capability set grows only with controls that read it.** Round 2 added `cancel`
-  with the Cancel button and `explain` with PostgreSQL's Explain button; transactions, column
-  provenance and `LIMIT`/`OFFSET` still do not exist because no shipped control reads them.
-  `services/mod.rs` states it, and states how a non-SQL backend fits without contorting the trait.
+  and `explain`; round 3 adds `detail` and the DDL source. Transactions and column provenance
+  still do not exist because no shipped control reads them. `services/mod.rs` states it, and
+  states how a non-SQL backend fits without contorting the trait.
 - **The object tree is a *question*, not a ladder.** A driver answers "the children of this node";
   nothing above `services/` knows PostgreSQL puts schemas under a database and SQLite does not.
   That is the whole reason a second backend is one file. `models/catalog.rs` also keeps a server's
@@ -258,11 +258,18 @@ rounds and deliberate cuts. Eleven things worth knowing before touching it:
   `TreeItem::is_folder` is `children.len() > 0`, so a node whose children have not been fetched
   draws no disclosure triangle and emits no expand event — the tree could never be opened. Every
   expandable node therefore gets a placeholder child until its real children arrive.
+- **Object detail reuses the one result grid; it is not another query system.** Double-clicking a
+  table or view opens Data / Columns / Indexes / Constraints / DDL in the right pane. View-only
+  impossibilities are omitted; SQLite's unenumerable CHECK constraints and PostgreSQL's
+  reconstructed DDL are said explicitly. `models/detail.rs` owns the backend-neutral request,
+  `state/detail.rs` owns paging and load states, and each driver interprets its own opaque node id.
 - **The memory bound is a type, not a comment.** `models/page.rs`'s `PageBuffer` stops the driver
   when rows, total bytes or one cell trips the budget, and **a full page still answers
   `Continue`** — being offered one further row is what proves there was more, which is what makes
   the footer's truncation notice trustworthy. **No `LIMIT` is ever injected into a statement the
-  user wrote**; that module says why bounding at the sink is the only honest way.
+  user wrote**. Round 3's table-data pages are different: the backend generates their whole
+  `SELECT … LIMIT … OFFSET …` from its opaque catalog id, and advances by rows actually kept so a
+  byte-bound page cannot skip data.
 - **Round 2's long work stays server-honest.** Cancel uses PostgreSQL's protocol CancelRequest or
   SQLite's interrupt handle, never task dropping; `services/postgres.rs::live` has the opt-in
   server-side proof. Export re-runs the displayed statement through `services/export.rs`'s

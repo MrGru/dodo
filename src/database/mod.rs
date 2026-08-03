@@ -19,22 +19,24 @@
 //! - [`components`] — the small elements the widget library does not have.
 //! - [`views`] — the page itself.
 //!
-//! # What rounds 1–2 ship, and what they deliberately do not
+//! # What rounds 1–3 ship, and what they deliberately do not
 //!
 //! Round 1 built the foundation against **PostgreSQL and SQLite only**: saved
 //! connections, the lazy object tree, one editor and one bounded result grid.
-//! Round 2 adds several session-only query tabs, protocol-level cancellation,
+//! Round 2 added session-only query tabs, protocol-level cancellation,
 //! PostgreSQL's non-executing `EXPLAIN`, cell/row copy, streamed CSV/JSON export
-//! and searchable in-session history. Export re-runs the statement into a file
-//! sink; it never serialises the bounded page and never injects `LIMIT`.
+//! and searchable in-session history. Round 3 adds one table/view detail
+//! surface: Data, Columns, Indexes, Constraints and DDL. Table data alone is
+//! server-paged with a statement generated from the driver's opaque catalog id;
+//! editor text is still never rewritten. PostgreSQL DDL is explicitly labelled
+//! reconstructed, while SQLite shows the statement stored in `sqlite_master`.
 //!
-//! Still not built, and nothing is reserved for them: object detail tabs and
-//! DDL, any editing or CRUD, favourites, pinned queries, persisted history or
-//! tab restore, autocomplete, global search, MySQL and Redis. **Column sorting
-//! is not built either**, and that goes further than the design report proposed:
-//! the result grid's headers carry the column name and its type and no sort
-//! affordance at all, because an absent control is honest where a disabled one
-//! invites the question.
+//! Still not built, and nothing is reserved for them: editing or CRUD,
+//! favourites, pinned queries, persisted history or tab restore, autocomplete,
+//! global search, MySQL and Redis. **Column sorting is not built either**: the
+//! result grid's headers carry the column name and its type and no sort
+//! affordance at all, because sorting one bounded page would be dishonest and
+//! server-side sorting was not part of round 3's accepted scope.
 //!
 //! # Threading
 //!

@@ -3,11 +3,10 @@
 //! # There is no sort affordance, and that is the design
 //!
 //! `gpui_component`'s table supports sorting, and this delegate deliberately
-//! does not use it. Sorting the thousand rows that happened to arrive is not
-//! sorting the result, and a control that is present but disabled invites the
-//! question every time. Server-side `ORDER BY` on a table-data view is the
-//! honest version and it is a later round; nothing here makes it hard, and
-//! nothing here is built for it either.
+//! does not use it. Sorting the rows that happened to arrive is not sorting the
+//! result, and a control that is present but disabled invites the question
+//! every time. Round 3 server-pages table data but did not accept sorting into
+//! scope, so no half-client-side version was added.
 //!
 //! # The header carries the column's type under its name
 //!
