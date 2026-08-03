@@ -188,6 +188,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
 ] }
 
+[dev-dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
+
 # ---------------------------------------------------------------------------
 # Build profiles
 #

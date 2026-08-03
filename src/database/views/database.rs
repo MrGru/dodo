@@ -325,6 +325,7 @@ impl DatabaseView {
                         this.store_error = Some(error.message());
                     }
                 }
+                this.sync_tree_items(cx);
                 cx.notify();
             });
         })
@@ -1199,5 +1200,83 @@ impl Render for DatabaseView {
                     )
                     .child(resizable_panel().child(right)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use gpui_component::tree::TreeItem;
+
+    use super::DatabaseView;
+    use crate::database::models::connection::{ConnectionDocument, ConnectionProfile};
+    use crate::database::models::engine::Engine;
+    use crate::database::services::connection_store::{ConnectionStore, InMemoryConnectionStore};
+    use crate::database::state::connections::ConnectionsState;
+    use crate::database::state::tree::RowRef;
+
+    #[gpui::test]
+    fn load_saved_populates_tree_and_new_connections_remain_visible(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.new(|cx| DatabaseView::new(window, cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let database: Entity<DatabaseView> = window.root(&mut cx).unwrap();
+
+        // Finish the constructor's disk load before substituting the isolated store.
+        cx.run_until_parked();
+        let saved = ConnectionProfile {
+            name: "Saved SQLite".into(),
+            file: "/tmp/saved.sqlite".into(),
+            ..ConnectionProfile::new(7, Engine::Sqlite)
+        };
+        let store = Arc::new(InMemoryConnectionStore::default());
+        store
+            .persist(&ConnectionDocument {
+                connections: vec![saved],
+                selected: Some(7),
+                ..ConnectionDocument::default()
+            })
+            .unwrap();
+        database.update(&mut cx, |database, cx| {
+            database.store = store;
+            database.connections = ConnectionsState::new();
+            database
+                .tree_state
+                .update(cx, |state, cx| state.set_items(Vec::new(), cx));
+            database.load_saved(cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            database.read_with(&cx, |database, _| database.connections.profiles().len()),
+            1
+        );
+        assert_tree_has_root(&database, 7, &mut cx);
+
+        database.update(&mut cx, |database, cx| {
+            database.on_form_saved(ConnectionProfile::new(8, Engine::Sqlite), cx);
+        });
+        assert_tree_has_root(&database, 8, &mut cx);
+    }
+
+    fn assert_tree_has_root(database: &Entity<DatabaseView>, id: u64, cx: &mut VisualTestContext) {
+        let tree = database.read_with(cx, |database, _| database.tree_state.clone());
+        let root = TreeItem::new(RowRef::root(id), "");
+        tree.update(cx, |state, cx| {
+            state.set_selected_item(Some(&root), cx);
+        });
+        assert_eq!(
+            tree.read_with(cx, |state, _| {
+                state.selected_item().map(|item| item.id.to_string())
+            }),
+            Some(RowRef::root(id))
+        );
     }
 }
