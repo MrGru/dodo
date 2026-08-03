@@ -50,6 +50,9 @@ pub struct QueryTab {
     /// own — see [`EditorLanguage`]'s module doc for what that cost round 1.
     pub language: EditorLanguage,
     pub query: QueryState,
+    /// The connection that produced `query`'s completed result. Export must
+    /// re-run against this connection, not whichever root was selected later.
+    pub result_connection: Option<u64>,
     /// How to stop the run in flight, **at the server**.
     ///
     /// Taken from the driver *before* the statement starts, because the
@@ -82,6 +85,7 @@ impl QueryTab {
             editor,
             language: EditorLanguage::new(),
             query: QueryState::Idle,
+            result_connection: None,
             cancel: None,
             exporting: false,
             run_task: None,
