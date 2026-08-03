@@ -5,10 +5,10 @@ use std::time::Duration;
 /// One statement to execute.
 ///
 /// The text is **exactly what the user typed**, and dodo does not rewrite it.
-/// The design report reserves `limit`/`offset` fields here for the day
-/// table-data views append `LIMIT n OFFSET m` to a statement *dodo itself*
-/// generated; they are not declared yet, because nothing in this round can set
-/// them and a field no caller fills is a decision nobody has made. See
+/// Object-detail paging is deliberately a different request
+/// (`models::detail::DetailRequest`): its statement is generated wholly by the
+/// backend from an opaque catalog id. Keeping offset out of this type is what
+/// makes it impossible for table paging to leak into editor text. See
 /// `models::page` for why bounding at the sink, rather than by rewriting, is
 /// the rule for anything the user wrote.
 #[derive(Clone, Debug, PartialEq, Eq)]
