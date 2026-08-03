@@ -33,7 +33,8 @@
 //!
 //! The extension point is the struct and [`Driver::capabilities`], not a
 //! pre-filled list of guesses. **A field arrives with the control that reads
-//! it**: round 2 added `cancel`, with the Cancel button.
+//! it**: round 2 added `cancel` with the Cancel button and `explain` with the
+//! Explain button, and nothing else.
 //!
 //! # Cancellation is against the server, and that is the whole point
 //!
@@ -94,6 +95,11 @@ pub struct Capabilities {
     /// silently does nothing teaches the user the wrong thing about their
     /// database.
     pub cancel: bool,
+    /// [`Driver::explain_statement`] returns something. Read by the Explain
+    /// button, which is **absent** rather than disabled where it is false — the
+    /// same posture as the result grid's missing sort affordance, and for the
+    /// same reason: a disabled control invites the question every time.
+    pub explain: bool,
 }
 
 /// A way to stop whatever a connection is running, **from another thread**.
@@ -166,6 +172,18 @@ pub trait Driver: Send + Sync + 'static {
     fn cancel_handle(&self) -> Option<CancelHandle> {
         None
     }
+
+    /// The statement that asks this backend for `statement`'s execution plan,
+    /// or `None` when it has none worth offering.
+    ///
+    /// This is the **one** place a user's statement is wrapped, and it is not
+    /// the rewriting `models::page` rules out: the user pressed Explain, what
+    /// comes back is a plan rather than their rows, and the footer names the
+    /// `EXPLAIN …` that was actually sent. `execute` still sends exactly what it
+    /// is given.
+    fn explain_statement(&self, _statement: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Opens a connection for `profile`.
@@ -203,6 +221,8 @@ mod tests {
     fn a_driver_that_is_not_sql_is_still_a_driver() {
         let driver: std::sync::Arc<dyn Driver> = std::sync::Arc::new(FakeDriver::key_value());
         assert_eq!(driver.capabilities().editor_language, "text");
+        assert!(!driver.capabilities().explain);
+        assert_eq!(driver.explain_statement("GET key"), None);
 
         let roots = driver.children(None).expect("roots load");
         assert!(!roots.is_empty(), "a key/value store still has a tree");

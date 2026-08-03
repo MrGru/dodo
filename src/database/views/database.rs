@@ -612,9 +612,20 @@ impl DatabaseView {
     // ---- the query -------------------------------------------------------
 
     pub(super) fn execute(&mut self, cx: &mut Context<Self>) {
+        self.start_query(false, cx);
+    }
+
+    pub(super) fn explain(&mut self, cx: &mut Context<Self>) {
+        self.start_query(true, cx);
+    }
+
+    fn start_query(&mut self, explain: bool, cx: &mut Context<Self>) {
         let Some(driver) = self.active_driver() else {
             return;
         };
+        if explain && !driver.capabilities().explain {
+            return;
+        }
         let Some(tab) = self.tabs.active() else {
             return;
         };
@@ -643,7 +654,13 @@ impl DatabaseView {
         let task = cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { query::run(driver.as_ref(), &buffer, budget) })
+                .spawn(async move {
+                    if explain {
+                        query::explain(driver.as_ref(), &buffer, budget)
+                    } else {
+                        query::run(driver.as_ref(), &buffer, budget)
+                    }
+                })
                 .await;
 
             let _ = this.update(cx, |this, cx| {

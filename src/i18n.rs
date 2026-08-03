@@ -954,6 +954,9 @@ pub enum Str {
     /// dodo could not reach the server to *ask* it to stop. The driver's own
     /// words, kept verbatim inside a translated frame.
     DbCancelFailed(String),
+
+    // Round 2: PostgreSQL's non-executing query plan.
+    DbExplain,
 }
 
 impl Str {
@@ -3008,6 +3011,9 @@ impl Str {
                  {detail}"
             )
             .into(),
+
+            (Str::DbExplain, Language::English) => "Explain".into(),
+            (Str::DbExplain, Language::Vietnamese) => "Giải thích".into(),
         }
     }
 }
@@ -3807,6 +3813,7 @@ mod tests {
             plain(Str::DbCancelledTitle),
             plain(Str::DbCancelledHint),
             with(Str::DbCancelFailed(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbExplain),
         ]
     }
 
@@ -4380,6 +4387,7 @@ mod tests {
             Str::DbCancelledTitle => 554,
             Str::DbCancelledHint => 555,
             Str::DbCancelFailed(_) => 556,
+            Str::DbExplain => 557,
         }
     }
 

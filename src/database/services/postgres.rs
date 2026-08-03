@@ -465,7 +465,19 @@ impl Driver for PostgresDriver {
         Capabilities {
             editor_language: "sql",
             cancel: true,
+            explain: true,
         }
+    }
+
+    /// A plain `EXPLAIN`, with no `ANALYZE`.
+    ///
+    /// `EXPLAIN ANALYZE` **runs** the statement — including an `UPDATE` or a
+    /// `DELETE` — and a button labelled Explain that quietly executed the user's
+    /// `DELETE FROM users` would be indefensible. The plan without it is the
+    /// planner's estimate, which is what "explain" means to everyone who has
+    /// not opted into the other thing.
+    fn explain_statement(&self, statement: &str) -> Option<String> {
+        Some(format!("EXPLAIN {statement}"))
     }
 
     fn cancel_handle(&self) -> Option<CancelHandle> {

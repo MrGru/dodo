@@ -171,6 +171,29 @@ pub fn run(driver: &dyn Driver, buffer: &str, budget: PageBudget) -> Result<Outc
     })
 }
 
+/// Runs PostgreSQL's non-executing plan command for every statement in
+/// `buffer`.
+///
+/// Each statement is wrapped separately. Prefixing the whole buffer once would
+/// explain only its first statement and then execute the rest normally — an
+/// especially bad surprise for `SELECT …; DELETE …`.
+pub fn explain(driver: &dyn Driver, buffer: &str, budget: PageBudget) -> Result<Outcome, Failure> {
+    let statements = split_statements(buffer);
+    if statements.is_empty() {
+        return Err(Failure::Nothing);
+    }
+    let explained = statements
+        .iter()
+        .map(|statement| {
+            driver
+                .explain_statement(statement)
+                .expect("Explain is reached only when the driver reports the capability")
+        })
+        .collect::<Vec<_>>()
+        .join(";\n");
+    run(driver, &explained, budget)
+}
+
 impl Outcome {
     /// The footer, as the pieces it is built from.
     ///
@@ -221,7 +244,7 @@ pub fn format_elapsed(elapsed: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Failure, QueryState, format_elapsed, run};
+    use super::{Failure, QueryState, explain, format_elapsed, run};
     use crate::database::models::error::DbError;
     use crate::database::models::page::PageBudget;
     use crate::database::models::value::Value;
@@ -244,6 +267,19 @@ mod tests {
         assert_eq!(outcome.columns.len(), 2);
         assert_eq!(outcome.statements_run, 1);
         assert!(outcome.has_grid());
+    }
+
+    #[test]
+    fn explain_wraps_every_statement_so_none_can_run_normally() {
+        let driver = FakeDriver::sql();
+        let outcome =
+            explain(&driver, "SELECT * FROM users; DELETE FROM users;", budget()).expect("plans");
+
+        assert_eq!(outcome.statements_run, 2);
+        assert_eq!(
+            driver.executed.lock().unwrap().as_slice(),
+            ["EXPLAIN SELECT * FROM users", "EXPLAIN DELETE FROM users"]
+        );
     }
 
     /// The statement is what the footer names, so it must be what was sent —

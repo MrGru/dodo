@@ -159,6 +159,10 @@ impl DatabaseView {
     fn render_editor(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let connected = self.active_driver().is_some();
         let running = self.tabs.active().is_some_and(|tab| tab.is_running());
+        let can_explain = self
+            .active_driver()
+            .is_some_and(|driver| driver.capabilities().explain)
+            && !running;
         let can_cancel = self.tabs.active().is_some_and(|tab| tab.can_cancel());
         let notice_text = self.tabs.active().and_then(|tab| tab.notice.clone());
         let editor = self.tabs.active().map(|tab| tab.editor.clone());
@@ -209,6 +213,18 @@ impl DatabaseView {
                                         .icon(AppIcon::Stop)
                                         .label(t(Str::DbCancelQuery, cx))
                                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
+                                )
+                            })
+                            // PostgreSQL only. SQLite reports no useful plan
+                            // surface, so absence is more honest than a button
+                            // that can never produce the promised result.
+                            .when(can_explain, |this| {
+                                this.child(
+                                    Button::new("db-explain")
+                                        .xsmall()
+                                        .ghost()
+                                        .label(t(Str::DbExplain, cx))
+                                        .on_click(cx.listener(|this, _, _, cx| this.explain(cx))),
                                 )
                             })
                             .child(
