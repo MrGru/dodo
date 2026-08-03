@@ -15,11 +15,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::database::models::catalog::{CatalogNode, GroupLabel, NodeId, NodeKind};
+use crate::database::models::detail::{DATA_PAGE_SIZE, DdlSource, DetailRequest, DetailTab};
 use crate::database::models::error::DbError;
 use crate::database::models::page::{Flow, RowSink};
 use crate::database::models::query::{Execution, QueryRequest};
 use crate::database::models::value::{ColumnMeta, Row, Value};
-use crate::database::services::{CancelHandle, Capabilities, Driver};
+use crate::database::services::{CancelHandle, Capabilities, DetailResult, Driver};
 
 /// What a fake answers with for one node.
 type Children = Vec<CatalogNode>;
@@ -202,6 +203,12 @@ impl Driver for FakeDriver {
             editor_language: self.editor_language,
             cancel: self.cancel,
             explain: self.editor_language == "sql",
+            detail: self.editor_language == "sql",
+            ddl: if self.editor_language == "sql" {
+                DdlSource::Server
+            } else {
+                DdlSource::None
+            },
         }
     }
 
@@ -228,6 +235,46 @@ impl Driver for FakeDriver {
 
     fn children(&self, parent: Option<&NodeId>) -> Result<Vec<CatalogNode>, DbError> {
         self.lookup(parent)
+    }
+
+    fn detail(
+        &self,
+        request: &DetailRequest,
+        sink: &mut dyn RowSink,
+    ) -> Result<DetailResult, DbError> {
+        if !self.capabilities().detail {
+            return Ok(DetailResult::Unavailable);
+        }
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
+        if request.tab == DetailTab::Ddl {
+            return Ok(DetailResult::Ddl("CREATE TABLE users (id INTEGER);".into()));
+        }
+
+        sink.columns(self.columns.clone());
+        let start = if request.tab == DetailTab::Data {
+            request.offset as usize
+        } else {
+            0
+        };
+        let limit = if request.tab == DetailTab::Data {
+            DATA_PAGE_SIZE as usize + 1
+        } else {
+            self.rows.len()
+        };
+        let mut truncated = false;
+        for row in self.rows.iter().skip(start).take(limit) {
+            if sink.row(row.clone()) == Flow::Stop {
+                truncated = true;
+                break;
+            }
+        }
+        Ok(DetailResult::Rows {
+            fields: None,
+            truncated,
+            notice: None,
+        })
     }
 
     fn execute(

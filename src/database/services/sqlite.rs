@@ -42,6 +42,7 @@
 //! [`server_error`] maps to [`DbError::Cancelled`] — from the library's own
 //! answer, not from the fact that a button was pressed.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -51,11 +52,14 @@ use rusqlite::{Connection, InterruptHandle, OpenFlags};
 
 use crate::database::models::catalog::{CatalogNode, GroupLabel, NodeId, NodeKind};
 use crate::database::models::connection::ConnectionProfile;
+use crate::database::models::detail::{
+    DATA_PAGE_SIZE, DdlSource, DetailField, DetailNotice, DetailRequest, DetailTab,
+};
 use crate::database::models::error::DbError;
 use crate::database::models::page::{Flow, RowSink};
 use crate::database::models::query::{Execution, QueryRequest};
 use crate::database::models::value::{ColumnMeta, ColumnOrigin, Value};
-use crate::database::services::{CancelHandle, Capabilities, Driver};
+use crate::database::services::{CancelHandle, Capabilities, DetailResult, Driver};
 
 pub struct SqliteDriver {
     connection: Mutex<Connection>,
@@ -305,6 +309,232 @@ impl SqliteDriver {
 
         Ok(nodes)
     }
+
+    fn detail_columns(
+        &self,
+        relation: &str,
+        sink: &mut dyn RowSink,
+    ) -> Result<DetailResult, DbError> {
+        let rows = self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT name, type, \"notnull\", dflt_value \
+                 FROM pragma_table_xinfo(?1) WHERE hidden = 0 ORDER BY cid",
+            )?;
+            let rows = statement.query_map([relation], |row| {
+                Ok(vec![
+                    Value::Text(row.get::<_, String>(0)?),
+                    Value::Text(row.get::<_, String>(1)?),
+                    Value::Bool(row.get::<_, i64>(2)? != 0),
+                    row.get::<_, Option<String>>(3)?
+                        .map(Value::Text)
+                        .unwrap_or(Value::Null),
+                ])
+            })?;
+            rows.collect()
+        })?;
+        Ok(metadata_rows(
+            vec![
+                DetailField::Name,
+                DetailField::Type,
+                DetailField::NotNull,
+                DetailField::Default,
+            ],
+            rows,
+            sink,
+            None,
+        ))
+    }
+
+    fn detail_indexes(
+        &self,
+        relation: &str,
+        sink: &mut dyn RowSink,
+    ) -> Result<DetailResult, DbError> {
+        let rows = self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT il.name, il.\"unique\", il.origin = 'pk', sm.sql \
+                 FROM pragma_index_list(?1) il \
+                 LEFT JOIN sqlite_master sm ON sm.type = 'index' AND sm.name = il.name \
+                 ORDER BY il.name",
+            )?;
+            let rows = statement.query_map([relation], |row| {
+                Ok(vec![
+                    Value::Text(row.get::<_, String>(0)?),
+                    Value::Bool(row.get::<_, i64>(1)? != 0),
+                    Value::Bool(row.get::<_, i64>(2)? != 0),
+                    row.get::<_, Option<String>>(3)?
+                        .map(Value::Text)
+                        .unwrap_or(Value::Null),
+                ])
+            })?;
+            rows.collect()
+        })?;
+        Ok(metadata_rows(
+            vec![
+                DetailField::Name,
+                DetailField::Unique,
+                DetailField::Primary,
+                DetailField::Definition,
+            ],
+            rows,
+            sink,
+            None,
+        ))
+    }
+
+    fn detail_constraints(
+        &self,
+        relation: &str,
+        sink: &mut dyn RowSink,
+    ) -> Result<DetailResult, DbError> {
+        let rows = self.with_connection(|connection| {
+            let mut rows = Vec::new();
+            let primary_key: Vec<String> = {
+                let mut statement = connection
+                    .prepare("SELECT name FROM pragma_table_info(?1) WHERE pk > 0 ORDER BY pk")?;
+                let values = statement.query_map([relation], |row| row.get::<_, String>(0))?;
+                values.collect::<Result<_, _>>()?
+            };
+            if !primary_key.is_empty() {
+                rows.push(vec![
+                    Value::Null,
+                    Value::Text(format!(
+                        "PRIMARY KEY ({})",
+                        primary_key
+                            .iter()
+                            .map(|name| quote_identifier(name))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )),
+                ]);
+            }
+
+            let unique_indexes: Vec<String> = {
+                let mut statement = connection.prepare(
+                    "SELECT name FROM pragma_index_list(?1) WHERE origin = 'u' ORDER BY name",
+                )?;
+                let values = statement.query_map([relation], |row| row.get::<_, String>(0))?;
+                values.collect::<Result<_, _>>()?
+            };
+            for index in unique_indexes {
+                let columns: Vec<String> = {
+                    let mut statement = connection
+                        .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")?;
+                    let values = statement.query_map([&index], |row| row.get::<_, String>(0))?;
+                    values.collect::<Result<_, _>>()?
+                };
+                rows.push(vec![
+                    Value::Text(index),
+                    Value::Text(format!(
+                        "UNIQUE ({})",
+                        columns
+                            .iter()
+                            .map(|name| quote_identifier(name))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )),
+                ]);
+            }
+
+            let mut statement = connection.prepare(
+                "SELECT id, \"table\", \"from\", \"to\", on_update, on_delete \
+                 FROM pragma_foreign_key_list(?1) ORDER BY id, seq",
+            )?;
+            let foreign_key_rows = statement.query_map([relation], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?;
+            type ForeignKey = (String, Vec<String>, Vec<Option<String>>, String, String);
+            let mut foreign_keys: BTreeMap<i64, ForeignKey> = BTreeMap::new();
+            for foreign_key in foreign_key_rows {
+                let (id, target, from, to, on_update, on_delete) = foreign_key?;
+                let entry = foreign_keys
+                    .entry(id)
+                    .or_insert_with(|| (target, Vec::new(), Vec::new(), on_update, on_delete));
+                entry.1.push(from);
+                entry.2.push(to);
+            }
+            for (_id, (target, from, to, on_update, on_delete)) in foreign_keys {
+                let target_columns = to
+                    .iter()
+                    .map(|column| column.as_deref().map(quote_identifier))
+                    .collect::<Option<Vec<_>>>()
+                    .map(|columns| format!(" ({})", columns.join(", ")))
+                    .unwrap_or_default();
+                rows.push(vec![
+                    Value::Null,
+                    Value::Text(format!(
+                        "FOREIGN KEY ({}) REFERENCES {}{} ON UPDATE {} ON DELETE {}",
+                        from.iter()
+                            .map(|name| quote_identifier(name))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        quote_identifier(&target),
+                        target_columns,
+                        on_update,
+                        on_delete
+                    )),
+                ]);
+            }
+            Ok(rows)
+        })?;
+        Ok(metadata_rows(
+            vec![DetailField::Name, DetailField::Definition],
+            rows,
+            sink,
+            Some(DetailNotice::SqliteConstraintsExcludeChecks),
+        ))
+    }
+
+    fn ddl(&self, relation: &str) -> Result<DetailResult, DbError> {
+        let ddl = self.with_connection(|connection| {
+            connection.query_row(
+                "SELECT sql FROM sqlite_master WHERE name = ?1 AND type IN ('table', 'view')",
+                [relation],
+                |row| row.get::<_, Option<String>>(0),
+            )
+        })?;
+        Ok(ddl
+            .map(DetailResult::Ddl)
+            .unwrap_or(DetailResult::Unavailable))
+    }
+}
+
+fn metadata_rows(
+    fields: Vec<DetailField>,
+    rows: Vec<Vec<Value>>,
+    sink: &mut dyn RowSink,
+    notice: Option<DetailNotice>,
+) -> DetailResult {
+    sink.columns(
+        fields
+            .iter()
+            .enumerate()
+            .map(|(index, _)| ColumnMeta::new(index.to_string(), ""))
+            .collect(),
+    );
+    let mut truncated = false;
+    for row in rows {
+        if sink.row(row) == Flow::Stop {
+            truncated = true;
+            break;
+        }
+    }
+    DetailResult::Rows {
+        fields: Some(fields),
+        truncated,
+        notice,
+    }
+}
+
+fn quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 /// The dimmed text beside a column. A SQLite column may have no declared type
@@ -358,6 +588,8 @@ impl Driver for SqliteDriver {
             // false and the button is not drawn — no round has built a pane
             // that could present either usefully.
             explain: false,
+            detail: true,
+            ddl: DdlSource::Server,
         }
     }
 
@@ -405,6 +637,46 @@ impl Driver for SqliteDriver {
             ("gi", [relation]) => self.indexes(relation),
             ("gk", [relation]) => self.constraints(relation),
             _ => Ok(Vec::new()),
+        }
+    }
+
+    fn detail(
+        &self,
+        request: &DetailRequest,
+        sink: &mut dyn RowSink,
+    ) -> Result<DetailResult, DbError> {
+        if !request.tab.applies_to(request.target.kind) {
+            return Ok(DetailResult::Unavailable);
+        }
+        let Some((tag, parts)) = id::parse(request.target.node.as_str()) else {
+            return Ok(DetailResult::Unavailable);
+        };
+        let (relation, is_table) = match (tag, parts.as_slice()) {
+            ("t", [relation]) => (*relation, true),
+            ("v", [relation]) => (*relation, false),
+            _ => return Ok(DetailResult::Unavailable),
+        };
+
+        match request.tab {
+            DetailTab::Data => {
+                let statement = format!(
+                    "SELECT * FROM {} LIMIT {} OFFSET {}",
+                    quote_identifier(relation),
+                    DATA_PAGE_SIZE + 1,
+                    request.offset
+                );
+                let execution = self.execute(&QueryRequest::new(statement), sink)?;
+                Ok(DetailResult::Rows {
+                    fields: None,
+                    truncated: execution.truncated,
+                    notice: None,
+                })
+            }
+            DetailTab::Columns => self.detail_columns(relation, sink),
+            DetailTab::Indexes if is_table => self.detail_indexes(relation, sink),
+            DetailTab::Constraints if is_table => self.detail_constraints(relation, sink),
+            DetailTab::Ddl => self.ddl(relation),
+            DetailTab::Indexes | DetailTab::Constraints => Ok(DetailResult::Unavailable),
         }
     }
 
@@ -515,15 +787,20 @@ fn cell(value: ValueRef<'_>) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{SqliteDriver, cell, column_detail, connect, foreign_key_detail, id, index_detail};
+    use super::{
+        SqliteDriver, cell, column_detail, connect, foreign_key_detail, id, index_detail,
+        quote_identifier,
+    };
     use crate::database::models::catalog::{GroupLabel, NodeId, NodeKind, NodeLabel};
     use crate::database::models::connection::ConnectionProfile;
+    use crate::database::models::detail::{DetailRequest, DetailTab, DetailTarget};
     use crate::database::models::engine::Engine;
     use crate::database::models::error::DbError;
     use crate::database::models::page::{PageBudget, PageBuffer};
     use crate::database::models::query::QueryRequest;
     use crate::database::models::value::Value;
     use crate::database::services::Driver;
+    use crate::database::state::detail::{DetailLoad, load as load_detail};
     use rusqlite::types::ValueRef;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -849,6 +1126,163 @@ mod tests {
     }
 
     #[test]
+    fn object_detail_uses_sqlite_catalog_rows_and_stored_ddl() {
+        let fixture = Fixture::new(SCHEMA);
+        let target = DetailTarget::new(
+            NodeId::new(id::relation("t", "users")),
+            NodeKind::Table,
+            "users",
+        );
+        let request = |tab| DetailRequest::new(target.clone(), tab, 0);
+
+        let DetailLoad::Grid(columns) =
+            load_detail(fixture.driver.as_ref(), &request(DetailTab::Columns))
+        else {
+            panic!("columns did not load");
+        };
+        assert_eq!(columns.rows.len(), 5);
+        assert_eq!(columns.rows[0][0], Value::Text("id".into()));
+        assert_eq!(columns.rows[0][1], Value::Text("INTEGER".into()));
+
+        let DetailLoad::Grid(indexes) =
+            load_detail(fixture.driver.as_ref(), &request(DetailTab::Indexes))
+        else {
+            panic!("indexes did not load");
+        };
+        assert!(
+            indexes
+                .rows
+                .iter()
+                .any(|row| row[0] == Value::Text("users_name".into()))
+        );
+
+        let DetailLoad::Grid(constraints) =
+            load_detail(fixture.driver.as_ref(), &request(DetailTab::Constraints))
+        else {
+            panic!("constraints did not load");
+        };
+        assert!(
+            constraints.notice.is_some(),
+            "CHECK constraints need the honesty notice"
+        );
+        assert!(
+            constraints
+                .rows
+                .iter()
+                .any(|row| row[1].display().contains("PRIMARY KEY"))
+        );
+
+        let DetailLoad::Ddl(ddl) = load_detail(fixture.driver.as_ref(), &request(DetailTab::Ddl))
+        else {
+            panic!("DDL did not load");
+        };
+        assert!(
+            ddl.starts_with("CREATE TABLE users"),
+            "stored DDL was {ddl:?}"
+        );
+        assert!(ddl.contains("name TEXT NOT NULL"));
+    }
+
+    #[test]
+    fn composite_and_unique_constraints_are_reported_without_parsing_ddl() {
+        let fixture = Fixture::new(
+            "CREATE TABLE parent (a INTEGER, b INTEGER, PRIMARY KEY (a, b));\n\
+             CREATE TABLE child (\n\
+                 a INTEGER, b INTEGER, UNIQUE (a, b), CHECK (a > 0),\n\
+                 FOREIGN KEY (a, b) REFERENCES parent (a, b)\n\
+             );",
+        );
+        let target = DetailTarget::new(
+            NodeId::new(id::relation("t", "child")),
+            NodeKind::Table,
+            "child",
+        );
+        let DetailLoad::Grid(constraints) = load_detail(
+            fixture.driver.as_ref(),
+            &DetailRequest::new(target, DetailTab::Constraints, 0),
+        ) else {
+            panic!("constraints did not load");
+        };
+        let definitions: Vec<String> = constraints
+            .rows
+            .iter()
+            .map(|row| row[1].display())
+            .collect();
+        assert!(
+            definitions
+                .iter()
+                .any(|definition| { definition.contains("UNIQUE (\"a\", \"b\")") })
+        );
+        assert_eq!(
+            definitions
+                .iter()
+                .filter(|definition| definition.starts_with("FOREIGN KEY"))
+                .count(),
+            1,
+            "a composite key is one constraint, not one per column"
+        );
+        assert!(definitions.iter().any(|definition| {
+            definition.contains("FOREIGN KEY (\"a\", \"b\") REFERENCES \"parent\" (\"a\", \"b\")")
+        }));
+        assert!(
+            constraints.notice.is_some(),
+            "CHECK is available only in stored DDL"
+        );
+    }
+
+    #[test]
+    fn a_check_only_table_is_empty_with_an_explanation_not_silently_complete() {
+        let fixture = Fixture::new("CREATE TABLE checked (value INTEGER CHECK (value > 0));");
+        let target = DetailTarget::new(
+            NodeId::new(id::relation("t", "checked")),
+            NodeKind::Table,
+            "checked",
+        );
+        assert!(matches!(
+            load_detail(
+                fixture.driver.as_ref(),
+                &DetailRequest::new(target, DetailTab::Constraints, 0),
+            ),
+            DetailLoad::Empty(Some(_))
+        ));
+    }
+
+    #[test]
+    fn table_data_is_paged_on_the_server_with_limit_and_offset() {
+        let fixture = Fixture::new(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY);\n\
+             WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 205)\n\
+             INSERT INTO items SELECT x FROM n;",
+        );
+        let target = DetailTarget::new(
+            NodeId::new(id::relation("t", "items")),
+            NodeKind::Table,
+            "items",
+        );
+
+        let first = load_detail(
+            fixture.driver.as_ref(),
+            &DetailRequest::new(target.clone(), DetailTab::Data, 0),
+        );
+        let DetailLoad::Grid(first) = first else {
+            panic!("first page did not load")
+        };
+        assert_eq!(first.rows.len(), 100);
+        assert!(first.has_more);
+        assert_eq!(first.rows[0][0], Value::Int(1));
+
+        let DetailLoad::Grid(last) = load_detail(
+            fixture.driver.as_ref(),
+            &DetailRequest::new(target, DetailTab::Data, 200),
+        ) else {
+            panic!("last page did not load");
+        };
+        assert_eq!(last.rows.len(), 5);
+        assert!(!last.has_more);
+        assert_eq!(last.rows[0][0], Value::Int(201));
+    }
+
+    #[test]
     fn ddl_runs_and_shows_up_in_the_tree() {
         let fixture = Fixture::new(SCHEMA);
         let mut sink = PageBuffer::default();
@@ -1020,5 +1454,6 @@ mod tests {
         let (tag, parts) = id::parse(&built).expect("parses");
         assert_eq!(tag, "t");
         assert_eq!(parts, [awkward]);
+        assert_eq!(quote_identifier("odd\"name"), "\"odd\"\"name\"");
     }
 }

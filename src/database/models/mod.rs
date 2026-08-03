@@ -22,6 +22,7 @@
 
 pub mod catalog;
 pub mod connection;
+pub mod detail;
 pub mod engine;
 pub mod error;
 pub mod page;
