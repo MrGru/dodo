@@ -64,7 +64,7 @@ pub fn format(sql: &str, engine: Engine) -> String {
 fn dialect(engine: Engine) -> Dialect {
     match engine {
         Engine::PostgreSql => Dialect::PostgreSql,
-        Engine::Sqlite => Dialect::Generic,
+        Engine::Sqlite | Engine::MySql | Engine::Redis => Dialect::Generic,
     }
 }
 

@@ -357,13 +357,15 @@ impl ConnectionForm {
     }
 
     fn network_fields(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        vec![
+        let mut fields = vec![
             self.text_field(Str::DbFieldHost, &self.host.clone(), cx),
             self.text_field(Str::DbFieldPort, &self.port.clone(), cx),
             self.text_field(Str::DbFieldDatabase, &self.database.clone(), cx),
             self.text_field(Str::DbFieldUser, &self.user.clone(), cx),
             self.password_field(cx),
-            self.field(
+        ];
+        if self.profile.engine.supports_tls() {
+            fields.push(self.field(
                 Str::DbFieldSsl,
                 self.segmented(
                     "db-ssl",
@@ -373,8 +375,9 @@ impl ConnectionForm {
                     cx,
                 ),
                 cx,
-            ),
-        ]
+            ));
+        }
+        fields
     }
 
     fn password_field(&self, cx: &mut Context<Self>) -> AnyElement {

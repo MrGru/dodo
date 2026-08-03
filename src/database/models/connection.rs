@@ -29,8 +29,9 @@ use super::engine::{Address, Engine};
 ///
 /// Bump this when a change to [`ConnectionProfile`] cannot be expressed by
 /// adding a `#[serde(default)]` field — an older dodo must then refuse the file
-/// rather than half-read it.
-pub const SCHEMA_VERSION: u32 = 1;
+/// rather than half-read it. Version 2 adds MySQL and Redis enum values, which
+/// a version-1 reader cannot deserialize.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Everything `connections.json` holds.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,11 +76,9 @@ impl ConnectionDocument {
 
 /// How much dodo insists on TLS when dialling a server.
 ///
-/// The three values are PostgreSQL's own `sslmode` vocabulary, reduced to the
-/// three that differ in *behaviour* rather than in certificate policy —
-/// `verify-ca` / `verify-full` are what `Require` already does here, because
-/// the connector always verifies against the platform's trust store and dodo
-/// ships no way to turn that off.
+/// The three values use PostgreSQL's familiar `sslmode` vocabulary, reduced to
+/// the behaviours shared with MySQL. Certificate validation is never disabled:
+/// connectors verify against their root store and dodo ships no insecure mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SslMode {
     /// Never negotiate TLS. The right answer for a container on `127.0.0.1`.
@@ -144,7 +143,7 @@ impl ConnectionProfile {
             engine,
             host: "127.0.0.1".into(),
             port: engine.default_port().unwrap_or_default(),
-            database: String::new(),
+            database: engine.default_database().into(),
             user: engine.default_user().into(),
             password: String::new(),
             ssl_mode: SslMode::default(),
@@ -159,10 +158,23 @@ impl ConnectionProfile {
         if self.engine == engine {
             return;
         }
+        let previous = self.engine;
         self.engine = engine;
         self.port = engine.default_port().unwrap_or_default();
-        if self.user.is_empty() {
+        if self.user.is_empty() || self.user == previous.default_user() {
             self.user = engine.default_user().into();
+        }
+        let database_fits = engine != Engine::Redis
+            || self
+                .database
+                .trim()
+                .parse::<i64>()
+                .is_ok_and(|database| database >= 0);
+        if self.database.is_empty()
+            || self.database == previous.default_database()
+            || !database_fits
+        {
+            self.database = engine.default_database().into();
         }
     }
 
@@ -221,6 +233,16 @@ impl ConnectionProfile {
                 }
                 if self.database.trim().is_empty() {
                     return Some(ProfileProblem::DatabaseMissing);
+                }
+                if self.engine == Engine::Redis
+                    && self
+                        .database
+                        .trim()
+                        .parse::<i64>()
+                        .ok()
+                        .is_none_or(|database| database < 0)
+                {
+                    return Some(ProfileProblem::RedisDatabaseInvalid);
                 }
                 None
             }
@@ -356,6 +378,7 @@ pub enum ProfileProblem {
     HostMissing,
     PortMissing,
     DatabaseMissing,
+    RedisDatabaseInvalid,
     FileMissing,
 }
 
@@ -366,6 +389,7 @@ impl ProfileProblem {
             ProfileProblem::HostMissing => Str::DbProfileHostMissing,
             ProfileProblem::PortMissing => Str::DbProfilePortMissing,
             ProfileProblem::DatabaseMissing => Str::DbProfileDatabaseMissing,
+            ProfileProblem::RedisDatabaseInvalid => Str::DbProfileRedisDatabaseInvalid,
             ProfileProblem::FileMissing => Str::DbProfileFileMissing,
         }
     }
@@ -397,6 +421,15 @@ mod tests {
         let file = ConnectionProfile::new(8, Engine::Sqlite);
         assert_eq!(file.port, 0, "a file engine suggests no port");
         assert_eq!(file.user, "");
+
+        let mysql = ConnectionProfile::new(9, Engine::MySql);
+        assert_eq!(mysql.port, 3306);
+        assert_eq!(mysql.user, "root");
+
+        let redis = ConnectionProfile::new(10, Engine::Redis);
+        assert_eq!(redis.port, 6379);
+        assert_eq!(redis.database, "0");
+        assert_eq!(redis.user, "");
     }
 
     /// `127.0.0.1`, not `localhost`: `localhost` is IPv4/IPv6-ambiguous, and
@@ -419,6 +452,13 @@ mod tests {
         profile.set_engine(Engine::PostgreSql);
         assert_eq!(profile.port, 5432);
         assert_eq!(profile.database, "shop", "the database name is still valid");
+
+        profile.user = "postgres".into();
+        profile.database = "shop".into();
+        profile.set_engine(Engine::Redis);
+        assert_eq!(profile.port, 6379);
+        assert_eq!(profile.user, "");
+        assert_eq!(profile.database, "0");
     }
 
     #[test]
@@ -471,6 +511,13 @@ mod tests {
 
         let file = ConnectionProfile::new(1, Engine::Sqlite);
         assert_eq!(file.problem(), Some(ProfileProblem::FileMissing));
+
+        let mut redis = ConnectionProfile::new(2, Engine::Redis);
+        assert_eq!(redis.problem(), None);
+        redis.database = "-1".into();
+        assert_eq!(redis.problem(), Some(ProfileProblem::RedisDatabaseInvalid));
+        redis.database = "not-a-number".into();
+        assert_eq!(redis.problem(), Some(ProfileProblem::RedisDatabaseInvalid));
     }
 
     #[test]

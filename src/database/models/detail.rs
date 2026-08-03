@@ -33,6 +33,7 @@ impl DetailTab {
         match kind {
             NodeKind::Table => true,
             NodeKind::View => matches!(self, Self::Data | Self::Columns | Self::Ddl),
+            NodeKind::Key => self == Self::Data,
             _ => false,
         }
     }
@@ -148,6 +149,8 @@ mod tests {
         assert!(DetailTab::Ddl.applies_to(NodeKind::View));
         assert!(!DetailTab::Indexes.applies_to(NodeKind::View));
         assert!(!DetailTab::Constraints.applies_to(NodeKind::View));
+        assert!(DetailTab::Data.applies_to(NodeKind::Key));
+        assert!(!DetailTab::Columns.applies_to(NodeKind::Key));
         assert!(!DetailTab::Data.applies_to(NodeKind::Column));
     }
 

@@ -46,7 +46,7 @@ impl NodeId {
 /// in a view branches on it for behaviour, which is what lets a later backend
 /// add a variant without touching the tree's logic.
 ///
-/// The variants are exactly the ones this round's two drivers emit, plus
+/// The variants are exactly the ones the shipped drivers emit, plus
 /// [`NodeKind::Other`]. A backend with a concept dodo has not met uses `Other`
 /// and gets a generic icon; when that concept is worth its own icon it becomes
 /// a variant, and the only arm that has to change is the icon map.
@@ -59,16 +59,18 @@ pub enum NodeKind {
     Column,
     Index,
     Constraint,
+    /// A numbered logical database or type group in a non-SQL store.
+    Namespace,
+    /// One key in a non-SQL store.
+    Key,
     /// A grouping row dodo inserts — "Tables", "Columns" — rather than an
     /// object the server has. Always carries a [`NodeLabel::Group`].
     Folder,
     /// Anything else a driver reports.
     ///
-    /// Neither of this round's two drivers produces one — both speak SQL and
-    /// every object they report has a variant above. It exists because it is
-    /// the escape hatch that lets a backend with a concept dodo has not met
-    /// (a key/value store's keyspaces, say) appear in the tree without a new
-    /// variant, and `services::fake`'s key/value driver is what exercises it.
+    /// It exists because it is the escape hatch for a concept dodo has not met;
+    /// `services::fake` exercises it so a later driver is not forced to grow
+    /// this enum before it can render a tree.
     #[allow(
         dead_code,
         reason = "the escape hatch a non-SQL driver uses; see above"
@@ -85,6 +87,7 @@ pub enum GroupLabel {
     Columns,
     Indexes,
     Constraints,
+    More,
 }
 
 impl GroupLabel {
@@ -95,6 +98,7 @@ impl GroupLabel {
             GroupLabel::Columns => Str::DbGroupColumns,
             GroupLabel::Indexes => Str::DbGroupIndexes,
             GroupLabel::Constraints => Str::DbGroupConstraints,
+            GroupLabel::More => Str::DbGroupMore,
         }
     }
 }
@@ -204,6 +208,7 @@ mod tests {
             GroupLabel::Columns,
             GroupLabel::Indexes,
             GroupLabel::Constraints,
+            GroupLabel::More,
         ] {
             for language in Language::ALL {
                 assert!(!label.text().text(language).trim().is_empty());

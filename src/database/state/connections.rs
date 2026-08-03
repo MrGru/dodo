@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::database::models::connection::{ConnectionDocument, ConnectionProfile};
+use crate::database::models::connection::{ConnectionDocument, ConnectionProfile, SCHEMA_VERSION};
 use crate::database::models::engine::Engine;
 use crate::database::models::error::DbError;
 use crate::i18n::Str;
@@ -75,6 +75,7 @@ impl ConnectionsState {
             .selected
             .filter(|id| document.connections.iter().any(|profile| profile.id == *id));
         self.document = ConnectionDocument {
+            version: SCHEMA_VERSION,
             selected,
             ..document
         };
@@ -211,7 +212,9 @@ fn points_elsewhere(before: &ConnectionProfile, after: &ConnectionProfile) -> bo
 #[cfg(test)]
 mod tests {
     use super::{ConnectionsState, Status, points_elsewhere};
-    use crate::database::models::connection::{ConnectionDocument, ConnectionProfile, SslMode};
+    use crate::database::models::connection::{
+        ConnectionDocument, ConnectionProfile, SCHEMA_VERSION, SslMode,
+    };
     use crate::database::models::engine::Engine;
     use crate::database::models::error::DbError;
     use crate::i18n::Language;
@@ -248,6 +251,17 @@ mod tests {
         assert!(state.loaded());
         assert_eq!(state.selected_id(), Some(2));
         assert_eq!(state.selected().map(|p| p.name.as_str()), Some("Two"));
+    }
+
+    #[test]
+    fn adopting_an_old_document_upgrades_what_the_next_save_writes() {
+        let mut state = ConnectionsState::new();
+        state.adopt(ConnectionDocument {
+            version: 1,
+            connections: vec![profile(1, "Old")],
+            selected: Some(1),
+        });
+        assert_eq!(state.document().version, SCHEMA_VERSION);
     }
 
     /// A hand-edited file can name a connection that is not there. Pointing the

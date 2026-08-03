@@ -27,6 +27,10 @@ pub enum Engine {
     PostgreSql,
     #[serde(rename = "sqlite")]
     Sqlite,
+    #[serde(rename = "mysql")]
+    MySql,
+    #[serde(rename = "redis")]
+    Redis,
 }
 
 /// How a connection to an engine is addressed. This is the whole reason the
@@ -43,7 +47,12 @@ pub enum Address {
 impl Engine {
     /// Every engine this build can connect to, in the order the picker lists
     /// them.
-    pub const ALL: [Engine; 2] = [Engine::PostgreSql, Engine::Sqlite];
+    pub const ALL: [Engine; 4] = [
+        Engine::PostgreSql,
+        Engine::Sqlite,
+        Engine::MySql,
+        Engine::Redis,
+    ];
 
     /// The product's own name. A proper noun in every language, so it is a
     /// `&'static str` rather than a [`Str`](crate::i18n::Str) — the same
@@ -52,13 +61,15 @@ impl Engine {
         match self {
             Engine::PostgreSql => "PostgreSQL",
             Engine::Sqlite => "SQLite",
+            Engine::MySql => "MySQL / MariaDB",
+            Engine::Redis => "Redis",
         }
     }
 
     /// Whether this engine is dialled or opened.
     pub fn address(self) -> Address {
         match self {
-            Engine::PostgreSql => Address::Network,
+            Engine::PostgreSql | Engine::MySql | Engine::Redis => Address::Network,
             Engine::Sqlite => Address::File,
         }
     }
@@ -68,6 +79,8 @@ impl Engine {
     pub fn default_port(self) -> Option<u16> {
         match self {
             Engine::PostgreSql => Some(5432),
+            Engine::MySql => Some(3306),
+            Engine::Redis => Some(6379),
             Engine::Sqlite => None,
         }
     }
@@ -77,7 +90,8 @@ impl Engine {
     pub fn default_user(self) -> &'static str {
         match self {
             Engine::PostgreSql => "postgres",
-            Engine::Sqlite => "",
+            Engine::MySql => "root",
+            Engine::Sqlite | Engine::Redis => "",
         }
     }
 
@@ -91,7 +105,8 @@ impl Engine {
     /// text, which is the library's own graceful default.
     pub fn editor_language(self) -> &'static str {
         match self {
-            Engine::PostgreSql | Engine::Sqlite => "sql",
+            Engine::PostgreSql | Engine::Sqlite | Engine::MySql => "sql",
+            Engine::Redis => "text",
         }
     }
 
@@ -102,6 +117,22 @@ impl Engine {
         match self {
             Engine::PostgreSql => "postgresql",
             Engine::Sqlite => "sqlite",
+            Engine::MySql => "mysql",
+            Engine::Redis => "redis",
+        }
+    }
+
+    /// Whether the network form's TLS control maps to this client.
+    pub fn supports_tls(self) -> bool {
+        matches!(self, Engine::PostgreSql | Engine::MySql)
+    }
+
+    /// The database field's initial value. Redis addresses logical database 0;
+    /// SQL engines require the user to name a database and start blank.
+    pub fn default_database(self) -> &'static str {
+        match self {
+            Engine::Redis => "0",
+            _ => "",
         }
     }
 }
@@ -123,20 +154,32 @@ mod tests {
             serde_json::to_string(&Engine::Sqlite).expect("serializes"),
             "\"sqlite\""
         );
+        assert_eq!(
+            serde_json::to_string(&Engine::MySql).expect("serializes"),
+            "\"mysql\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Engine::Redis).expect("serializes"),
+            "\"redis\""
+        );
 
         for engine in Engine::ALL {
             let json = serde_json::to_string(&engine).expect("serializes");
             let back: Engine = serde_json::from_str(&json).expect("deserializes");
             assert_eq!(back, engine);
         }
-
-        assert!(serde_json::from_str::<Engine>("\"mysql\"").is_err());
     }
 
     #[test]
     fn a_file_engine_has_no_port_and_a_network_engine_does() {
         assert_eq!(Engine::PostgreSql.address(), Address::Network);
         assert_eq!(Engine::PostgreSql.default_port(), Some(5432));
+        assert_eq!(Engine::MySql.address(), Address::Network);
+        assert_eq!(Engine::MySql.default_port(), Some(3306));
+        assert_eq!(Engine::Redis.address(), Address::Network);
+        assert_eq!(Engine::Redis.default_port(), Some(6379));
+        assert_eq!(Engine::Redis.default_database(), "0");
+        assert!(!Engine::Redis.supports_tls());
 
         assert_eq!(Engine::Sqlite.address(), Address::File);
         assert_eq!(

@@ -168,6 +168,15 @@ impl DatabaseView {
             .active_driver()
             .is_some_and(|driver| driver.capabilities().explain)
             && !running;
+        let can_format = self
+            .active_driver()
+            .map(|driver| driver.capabilities().editor_language == "sql")
+            .or_else(|| {
+                self.connections
+                    .selected()
+                    .map(|profile| profile.engine.editor_language() == "sql")
+            })
+            .unwrap_or(true);
         let can_cancel = self.tabs.active().is_some_and(|tab| tab.can_cancel());
         let tab_notice = self
             .tabs
@@ -210,15 +219,17 @@ impl DatabaseView {
                                         this.open_history(window, cx)
                                     })),
                             )
-                            .child(
-                                Button::new("db-format")
-                                    .xsmall()
-                                    .ghost()
-                                    .label(t(Str::DbFormat, cx))
-                                    .on_click(
-                                        cx.listener(|this, _, window, cx| this.format(window, cx)),
-                                    ),
-                            )
+                            .when(can_format, |this| {
+                                this.child(
+                                    Button::new("db-format")
+                                        .xsmall()
+                                        .ghost()
+                                        .label(t(Str::DbFormat, cx))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.format(window, cx)
+                                        })),
+                                )
+                            })
                             // Only while there is something to stop, and only
                             // when the backend can really stop it: a Cancel
                             // that dropped the wait and left the server working
