@@ -43,6 +43,7 @@ use crate::app_icon::AppIcon;
 use crate::database::components::notice::{Tone, notice};
 use crate::database::components::states::empty_state;
 use crate::database::models::engine::Engine;
+use crate::database::state::tree::RowRef;
 use crate::database::views::database::{
     ConnectionLook, DatabaseView, RowLook, TREE_INDENT, TREE_PADDING, row_looks,
 };
@@ -202,14 +203,31 @@ impl DatabaseView {
                         icon,
                         detail,
                         muted: is_muted,
-                    }) => row.child(object_row(
-                        entry,
-                        *icon,
-                        item.label.clone(),
-                        detail.clone(),
-                        *is_muted,
-                        muted,
-                    )),
+                        open,
+                    }) => {
+                        let row = row.child(object_row(
+                            entry,
+                            *icon,
+                            item.label.clone(),
+                            detail.clone(),
+                            *is_muted,
+                            muted,
+                        ));
+                        match (open.clone(), RowRef::parse(&item.id)) {
+                            (Some(target), Some(reference)) => {
+                                let view = view.clone();
+                                row.on_click(move |event, _, cx| {
+                                    if event.click_count() == 2 {
+                                        let target = target.clone();
+                                        view.update(cx, |this, cx| {
+                                            this.open_detail(reference.connection, target, cx)
+                                        });
+                                    }
+                                })
+                            }
+                            _ => row,
+                        }
+                    }
                     // Only reachable if the outline and the look map disagree,
                     // which they cannot — but a panic here would be a crash on
                     // a redraw.

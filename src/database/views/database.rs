@@ -66,6 +66,7 @@ use gpui_component::{ActiveTheme as _, WindowExt as _};
 use crate::app_icon::AppIcon;
 use crate::database::models::catalog::{NodeId, NodeKind, NodeLabel};
 use crate::database::models::connection::ConnectionProfile;
+use crate::database::models::detail::DetailTarget;
 use crate::database::models::engine::Engine;
 use crate::database::models::page::PageBudget;
 use crate::database::models::sql_format;
@@ -73,6 +74,7 @@ use crate::database::services::connection_store::{ConnectionStore, DiskConnectio
 use crate::database::services::export::{self, ExportFormat};
 use crate::database::services::{self, Driver};
 use crate::database::state::connections::{ConnectionsState, Status};
+use crate::database::state::detail::{self, DetailLoad, DetailState};
 use crate::database::state::history::History;
 use crate::database::state::query::{self, QueryState};
 use crate::database::state::tabs::{QueryTab, QueryTabs};
@@ -115,8 +117,10 @@ pub struct DatabaseView {
     pub(super) tabs: QueryTabs,
     /// Every editor buffer executed this session, newest first. Never persisted.
     history: History,
-    /// Shared by every tab, because only one result is ever on screen.
+    /// Shared by query results and object detail, because only one grid is ever
+    /// on screen.
     pub(super) table: Entity<TableState<ResultDelegate>>,
+    pub(super) detail: Option<DetailState>,
 
     outer_split: Entity<ResizableState>,
     pub(super) inner_split: Entity<ResizableState>,
@@ -131,6 +135,7 @@ pub struct DatabaseView {
     /// cancelled by a run in another.
     connect_task: Option<Task<()>>,
     children_task: Option<Task<()>>,
+    detail_task: Option<Task<()>>,
     save_task: Option<Task<()>>,
 
     /// A failure from the store itself — the file could not be read or written.
@@ -165,6 +170,7 @@ impl DatabaseView {
             tabs: QueryTabs::new(),
             history: History::default(),
             table,
+            detail: None,
             outer_split: cx.new(|_| ResizableState::default()),
             inner_split: cx.new(|_| ResizableState::default()),
             form: None,
@@ -172,6 +178,7 @@ impl DatabaseView {
             _tree_subscription: tree_subscription,
             connect_task: None,
             children_task: None,
+            detail_task: None,
             save_task: None,
             store_error: None,
             focus_handle: cx.focus_handle(),
@@ -286,6 +293,9 @@ impl DatabaseView {
     /// One `TableState` serves every tab, so this is what stops a switched-to
     /// tab showing the rows of the tab that was on screen before it.
     fn show_active_result(&mut self, cx: &mut Context<Self>) {
+        if self.detail.is_some() {
+            return;
+        }
         let result = match self.tabs.active().map(|tab| &tab.query) {
             Some(QueryState::Done(outcome)) => {
                 Some((outcome.columns.clone(), outcome.rows.clone()))
@@ -411,6 +421,7 @@ impl DatabaseView {
 
     pub(super) fn disconnect(&mut self, id: u64, cx: &mut Context<Self>) {
         self.drivers.remove(&id);
+        self.close_detail_for(id, cx);
         self.connections.set_status(id, Status::Disconnected);
         // The whole tree under this root goes: the next session may be a
         // different database entirely, so keeping the shape would be keeping a
@@ -441,6 +452,7 @@ impl DatabaseView {
         // in which case the live handle points at the old database and must go.
         if self.connections.save(profile) {
             self.drivers.remove(&id);
+            self.close_detail_for(id, cx);
             self.forest.forget(id);
         }
         self.sync_tree_items(cx);
@@ -472,6 +484,7 @@ impl DatabaseView {
                 .on_ok(move |_, window, cx| {
                     view.update(cx, |this, cx| {
                         this.drivers.remove(&id);
+                        this.close_detail_for(id, cx);
                         this.connections.delete(id);
                         this.forest.forget(id);
                         this.sync_tree_items(cx);
@@ -636,6 +649,147 @@ impl DatabaseView {
             .collect();
         self.tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
+        });
+    }
+
+    // ---- object detail --------------------------------------------------
+
+    pub(super) fn open_detail(
+        &mut self,
+        connection: u64,
+        target: DetailTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(driver) = self.drivers.get(&connection).cloned() else {
+            return;
+        };
+        let capabilities = driver.capabilities();
+        if !capabilities.detail {
+            return;
+        }
+
+        self.select(connection, cx);
+        self.detail = Some(DetailState::new(connection, target, capabilities.ddl));
+        self.start_detail_load(driver, cx);
+    }
+
+    fn start_detail_load(&mut self, driver: Arc<dyn Driver>, cx: &mut Context<Self>) {
+        let Some(detail) = self.detail.as_mut() else {
+            return;
+        };
+        let connection = detail.connection;
+        let request = detail.begin();
+        self.show_detail_result(cx);
+        cx.notify();
+
+        self.detail_task = Some(cx.spawn(async move |this, cx| {
+            let background_request = request.clone();
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { detail::load(driver.as_ref(), &background_request) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                let applied = this.detail.as_mut().is_some_and(|detail| {
+                    detail.connection == connection && detail.apply(&request, loaded)
+                });
+                if applied {
+                    this.show_detail_result(cx);
+                    this.detail_task = None;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    pub(super) fn select_detail_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(tab) = self
+            .detail
+            .as_ref()
+            .and_then(|detail| detail.visible_tabs().nth(index))
+        else {
+            return;
+        };
+        let changed = self
+            .detail
+            .as_mut()
+            .is_some_and(|detail| detail.select(tab));
+        if !changed {
+            return;
+        }
+        let Some(driver) = self
+            .detail
+            .as_ref()
+            .and_then(|detail| self.drivers.get(&detail.connection))
+            .cloned()
+        else {
+            return;
+        };
+        self.start_detail_load(driver, cx);
+    }
+
+    pub(super) fn detail_previous(&mut self, cx: &mut Context<Self>) {
+        if !self.detail.as_mut().is_some_and(DetailState::previous) {
+            return;
+        }
+        self.reload_detail(cx);
+    }
+
+    pub(super) fn detail_next(&mut self, cx: &mut Context<Self>) {
+        if !self.detail.as_mut().is_some_and(DetailState::next) {
+            return;
+        }
+        self.reload_detail(cx);
+    }
+
+    fn reload_detail(&mut self, cx: &mut Context<Self>) {
+        let Some(driver) = self
+            .detail
+            .as_ref()
+            .and_then(|detail| self.drivers.get(&detail.connection))
+            .cloned()
+        else {
+            return;
+        };
+        self.start_detail_load(driver, cx);
+    }
+
+    pub(super) fn close_detail(&mut self, cx: &mut Context<Self>) {
+        self.detail = None;
+        self.detail_task = None;
+        self.show_active_result(cx);
+        cx.notify();
+    }
+
+    fn close_detail_for(&mut self, connection: u64, cx: &mut Context<Self>) {
+        if self
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.connection == connection)
+        {
+            self.close_detail(cx);
+        }
+    }
+
+    fn show_detail_result(&mut self, cx: &mut Context<Self>) {
+        let result = self.detail.as_ref().and_then(|detail| match &detail.load {
+            DetailLoad::Grid(grid) => {
+                let mut columns = grid.columns.clone();
+                if let Some(fields) = &grid.fields {
+                    for (column, field) in columns.iter_mut().zip(fields) {
+                        column.name = t(field.label(), cx).to_string();
+                    }
+                }
+                Some((columns, grid.rows.clone()))
+            }
+            _ => None,
+        });
+        self.table.update(cx, |state, cx| {
+            match result {
+                Some((columns, rows)) => state.delegate_mut().set(columns, rows),
+                None => state.delegate_mut().clear(),
+            }
+            state.refresh(cx);
         });
     }
 
@@ -994,6 +1148,9 @@ impl DatabaseView {
                 });
             }
         }
+        if retranslate && self.detail.is_some() {
+            self.show_detail_result(cx);
+        }
     }
 }
 
@@ -1054,6 +1211,7 @@ pub(super) enum RowLook {
         icon: AppIcon,
         detail: Option<SharedString>,
         muted: bool,
+        open: Option<DetailTarget>,
     },
 }
 
@@ -1119,6 +1277,12 @@ pub(super) fn row_looks(
                 icon: node_icon(node.kind),
                 detail: node.detail.clone().map(SharedString::from),
                 muted: false,
+                open: match (&node.label, node.kind) {
+                    (NodeLabel::Name(name), NodeKind::Table | NodeKind::View) => {
+                        Some(DetailTarget::new(node.id.clone(), node.kind, name.clone()))
+                    }
+                    _ => None,
+                },
             },
             Content::Notice(notice) => RowLook::Object {
                 icon: match notice {
@@ -1127,6 +1291,7 @@ pub(super) fn row_looks(
                 },
                 detail: None,
                 muted: true,
+                open: None,
             },
         };
         into.insert(SharedString::from(row.id.clone()), look);
