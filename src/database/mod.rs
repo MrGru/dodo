@@ -9,7 +9,7 @@
 //!   unit tested with no server.
 //! - [`services`] — the [`Driver`](services::Driver) trait and its
 //!   implementations. **The only layer that may name `postgres`, `rusqlite`,
-//!   `rustls` or `tokio-postgres-rustls`**, mirroring how
+//!   `mysql`, `redis`, `rustls` or `tokio-postgres-rustls`**, mirroring how
 //!   `api_explorer::services::http` is the only place that names `reqwest` and
 //!   `docker::services` the only place that names `bollard`. Also where
 //!   `connections.json` is read and written.
@@ -19,7 +19,7 @@
 //! - [`components`] — the small elements the widget library does not have.
 //! - [`views`] — the page itself.
 //!
-//! # What rounds 1–3 ship, and what they deliberately do not
+//! # What rounds 1–4 ship, and what they deliberately do not
 //!
 //! Round 1 built the foundation against **PostgreSQL and SQLite only**: saved
 //! connections, the lazy object tree, one editor and one bounded result grid.
@@ -30,10 +30,14 @@
 //! server-paged with a statement generated from the driver's opaque catalog id;
 //! editor text is still never rewritten. PostgreSQL DDL is explicitly labelled
 //! reconstructed, while SQLite shows the statement stored in `sqlite_master`.
+//! Round 4 adds MySQL and MariaDB through one shared-protocol driver, plus
+//! Redis as the trait's first non-SQL store. Redis's tree is numbered logical
+//! databases → type groups → cursor-paged keys; the console runs one command
+//! per line, and only an opened key fetches its value.
 //!
 //! Still not built, and nothing is reserved for them: editing or CRUD,
 //! favourites, pinned queries, persisted history or tab restore, autocomplete,
-//! global search, MySQL and Redis. **Column sorting is not built either**: the
+//! or global search. **Column sorting is not built either**: the
 //! result grid's headers carry the column name and its type and no sort
 //! affordance at all, because sorting one bounded page would be dishonest and
 //! server-side sorting was not part of round 3's accepted scope.
@@ -46,7 +50,9 @@
 //! UI thread. Nothing in this module — including `connections.json` — is read
 //! or written on the UI thread.
 //!
-//! One honest wrinkle worth knowing before reading `services/postgres.rs`: the
+//! MySQL and Redis use their crates' blocking clients directly; neither builds
+//! or requires an async runtime. One honest wrinkle worth knowing before
+//! reading `services/postgres.rs`: the
 //! `postgres` crate is a synchronous façade over `tokio-postgres` and builds a
 //! private **current-thread** tokio runtime per client. That adds no threads
 //! (the calling background-executor thread drives it) and this module never

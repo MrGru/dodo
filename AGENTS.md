@@ -219,9 +219,9 @@ Six things worth knowing before touching it:
   (NIST FIPS 180-4 vectors; SemVer §11 precedence).
 
 **`src/database/`** is the Database Explorer — create a connection, browse its objects, run a
-query, read the result — **PostgreSQL and SQLite only as of round 3**. Same five-layer split as
-the three modules above; **`src/database/mod.rs` is the authority** on the structure, shipped
-rounds and deliberate cuts. Twelve things worth knowing before touching it:
+query, read the result — **PostgreSQL, SQLite, MySQL/MariaDB and Redis as of round 4**. Same
+five-layer split as the three modules above; **`src/database/mod.rs` is the authority** on the
+structure, shipped rounds and deliberate cuts. Fourteen things worth knowing before touching it:
 
 - **The left panel is one tree and the connections are its roots**, not a list stacked on a
   tree. `state::tree::Forest` holds one `CatalogTree` per connection, so selecting a connection
@@ -282,6 +282,16 @@ rounds and deliberate cuts. Twelve things worth knowing before touching it:
   UTF-8-as-text — right for an enum, whose binary form *is* its label — or to bytes, and the
   header always carries the server's own `format_type` name. Its `live` test module skips itself
   unless `DODO_PG_TEST_HOST` is set and carries the container command in its doc.
+- **MySQL and MariaDB are one driver and one visible engine.** `services/mysql.rs` uses the
+  blocking `mysql` client with rustls, streams text-protocol rows, preserves the protocol's
+  original table/column metadata, gets DDL from `SHOW CREATE`, and cancels through a second
+  connection's `KILL QUERY`. Its opt-in live test is deliberately run against both server images.
+- **Redis is a non-SQL driver, not SQL-shaped view code.** `services/redis.rs` owns command-line
+  tokenization, reply-to-grid mapping and the generic logical-db → type → key tree. Key browsing
+  is one `SCAN … TYPE` cursor page per expansion with a nested More node — never `KEYS` and never
+  a full keyspace — and a separate catalog connection keeps browsing from changing the console's
+  selected database. Values are fetched only when key detail opens; Redis honestly reports no
+  Explain, DDL or cancel capability.
 - **No OS keychain, on any platform, and no `keyring` dependency.** A database password is stored
   the way the API Explorer stores a secret variable: plain text under `data_dir()`, masked in the
   UI, with a notice that is never absent. The report's `CredentialStore` trait is deliberately not
