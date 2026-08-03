@@ -69,7 +69,7 @@ fn main() {
         // Loads `updater.json`, sweeps whatever a previous install renamed
         // aside, and schedules the silent background check. Everything it does
         // is asynchronous; it opens no window and blocks nothing. Same
-        // post-`gpui_component::init` ordering as the three above — it binds no
+        // post-`gpui_component::init` ordering as the four above — it binds no
         // keys today, and keeping the position means adding one later is not a
         // debugging session.
         updater::init(cx);

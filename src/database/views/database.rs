@@ -663,11 +663,11 @@ impl DatabaseView {
         }
 
         let id = tab.id;
-        let connection = self
-            .connections
-            .selected()
-            .map(|profile| profile.name.clone())
-            .unwrap_or_default();
+        let Some(profile) = self.connections.selected() else {
+            return;
+        };
+        let connection_id = profile.id;
+        let connection = profile.name.clone();
         let buffer = tab.editor.read(cx).value().to_string();
         let history_buffer = buffer.clone();
         let budget = PageBudget::default();
@@ -678,6 +678,7 @@ impl DatabaseView {
 
         if let Some(tab) = self.tabs.active_mut() {
             tab.query = QueryState::Running;
+            tab.result_connection = None;
             tab.cancel = cancel;
             tab.notice = None;
             tab.notice_success = false;
@@ -707,11 +708,17 @@ impl DatabaseView {
                     return;
                 };
                 tab.query = match result {
-                    Ok(outcome) => QueryState::Done(outcome),
+                    Ok(outcome) => {
+                        tab.result_connection = Some(connection_id);
+                        QueryState::Done(outcome)
+                    }
                     // The previous result stays cleared: leaving it on screen
                     // beside a failure makes it look like the failed statement
                     // produced it.
-                    Err(failure) => QueryState::Failed(failure),
+                    Err(failure) => {
+                        tab.result_connection = None;
+                        QueryState::Failed(failure)
+                    }
                 };
                 // Nothing is running any more, so the handle would cancel
                 // whatever runs next.
@@ -780,24 +787,38 @@ impl DatabaseView {
         cx.notify();
     }
 
-    /// Re-runs the statement behind the displayed grid into a file-backed sink.
-    /// The bounded rows on screen are never used as the export source.
-    pub(super) fn export(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
-        let Some(driver) = self.active_driver() else {
-            return;
+    pub(super) fn can_export(&self) -> bool {
+        let Some(tab) = self.tabs.active() else {
+            return false;
         };
+        !tab.is_running()
+            && matches!(&tab.query, QueryState::Done(outcome) if outcome.has_grid())
+            && tab
+                .result_connection
+                .is_some_and(|id| self.drivers.contains_key(&id))
+    }
+
+    /// Re-runs the statement behind the displayed grid into a file-backed sink.
+    /// The bounded rows on screen are never used as the export source, and the
+    /// run goes back to the connection that produced them rather than a root
+    /// the user selected afterwards.
+    pub(super) fn export(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.active() else {
             return;
         };
-        if tab.is_running() {
+        if !self.can_export() {
             return;
         }
         let QueryState::Done(outcome) = &tab.query else {
             return;
         };
-        if !outcome.has_grid() {
+        let Some(driver) = tab
+            .result_connection
+            .and_then(|connection| self.drivers.get(&connection))
+            .cloned()
+        else {
             return;
-        }
+        };
 
         let id = tab.id;
         let statement = outcome.statement.clone();

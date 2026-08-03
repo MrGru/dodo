@@ -393,7 +393,7 @@ impl DatabaseView {
             return None;
         };
 
-        let running = self.tabs.active().is_some_and(|tab| tab.is_running());
+        let can_export = self.can_export();
         let parts: Vec<SharedString> = outcome
             .footer()
             .into_iter()
@@ -449,7 +449,7 @@ impl DatabaseView {
                                             .xsmall()
                                             .ghost()
                                             .icon(AppIcon::Download)
-                                            .disabled(running)
+                                            .disabled(!can_export)
                                             .label(t(Str::DbExportCsv, cx))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.export(ExportFormat::Csv, cx)
@@ -460,7 +460,7 @@ impl DatabaseView {
                                             .xsmall()
                                             .ghost()
                                             .icon(AppIcon::Download)
-                                            .disabled(running)
+                                            .disabled(!can_export)
                                             .label(t(Str::DbExportJson, cx))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.export(ExportFormat::Json, cx)
