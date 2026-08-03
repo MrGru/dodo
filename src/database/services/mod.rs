@@ -7,8 +7,8 @@
 //! never learns which crate is behind it. It hands over a statement and gets
 //! back [`models`](crate::database::models) types. A second backend is another
 //! [`Driver`] and nothing above this module changes. **This module and its
-//! children are the only place that may name `postgres`, `rusqlite`, `rustls`
-//! or `tokio-postgres-rustls`.**
+//! children are the only place that may name `postgres`, `rusqlite`, `mysql`,
+//! `redis`, `rustls` or `tokio-postgres-rustls`.**
 //!
 //! # Threading — blocking by contract
 //!
@@ -34,7 +34,9 @@
 //! The extension point is the struct and [`Driver::capabilities`], not a
 //! pre-filled list of guesses. **A field arrives with the control that reads
 //! it**: round 2 added `cancel` and `explain`; round 3 adds `detail` and the DDL
-//! source with the object-detail surface.
+//! source with the object-detail surface. Round 4 needs no new capability:
+//! MySQL fills the existing SQL fields, while Redis reports only plain-text
+//! editing and key detail and leaves cancel, Explain and DDL absent.
 //!
 //! # Cancellation is against the server, and that is the whole point
 //!
@@ -70,7 +72,9 @@
 
 pub mod connection_store;
 pub mod export;
+pub mod mysql;
 pub mod postgres;
+pub mod redis;
 pub mod sqlite;
 
 #[cfg(test)]
@@ -183,6 +187,12 @@ pub trait Driver: Send + Sync + 'static {
     fn execute(&self, request: &QueryRequest, sink: &mut dyn RowSink)
     -> Result<Execution, DbError>;
 
+    /// Splits an editor buffer into commands. SQL is the default; a non-SQL
+    /// console overrides this without teaching the state or views its syntax.
+    fn statements(&self, buffer: &str) -> Vec<String> {
+        crate::database::models::split::split_statements(buffer)
+    }
+
     /// A handle that stops whatever this connection is running.
     ///
     /// `None` exactly when `capabilities().cancel` is false. Callers take one
@@ -225,6 +235,8 @@ pub fn connect(profile: &ConnectionProfile) -> Result<Arc<dyn Driver>, DbError> 
     match profile.engine {
         Engine::PostgreSql => postgres::connect(profile).map(|driver| driver as Arc<dyn Driver>),
         Engine::Sqlite => sqlite::connect(profile).map(|driver| driver as Arc<dyn Driver>),
+        Engine::MySql => mysql::connect(profile).map(|driver| driver as Arc<dyn Driver>),
+        Engine::Redis => redis::connect(profile).map(|driver| driver as Arc<dyn Driver>),
     }
 }
 

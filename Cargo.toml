@@ -121,14 +121,14 @@ rquickjs = { version = "0.12.1", default-features = false, features = ["std"] }
 # ---------------------------------------------------------------------------
 # Database Explorer drivers.
 #
-# **Only `database::services` may name any of the five crates below**, the same
+# **Only `database::services` may name the driver crates below**, the same
 # containment rule `reqwest`, `bollard` and `rquickjs` follow. Everything above
 # that layer sees the `Driver` trait and `database::models`' plain data.
 #
 # All of them are *blocking* clients, chosen over `sqlx` for one decisive
 # reason recorded in the design report: every SQL backend here exposes a real
-# out-of-band query cancel (`Client::cancel_token`, `sqlite3_interrupt`) and
-# `sqlx` exposes none, so "Cancel" could only ever mean "drop the future and
+# out-of-band query cancel (`Client::cancel_token`, `sqlite3_interrupt`,
+# `KILL QUERY`) and `sqlx` exposes none, so "Cancel" could only ever mean "drop the future and
 # let the server keep grinding". Cancel itself is a later round; the driver
 # choice that makes it possible is made here.
 # ---------------------------------------------------------------------------
@@ -173,6 +173,16 @@ rusqlite = { version = "0.40", features = [
 # developers want it is tokenize-and-reindent rather than parse-and-print.
 # `database::models::sql_format` is the only module that may name it.
 sqlformat = "0.5"
+# MySQL and MariaDB, through their shared wire protocol. Defaults include
+# native-tls; keep only the pure-Rust compression backend and rustls using the
+# aws-lc provider already present in dodo's graph. No pool is built or used.
+mysql = { version = "28", default-features = false, features = [
+    "minimal-rust",
+    "rustls-tls",
+] }
+# Redis/Valkey's synchronous client only. Defaults add command-family helpers
+# dodo does not use; no aio feature means no async runtime enters this module.
+redis = { version = "1.5", default-features = false }
 
 # Two kernel32 calls only — `GetStdHandle` and `AttachConsole` — so that
 # `--version` / `--build-info` still print from a GUI-subsystem binary. See

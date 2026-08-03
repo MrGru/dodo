@@ -1002,6 +1002,11 @@ pub enum Str {
     DbDetailConstraintsPartial,
     DbDetailCopyDdl,
     DbDetailMetadataTruncated(usize),
+
+    // Database Explorer round 4: non-SQL console and keyspace paging.
+    DbProfileRedisDatabaseInvalid,
+    DbGroupMore,
+    DbCommandPlaceholder,
 }
 
 impl Str {
@@ -3164,6 +3169,20 @@ impl Str {
             (Str::DbDetailMetadataTruncated(count), Language::Vietnamese) => {
                 format!("Đang hiện {count} dòng siêu dữ liệu đầu tiên.").into()
             }
+            (Str::DbProfileRedisDatabaseInvalid, Language::English) => {
+                "Enter a non-negative logical database number.".into()
+            }
+            (Str::DbProfileRedisDatabaseInvalid, Language::Vietnamese) => {
+                "Hãy nhập số cơ sở dữ liệu logic không âm.".into()
+            }
+            (Str::DbGroupMore, Language::English) => "More…".into(),
+            (Str::DbGroupMore, Language::Vietnamese) => "Thêm…".into(),
+            (Str::DbCommandPlaceholder, Language::English) => {
+                "Enter one Redis command per line.".into()
+            }
+            (Str::DbCommandPlaceholder, Language::Vietnamese) => {
+                "Nhập một lệnh Redis trên mỗi dòng.".into()
+            }
         }
     }
 }
@@ -4007,6 +4026,9 @@ mod tests {
             plain(Str::DbDetailCopyDdl),
             plain(Str::DbDetailFieldNotNull),
             with(Str::DbDetailMetadataTruncated(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::DbProfileRedisDatabaseInvalid),
+            plain(Str::DbGroupMore),
+            plain(Str::DbCommandPlaceholder),
         ]
     }
 
@@ -4612,6 +4634,9 @@ mod tests {
             Str::DbDetailCopyDdl => 586,
             Str::DbDetailFieldNotNull => 587,
             Str::DbDetailMetadataTruncated(_) => 588,
+            Str::DbProfileRedisDatabaseInvalid => 589,
+            Str::DbGroupMore => 590,
+            Str::DbCommandPlaceholder => 591,
         }
     }
 

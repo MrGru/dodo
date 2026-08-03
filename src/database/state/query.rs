@@ -27,7 +27,6 @@ use std::time::Duration;
 use crate::database::models::error::DbError;
 use crate::database::models::page::{PageBudget, PageBuffer};
 use crate::database::models::query::QueryRequest;
-use crate::database::models::split::split_statements;
 use crate::database::models::value::{ColumnMeta, Row};
 use crate::database::services::Driver;
 use crate::i18n::Str;
@@ -106,7 +105,7 @@ impl Failure {
 /// **Blocking**, like everything it calls: run it on GPUI's background
 /// executor, never on the UI thread.
 pub fn run(driver: &dyn Driver, buffer: &str, budget: PageBudget) -> Result<Outcome, Failure> {
-    let statements = split_statements(buffer);
+    let statements = driver.statements(buffer);
     if statements.is_empty() {
         return Err(Failure::Nothing);
     }
@@ -178,7 +177,7 @@ pub fn run(driver: &dyn Driver, buffer: &str, budget: PageBudget) -> Result<Outc
 /// explain only its first statement and then execute the rest normally — an
 /// especially bad surprise for `SELECT …; DELETE …`.
 pub fn explain(driver: &dyn Driver, buffer: &str, budget: PageBudget) -> Result<Outcome, Failure> {
-    let statements = split_statements(buffer);
+    let statements = driver.statements(buffer);
     if statements.is_empty() {
         return Err(Failure::Nothing);
     }

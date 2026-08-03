@@ -824,7 +824,7 @@ impl DatabaseView {
         let connection_id = profile.id;
         let connection = profile.name.clone();
         let buffer = tab.editor.read(cx).value().to_string();
-        let history_buffer = buffer.clone();
+        let history_buffer = (!driver.statements(&buffer).is_empty()).then(|| buffer.clone());
         let budget = PageBudget::default();
         // **Before** the statement starts, not when Cancel is pressed: the
         // driver's connection is locked for as long as the query runs, so a
@@ -856,7 +856,9 @@ impl DatabaseView {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                this.history.record(connection, history_buffer);
+                if let Some(history_buffer) = history_buffer {
+                    this.history.record(connection, history_buffer);
+                }
                 // By id, not by index: the user may have closed a tab to the
                 // left of this one, or closed this one, while it ran.
                 let Some(tab) = this.tabs.find_mut(id) else {
@@ -1117,7 +1119,14 @@ impl DatabaseView {
         let current = Language::current(cx);
         let retranslate = self.language != current;
         self.language = current;
-        let placeholder = retranslate.then(|| t(Str::DbQueryPlaceholder, cx));
+        let placeholder = t(
+            if language == "sql" {
+                Str::DbQueryPlaceholder
+            } else {
+                Str::DbCommandPlaceholder
+            },
+            cx,
+        );
 
         // Every tab, not just the active one: a background tab whose editor was
         // never re-pointed would draw black text the moment it is switched to.
@@ -1134,7 +1143,9 @@ impl DatabaseView {
                 .tab_mut(index)
                 .is_some_and(|tab| tab.language.adopt(language));
             if repoint {
+                let placeholder = placeholder.clone();
                 editor.update(cx, |state, cx| {
+                    state.set_placeholder(placeholder, window, cx);
                     state.set_highlighter(language, cx);
                     // `refresh` is the only public way to say "re-run syntax
                     // highlighting on the next render"; without it the grammar
@@ -1142,7 +1153,8 @@ impl DatabaseView {
                     state.refresh(cx);
                 });
             }
-            if let Some(placeholder) = placeholder.clone() {
+            if retranslate && !repoint {
+                let placeholder = placeholder.clone();
                 editor.update(cx, |state, cx| {
                     state.set_placeholder(placeholder, window, cx);
                 });
@@ -1248,7 +1260,8 @@ fn node_icon(kind: NodeKind) -> AppIcon {
         NodeKind::View => AppIcon::Eye,
         NodeKind::Column => AppIcon::Columns,
         NodeKind::Index => AppIcon::SortAscending,
-        NodeKind::Constraint => AppIcon::Key,
+        NodeKind::Constraint | NodeKind::Key => AppIcon::Key,
+        NodeKind::Namespace => AppIcon::Database,
         NodeKind::Folder => AppIcon::FolderOpen,
         NodeKind::Other => AppIcon::File,
     }
@@ -1260,6 +1273,8 @@ pub(super) fn engine_icon(engine: Engine) -> AppIcon {
     match engine {
         Engine::PostgreSql => AppIcon::PostgreSql,
         Engine::Sqlite => AppIcon::Sqlite,
+        Engine::MySql => AppIcon::Database,
+        Engine::Redis => AppIcon::Key,
     }
 }
 
@@ -1278,7 +1293,7 @@ pub(super) fn row_looks(
                 detail: node.detail.clone().map(SharedString::from),
                 muted: false,
                 open: match (&node.label, node.kind) {
-                    (NodeLabel::Name(name), NodeKind::Table | NodeKind::View) => {
+                    (NodeLabel::Name(name), NodeKind::Table | NodeKind::View | NodeKind::Key) => {
                         Some(DetailTarget::new(node.id.clone(), node.kind, name.clone()))
                     }
                     _ => None,
