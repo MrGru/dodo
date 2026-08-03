@@ -351,6 +351,13 @@ impl Driver for SqliteDriver {
         Capabilities {
             editor_language: "sql",
             cancel: true,
+            // SQLite's `EXPLAIN` prints VDBE opcodes and `EXPLAIN QUERY PLAN`
+            // prints three columns of shorthand; neither is the thing a person
+            // means by "show me the plan", and offering one under that label
+            // would be worse than the honest absence. So the capability is
+            // false and the button is not drawn — no round has built a pane
+            // that could present either usefully.
+            explain: false,
         }
     }
 
@@ -611,6 +618,8 @@ mod tests {
         let fixture = Fixture::new(SCHEMA);
         assert!(fixture.driver.ping().is_ok());
         assert_eq!(fixture.driver.capabilities().editor_language, "sql");
+        assert!(!fixture.driver.capabilities().explain);
+        assert_eq!(fixture.driver.explain_statement("SELECT 1"), None);
     }
 
     // ---- the catalog ----------------------------------------------------

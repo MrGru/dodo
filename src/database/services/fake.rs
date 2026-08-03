@@ -201,7 +201,14 @@ impl Driver for FakeDriver {
         Capabilities {
             editor_language: self.editor_language,
             cancel: self.cancel,
+            explain: self.editor_language == "sql",
         }
+    }
+
+    fn explain_statement(&self, statement: &str) -> Option<String> {
+        self.capabilities()
+            .explain
+            .then(|| format!("EXPLAIN {statement}"))
     }
 
     fn cancel_handle(&self) -> Option<CancelHandle> {
