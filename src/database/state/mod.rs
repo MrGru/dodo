@@ -14,16 +14,22 @@
 //! - [`tabs`] — the open query tabs: each one's text, run in flight and
 //!   result, and the index arithmetic that decides which tab shows after a
 //!   close.
+//! - [`history`] and [`saved_queries`] — the bounded persisted execution list
+//!   and saved-query CRUD; their JSON boundary remains in `services`.
+//! - [`catalog_search`] — one bounded walk over `Driver::children`, cached in
+//!   memory and filtered locally after the remote work finishes.
 //! - [`edit`] — original/displayed rows together, so edits, inserts and deletes
 //!   remain local until Commit and Rollback is one exact reset.
 //!
 //! [`run`]: query::run
 
+pub mod catalog_search;
 pub mod connections;
 pub mod detail;
 pub mod edit;
 pub mod editor;
 pub mod history;
 pub mod query;
+pub mod saved_queries;
 pub mod tabs;
 pub mod tree;

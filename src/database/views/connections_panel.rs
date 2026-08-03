@@ -58,12 +58,21 @@ impl DatabaseView {
     /// per-connection, and the tree.
     pub(super) fn render_panel(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
         let store_error = self.store_error.clone();
+        let query_store_error = self.query_store_error.clone();
 
         v_flex()
             .size_full()
             .min_w_0()
             .child(self.render_header(cx))
             .when_some(store_error, |this, error| {
+                this.child(
+                    div()
+                        .px_2()
+                        .pb_1()
+                        .child(notice(Tone::Danger, t(error, cx), cx)),
+                )
+            })
+            .when_some(query_store_error, |this, error| {
                 this.child(
                     div()
                         .px_2()
@@ -104,6 +113,17 @@ impl DatabaseView {
             .child(
                 h_flex()
                     .gap_1()
+                    .child(
+                        Button::new("db-search-catalogs")
+                            .ghost()
+                            .xsmall()
+                            .icon(AppIcon::Search)
+                            .tooltip(t(Str::DbCatalogSearch, cx))
+                            .disabled(!self.can_search_catalogs())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_catalog_search(window, cx)
+                            })),
+                    )
                     .child(
                         Button::new("db-refresh-tree")
                             .ghost()

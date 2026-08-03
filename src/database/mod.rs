@@ -14,12 +14,13 @@
 //!   `docker::services` the only place that names `bollard`. Also where
 //!   `connections.json` is read and written.
 //! - [`state`] — the saved connections and their live status, the object
-//!   tree's per-node load state, open query tabs and in-session history. Plain
-//!   data over an `Arc<dyn Driver>`.
+//!   tree's per-node load state, open query tabs, saved queries, persisted
+//!   history and the bounded catalog-search index. Plain data over an
+//!   `Arc<dyn Driver>`.
 //! - [`components`] — the small elements the widget library does not have.
 //! - [`views`] — the page itself.
 //!
-//! # What rounds 1–5 ship, and what they deliberately do not
+//! # What rounds 1–6 ship, and what they deliberately do not
 //!
 //! Round 1 built the foundation against **PostgreSQL and SQLite only**: saved
 //! connections, the lazy object tree, one editor and one bounded result grid.
@@ -35,11 +36,15 @@
 //! databases → type groups → cursor-paged keys; the console runs one command
 //! per line, and only an opened key fetches its value. Round 5 adds pending
 //! table-data edits, add/delete/duplicate row, and explicit Commit/Rollback for
-//! PostgreSQL, SQLite and MySQL/MariaDB; Redis remains read-only.
+//! PostgreSQL, SQLite and MySQL/MariaDB; Redis remains read-only. Round 6 adds
+//! connection-scoped saved queries, bounded persisted query history and one
+//! bounded in-memory catalog search over connected databases. Search walks the
+//! existing `Driver::children` seam off-thread; Redis therefore keeps using
+//! cursor-paged `SCAN … TYPE`, never `KEYS` or one query per key.
 //!
-//! Still not built, and nothing is reserved for them: favourites, pinned
-//! queries, persisted history or tab restore, autocomplete,
-//! or global search. **Column sorting is not built either**: the
+//! Still not built, and nothing is reserved for them: favourites, saved-query
+//! folders/tags/sharing/import/export, tab restore, autocomplete, or a
+//! background catalog daemon. **Column sorting is not built either**: the
 //! result grid's headers carry the column name and its type and no sort
 //! affordance at all, because sorting one bounded page would be dishonest and
 //! server-side sorting was not part of round 3's accepted scope.
@@ -71,8 +76,8 @@
 //! Every [`Driver`](services::Driver) method performs blocking IO and is
 //! **blocking by contract**, exactly like `Transport::execute` and
 //! `DockerEngine`: callers run them on GPUI's background executor, never on the
-//! UI thread. Nothing in this module — including `connections.json` — is read
-//! or written on the UI thread.
+//! UI thread. Nothing in this module — including `connections.json` and
+//! `query-data.json` — is read or written on the UI thread.
 //!
 //! MySQL and Redis use their crates' blocking clients directly; neither builds
 //! or requires an async runtime. One honest wrinkle worth knowing before

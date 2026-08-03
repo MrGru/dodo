@@ -1,32 +1,40 @@
-//! Searchable query history for this session.
+//! Persisted, searchable query history.
 //!
-//! The dialog is an entity because dialog layers repaint independently from
-//! the Database page. It receives an owned snapshot, never reads the page while
-//! the click handler has it leased, and clicking a row opens a new query tab.
+//! The dialog receives an owned snapshot and clicking a row opens its text in a
+//! new tab. The saved connection scope is checked before the page changes its
+//! selection, so a repointed profile can never silently receive an old query.
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::{
     App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Pixels, Render,
     SharedString, Styled as _, Task, Window, div, px,
 };
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::list::{List, ListDelegate, ListItem, ListState};
-use gpui_component::{ActiveTheme as _, IndexPath, WindowExt as _, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Disableable as _, IndexPath, Sizable as _, WindowExt as _, h_flex, v_flex,
+};
 
-use crate::database::state::history::HistoryEntry;
+use crate::app_icon::AppIcon;
+use crate::database::models::library::{HistoryEntry, HistoryOutcome};
+use crate::database::state::query::format_elapsed;
 use crate::database::views::database::DatabaseView;
 use crate::i18n::{Str, t};
 
-const PANEL_W: Pixels = px(640.);
+const PANEL_W: Pixels = px(680.);
 const PANEL_H: Pixels = px(440.);
 const PANEL_MARGIN: Pixels = px(24.);
 const DIALOG_PADDING_X: Pixels = px(32.);
 
 pub fn open(
     entries: Vec<HistoryEntry>,
+    writable: bool,
     database: Entity<DatabaseView>,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let view = cx.new(|cx| HistoryView::new(entries, database, window, cx));
+    let view = cx.new(|cx| HistoryView::new(entries, writable, database, window, cx));
     window.open_dialog(cx, move |dialog, window, cx| {
         let view = view.clone();
         let viewport = window.viewport_size();
@@ -48,30 +56,61 @@ pub fn open(
 
 struct HistoryView {
     list: Entity<ListState<HistoryDelegate>>,
+    database: Entity<DatabaseView>,
+    can_clear: bool,
 }
 
 impl HistoryView {
     fn new(
         entries: Vec<HistoryEntry>,
+        writable: bool,
         database: Entity<DatabaseView>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let can_clear = writable && !entries.is_empty();
         let list = cx.new(|cx| {
-            ListState::new(HistoryDelegate::new(entries, database), window, cx).searchable(true)
+            ListState::new(HistoryDelegate::new(entries, database.clone()), window, cx)
+                .searchable(true)
         });
         list.update(cx, |state, cx| state.focus(window, cx));
-        Self { list }
+        Self {
+            list,
+            database,
+            can_clear,
+        }
     }
 }
 
 impl Render for HistoryView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child(
-            List::new(&self.list)
-                .search_placeholder(t(Str::DbHistorySearch, cx))
-                .size_full(),
-        )
+        let database = self.database.clone();
+        v_flex()
+            .size_full()
+            .gap_2()
+            .child(
+                h_flex().w_full().justify_end().child(
+                    Button::new("db-clear-history")
+                        .ghost()
+                        .small()
+                        .icon(AppIcon::Trash)
+                        .label(t(Str::DbHistoryClear, cx))
+                        .disabled(!self.can_clear)
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            database.update(cx, |database, cx| {
+                                database.confirm_clear_history(window, cx)
+                            });
+                        }),
+                ),
+            )
+            .child(
+                div().flex_1().min_h_0().child(
+                    List::new(&self.list)
+                        .search_placeholder(t(Str::DbHistorySearch, cx))
+                        .size_full(),
+                ),
+            )
     }
 }
 
@@ -126,6 +165,16 @@ impl ListDelegate for HistoryDelegate {
         cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
         let entry = self.entries.get(*self.filtered.get(ix.row)?)?;
+        let outcome = match entry.outcome {
+            HistoryOutcome::Succeeded => Str::DbHistorySucceeded,
+            HistoryOutcome::Failed => Str::DbHistoryFailed,
+            HistoryOutcome::Cancelled => Str::DbCancelledMessage,
+        };
+        let separator = || {
+            div()
+                .text_color(cx.theme().muted_foreground)
+                .child(SharedString::new_static("·"))
+        };
         Some(
             ListItem::new(("db-history-row", ix.row)).child(
                 v_flex()
@@ -139,10 +188,23 @@ impl ListDelegate for HistoryDelegate {
                             .child(SharedString::from(statement_summary(&entry.statement))),
                     )
                     .child(
-                        div()
+                        h_flex()
+                            .gap_1()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(SharedString::from(entry.connection.clone())),
+                            .child(SharedString::from(entry.scope.connection_name.clone()))
+                            .child(separator())
+                            .child(t(outcome, cx))
+                            .children(entry.duration_ms.map(|millis| {
+                                h_flex().gap_1().child(separator()).child(t(
+                                    Str::DbFooterElapsed(format_elapsed(Duration::from_millis(
+                                        millis,
+                                    ))),
+                                    cx,
+                                ))
+                            }))
+                            .child(separator())
+                            .child(t(relative_age(entry.recorded_at, now()), cx)),
                     ),
             ),
         )
@@ -179,14 +241,14 @@ impl ListDelegate for HistoryDelegate {
     fn confirm(&mut self, _: bool, window: &mut Window, cx: &mut Context<ListState<Self>>) {
         let Some(entry) = self
             .selected
-            .and_then(|ix| self.filtered.get(ix.row))
-            .and_then(|index| self.entries.get(*index))
+            .and_then(|ix| self.filtered.get(ix.row).copied())
+            .and_then(|index| self.entries.get(index))
             .cloned()
         else {
             return;
         };
         self.database.update(cx, |database, cx| {
-            database.open_tab_with_statement(entry.statement, window, cx)
+            database.open_scoped_statement(entry.scope, entry.statement, window, cx)
         });
         window.close_dialog(cx);
     }
@@ -196,9 +258,27 @@ fn statement_summary(statement: &str) -> String {
     statement.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn relative_age(recorded_at: u64, current: u64) -> Str {
+    let seconds = current.saturating_sub(recorded_at);
+    match seconds {
+        0..=59 => Str::DbHistoryJustNow,
+        60..=3_599 => Str::DbHistoryMinutesAgo(seconds / 60),
+        3_600..=86_399 => Str::DbHistoryHoursAgo(seconds / 3_600),
+        _ => Str::DbHistoryDaysAgo(seconds / 86_400),
+    }
+}
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::statement_summary;
+    use super::{relative_age, statement_summary};
+    use crate::i18n::Str;
 
     #[test]
     fn a_multiline_statement_is_one_search_result_row() {
@@ -206,5 +286,22 @@ mod tests {
             statement_summary("SELECT *\n  FROM users\nWHERE id = 1"),
             "SELECT * FROM users WHERE id = 1"
         );
+    }
+
+    #[test]
+    fn persisted_timestamps_render_as_bounded_relative_units() {
+        assert!(matches!(relative_age(100, 120), Str::DbHistoryJustNow));
+        assert!(matches!(
+            relative_age(100, 220),
+            Str::DbHistoryMinutesAgo(2)
+        ));
+        assert!(matches!(
+            relative_age(100, 7_300),
+            Str::DbHistoryHoursAgo(2)
+        ));
+        assert!(matches!(
+            relative_age(100, 172_900),
+            Str::DbHistoryDaysAgo(2)
+        ));
     }
 }

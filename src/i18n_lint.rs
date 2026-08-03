@@ -36,7 +36,7 @@
 /// The view sources, embedded at compile time so the test needs no working
 /// directory. These are the files that build what the user sees; pure logic
 /// modules have no text sinks and are not worth scanning.
-const SOURCES: [(&str, &str); 26] = [
+const SOURCES: [(&str, &str); 30] = [
     ("src/layout.rs", include_str!("layout.rs")),
     ("src/json_formatter.rs", include_str!("json_formatter.rs")),
     ("src/encoder_decoder.rs", include_str!("encoder_decoder.rs")),
@@ -134,6 +134,22 @@ const SOURCES: [(&str, &str); 26] = [
     (
         "src/database/views/result_grid.rs",
         include_str!("database/views/result_grid.rs"),
+    ),
+    (
+        "src/database/views/history.rs",
+        include_str!("database/views/history.rs"),
+    ),
+    (
+        "src/database/views/saved_queries.rs",
+        include_str!("database/views/saved_queries.rs"),
+    ),
+    (
+        "src/database/views/saved_query_form.rs",
+        include_str!("database/views/saved_query_form.rs"),
+    ),
+    (
+        "src/database/views/catalog_search.rs",
+        include_str!("database/views/catalog_search.rs"),
     ),
     // The two shared elements. They take text that is already translated, so a
     // literal in one of them would be a new, untranslated string rather than a

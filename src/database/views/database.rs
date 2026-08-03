@@ -54,8 +54,8 @@ use std::sync::Arc;
 
 use gpui::{
     App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, Hsla,
-    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, SharedString,
-    Styled as _, Subscription, Task, Window, div, px,
+    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, ScrollStrategy,
+    SharedString, Styled as _, Subscription, Task, Window, div, px,
 };
 use gpui_component::input::InputState;
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
@@ -68,20 +68,25 @@ use crate::database::models::catalog::{NodeId, NodeKind, NodeLabel};
 use crate::database::models::connection::ConnectionProfile;
 use crate::database::models::detail::{DetailRequest, DetailTarget};
 use crate::database::models::engine::Engine;
+use crate::database::models::library::{HistoryOutcome, QueryDataDocument, QueryScope, SavedQuery};
 use crate::database::models::page::PageBudget;
 use crate::database::models::sql_format;
 use crate::database::models::statement::{GeneratedBatch, generate};
 use crate::database::models::value::{ColumnMeta, Value};
 use crate::database::services::connection_store::{ConnectionStore, DiskConnectionStore};
 use crate::database::services::export::{self, ExportFormat};
+use crate::database::services::query_store::{DiskQueryStore, QueryStore};
 use crate::database::services::{self, Driver};
+use crate::database::state::catalog_search::{CatalogIndex, CatalogSearchEntry, CatalogSource};
 use crate::database::state::connections::{ConnectionsState, Status};
 use crate::database::state::detail::{self, DetailLoad, DetailState};
 use crate::database::state::edit::{EditError, PendingGrid};
 use crate::database::state::history::History;
 use crate::database::state::query::{self, QueryState};
+use crate::database::state::saved_queries::SavedQueries;
 use crate::database::state::tabs::{QueryTab, QueryTabs};
 use crate::database::state::tree::{Content, Forest, Notice, Outline, RowRef};
+use crate::database::views::catalog_search;
 use crate::database::views::commit_dialog;
 use crate::database::views::connection_form::{self, ConnectionForm, FormEvent};
 use crate::database::views::history;
@@ -89,6 +94,7 @@ use crate::database::views::result_grid::ResultDelegate;
 use crate::database::views::row_editor::{
     self, Action as RowEditorAction, Draft as RowEditorDraft,
 };
+use crate::database::views::{saved_queries, saved_query_form};
 use crate::database::{DatabaseCopyCell, DatabaseCopyRow, KEY_CONTEXT};
 use crate::i18n::{Language, Str, t};
 use crate::paths::data_dir;
@@ -128,8 +134,15 @@ pub struct DatabaseView {
 
     /// The open query tabs. Always at least one.
     pub(super) tabs: QueryTabs,
-    /// Every editor buffer executed this session, newest first. Never persisted.
+    /// Round 2's bounded execution list, now restored from disk on launch.
     history: History,
+    saved_queries: SavedQueries,
+    query_store: Arc<dyn QueryStore>,
+    query_store_loaded: bool,
+    /// False after a corrupt/newer document. In-memory query work remains
+    /// usable, but nothing overwrites the unreadable file silently.
+    query_store_writable: bool,
+    query_save_dirty: bool,
     /// Shared by query results and object detail, because only one grid is ever
     /// on screen.
     pub(super) table: Entity<TableState<ResultDelegate>>,
@@ -151,10 +164,12 @@ pub struct DatabaseView {
     detail_task: Option<Task<()>>,
     mutation_task: Option<Task<()>>,
     save_task: Option<Task<()>>,
+    query_save_task: Option<Task<()>>,
 
     /// A failure from the store itself — the file could not be read or written.
     /// Held as a [`Str`] rather than rendered text so it re-translates.
     pub(super) store_error: Option<Str>,
+    pub(super) query_store_error: Option<Str>,
     /// Result/detail mutation feedback, held untranslated so language changes
     /// update a message already on screen.
     pub(super) edit_notice: Option<(Str, bool)>,
@@ -186,6 +201,11 @@ impl DatabaseView {
             tree_state,
             tabs: QueryTabs::new(),
             history: History::default(),
+            saved_queries: SavedQueries::default(),
+            query_store: Arc::new(DiskQueryStore::new()),
+            query_store_loaded: false,
+            query_store_writable: false,
+            query_save_dirty: false,
             table,
             detail: None,
             outer_split: cx.new(|_| ResizableState::default()),
@@ -198,7 +218,9 @@ impl DatabaseView {
             detail_task: None,
             mutation_task: None,
             save_task: None,
+            query_save_task: None,
             store_error: None,
+            query_store_error: None,
             edit_notice: None,
             focus_handle: cx.focus_handle(),
             language: Language::current(cx),
@@ -207,6 +229,7 @@ impl DatabaseView {
         // it is a dead end with no way back.
         this.open_tab(window, cx);
         this.load_saved(cx);
+        this.load_query_data(cx);
         this
     }
 
@@ -252,7 +275,134 @@ impl DatabaseView {
     }
 
     pub(super) fn open_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        history::open(self.history.snapshot(), cx.entity(), window, cx);
+        history::open(
+            self.history.snapshot(),
+            self.query_store_writable,
+            cx.entity(),
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn open_saved_queries(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        saved_queries::open(self.saved_queries.snapshot(), cx.entity(), window, cx);
+    }
+
+    pub(super) fn pin_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.query_store_writable {
+            return;
+        }
+        let Some(profile) = self.connections.selected() else {
+            return;
+        };
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let statement = tab.editor.read(cx).value().to_string();
+        let draft = SavedQuery {
+            id: 0,
+            name: String::new(),
+            statement,
+            scope: QueryScope::from_profile(profile),
+        };
+        saved_query_form::open(cx.entity(), draft, false, window, cx);
+    }
+
+    pub(super) fn edit_saved_query(
+        &mut self,
+        query: SavedQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.query_store_writable {
+            saved_query_form::open(cx.entity(), query, true, window, cx);
+        }
+    }
+
+    pub(super) fn save_saved_query(&mut self, query: SavedQuery, cx: &mut Context<Self>) -> bool {
+        if !self.query_store_writable || !self.saved_queries.save(query) {
+            return false;
+        }
+        self.persist_query_data(cx);
+        cx.notify();
+        true
+    }
+
+    pub(super) fn delete_saved_query(
+        &mut self,
+        query: SavedQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.query_store_writable {
+            return;
+        }
+        let id = query.id;
+        let name = query.name;
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let view = view.clone();
+            dialog
+                .title(t(Str::DbSavedQueryDeleteTitle, cx))
+                .child(t(Str::DbSavedQueryDeleteMessage(name.clone()), cx))
+                .on_ok(move |_, window, cx| {
+                    view.update(cx, |this, cx| {
+                        if this.saved_queries.delete(id) {
+                            this.persist_query_data(cx);
+                        }
+                    });
+                    window.close_dialog(cx);
+                    true
+                })
+        });
+    }
+
+    pub(super) fn confirm_clear_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.query_store_writable || self.history.snapshot().is_empty() {
+            return;
+        }
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let view = view.clone();
+            dialog
+                .title(t(Str::DbHistoryClearTitle, cx))
+                .child(t(Str::DbHistoryClearMessage, cx))
+                .on_ok(move |_, window, cx| {
+                    view.update(cx, |this, cx| {
+                        if this.history.clear() {
+                            this.persist_query_data(cx);
+                        }
+                    });
+                    window.close_dialog(cx);
+                    true
+                })
+        });
+    }
+
+    pub(super) fn open_scoped_statement(
+        &mut self,
+        scope: QueryScope,
+        statement: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let matches = self
+            .connections
+            .find(scope.connection_id)
+            .is_some_and(|profile| scope.matches_profile(profile));
+        if matches {
+            self.select(scope.connection_id, cx);
+        }
+        self.open_tab_with_statement(statement, window, cx);
+        if !matches && let Some(tab) = self.tabs.active_mut() {
+            tab.notice = Some(Str::DbSavedQueryScopeMismatch(scope.connection_name));
+            tab.notice_success = false;
+        }
+        cx.notify();
+    }
+
+    pub(super) fn query_store_writable(&self) -> bool {
+        self.query_store_writable
     }
 
     pub(super) fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -385,6 +535,158 @@ impl DatabaseView {
                 cx.notify();
             });
         }));
+    }
+
+    /// Loads `query-data.json` without ever risking the editor's usability.
+    /// A corrupt or newer document is reported and left untouched; query runs
+    /// continue in memory, but saves are disabled for that launch.
+    fn load_query_data(&mut self, cx: &mut Context<Self>) {
+        let store = self.query_store.clone();
+        cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { store.load() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.query_store_loaded = true;
+                match loaded {
+                    Ok(document) => {
+                        // A query may finish during startup. Keep it ahead of
+                        // the persisted entries rather than replacing it.
+                        let mut history = this.history.snapshot();
+                        let had_session_entries = !history.is_empty();
+                        history.extend(document.history);
+                        this.history.adopt(history);
+                        this.saved_queries.adopt(document.saved_queries);
+                        this.query_store_writable = true;
+                        if had_session_entries {
+                            this.persist_query_data(cx);
+                        }
+                    }
+                    Err(error) => {
+                        this.query_store_error = Some(error.message());
+                        this.query_store_writable = false;
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn query_data_document(&self) -> QueryDataDocument {
+        QueryDataDocument {
+            saved_queries: self.saved_queries.snapshot(),
+            history: self.history.snapshot(),
+            ..QueryDataDocument::default()
+        }
+    }
+
+    /// Coalesces frequent history writes into one ordered background stream.
+    /// This avoids two saves racing on the same temporary file when queries
+    /// finish close together.
+    fn persist_query_data(&mut self, cx: &mut Context<Self>) {
+        if !self.query_store_loaded || !self.query_store_writable {
+            return;
+        }
+        self.query_save_dirty = true;
+        if self.query_save_task.is_none() {
+            self.start_query_save(cx);
+        }
+    }
+
+    fn start_query_save(&mut self, cx: &mut Context<Self>) {
+        self.query_save_dirty = false;
+        let store = self.query_store.clone();
+        let document = self.query_data_document();
+        self.query_save_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { store.persist(&document) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.query_save_task = None;
+                if let Err(error) = result {
+                    this.query_store_error = Some(error.message());
+                    this.query_store_writable = false;
+                    this.query_save_dirty = false;
+                } else if this.query_save_dirty {
+                    this.start_query_save(cx);
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    // ---- global catalog search -------------------------------------------
+
+    pub(super) fn can_search_catalogs(&self) -> bool {
+        !self.drivers.is_empty()
+    }
+
+    pub(super) fn open_catalog_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let sources = self
+            .connections
+            .profiles()
+            .iter()
+            .filter_map(|profile| {
+                self.drivers
+                    .get(&profile.id)
+                    .cloned()
+                    .map(|driver| CatalogSource {
+                        scope: QueryScope::from_profile(profile),
+                        driver,
+                    })
+            })
+            .collect::<Vec<_>>();
+        if !sources.is_empty() {
+            catalog_search::open(sources, cx.entity(), window, cx);
+        }
+    }
+
+    pub(super) fn navigate_catalog_result(
+        &mut self,
+        entry: CatalogSearchEntry,
+        index: Arc<CatalogIndex>,
+        cx: &mut Context<Self>,
+    ) {
+        let valid = self
+            .connections
+            .find(entry.scope.connection_id)
+            .is_some_and(|profile| entry.scope.matches_profile(profile))
+            && self.drivers.contains_key(&entry.scope.connection_id);
+        if !valid {
+            self.edit_notice = Some((
+                Str::DbCatalogSearchConnectionUnavailable(entry.scope.connection_name),
+                false,
+            ));
+            cx.notify();
+            return;
+        }
+
+        let connection = entry.scope.connection_id;
+        self.select(connection, cx);
+        self.forest.open(connection);
+        index.reveal(&entry, self.forest.tree_mut(connection));
+        self.sync_tree_items(cx);
+
+        let row_id = SharedString::from(RowRef::child(connection, entry.node.id.as_str()));
+        let item = TreeItem::new(row_id.clone(), row_id.clone());
+        self.tree_state.update(cx, |state, cx| {
+            state.set_selected_item(Some(&item), cx);
+            state.reveal_item(&row_id, ScrollStrategy::Center, cx);
+        });
+
+        if let (NodeLabel::Name(name), NodeKind::Table | NodeKind::View | NodeKind::Key) =
+            (&entry.node.label, entry.node.kind)
+        {
+            self.open_detail(
+                connection,
+                DetailTarget::new(entry.node.id, entry.node.kind, name.clone()),
+                cx,
+            );
+        }
+        cx.notify();
     }
 
     // ---- connections -----------------------------------------------------
@@ -1284,7 +1586,7 @@ impl DatabaseView {
             return;
         };
         let connection_id = profile.id;
-        let connection = profile.name.clone();
+        let scope = QueryScope::from_profile(profile);
         let buffer = tab.editor.read(cx).value().to_string();
         let history_buffer = (!driver.statements(&buffer).is_empty()).then(|| buffer.clone());
         let budget = PageBudget::default();
@@ -1319,7 +1621,20 @@ impl DatabaseView {
 
             let _ = this.update(cx, |this, cx| {
                 if let Some(history_buffer) = history_buffer {
-                    this.history.record(connection, history_buffer);
+                    let (outcome, duration_ms) = match &result {
+                        Ok(outcome) => (
+                            HistoryOutcome::Succeeded,
+                            Some(outcome.elapsed.as_millis().min(u128::from(u64::MAX)) as u64),
+                        ),
+                        Err(failure) if failure.is_cancelled() => (HistoryOutcome::Cancelled, None),
+                        Err(_) => (HistoryOutcome::Failed, None),
+                    };
+                    if this
+                        .history
+                        .record(scope, history_buffer, outcome, duration_ms)
+                    {
+                        this.persist_query_data(cx);
+                    }
                 }
                 // By id, not by index: the user may have closed a tab to the
                 // left of this one, or closed this one, while it ran.
@@ -1714,7 +2029,7 @@ pub(super) struct ConnectionLook {
 /// The icon for a node kind. The only place a `NodeKind` is matched on, which
 /// is what "adding a backend does not change the views" means in practice: a
 /// new variant adds an arm here and nowhere else.
-fn node_icon(kind: NodeKind) -> AppIcon {
+pub(super) fn node_icon(kind: NodeKind) -> AppIcon {
     match kind {
         NodeKind::Database => AppIcon::Database,
         NodeKind::Schema => AppIcon::Folder,

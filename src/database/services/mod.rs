@@ -71,6 +71,7 @@ pub mod connection_store;
 pub mod export;
 pub mod mysql;
 pub mod postgres;
+pub mod query_store;
 pub mod redis;
 pub mod sqlite;
 
