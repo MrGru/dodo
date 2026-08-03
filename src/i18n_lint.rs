@@ -36,7 +36,7 @@
 /// The view sources, embedded at compile time so the test needs no working
 /// directory. These are the files that build what the user sees; pure logic
 /// modules have no text sinks and are not worth scanning.
-const SOURCES: [(&str, &str); 25] = [
+const SOURCES: [(&str, &str); 26] = [
     ("src/layout.rs", include_str!("layout.rs")),
     ("src/json_formatter.rs", include_str!("json_formatter.rs")),
     ("src/encoder_decoder.rs", include_str!("encoder_decoder.rs")),
@@ -126,6 +126,10 @@ const SOURCES: [(&str, &str); 25] = [
     (
         "src/database/views/query_pane.rs",
         include_str!("database/views/query_pane.rs"),
+    ),
+    (
+        "src/database/views/object_detail.rs",
+        include_str!("database/views/object_detail.rs"),
     ),
     (
         "src/database/views/result_grid.rs",

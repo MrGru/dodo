@@ -43,6 +43,10 @@ use crate::i18n::{Str, t};
 
 impl DatabaseView {
     pub(super) fn render_workspace(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if self.detail.is_some() {
+            return self.render_object_detail(cx);
+        }
+
         // Nothing is selected but connections exist: the editor would have
         // nowhere to send a statement, so the pane says which choice is
         // missing rather than showing a dead Execute button.
