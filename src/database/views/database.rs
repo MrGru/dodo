@@ -73,10 +73,12 @@ use crate::database::services::connection_store::{ConnectionStore, DiskConnectio
 use crate::database::services::export::{self, ExportFormat};
 use crate::database::services::{self, Driver};
 use crate::database::state::connections::{ConnectionsState, Status};
+use crate::database::state::history::History;
 use crate::database::state::query::{self, QueryState};
 use crate::database::state::tabs::{QueryTab, QueryTabs};
 use crate::database::state::tree::{Content, Forest, Notice, Outline, RowRef};
 use crate::database::views::connection_form::{self, ConnectionForm, FormEvent};
+use crate::database::views::history;
 use crate::database::views::result_grid::ResultDelegate;
 use crate::database::{DatabaseCopyCell, DatabaseCopyRow, KEY_CONTEXT};
 use crate::i18n::{Language, Str, t};
@@ -111,6 +113,8 @@ pub struct DatabaseView {
 
     /// The open query tabs. Always at least one.
     pub(super) tabs: QueryTabs,
+    /// Every editor buffer executed this session, newest first. Never persisted.
+    history: History,
     /// Shared by every tab, because only one result is ever on screen.
     pub(super) table: Entity<TableState<ResultDelegate>>,
 
@@ -159,6 +163,7 @@ impl DatabaseView {
             forest: Forest::new(),
             tree_state,
             tabs: QueryTabs::new(),
+            history: History::default(),
             table,
             outer_split: cx.new(|_| ResizableState::default()),
             inner_split: cx.new(|_| ResizableState::default()),
@@ -206,6 +211,22 @@ impl DatabaseView {
         // old tab's rows under it.
         self.show_active_result(cx);
         cx.notify();
+    }
+
+    pub(super) fn open_tab_with_statement(
+        &mut self,
+        statement: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_tab(window, cx);
+        if let Some(editor) = self.tabs.active().map(|tab| tab.editor.clone()) {
+            editor.update(cx, |state, cx| state.set_value(statement, window, cx));
+        }
+    }
+
+    pub(super) fn open_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        history::open(self.history.snapshot(), cx.entity(), window, cx);
     }
 
     pub(super) fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -642,7 +663,13 @@ impl DatabaseView {
         }
 
         let id = tab.id;
+        let connection = self
+            .connections
+            .selected()
+            .map(|profile| profile.name.clone())
+            .unwrap_or_default();
         let buffer = tab.editor.read(cx).value().to_string();
+        let history_buffer = buffer.clone();
         let budget = PageBudget::default();
         // **Before** the statement starts, not when Cancel is pressed: the
         // driver's connection is locked for as long as the query runs, so a
@@ -673,6 +700,7 @@ impl DatabaseView {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
+                this.history.record(connection, history_buffer);
                 // By id, not by index: the user may have closed a tab to the
                 // left of this one, or closed this one, while it ran.
                 let Some(tab) = this.tabs.find_mut(id) else {

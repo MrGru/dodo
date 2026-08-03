@@ -971,6 +971,12 @@ pub enum Str {
     },
     DbExportCancelled,
     DbExportFailed(String),
+
+    // Round 2: searchable in-session query history.
+    DbHistory,
+    DbHistorySearch,
+    DbHistoryEmpty,
+    DbHistoryNoMatches,
 }
 
 impl Str {
@@ -3052,6 +3058,15 @@ impl Str {
             (Str::DbExportFailed(detail), Language::Vietnamese) => {
                 format!("Không thể xuất kết quả: {detail}").into()
             }
+
+            (Str::DbHistory, Language::English) => "History".into(),
+            (Str::DbHistory, Language::Vietnamese) => "Lịch sử".into(),
+            (Str::DbHistorySearch, Language::English) => "Search query history…".into(),
+            (Str::DbHistorySearch, Language::Vietnamese) => "Tìm trong lịch sử truy vấn…".into(),
+            (Str::DbHistoryEmpty, Language::English) => "No queries have run yet.".into(),
+            (Str::DbHistoryEmpty, Language::Vietnamese) => "Chưa có truy vấn nào được chạy.".into(),
+            (Str::DbHistoryNoMatches, Language::English) => "No matching queries.".into(),
+            (Str::DbHistoryNoMatches, Language::Vietnamese) => "Không có truy vấn phù hợp.".into(),
         }
     }
 }
@@ -3865,6 +3880,10 @@ mod tests {
             ),
             plain(Str::DbExportCancelled),
             with(Str::DbExportFailed(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbHistory),
+            plain(Str::DbHistorySearch),
+            plain(Str::DbHistoryEmpty),
+            plain(Str::DbHistoryNoMatches),
         ]
     }
 
@@ -4446,6 +4465,10 @@ mod tests {
             Str::DbExportSucceeded { .. } => 562,
             Str::DbExportCancelled => 563,
             Str::DbExportFailed(_) => 564,
+            Str::DbHistory => 565,
+            Str::DbHistorySearch => 566,
+            Str::DbHistoryEmpty => 567,
+            Str::DbHistoryNoMatches => 568,
         }
     }
 

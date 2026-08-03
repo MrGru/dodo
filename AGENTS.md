@@ -219,9 +219,9 @@ Six things worth knowing before touching it:
   (NIST FIPS 180-4 vectors; SemVer §11 precedence).
 
 **`src/database/`** is the Database Explorer — create a connection, browse its objects, run a
-query, read the result — **PostgreSQL and SQLite only as of round 1**. Same five-layer split as
-the three modules above; **`src/database/mod.rs` is the authority** on the structure and on what
-R1 deliberately does not build. Ten things worth knowing before touching it:
+query, read the result — **PostgreSQL and SQLite only as of round 2**. Same five-layer split as
+the three modules above; **`src/database/mod.rs` is the authority** on the structure, shipped
+rounds and deliberate cuts. Eleven things worth knowing before touching it:
 
 - **The left panel is one tree and the connections are its roots**, not a list stacked on a
   tree. `state::tree::Forest` holds one `CatalogTree` per connection, so selecting a connection
@@ -245,12 +245,10 @@ R1 deliberately does not build. Ten things worth knowing before touching it:
   returns nothing. (Other modules are *mentioned* in its doc comments; a pointer is not an edge.)
   The design report proposed a "detect running database containers" prefill on the connection form
   and it was dropped in *every* round, precisely so no compile-time edge exists between two tools.
-- **The `Driver` trait is four methods and the capability set has one field.** That is not an
-  oversight: the report proposes fields for transactions, Explain, cancel, column provenance and
-  `LIMIT`/`OFFSET`, and each describes a control no round has built, so each would be a value
-  nothing reads — the same reasoning `Cargo.toml` records for the marker features this crate
-  declined. `services/mod.rs` states it, and states how a non-SQL backend fits without contorting
-  the trait. A field arrives with the control that reads it.
+- **The `Driver` capability set grows only with controls that read it.** Round 2 added `cancel`
+  with the Cancel button and `explain` with PostgreSQL's Explain button; transactions, column
+  provenance and `LIMIT`/`OFFSET` still do not exist because no shipped control reads them.
+  `services/mod.rs` states it, and states how a non-SQL backend fits without contorting the trait.
 - **The object tree is a *question*, not a ladder.** A driver answers "the children of this node";
   nothing above `services/` knows PostgreSQL puts schemas under a database and SQLite does not.
   That is the whole reason a second backend is one file. `models/catalog.rs` also keeps a server's
@@ -265,6 +263,11 @@ R1 deliberately does not build. Ten things worth knowing before touching it:
   `Continue`** — being offered one further row is what proves there was more, which is what makes
   the footer's truncation notice trustworthy. **No `LIMIT` is ever injected into a statement the
   user wrote**; that module says why bounding at the sink is the only honest way.
+- **Round 2's long work stays server-honest.** Cancel uses PostgreSQL's protocol CancelRequest or
+  SQLite's interrupt handle, never task dropping; `services/postgres.rs::live` has the opt-in
+  server-side proof. Export re-runs the displayed statement through `services/export.rs`'s
+  file-backed sink and keeps one row, never the truncated grid. Query tabs and searchable history
+  are session-only; neither is added to the persisted-files list below.
 - **PostgreSQL rows arrive as binary and `services/postgres.rs` decodes them.** `query_raw`
   streams (the blocking client's `simple_query` would give text for free but materialises the
   whole result, defeating the budget); `numeric` is rendered as text rather than through an `f64`,
