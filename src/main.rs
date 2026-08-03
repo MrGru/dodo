@@ -64,6 +64,8 @@ fn main() {
         // Binds the Docker list pages' keyboard navigation, scoped to the Docker
         // view. Same post-`init` ordering rule as the two above.
         docker::init(cx);
+        // Binds copy-cell and copy-row while the Database result grid has focus.
+        database::init(cx);
         // Loads `updater.json`, sweeps whatever a previous install renamed
         // aside, and schedules the silent background check. Everything it does
         // is asynchronous; it opens no window and blocks nothing. Same

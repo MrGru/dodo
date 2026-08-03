@@ -50,12 +50,15 @@
 //! of the result off the right of the window.
 
 use gpui::{
-    App, Context, Div, Edges, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
-    SharedString, Stateful, Styled as _, Window, div, px, relative, rems,
+    App, ClipboardItem, Context, Div, Edges, InteractiveElement as _, IntoElement,
+    ParentElement as _, Pixels, SharedString, Stateful, Styled as _, Window, div, px, relative,
+    rems,
 };
+use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_component::table::{Column, TableDelegate, TableState};
 use gpui_component::{ActiveTheme as _, Size, StyledExt as _, h_flex, v_flex};
 
+use crate::app_icon::AppIcon;
 use crate::database::models::value::{ColumnMeta, Row, Value};
 use crate::i18n::{Str, t};
 
@@ -149,6 +152,20 @@ impl ResultDelegate {
     fn cell(&self, row_ix: usize, col_ix: usize) -> Option<&Value> {
         self.rows.get(row_ix).and_then(|row| row.get(col_ix))
     }
+
+    pub(super) fn copy_cell_text(&self, row_ix: usize, col_ix: usize) -> Option<String> {
+        self.cell(row_ix, col_ix).map(Value::display)
+    }
+
+    /// Tab-separated so a copied row pastes into a spreadsheet as one row.
+    pub(super) fn copy_row_text(&self, row_ix: usize) -> Option<String> {
+        self.rows.get(row_ix).map(|row| {
+            row.iter()
+                .map(Value::display)
+                .collect::<Vec<_>>()
+                .join("\t")
+        })
+    }
 }
 
 impl TableDelegate for ResultDelegate {
@@ -219,10 +236,34 @@ impl TableDelegate for ResultDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        let copy_cell = self.copy_cell_text(row_ix, col_ix).unwrap_or_default();
+        let copy_row = self.copy_row_text(row_ix).unwrap_or_default();
+
         // `h_flex().size_full()` rather than a bare div: the cell has no
         // vertical padding left to centre the text for it (see this module's
         // doc), so the content centres itself.
-        let cell = h_flex().size_full().min_w_0().text_size(rems(NAME_REMS));
+        let cell = h_flex()
+            .size_full()
+            .min_w_0()
+            .text_size(rems(NAME_REMS))
+            .context_menu(move |menu, _, cx| {
+                let cell = copy_cell.clone();
+                let row = copy_row.clone();
+                menu.item(
+                    PopupMenuItem::new(t(Str::DbCopyCell, cx))
+                        .icon(AppIcon::Copy)
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(cell.clone()));
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new(t(Str::DbCopyRow, cx))
+                        .icon(AppIcon::Copy)
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(row.clone()));
+                        }),
+                )
+            });
         match self.cell(row_ix, col_ix) {
             // `NULL` is drawn in the muted colour rather than written into the
             // value, so text that spells NULL cannot be mistaken for one.
@@ -365,6 +406,8 @@ mod tests {
         );
         assert!(!delegate.is_empty());
         assert_eq!(delegate.cell(0, 1), Some(&Value::Text("x".into())));
+        assert_eq!(delegate.copy_cell_text(0, 1).as_deref(), Some("x"));
+        assert_eq!(delegate.copy_row_text(0).as_deref(), Some("1\tx"));
 
         delegate.set(vec![ColumnMeta::new("only", "text")], Vec::new());
         assert_eq!(delegate.columns.len(), 1);

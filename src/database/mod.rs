@@ -101,4 +101,37 @@ pub mod services;
 pub mod state;
 pub mod views;
 
+use gpui::{App, KeyBinding, actions};
+
 pub use views::DatabaseView;
+
+pub(crate) const KEY_CONTEXT: &str = "DatabaseResult";
+
+actions!(database, [DatabaseCopyCell, DatabaseCopyRow]);
+
+/// Registers result-grid copy shortcuts after `gpui_component::init`, so these
+/// bindings win the tie with the component library's own contexts.
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new(
+            "cmd-c",
+            DatabaseCopyCell,
+            Some("DatabaseResult > DataTable"),
+        ),
+        KeyBinding::new(
+            "ctrl-c",
+            DatabaseCopyCell,
+            Some("DatabaseResult > DataTable"),
+        ),
+        KeyBinding::new(
+            "cmd-shift-c",
+            DatabaseCopyRow,
+            Some("DatabaseResult > DataTable"),
+        ),
+        KeyBinding::new(
+            "ctrl-shift-c",
+            DatabaseCopyRow,
+            Some("DatabaseResult > DataTable"),
+        ),
+    ]);
+}
