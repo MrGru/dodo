@@ -1,8 +1,8 @@
 //! Where dodo keeps the files it writes.
 //!
 //! One directory, resolved once, shared by every store that persists something:
-//! `collections.json`, `environments.json`, `script-consent.json` and
-//! `updater.json`. It used to live in
+//! `collections.json`, `environments.json`, `script-consent.json`,
+//! `updater.json`, `connections.json` and `query-data.json`. It used to live in
 //! [`api_explorer::services::collection_store`](crate::api_explorer::services::collection_store)
 //! because that was the first module to persist anything; it moved here when
 //! the second top-level module — the updater — started needing it, so neither
