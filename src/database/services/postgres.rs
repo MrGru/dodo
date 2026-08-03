@@ -84,11 +84,14 @@ use postgres::{Client, Config, NoTls, Row as PgRow};
 
 use crate::database::models::catalog::{CatalogNode, GroupLabel, NodeId, NodeKind};
 use crate::database::models::connection::{ConnectionProfile, SslMode};
+use crate::database::models::detail::{
+    DATA_PAGE_SIZE, DdlSource, DetailField, DetailRequest, DetailTab,
+};
 use crate::database::models::error::DbError;
 use crate::database::models::page::{Flow, RowSink};
 use crate::database::models::query::{Execution, QueryRequest};
 use crate::database::models::value::{ColumnMeta, Value};
-use crate::database::services::{CancelHandle, Capabilities, Driver};
+use crate::database::services::{CancelHandle, Capabilities, DetailResult, Driver};
 
 /// How long to wait for a server to answer the connection attempt. Long enough
 /// for a container that is still starting, short enough that a wrong host does
@@ -301,6 +304,47 @@ const CONSTRAINTS: &str = "SELECT con.conname, \
      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
      WHERE n.nspname = $1 AND c.relname = $2 ORDER BY con.conname";
 
+const DETAIL_COLUMNS: &str = "SELECT a.attname, \
+     pg_catalog.format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, \
+     pg_catalog.pg_get_expr(d.adbin, d.adrelid) \
+     FROM pg_catalog.pg_attribute a \
+     JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+     WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped \
+     ORDER BY a.attnum";
+
+const DETAIL_INDEXES: &str = "SELECT ic.relname, i.indisunique, i.indisprimary, \
+     pg_catalog.pg_get_indexdef(i.indexrelid) \
+     FROM pg_catalog.pg_index i \
+     JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid \
+     JOIN pg_catalog.pg_class c ON c.oid = i.indrelid \
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+     WHERE n.nspname = $1 AND c.relname = $2 ORDER BY ic.relname";
+
+const DDL_COLUMNS: &str = "SELECT a.attname, \
+     pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull, \
+     pg_catalog.pg_get_expr(d.adbin, d.adrelid), a.attidentity::text, a.attgenerated::text \
+     FROM pg_catalog.pg_attribute a \
+     JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+     WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped \
+     ORDER BY a.attnum";
+
+const DDL_INDEXES: &str = "SELECT pg_catalog.pg_get_indexdef(i.indexrelid) \
+     FROM pg_catalog.pg_index i \
+     JOIN pg_catalog.pg_class c ON c.oid = i.indrelid \
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+     WHERE n.nspname = $1 AND c.relname = $2 \
+       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid = i.indexrelid) \
+     ORDER BY i.indexrelid";
+
+const VIEW_DDL: &str = "SELECT c.relkind::text, pg_catalog.pg_get_viewdef(c.oid, true) \
+     FROM pg_catalog.pg_class c \
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+     WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('v', 'm')";
+
 /// The database this connection is attached to.
 const CURRENT_DATABASE: &str = "SELECT current_database()";
 
@@ -436,6 +480,194 @@ impl PostgresDriver {
             })
             .collect())
     }
+
+    fn detail_columns(
+        &self,
+        schema: &str,
+        relation: &str,
+        sink: &mut dyn RowSink,
+    ) -> Result<DetailResult, DbError> {
+        let rows =
+            self.with_client(|client| client.query(DETAIL_COLUMNS, &[&schema, &relation]))?;
+        let values = rows
+            .iter()
+            .map(|row| {
+                vec![
+                    Value::Text(row.get::<_, String>(0)),
+                    Value::Text(row.get::<_, String>(1)),
+                    Value::Bool(row.get::<_, bool>(2)),
+                    row.get::<_, Option<String>>(3)
+                        .map(Value::Text)
+                        .unwrap_or(Value::Null),
+                ]
+            })
+            .collect();
+        Ok(metadata_rows(
+            vec![
+                DetailField::Name,
+                DetailField::Type,
+                DetailField::Nullable,
+                DetailField::Default,
+            ],
+            values,
+            sink,
+        ))
+    }
+
+    fn detail_indexes(
+        &self,
+        schema: &str,
+        relation: &str,
+        sink: &mut dyn RowSink,
+    ) -> Result<DetailResult, DbError> {
+        let rows =
+            self.with_client(|client| client.query(DETAIL_INDEXES, &[&schema, &relation]))?;
+        let values = rows
+            .iter()
+            .map(|row| {
+                vec![
+                    Value::Text(row.get::<_, String>(0)),
+                    Value::Bool(row.get::<_, bool>(1)),
+                    Value::Bool(row.get::<_, bool>(2)),
+                    Value::Text(row.get::<_, String>(3)),
+                ]
+            })
+            .collect();
+        Ok(metadata_rows(
+            vec![
+                DetailField::Name,
+                DetailField::Unique,
+                DetailField::Primary,
+                DetailField::Definition,
+            ],
+            values,
+            sink,
+        ))
+    }
+
+    fn detail_constraints(
+        &self,
+        schema: &str,
+        relation: &str,
+        sink: &mut dyn RowSink,
+    ) -> Result<DetailResult, DbError> {
+        let rows = self.with_client(|client| client.query(CONSTRAINTS, &[&schema, &relation]))?;
+        let values = rows
+            .iter()
+            .map(|row| {
+                vec![
+                    Value::Text(row.get::<_, String>(0)),
+                    Value::Text(row.get::<_, String>(1)),
+                ]
+            })
+            .collect();
+        Ok(metadata_rows(
+            vec![DetailField::Name, DetailField::Definition],
+            values,
+            sink,
+        ))
+    }
+
+    fn table_ddl(&self, schema: &str, relation: &str) -> Result<String, DbError> {
+        let columns =
+            self.with_client(|client| client.query(DDL_COLUMNS, &[&schema, &relation]))?;
+        let constraints =
+            self.with_client(|client| client.query(CONSTRAINTS, &[&schema, &relation]))?;
+        let indexes =
+            self.with_client(|client| client.query(DDL_INDEXES, &[&schema, &relation]))?;
+
+        let mut definitions = Vec::new();
+        for row in columns {
+            let name: String = row.get(0);
+            let type_name: String = row.get(1);
+            let not_null: bool = row.get(2);
+            let default: Option<String> = row.get(3);
+            let identity: String = row.get(4);
+            let generated: String = row.get(5);
+            let mut definition = format!("{} {type_name}", quote_identifier(&name));
+            if generated == "s" {
+                if let Some(expression) = default {
+                    definition.push_str(&format!(" GENERATED ALWAYS AS ({expression}) STORED"));
+                }
+            } else if identity == "a" {
+                definition.push_str(" GENERATED ALWAYS AS IDENTITY");
+            } else if identity == "d" {
+                definition.push_str(" GENERATED BY DEFAULT AS IDENTITY");
+            } else if let Some(default) = default {
+                definition.push_str(&format!(" DEFAULT {default}"));
+            }
+            if not_null {
+                definition.push_str(" NOT NULL");
+            }
+            definitions.push(definition);
+        }
+        for row in constraints {
+            let name: String = row.get(0);
+            let definition: String = row.get(1);
+            definitions.push(format!(
+                "CONSTRAINT {} {definition}",
+                quote_identifier(&name)
+            ));
+        }
+
+        let qualified = format!(
+            "{}.{}",
+            quote_identifier(schema),
+            quote_identifier(relation)
+        );
+        let mut ddl = format!(
+            "CREATE TABLE {qualified} (\n    {}\n);",
+            definitions.join(",\n    ")
+        );
+        for row in indexes {
+            let definition: String = row.get(0);
+            ddl.push_str(&format!("\n\n{definition};"));
+        }
+        Ok(ddl)
+    }
+
+    fn view_ddl(&self, schema: &str, relation: &str) -> Result<String, DbError> {
+        let row = self.with_client(|client| client.query_one(VIEW_DDL, &[&schema, &relation]))?;
+        let kind: String = row.get(0);
+        let definition: String = row.get(1);
+        let materialized = if kind == "m" { "MATERIALIZED " } else { "" };
+        Ok(format!(
+            "CREATE {materialized}VIEW {}.{} AS\n{};",
+            quote_identifier(schema),
+            quote_identifier(relation),
+            definition.trim_end_matches(';')
+        ))
+    }
+}
+
+fn metadata_rows(
+    fields: Vec<DetailField>,
+    rows: Vec<Vec<Value>>,
+    sink: &mut dyn RowSink,
+) -> DetailResult {
+    sink.columns(
+        fields
+            .iter()
+            .enumerate()
+            .map(|(index, _)| ColumnMeta::new(index.to_string(), ""))
+            .collect(),
+    );
+    let mut truncated = false;
+    for row in rows {
+        if sink.row(row) == Flow::Stop {
+            truncated = true;
+            break;
+        }
+    }
+    DetailResult::Rows {
+        fields: Some(fields),
+        truncated,
+        notice: None,
+    }
+}
+
+fn quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 /// The dimmed text beside a column: its rendered type, and whether it is
@@ -466,6 +698,8 @@ impl Driver for PostgresDriver {
             editor_language: "sql",
             cancel: true,
             explain: true,
+            detail: true,
+            ddl: DdlSource::Reconstructed,
         }
     }
 
@@ -523,6 +757,48 @@ impl Driver for PostgresDriver {
             ("gk", [schema, relation]) => self.constraints(schema, relation),
             // A leaf, or an id from a build that knew more tags than this one.
             _ => Ok(Vec::new()),
+        }
+    }
+
+    fn detail(
+        &self,
+        request: &DetailRequest,
+        sink: &mut dyn RowSink,
+    ) -> Result<DetailResult, DbError> {
+        if !request.tab.applies_to(request.target.kind) {
+            return Ok(DetailResult::Unavailable);
+        }
+        let Some((tag, parts)) = id::parse(request.target.node.as_str()) else {
+            return Ok(DetailResult::Unavailable);
+        };
+        let (schema, relation, is_table) = match (tag, parts.as_slice()) {
+            ("t", [schema, relation]) => (*schema, *relation, true),
+            ("v", [schema, relation]) => (*schema, *relation, false),
+            _ => return Ok(DetailResult::Unavailable),
+        };
+
+        match request.tab {
+            DetailTab::Data => {
+                let statement = format!(
+                    "SELECT * FROM {}.{} LIMIT {} OFFSET {}",
+                    quote_identifier(schema),
+                    quote_identifier(relation),
+                    DATA_PAGE_SIZE + 1,
+                    request.offset
+                );
+                let execution = self.execute(&QueryRequest::new(statement), sink)?;
+                Ok(DetailResult::Rows {
+                    fields: None,
+                    truncated: execution.truncated,
+                    notice: None,
+                })
+            }
+            DetailTab::Columns => self.detail_columns(schema, relation, sink),
+            DetailTab::Indexes if is_table => self.detail_indexes(schema, relation, sink),
+            DetailTab::Constraints if is_table => self.detail_constraints(schema, relation, sink),
+            DetailTab::Ddl if is_table => self.table_ddl(schema, relation).map(DetailResult::Ddl),
+            DetailTab::Ddl => self.view_ddl(schema, relation).map(DetailResult::Ddl),
+            DetailTab::Indexes | DetailTab::Constraints => Ok(DetailResult::Unavailable),
         }
     }
 
@@ -982,12 +1258,14 @@ mod live {
     use super::{PostgresDriver, connect};
     use crate::database::models::catalog::{NodeId, NodeKind, NodeLabel};
     use crate::database::models::connection::{ConnectionProfile, SslMode};
+    use crate::database::models::detail::{DetailRequest, DetailTab, DetailTarget};
     use crate::database::models::engine::Engine;
     use crate::database::models::error::DbError;
     use crate::database::models::page::{PageBudget, PageBuffer};
     use crate::database::models::query::QueryRequest;
     use crate::database::models::value::Value;
     use crate::database::services::Driver;
+    use crate::database::state::detail::{DetailLoad, load as load_detail};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1190,6 +1468,62 @@ INSERT INTO users (name, balance, active, tags, profile, token, born, seen, avat
             definitions.iter().any(|text| text.contains("FOREIGN KEY")),
             "no foreign key in {definitions:?}"
         );
+    }
+
+    #[test]
+    fn object_detail_metadata_and_reconstructed_ddl_are_valid_on_a_live_server() {
+        let fixture = fixture!(DDL);
+        let target = DetailTarget::new(
+            NodeId::new(super::id::relation("t", &fixture.schema, "users")),
+            NodeKind::Table,
+            "users",
+        );
+        let request = |tab| DetailRequest::new(target.clone(), tab, 0);
+
+        let DetailLoad::Grid(columns) =
+            load_detail(fixture.driver.as_ref(), &request(DetailTab::Columns))
+        else {
+            panic!("columns did not load");
+        };
+        assert_eq!(columns.rows[0][0], Value::Text("id".into()));
+        assert!(
+            columns
+                .rows
+                .iter()
+                .any(|row| { row[1] == Value::Text("character varying(50)".into()) })
+        );
+
+        let DetailLoad::Grid(indexes) =
+            load_detail(fixture.driver.as_ref(), &request(DetailTab::Indexes))
+        else {
+            panic!("indexes did not load");
+        };
+        assert!(
+            indexes
+                .rows
+                .iter()
+                .any(|row| { row[0] == Value::Text("users_name_idx".into()) })
+        );
+
+        let DetailLoad::Grid(constraints) =
+            load_detail(fixture.driver.as_ref(), &request(DetailTab::Constraints))
+        else {
+            panic!("constraints did not load");
+        };
+        assert!(
+            constraints
+                .rows
+                .iter()
+                .any(|row| { row[1].display().contains("PRIMARY KEY") })
+        );
+
+        let DetailLoad::Ddl(ddl) = load_detail(fixture.driver.as_ref(), &request(DetailTab::Ddl))
+        else {
+            panic!("DDL did not load");
+        };
+        assert!(ddl.starts_with(&format!("CREATE TABLE \"{}\".\"users\"", fixture.schema)));
+        assert!(ddl.contains("character varying(50) NOT NULL"));
+        assert!(ddl.contains("CREATE INDEX users_name_idx"));
     }
 
     #[test]
@@ -1443,7 +1777,7 @@ INSERT INTO users (name, balance, active, tags, profile, token, born, seen, avat
 #[cfg(test)]
 mod tests {
     use super::decode::{date, from_bytes, numeric, time, timestamp, uuid};
-    use super::{column_detail, id, index_detail, type_name};
+    use super::{column_detail, id, index_detail, quote_identifier, type_name};
     use crate::database::models::value::Value;
     use postgres::types::Type;
 
@@ -1481,6 +1815,7 @@ mod tests {
             assert_eq!(found_tag, tag, "for {built:?}");
             assert_eq!(found_parts, parts, "for {built:?}");
         }
+        assert_eq!(quote_identifier("odd\"name"), "\"odd\"\"name\"");
     }
 
     // ---- tree detail text ----------------------------------------------

@@ -977,6 +977,31 @@ pub enum Str {
     DbHistorySearch,
     DbHistoryEmpty,
     DbHistoryNoMatches,
+
+    // Database Explorer round 3: table and view detail.
+    DbDetailData,
+    DbDetailDdl,
+    DbDetailFieldNullable,
+    DbDetailFieldNotNull,
+    DbDetailFieldDefault,
+    DbDetailFieldUnique,
+    DbDetailFieldPrimary,
+    DbDetailFieldDefinition,
+    DbDetailClose,
+    DbDetailUnavailable,
+    DbDetailNoRows,
+    DbDetailNoMetadata,
+    DbDetailPrevious,
+    DbDetailNext,
+    DbDetailPage(usize),
+    DbDetailRowsRange {
+        first: u64,
+        last: u64,
+    },
+    DbDetailDdlReconstructed,
+    DbDetailConstraintsPartial,
+    DbDetailCopyDdl,
+    DbDetailMetadataTruncated(usize),
 }
 
 impl Str {
@@ -3067,6 +3092,78 @@ impl Str {
             (Str::DbHistoryEmpty, Language::Vietnamese) => "Chưa có truy vấn nào được chạy.".into(),
             (Str::DbHistoryNoMatches, Language::English) => "No matching queries.".into(),
             (Str::DbHistoryNoMatches, Language::Vietnamese) => "Không có truy vấn phù hợp.".into(),
+
+            (Str::DbDetailData, Language::English) => "Data".into(),
+            (Str::DbDetailData, Language::Vietnamese) => "Dữ liệu".into(),
+            (Str::DbDetailDdl, _) => "DDL".into(),
+            (Str::DbDetailFieldNullable, Language::English) => "Nullable".into(),
+            (Str::DbDetailFieldNullable, Language::Vietnamese) => "Cho phép NULL".into(),
+            (Str::DbDetailFieldNotNull, Language::English) => "Not null".into(),
+            (Str::DbDetailFieldNotNull, Language::Vietnamese) => "Không NULL".into(),
+            (Str::DbDetailFieldDefault, Language::English) => "Default".into(),
+            (Str::DbDetailFieldDefault, Language::Vietnamese) => "Mặc định".into(),
+            (Str::DbDetailFieldUnique, Language::English) => "Unique".into(),
+            (Str::DbDetailFieldUnique, Language::Vietnamese) => "Duy nhất".into(),
+            (Str::DbDetailFieldPrimary, Language::English) => "Primary".into(),
+            (Str::DbDetailFieldPrimary, Language::Vietnamese) => "Chính".into(),
+            (Str::DbDetailFieldDefinition, Language::English) => "Definition".into(),
+            (Str::DbDetailFieldDefinition, Language::Vietnamese) => "Định nghĩa".into(),
+            (Str::DbDetailClose, Language::English) => "Close object detail".into(),
+            (Str::DbDetailClose, Language::Vietnamese) => "Đóng chi tiết đối tượng".into(),
+            (Str::DbDetailUnavailable, Language::English) => {
+                "This detail is not available for this object.".into()
+            }
+            (Str::DbDetailUnavailable, Language::Vietnamese) => {
+                "Chi tiết này không có sẵn cho đối tượng này.".into()
+            }
+            (Str::DbDetailNoRows, Language::English) => "This object has no rows.".into(),
+            (Str::DbDetailNoRows, Language::Vietnamese) => {
+                "Đối tượng này không có dòng nào.".into()
+            }
+            (Str::DbDetailNoMetadata, Language::English) => "No metadata was reported.".into(),
+            (Str::DbDetailNoMetadata, Language::Vietnamese) => {
+                "Không có siêu dữ liệu nào được báo cáo.".into()
+            }
+            (Str::DbDetailPrevious, Language::English) => "Previous".into(),
+            (Str::DbDetailPrevious, Language::Vietnamese) => "Trước".into(),
+            (Str::DbDetailNext, Language::English) => "Next".into(),
+            (Str::DbDetailNext, Language::Vietnamese) => "Tiếp".into(),
+            (Str::DbDetailPage(page), Language::English) => format!("Page {page}").into(),
+            (Str::DbDetailPage(page), Language::Vietnamese) => format!("Trang {page}").into(),
+            (Str::DbDetailRowsRange { first, last }, Language::English) => {
+                format!("Rows {first}–{last}").into()
+            }
+            (Str::DbDetailRowsRange { first, last }, Language::Vietnamese) => {
+                format!("Dòng {first}–{last}").into()
+            }
+            (Str::DbDetailDdlReconstructed, Language::English) => {
+                "Reconstructed from PostgreSQL catalog metadata; partitioning, inheritance, \
+                 storage settings, comments and ownership may be omitted."
+                    .into()
+            }
+            (Str::DbDetailDdlReconstructed, Language::Vietnamese) => {
+                "Được dựng lại từ siêu dữ liệu danh mục PostgreSQL; có thể thiếu phân vùng, kế \
+                 thừa, thiết lập lưu trữ, chú thích và quyền sở hữu."
+                    .into()
+            }
+            (Str::DbDetailConstraintsPartial, Language::English) => {
+                "SQLite does not expose CHECK constraints as catalog rows. See the stored DDL for \
+                 the complete definition."
+                    .into()
+            }
+            (Str::DbDetailConstraintsPartial, Language::Vietnamese) => {
+                "SQLite không cung cấp ràng buộc CHECK dưới dạng dòng danh mục. Xem DDL đã lưu \
+                 để biết định nghĩa đầy đủ."
+                    .into()
+            }
+            (Str::DbDetailCopyDdl, Language::English) => "Copy DDL".into(),
+            (Str::DbDetailCopyDdl, Language::Vietnamese) => "Sao chép DDL".into(),
+            (Str::DbDetailMetadataTruncated(count), Language::English) => {
+                format!("Showing the first {count} metadata rows.").into()
+            }
+            (Str::DbDetailMetadataTruncated(count), Language::Vietnamese) => {
+                format!("Đang hiện {count} dòng siêu dữ liệu đầu tiên.").into()
+            }
         }
     }
 }
@@ -3884,6 +3981,32 @@ mod tests {
             plain(Str::DbHistorySearch),
             plain(Str::DbHistoryEmpty),
             plain(Str::DbHistoryNoMatches),
+            plain(Str::DbDetailData),
+            term(Str::DbDetailDdl),
+            plain(Str::DbDetailFieldNullable),
+            plain(Str::DbDetailFieldDefault),
+            plain(Str::DbDetailFieldUnique),
+            plain(Str::DbDetailFieldPrimary),
+            plain(Str::DbDetailFieldDefinition),
+            plain(Str::DbDetailClose),
+            plain(Str::DbDetailUnavailable),
+            plain(Str::DbDetailNoRows),
+            plain(Str::DbDetailNoMetadata),
+            plain(Str::DbDetailPrevious),
+            plain(Str::DbDetailNext),
+            with(Str::DbDetailPage(NUMBER), &[NUMBER_TEXT]),
+            with(
+                Str::DbDetailRowsRange {
+                    first: NUMBER as u64,
+                    last: 77,
+                },
+                &[NUMBER_TEXT, "77"],
+            ),
+            plain(Str::DbDetailDdlReconstructed),
+            plain(Str::DbDetailConstraintsPartial),
+            plain(Str::DbDetailCopyDdl),
+            plain(Str::DbDetailFieldNotNull),
+            with(Str::DbDetailMetadataTruncated(NUMBER), &[NUMBER_TEXT]),
         ]
     }
 
@@ -4469,6 +4592,26 @@ mod tests {
             Str::DbHistorySearch => 566,
             Str::DbHistoryEmpty => 567,
             Str::DbHistoryNoMatches => 568,
+            Str::DbDetailData => 569,
+            Str::DbDetailDdl => 570,
+            Str::DbDetailFieldNullable => 571,
+            Str::DbDetailFieldDefault => 572,
+            Str::DbDetailFieldUnique => 573,
+            Str::DbDetailFieldPrimary => 574,
+            Str::DbDetailFieldDefinition => 575,
+            Str::DbDetailClose => 576,
+            Str::DbDetailUnavailable => 577,
+            Str::DbDetailNoRows => 578,
+            Str::DbDetailNoMetadata => 579,
+            Str::DbDetailPrevious => 580,
+            Str::DbDetailNext => 581,
+            Str::DbDetailPage(_) => 582,
+            Str::DbDetailRowsRange { .. } => 583,
+            Str::DbDetailDdlReconstructed => 584,
+            Str::DbDetailConstraintsPartial => 585,
+            Str::DbDetailCopyDdl => 586,
+            Str::DbDetailFieldNotNull => 587,
+            Str::DbDetailMetadataTruncated(_) => 588,
         }
     }
 

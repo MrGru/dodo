@@ -18,6 +18,7 @@
 //! [`run`]: query::run
 
 pub mod connections;
+pub mod detail;
 pub mod editor;
 pub mod history;
 pub mod query;
