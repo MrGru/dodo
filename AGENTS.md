@@ -220,7 +220,7 @@ Six things worth knowing before touching it:
 
 **`src/database/`** is the Database Explorer — create a connection, browse its objects, run a
 query, read the result, and safely edit identified SQL rows — **PostgreSQL, SQLite, MySQL/MariaDB
-and Redis as of round 5**. Same five-layer split as the three modules above;
+and Redis as of round 6**. Same five-layer split as the three modules above;
 **`src/database/mod.rs` is the authority** on the structure, shipped rounds and deliberate cuts.
 Fifteen things worth knowing before touching it:
 
@@ -283,8 +283,8 @@ Fifteen things worth knowing before touching it:
 - **Round 2's long work stays server-honest.** Cancel uses PostgreSQL's protocol CancelRequest or
   SQLite's interrupt handle, never task dropping; `services/postgres.rs::live` has the opt-in
   server-side proof. Export re-runs the displayed statement through `services/export.rs`'s
-  file-backed sink and keeps one row, never the truncated grid. Query tabs and searchable history
-  are session-only; neither is added to the persisted-files list below.
+  file-backed sink and keeps one row, never the truncated grid. Query tabs remain session-only;
+  round 6 persists the bounded execution history instead of restoring tabs.
 - **PostgreSQL rows arrive as binary and `services/postgres.rs` decodes them.** `query_raw`
   streams (the blocking client's `simple_query` would give text for free but materialises the
   whole result, defeating the budget); `numeric` is rendered as text rather than through an `f64`,
@@ -302,19 +302,26 @@ Fifteen things worth knowing before touching it:
   a full keyspace — and a separate catalog connection keeps browsing from changing the console's
   selected database. Values are fetched only when key detail opens; Redis honestly reports no
   Explain, DDL or cancel capability.
+- **Round 6 stores query data, not sessions.** `query-data.json` contains connection-scoped saved
+  queries and the newest 200 history entries under a 4 MiB text budget; it never carries a
+  connection profile or password. Reopening selects the saved connection only while id, engine
+  and target still match, otherwise it opens text with a warning. Global catalog search walks
+  connected drivers through the existing `children` seam once, caps calls/nodes, filters its
+  in-memory index locally, and follows Redis More nodes rather than querying key leaves.
 - **No OS keychain, on any platform, and no `keyring` dependency.** A database password is stored
   the way the API Explorer stores a secret variable: plain text under `data_dir()`, masked in the
   UI, with a notice that is never absent. The report's `CredentialStore` trait is deliberately not
   built — one storage behaviour does not need a trait. `models/connection.rs` states the posture
   and a store test asserts the password really is in the file, so nobody later assumes otherwise.
 
-**dodo persists five things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
+**dodo persists six things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
 behind a trait so the state layer never learns where they live: `collections.json`
 (`api_explorer::services::collection_store`), `environments.json` (`services::variable_store`),
 `script-consent.json` (`services::consent_store`, the imported scripts the user has approved),
-`updater.json` (`updater::services::config_store`) and `connections.json`
+`updater.json` (`updater::services::config_store`), `connections.json`
 (`database::services::connection_store`, which also holds database passwords in plain text — see
-above). The `dodo-theming-settings` skill's "nothing
+above) and `query-data.json` (`database::services::query_store`, saved queries plus bounded query
+history, with query text intentionally stored as plain text). The `dodo-theming-settings` skill's "nothing
 is persisted across restarts" is therefore scoped to appearance/language settings only —
 including the **Run scripts** setting, which is a `ScriptPolicy` global and deliberately starts
 each launch at the cautious `Ask for imported`. `updater.json` is the one exception and the
@@ -330,8 +337,8 @@ of them; copy that trick rather than a `cfg` split for anything else platform-sh
 
 The files version differently, and the difference is deliberate. A `RequestSnapshot` inside
 `collections.json` is versioned only by `#[serde(default)]`, which copes with *added* fields and
-nothing else. `environments.json`, `script-consent.json`, `updater.json` and `connections.json`
-carry an explicit
+nothing else. `environments.json`, `script-consent.json`, `updater.json`, `connections.json` and
+`query-data.json` carry an explicit
 `"version"` from their very first write, and their `parse_document` **refuses** a file whose
 version is higher rather than half-reading it. Copy that pattern for any new file; do not copy
 `collections.json`'s.
