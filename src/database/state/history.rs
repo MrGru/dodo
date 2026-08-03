@@ -1,27 +1,18 @@
-//! Query history for this process, newest first.
+//! Persisted searchable query history, newest first.
 //!
-//! Deliberately in memory, following the API Explorer's precedent: history is
-//! a within-session convenience, not saved user data. Query tabs are likewise
-//! not restored after restart.
+//! Round 2's in-session list remains the model; round 6 gives that same list a
+//! versioned JSON store. Retention is deterministic: at most 200 entries and at
+//! most 4 MiB of query/connection text, always keeping the newest entries that
+//! fit. A single query larger than the byte budget is not recorded rather than
+//! being truncated into dangerous text that could later be reopened.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::database::models::library::{HistoryEntry, HistoryOutcome, QueryScope};
 use crate::database::models::split::split_statements;
 
-const MAX_ENTRIES: usize = 200;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HistoryEntry {
-    pub connection: String,
-    pub statement: String,
-}
-
-impl HistoryEntry {
-    pub fn matches(&self, query: &str) -> bool {
-        let query = query.trim().to_lowercase();
-        query.is_empty()
-            || self.statement.to_lowercase().contains(&query)
-            || self.connection.to_lowercase().contains(&query)
-    }
-}
+pub const MAX_ENTRIES: usize = 200;
+pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct History {
@@ -29,20 +20,42 @@ pub struct History {
 }
 
 impl History {
+    pub fn adopt(&mut self, entries: Vec<HistoryEntry>) {
+        self.entries = retained(entries);
+    }
+
     /// Records one editor buffer that reached execution. Empty and comment-only
-    /// buffers never reached a driver and therefore are not history.
-    pub fn record(&mut self, connection: String, statement: String) {
+    /// SQL buffers never reached a driver and therefore are not history. A
+    /// non-SQL driver is checked by the caller before it reaches this method.
+    pub fn record(
+        &mut self,
+        scope: QueryScope,
+        statement: String,
+        outcome: HistoryOutcome,
+        duration_ms: Option<u64>,
+    ) -> bool {
         if split_statements(&statement).is_empty() {
-            return;
+            return false;
         }
+        let before = self.entries.clone();
         self.entries.insert(
             0,
             HistoryEntry {
-                connection,
+                scope,
                 statement,
+                recorded_at: now(),
+                outcome,
+                duration_ms,
             },
         );
-        self.entries.truncate(MAX_ENTRIES);
+        self.entries = retained(std::mem::take(&mut self.entries));
+        self.entries != before
+    }
+
+    pub fn clear(&mut self) -> bool {
+        let changed = !self.entries.is_empty();
+        self.entries.clear();
+        changed
     }
 
     pub fn snapshot(&self) -> Vec<HistoryEntry> {
@@ -50,32 +63,129 @@ impl History {
     }
 }
 
+fn retained(entries: Vec<HistoryEntry>) -> Vec<HistoryEntry> {
+    let mut bytes = 0usize;
+    entries
+        .into_iter()
+        .take(MAX_ENTRIES)
+        .take_while(|entry| {
+            let size = entry.stored_bytes();
+            if size > MAX_BYTES.saturating_sub(bytes) {
+                return false;
+            }
+            bytes += size;
+            true
+        })
+        .collect()
+}
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{History, MAX_ENTRIES};
+    use super::{History, MAX_BYTES, MAX_ENTRIES, retained};
+    use crate::database::models::connection::ConnectionProfile;
+    use crate::database::models::engine::Engine;
+    use crate::database::models::library::{HistoryEntry, HistoryOutcome, QueryScope};
+
+    fn scope(name: &str) -> QueryScope {
+        let mut profile = ConnectionProfile::new(1, Engine::PostgreSql);
+        profile.name = name.into();
+        QueryScope::from_profile(&profile)
+    }
+
+    fn entry(number: usize, size: usize) -> HistoryEntry {
+        HistoryEntry {
+            scope: scope("local"),
+            statement: format!("SELECT {number} -- {}", "x".repeat(size)),
+            recorded_at: number as u64,
+            outcome: HistoryOutcome::Succeeded,
+            duration_ms: Some(1),
+        }
+    }
 
     #[test]
     fn history_is_newest_first_searchable_and_session_bounded() {
         let mut history = History::default();
-        history.record("local".into(), "SELECT 1".into());
-        history.record("staging".into(), "SELECT * FROM users".into());
+        history.record(
+            scope("local"),
+            "SELECT 1".into(),
+            HistoryOutcome::Succeeded,
+            Some(1),
+        );
+        history.record(
+            scope("staging"),
+            "SELECT * FROM users".into(),
+            HistoryOutcome::Failed,
+            None,
+        );
 
         let entries = history.snapshot();
-        assert_eq!(entries[0].connection, "staging");
+        assert_eq!(entries[0].scope.connection_name, "staging");
         assert!(entries[0].matches("USERS"));
         assert!(entries[1].matches("LOCAL"));
         assert!(!entries[1].matches("missing"));
 
         for number in 0..(MAX_ENTRIES + 20) {
-            history.record("local".into(), format!("SELECT {number}"));
+            history.record(
+                scope("local"),
+                format!("SELECT {number}"),
+                HistoryOutcome::Cancelled,
+                None,
+            );
         }
         assert_eq!(history.snapshot().len(), MAX_ENTRIES);
     }
 
     #[test]
-    fn text_that_never_reaches_a_driver_is_not_history() {
+    fn retention_keeps_the_newest_entries_that_fit_the_disk_budget() {
+        let entries = vec![
+            entry(3, MAX_BYTES / 2),
+            entry(2, MAX_BYTES / 2),
+            entry(1, 20),
+        ];
+        let kept = retained(entries);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].recorded_at, 3);
+        assert!(kept.iter().map(HistoryEntry::stored_bytes).sum::<usize>() <= MAX_BYTES);
+
+        let too_large = retained(vec![entry(4, MAX_BYTES + 1)]);
+        assert!(too_large.is_empty(), "oversized text must not be truncated");
+    }
+
+    #[test]
+    fn adopting_old_history_applies_the_same_bounds_as_new_entries() {
+        let entries = (0..(MAX_ENTRIES + 5))
+            .map(|number| entry(number, 1))
+            .collect();
         let mut history = History::default();
-        history.record("local".into(), "-- only a comment".into());
+        history.adopt(entries);
+        assert_eq!(history.snapshot().len(), MAX_ENTRIES);
+    }
+
+    #[test]
+    fn text_that_never_reaches_a_driver_is_not_history_and_clear_is_explicit() {
+        let mut history = History::default();
+        assert!(!history.record(
+            scope("local"),
+            "-- only a comment".into(),
+            HistoryOutcome::Succeeded,
+            None,
+        ));
         assert!(history.snapshot().is_empty());
+
+        history.record(
+            scope("local"),
+            "SELECT 1".into(),
+            HistoryOutcome::Succeeded,
+            None,
+        );
+        assert!(history.clear());
+        assert!(!history.clear());
     }
 }

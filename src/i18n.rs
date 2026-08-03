@@ -1058,6 +1058,63 @@ pub enum Str {
     DbCommitBuildFailed,
     DbResolvePending,
     DbEditDuplicateRows,
+
+    // Database Explorer round 6: saved queries and persisted history.
+    DbQueryStoreError(String),
+    DbQueryStoreMissingVersion,
+    DbQueryStoreUnsupportedVersion {
+        found: u64,
+        supported: u32,
+    },
+    DbSavedQueries,
+    DbSaveQuery,
+    DbSavedQuerySearch,
+    DbSavedQueryEmpty,
+    DbSavedQueryNoMatches,
+    DbSavedQueryCreateTitle,
+    DbSavedQueryEditTitle,
+    DbSavedQueryName,
+    DbSavedQueryNamePlaceholder,
+    DbSavedQueryStatement,
+    DbSavedQueryScope,
+    DbSavedQueryPlaintextNotice,
+    DbSavedQueryNameRequired,
+    DbSavedQueryStatementRequired,
+    DbSavedQueryEdit,
+    DbSavedQueryDelete,
+    DbSavedQueryDeleteTitle,
+    DbSavedQueryDeleteMessage(String),
+    DbSavedQueryScopeMismatch(String),
+    DbHistoryClear,
+    DbHistoryClearTitle,
+    DbHistoryClearMessage,
+    DbHistorySucceeded,
+    DbHistoryFailed,
+    DbHistoryJustNow,
+    DbHistoryMinutesAgo(u64),
+    DbHistoryHoursAgo(u64),
+    DbHistoryDaysAgo(u64),
+
+    // Database Explorer round 6: bounded global catalog search.
+    DbCatalogSearch,
+    DbCatalogSearchPlaceholder,
+    DbCatalogSearchLoading,
+    DbCatalogSearchEmpty,
+    DbCatalogSearchNoMatches,
+    DbCatalogSearchConnectedOnly,
+    DbCatalogSearchTruncated(usize),
+    DbCatalogSearchPartial(usize),
+    DbCatalogSearchConnectionUnavailable(String),
+    DbCatalogKindDatabase,
+    DbCatalogKindSchema,
+    DbCatalogKindTable,
+    DbCatalogKindView,
+    DbCatalogKindColumn,
+    DbCatalogKindIndex,
+    DbCatalogKindConstraint,
+    DbCatalogKindNamespace,
+    DbCatalogKindKey,
+    DbCatalogKindObject,
 }
 
 impl Str {
@@ -3438,6 +3495,168 @@ impl Str {
             (Str::DbEditDuplicateRows, Language::Vietnamese) => {
                 "Kết quả này chỉ đọc vì nhiều dòng đang hiển thị có cùng một định danh duy nhất.".into()
             }
+
+            (Str::DbQueryStoreError(detail), Language::English) => {
+                format!("Saved queries and history could not be read or written: {detail}").into()
+            }
+            (Str::DbQueryStoreError(detail), Language::Vietnamese) => {
+                format!("Không thể đọc hoặc ghi truy vấn đã lưu và lịch sử: {detail}").into()
+            }
+            (Str::DbQueryStoreMissingVersion, Language::English) => {
+                "The saved-query file has no version and was not loaded.".into()
+            }
+            (Str::DbQueryStoreMissingVersion, Language::Vietnamese) => {
+                "Tệp truy vấn đã lưu không có phiên bản nên chưa được tải.".into()
+            }
+            (
+                Str::DbQueryStoreUnsupportedVersion { found, supported },
+                Language::English,
+            ) => format!(
+                "The saved-query file uses version {found}; this Dodo supports up to {supported}."
+            )
+            .into(),
+            (
+                Str::DbQueryStoreUnsupportedVersion { found, supported },
+                Language::Vietnamese,
+            ) => format!(
+                "Tệp truy vấn đã lưu dùng phiên bản {found}; Dodo này chỉ hỗ trợ đến {supported}."
+            )
+            .into(),
+            (Str::DbSavedQueries, Language::English) => "Saved queries".into(),
+            (Str::DbSavedQueries, Language::Vietnamese) => "Truy vấn đã lưu".into(),
+            (Str::DbSaveQuery, Language::English) => "Save query".into(),
+            (Str::DbSaveQuery, Language::Vietnamese) => "Lưu truy vấn".into(),
+            (Str::DbSavedQuerySearch, Language::English) => "Search saved queries…".into(),
+            (Str::DbSavedQuerySearch, Language::Vietnamese) => "Tìm truy vấn đã lưu…".into(),
+            (Str::DbSavedQueryEmpty, Language::English) => "No saved queries yet.".into(),
+            (Str::DbSavedQueryEmpty, Language::Vietnamese) => "Chưa có truy vấn nào được lưu.".into(),
+            (Str::DbSavedQueryNoMatches, Language::English) => "No matching saved queries.".into(),
+            (Str::DbSavedQueryNoMatches, Language::Vietnamese) => "Không có truy vấn đã lưu phù hợp.".into(),
+            (Str::DbSavedQueryCreateTitle, Language::English) => "Save query".into(),
+            (Str::DbSavedQueryCreateTitle, Language::Vietnamese) => "Lưu truy vấn".into(),
+            (Str::DbSavedQueryEditTitle, Language::English) => "Edit saved query".into(),
+            (Str::DbSavedQueryEditTitle, Language::Vietnamese) => "Sửa truy vấn đã lưu".into(),
+            (Str::DbSavedQueryName, Language::English) => "Name".into(),
+            (Str::DbSavedQueryName, Language::Vietnamese) => "Tên".into(),
+            (Str::DbSavedQueryNamePlaceholder, Language::English) => "e.g. Recent orders".into(),
+            (Str::DbSavedQueryNamePlaceholder, Language::Vietnamese) => "ví dụ: Đơn hàng gần đây".into(),
+            (Str::DbSavedQueryStatement, Language::English) => "Query".into(),
+            (Str::DbSavedQueryStatement, Language::Vietnamese) => "Truy vấn".into(),
+            (Str::DbSavedQueryScope, Language::English) => "Connection".into(),
+            (Str::DbSavedQueryScope, Language::Vietnamese) => "Kết nối".into(),
+            (Str::DbSavedQueryPlaintextNotice, Language::English) => {
+                "Saved queries are stored as plain text on this device. Remove passwords and other secrets before saving."
+                    .into()
+            }
+            (Str::DbSavedQueryPlaintextNotice, Language::Vietnamese) => {
+                "Truy vấn được lưu dưới dạng văn bản thuần trên thiết bị này. Hãy xóa mật khẩu và bí mật khác trước khi lưu."
+                    .into()
+            }
+            (Str::DbSavedQueryNameRequired, Language::English) => "Enter a name for this query.".into(),
+            (Str::DbSavedQueryNameRequired, Language::Vietnamese) => "Hãy nhập tên cho truy vấn này.".into(),
+            (Str::DbSavedQueryStatementRequired, Language::English) => "Enter query text to save.".into(),
+            (Str::DbSavedQueryStatementRequired, Language::Vietnamese) => "Hãy nhập nội dung truy vấn để lưu.".into(),
+            (Str::DbSavedQueryEdit, Language::English) => "Edit saved query".into(),
+            (Str::DbSavedQueryEdit, Language::Vietnamese) => "Sửa truy vấn đã lưu".into(),
+            (Str::DbSavedQueryDelete, Language::English) => "Delete saved query".into(),
+            (Str::DbSavedQueryDelete, Language::Vietnamese) => "Xóa truy vấn đã lưu".into(),
+            (Str::DbSavedQueryDeleteTitle, Language::English) => "Delete saved query?".into(),
+            (Str::DbSavedQueryDeleteTitle, Language::Vietnamese) => "Xóa truy vấn đã lưu?".into(),
+            (Str::DbSavedQueryDeleteMessage(name), Language::English) => {
+                format!("Delete “{name}”? This cannot be undone.").into()
+            }
+            (Str::DbSavedQueryDeleteMessage(name), Language::Vietnamese) => {
+                format!("Xóa “{name}”? Không thể hoàn tác thao tác này.").into()
+            }
+            (Str::DbSavedQueryScopeMismatch(name), Language::English) => format!(
+                "Opened as text only because its saved connection “{name}” is missing or now points elsewhere. Select the intended connection before running it."
+            )
+            .into(),
+            (Str::DbSavedQueryScopeMismatch(name), Language::Vietnamese) => format!(
+                "Chỉ mở dưới dạng văn bản vì kết nối đã lưu “{name}” không còn hoặc hiện trỏ đến nơi khác. Hãy chọn đúng kết nối trước khi chạy."
+            )
+            .into(),
+            (Str::DbHistoryClear, Language::English) => "Clear history".into(),
+            (Str::DbHistoryClear, Language::Vietnamese) => "Xóa lịch sử".into(),
+            (Str::DbHistoryClearTitle, Language::English) => "Clear query history?".into(),
+            (Str::DbHistoryClearTitle, Language::Vietnamese) => "Xóa lịch sử truy vấn?".into(),
+            (Str::DbHistoryClearMessage, Language::English) => {
+                "Delete all persisted query history? Saved queries are not affected.".into()
+            }
+            (Str::DbHistoryClearMessage, Language::Vietnamese) => {
+                "Xóa toàn bộ lịch sử truy vấn đã lưu? Các truy vấn đã lưu sẽ không bị ảnh hưởng.".into()
+            }
+            (Str::DbHistorySucceeded, Language::English) => "Succeeded".into(),
+            (Str::DbHistorySucceeded, Language::Vietnamese) => "Thành công".into(),
+            (Str::DbHistoryFailed, Language::English) => "Failed".into(),
+            (Str::DbHistoryFailed, Language::Vietnamese) => "Thất bại".into(),
+            (Str::DbHistoryJustNow, Language::English) => "Just now".into(),
+            (Str::DbHistoryJustNow, Language::Vietnamese) => "Vừa xong".into(),
+            (Str::DbHistoryMinutesAgo(minutes), Language::English) => format!("{minutes}m ago").into(),
+            (Str::DbHistoryMinutesAgo(minutes), Language::Vietnamese) => format!("{minutes} phút trước").into(),
+            (Str::DbHistoryHoursAgo(hours), Language::English) => format!("{hours}h ago").into(),
+            (Str::DbHistoryHoursAgo(hours), Language::Vietnamese) => format!("{hours} giờ trước").into(),
+            (Str::DbHistoryDaysAgo(days), Language::English) => format!("{days}d ago").into(),
+            (Str::DbHistoryDaysAgo(days), Language::Vietnamese) => format!("{days} ngày trước").into(),
+
+            (Str::DbCatalogSearch, Language::English) => "Search catalogs".into(),
+            (Str::DbCatalogSearch, Language::Vietnamese) => "Tìm trong danh mục".into(),
+            (Str::DbCatalogSearchPlaceholder, Language::English) => "Search catalog objects…".into(),
+            (Str::DbCatalogSearchPlaceholder, Language::Vietnamese) => "Tìm đối tượng danh mục…".into(),
+            (Str::DbCatalogSearchLoading, Language::English) => "Loading connected catalogs…".into(),
+            (Str::DbCatalogSearchLoading, Language::Vietnamese) => "Đang tải danh mục đã kết nối…".into(),
+            (Str::DbCatalogSearchEmpty, Language::English) => "No catalog objects were found.".into(),
+            (Str::DbCatalogSearchEmpty, Language::Vietnamese) => "Không tìm thấy đối tượng danh mục nào.".into(),
+            (Str::DbCatalogSearchNoMatches, Language::English) => "No matching catalog objects.".into(),
+            (Str::DbCatalogSearchNoMatches, Language::Vietnamese) => "Không có đối tượng danh mục phù hợp.".into(),
+            (Str::DbCatalogSearchConnectedOnly, Language::English) => {
+                "Search covers connected databases and builds one bounded in-memory catalog cache."
+                    .into()
+            }
+            (Str::DbCatalogSearchConnectedOnly, Language::Vietnamese) => {
+                "Tìm kiếm bao gồm các cơ sở dữ liệu đã kết nối và tạo một bộ nhớ đệm danh mục trong bộ nhớ có giới hạn."
+                    .into()
+            }
+            (Str::DbCatalogSearchTruncated(count), Language::English) => {
+                format!("Search stopped at the catalog limit after indexing {count} objects.").into()
+            }
+            (Str::DbCatalogSearchTruncated(count), Language::Vietnamese) => {
+                format!("Tìm kiếm dừng ở giới hạn danh mục sau khi lập chỉ mục {count} đối tượng.").into()
+            }
+            (Str::DbCatalogSearchPartial(count), Language::English) => {
+                format!("{count} catalog branch(es) could not be searched.").into()
+            }
+            (Str::DbCatalogSearchPartial(count), Language::Vietnamese) => {
+                format!("Không thể tìm trong {count} nhánh danh mục.").into()
+            }
+            (Str::DbCatalogSearchConnectionUnavailable(name), Language::English) => format!(
+                "The catalog result cannot be opened because connection “{name}” is no longer connected or now points elsewhere."
+            )
+            .into(),
+            (Str::DbCatalogSearchConnectionUnavailable(name), Language::Vietnamese) => format!(
+                "Không thể mở kết quả danh mục vì kết nối “{name}” không còn được kết nối hoặc hiện trỏ đến nơi khác."
+            )
+            .into(),
+            (Str::DbCatalogKindDatabase, Language::English) => "Database".into(),
+            (Str::DbCatalogKindDatabase, Language::Vietnamese) => "Cơ sở dữ liệu".into(),
+            (Str::DbCatalogKindSchema, Language::English) => "Schema".into(),
+            (Str::DbCatalogKindSchema, Language::Vietnamese) => "Lược đồ".into(),
+            (Str::DbCatalogKindTable, Language::English) => "Table".into(),
+            (Str::DbCatalogKindTable, Language::Vietnamese) => "Bảng".into(),
+            (Str::DbCatalogKindView, Language::English) => "View".into(),
+            (Str::DbCatalogKindView, Language::Vietnamese) => "Khung nhìn".into(),
+            (Str::DbCatalogKindColumn, Language::English) => "Column".into(),
+            (Str::DbCatalogKindColumn, Language::Vietnamese) => "Cột".into(),
+            (Str::DbCatalogKindIndex, Language::English) => "Index".into(),
+            (Str::DbCatalogKindIndex, Language::Vietnamese) => "Chỉ mục".into(),
+            (Str::DbCatalogKindConstraint, Language::English) => "Constraint".into(),
+            (Str::DbCatalogKindConstraint, Language::Vietnamese) => "Ràng buộc".into(),
+            (Str::DbCatalogKindNamespace, Language::English) => "Namespace".into(),
+            (Str::DbCatalogKindNamespace, Language::Vietnamese) => "Không gian tên".into(),
+            (Str::DbCatalogKindKey, Language::English) => "Key".into(),
+            (Str::DbCatalogKindKey, Language::Vietnamese) => "Khóa".into(),
+            (Str::DbCatalogKindObject, Language::English) => "Object".into(),
+            (Str::DbCatalogKindObject, Language::Vietnamese) => "Đối tượng".into(),
         }
     }
 }
@@ -4342,6 +4561,65 @@ mod tests {
             plain(Str::DbCommitBuildFailed),
             plain(Str::DbResolvePending),
             plain(Str::DbEditDuplicateRows),
+            with(Str::DbQueryStoreError(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbQueryStoreMissingVersion),
+            with(
+                Str::DbQueryStoreUnsupportedVersion {
+                    found: NUMBER as u64,
+                    supported: 77,
+                },
+                &[NUMBER_TEXT, "77"],
+            ),
+            plain(Str::DbSavedQueries),
+            plain(Str::DbSaveQuery),
+            plain(Str::DbSavedQuerySearch),
+            plain(Str::DbSavedQueryEmpty),
+            plain(Str::DbSavedQueryNoMatches),
+            plain(Str::DbSavedQueryCreateTitle),
+            plain(Str::DbSavedQueryEditTitle),
+            plain(Str::DbSavedQueryName),
+            plain(Str::DbSavedQueryNamePlaceholder),
+            plain(Str::DbSavedQueryStatement),
+            plain(Str::DbSavedQueryPlaintextNotice),
+            plain(Str::DbSavedQueryNameRequired),
+            plain(Str::DbSavedQueryStatementRequired),
+            plain(Str::DbSavedQueryEdit),
+            plain(Str::DbSavedQueryDelete),
+            plain(Str::DbSavedQueryDeleteTitle),
+            with(Str::DbSavedQueryDeleteMessage(DETAIL.into()), &[DETAIL]),
+            with(Str::DbSavedQueryScopeMismatch(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbHistoryClear),
+            plain(Str::DbHistoryClearTitle),
+            plain(Str::DbHistoryClearMessage),
+            plain(Str::DbHistorySucceeded),
+            plain(Str::DbHistoryFailed),
+            plain(Str::DbHistoryJustNow),
+            with(Str::DbHistoryMinutesAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::DbHistoryHoursAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            with(Str::DbHistoryDaysAgo(NUMBER as u64), &[NUMBER_TEXT]),
+            plain(Str::DbCatalogSearch),
+            plain(Str::DbCatalogSearchPlaceholder),
+            plain(Str::DbCatalogSearchLoading),
+            plain(Str::DbCatalogSearchEmpty),
+            plain(Str::DbCatalogSearchNoMatches),
+            plain(Str::DbCatalogSearchConnectedOnly),
+            with(Str::DbCatalogSearchTruncated(NUMBER), &[NUMBER_TEXT]),
+            with(Str::DbCatalogSearchPartial(NUMBER), &[NUMBER_TEXT]),
+            with(
+                Str::DbCatalogSearchConnectionUnavailable(DETAIL.into()),
+                &[DETAIL],
+            ),
+            plain(Str::DbCatalogKindDatabase),
+            plain(Str::DbCatalogKindSchema),
+            plain(Str::DbCatalogKindTable),
+            plain(Str::DbCatalogKindView),
+            plain(Str::DbCatalogKindColumn),
+            plain(Str::DbCatalogKindIndex),
+            plain(Str::DbCatalogKindConstraint),
+            plain(Str::DbCatalogKindNamespace),
+            plain(Str::DbCatalogKindKey),
+            plain(Str::DbCatalogKindObject),
+            plain(Str::DbSavedQueryScope),
         ]
     }
 
@@ -4990,6 +5268,56 @@ mod tests {
             Str::DbCommitBuildFailed => 629,
             Str::DbResolvePending => 630,
             Str::DbEditDuplicateRows => 631,
+            Str::DbQueryStoreError(_) => 632,
+            Str::DbQueryStoreMissingVersion => 633,
+            Str::DbQueryStoreUnsupportedVersion { .. } => 634,
+            Str::DbSavedQueries => 635,
+            Str::DbSaveQuery => 636,
+            Str::DbSavedQuerySearch => 637,
+            Str::DbSavedQueryEmpty => 638,
+            Str::DbSavedQueryNoMatches => 639,
+            Str::DbSavedQueryCreateTitle => 640,
+            Str::DbSavedQueryEditTitle => 641,
+            Str::DbSavedQueryName => 642,
+            Str::DbSavedQueryNamePlaceholder => 643,
+            Str::DbSavedQueryStatement => 644,
+            Str::DbSavedQueryPlaintextNotice => 645,
+            Str::DbSavedQueryNameRequired => 646,
+            Str::DbSavedQueryStatementRequired => 647,
+            Str::DbSavedQueryEdit => 648,
+            Str::DbSavedQueryDelete => 649,
+            Str::DbSavedQueryDeleteTitle => 650,
+            Str::DbSavedQueryDeleteMessage(_) => 651,
+            Str::DbSavedQueryScopeMismatch(_) => 652,
+            Str::DbHistoryClear => 653,
+            Str::DbHistoryClearTitle => 654,
+            Str::DbHistoryClearMessage => 655,
+            Str::DbHistorySucceeded => 656,
+            Str::DbHistoryFailed => 657,
+            Str::DbHistoryJustNow => 658,
+            Str::DbHistoryMinutesAgo(_) => 659,
+            Str::DbHistoryHoursAgo(_) => 660,
+            Str::DbHistoryDaysAgo(_) => 661,
+            Str::DbCatalogSearch => 662,
+            Str::DbCatalogSearchPlaceholder => 663,
+            Str::DbCatalogSearchLoading => 664,
+            Str::DbCatalogSearchEmpty => 665,
+            Str::DbCatalogSearchNoMatches => 666,
+            Str::DbCatalogSearchConnectedOnly => 667,
+            Str::DbCatalogSearchTruncated(_) => 668,
+            Str::DbCatalogSearchPartial(_) => 669,
+            Str::DbCatalogSearchConnectionUnavailable(_) => 670,
+            Str::DbCatalogKindDatabase => 671,
+            Str::DbCatalogKindSchema => 672,
+            Str::DbCatalogKindTable => 673,
+            Str::DbCatalogKindView => 674,
+            Str::DbCatalogKindColumn => 675,
+            Str::DbCatalogKindIndex => 676,
+            Str::DbCatalogKindConstraint => 677,
+            Str::DbCatalogKindNamespace => 678,
+            Str::DbCatalogKindKey => 679,
+            Str::DbCatalogKindObject => 680,
+            Str::DbSavedQueryScope => 681,
         }
     }
 

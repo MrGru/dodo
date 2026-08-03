@@ -178,6 +178,12 @@ impl DatabaseView {
             })
             .unwrap_or(true);
         let can_cancel = self.tabs.active().is_some_and(|tab| tab.can_cancel());
+        let query_store_writable = self.query_store_writable();
+        let can_save_query = query_store_writable
+            && self
+                .tabs
+                .active()
+                .is_some_and(|tab| !tab.editor.read(cx).value().trim().is_empty());
         let tab_notice = self
             .tabs
             .active()
@@ -209,6 +215,28 @@ impl DatabaseView {
                     .child(
                         h_flex()
                             .gap_1()
+                            .child(
+                                Button::new("db-saved-queries")
+                                    .xsmall()
+                                    .ghost()
+                                    .icon(AppIcon::SquareCode)
+                                    .label(t(Str::DbSavedQueries, cx))
+                                    .disabled(!query_store_writable)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_saved_queries(window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("db-save-query")
+                                    .xsmall()
+                                    .ghost()
+                                    .icon(AppIcon::Save)
+                                    .tooltip(t(Str::DbSaveQuery, cx))
+                                    .disabled(!can_save_query)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.pin_current_query(window, cx)
+                                    })),
+                            )
                             .child(
                                 Button::new("db-history")
                                     .xsmall()
