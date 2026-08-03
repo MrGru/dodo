@@ -961,6 +961,16 @@ pub enum Str {
     // Round 2: result-grid clipboard actions.
     DbCopyCell,
     DbCopyRow,
+
+    // Round 2: full-result streaming export.
+    DbExportCsv,
+    DbExportJson,
+    DbExportSucceeded {
+        rows: usize,
+        path: String,
+    },
+    DbExportCancelled,
+    DbExportFailed(String),
 }
 
 impl Str {
@@ -3023,6 +3033,25 @@ impl Str {
             (Str::DbCopyCell, Language::Vietnamese) => "Sao chép ô".into(),
             (Str::DbCopyRow, Language::English) => "Copy row".into(),
             (Str::DbCopyRow, Language::Vietnamese) => "Sao chép dòng".into(),
+
+            (Str::DbExportCsv, Language::English) => "Export CSV".into(),
+            (Str::DbExportCsv, Language::Vietnamese) => "Xuất CSV".into(),
+            (Str::DbExportJson, Language::English) => "Export JSON".into(),
+            (Str::DbExportJson, Language::Vietnamese) => "Xuất JSON".into(),
+            (Str::DbExportSucceeded { rows, path }, Language::English) => {
+                format!("Exported {rows} rows to {path}.").into()
+            }
+            (Str::DbExportSucceeded { rows, path }, Language::Vietnamese) => {
+                format!("Đã xuất {rows} dòng vào {path}.").into()
+            }
+            (Str::DbExportCancelled, Language::English) => "Export cancelled.".into(),
+            (Str::DbExportCancelled, Language::Vietnamese) => "Đã huỷ xuất dữ liệu.".into(),
+            (Str::DbExportFailed(detail), Language::English) => {
+                format!("The result could not be exported: {detail}").into()
+            }
+            (Str::DbExportFailed(detail), Language::Vietnamese) => {
+                format!("Không thể xuất kết quả: {detail}").into()
+            }
         }
     }
 }
@@ -3825,6 +3854,17 @@ mod tests {
             plain(Str::DbExplain),
             plain(Str::DbCopyCell),
             plain(Str::DbCopyRow),
+            plain(Str::DbExportCsv),
+            plain(Str::DbExportJson),
+            with(
+                Str::DbExportSucceeded {
+                    rows: NUMBER,
+                    path: DETAIL.into(),
+                },
+                &[NUMBER_TEXT, DETAIL],
+            ),
+            plain(Str::DbExportCancelled),
+            with(Str::DbExportFailed(DETAIL.into()), &[DETAIL]),
         ]
     }
 
@@ -4401,6 +4441,11 @@ mod tests {
             Str::DbExplain => 557,
             Str::DbCopyCell => 558,
             Str::DbCopyRow => 559,
+            Str::DbExportCsv => 560,
+            Str::DbExportJson => 561,
+            Str::DbExportSucceeded { .. } => 562,
+            Str::DbExportCancelled => 563,
+            Str::DbExportFailed(_) => 564,
         }
     }
 

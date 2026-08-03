@@ -69,6 +69,7 @@
 //! driver's type.
 
 pub mod connection_store;
+pub mod export;
 pub mod postgres;
 pub mod sqlite;
 

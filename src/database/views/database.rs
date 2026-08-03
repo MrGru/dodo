@@ -49,6 +49,7 @@
 //! user may close a tab to its left, or switch away, while it is still running.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
@@ -69,6 +70,7 @@ use crate::database::models::engine::Engine;
 use crate::database::models::page::PageBudget;
 use crate::database::models::sql_format;
 use crate::database::services::connection_store::{ConnectionStore, DiskConnectionStore};
+use crate::database::services::export::{self, ExportFormat};
 use crate::database::services::{self, Driver};
 use crate::database::state::connections::{ConnectionsState, Status};
 use crate::database::state::query::{self, QueryState};
@@ -78,6 +80,7 @@ use crate::database::views::connection_form::{self, ConnectionForm, FormEvent};
 use crate::database::views::result_grid::ResultDelegate;
 use crate::database::{DatabaseCopyCell, DatabaseCopyRow, KEY_CONTEXT};
 use crate::i18n::{Language, Str, t};
+use crate::paths::data_dir;
 
 /// The left panel's default width, and the range the divider allows.
 const PANEL_WIDTH: Pixels = px(280.);
@@ -650,6 +653,7 @@ impl DatabaseView {
             tab.query = QueryState::Running;
             tab.cancel = cancel;
             tab.notice = None;
+            tab.notice_success = false;
         }
         // The grid is shared, so a run that leaves the previous result on
         // screen would attribute those rows to the statement now in flight.
@@ -736,6 +740,7 @@ impl DatabaseView {
                         // Held as a `Str` rather than rendered text, so a
                         // banner already on screen re-translates.
                         tab.notice = Some(Str::DbCancelFailed(error.detail().to_string()));
+                        tab.notice_success = false;
                     }
                     cx.notify();
                 });
@@ -745,6 +750,96 @@ impl DatabaseView {
             tab.cancel_task = Some(task);
         }
         cx.notify();
+    }
+
+    /// Re-runs the statement behind the displayed grid into a file-backed sink.
+    /// The bounded rows on screen are never used as the export source.
+    pub(super) fn export(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
+        let Some(driver) = self.active_driver() else {
+            return;
+        };
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        if tab.is_running() {
+            return;
+        }
+        let QueryState::Done(outcome) = &tab.query else {
+            return;
+        };
+        if !outcome.has_grid() {
+            return;
+        }
+
+        let id = tab.id;
+        let statement = outcome.statement.clone();
+        let directory = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(data_dir);
+        let filename = format!("query.{}", format.extension());
+        let receiver = cx.prompt_for_new_path(&directory, Some(&filename));
+
+        let task = cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = receiver.await else {
+                return;
+            };
+
+            let cancel = driver.cancel_handle();
+            let Ok(started) = this.update(cx, |this, cx| {
+                let Some(tab) = this.tabs.find_mut(id) else {
+                    return false;
+                };
+                if tab.is_running() {
+                    return false;
+                }
+                tab.exporting = true;
+                tab.cancel = cancel;
+                tab.notice = None;
+                tab.notice_success = false;
+                cx.notify();
+                true
+            }) else {
+                return;
+            };
+            if !started {
+                return;
+            }
+
+            let shown_path = path.display().to_string();
+            let result = cx
+                .background_executor()
+                .spawn(async move { export::export(driver.as_ref(), &statement, &path, format) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                let Some(tab) = this.tabs.find_mut(id) else {
+                    return;
+                };
+                tab.exporting = false;
+                tab.cancel = None;
+                match result {
+                    Ok(rows) => {
+                        tab.notice = Some(Str::DbExportSucceeded {
+                            rows,
+                            path: shown_path,
+                        });
+                        tab.notice_success = true;
+                    }
+                    Err(error) if error.is_cancelled() => {
+                        tab.notice = Some(Str::DbExportCancelled);
+                        tab.notice_success = false;
+                    }
+                    Err(error) => {
+                        tab.notice = Some(Str::DbExportFailed(error.detail()));
+                        tab.notice_success = false;
+                    }
+                }
+                cx.notify();
+            });
+        });
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.run_task = Some(task);
+        }
     }
 
     fn copy_cell(&mut self, _: &DatabaseCopyCell, _: &mut Window, cx: &mut Context<Self>) {
