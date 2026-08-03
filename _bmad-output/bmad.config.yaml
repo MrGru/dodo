@@ -1,0 +1,65 @@
+# _bmad-output/ folder manifest
+# Tells BMAD workflows where each artifact type lives.
+# Mirrors `_bmad/config.yaml` but at the project root level for easy discovery.
+#
+# This file previously described "Cowork Local v3.0" (CoworkAthon), an unrelated
+# Python project. It has been regenerated to describe `dodo`, the Rust/GPUI
+# desktop app actually in this repository. See ../CHANGELOG.md for the record
+# of that regeneration. It also now matches the folder that is actually on
+# disk (`_bmad-output/`) instead of claiming a `bmad/` rename that never
+# happened.
+
+version: "1.x-latest"
+output_folder: _bmad-output
+
+planning_artifacts:
+  dir: _bmad-output/planning-artifacts
+  contents:
+    product-brief:           product-brief.md
+    prfaq:                   prfaq-dodo.md
+    prd:                     PRD.md
+    prd_addendum:            addendum.md
+    decision_log:            decision-log.md
+    validation_report:       validation-report.md
+    ux_design_visual:        DESIGN.md
+    ux_experience_behavioral: EXPERIENCE.md
+    architecture_spine:      ARCHITECTURE-SPINE.md
+    architecture_decisions:  architecture-decisions.md
+    epics:                   epics/
+    dependency_graph:        dependency-graph.md
+    implementation_readiness: implementation-readiness-check.md
+    project_context:         project-context.md
+    glossary:                glossary.md
+    references:              references.md
+
+implementation_artifacts:
+  dir: _bmad-output/implementation-artifacts
+  contents:
+    agent_brief:             AGENT_BRIEF.md
+    execution_loop:          agent-execution-loop.md
+    execution_order:         execution-order.md
+    blocked_decision_tree:   blocked-decision-tree.md
+    completion_criteria:     completion-criteria.md
+    five_second_prompt:      5-second-prompt.md
+    success_vision:          success-vision.md
+    execution_practice:      execution-practice.md
+    cut_first_order:         cut-first-order.md
+    risk_register:           risk-register.md
+    roadmap:                 v31-roadmap.md
+    env_vars_config:         env-vars-and-config.md
+    open_questions:          open-questions.md
+    architecture_constraints: architecture-constraints.md
+    sprint_status:           sprint-status.yaml
+    stories:                 stories/
+    reviews:                 review/
+    validations:             validation/
+    retrospectives:          retrospectives/
+    course_corrections:      course-corrections/
+
+# Dropped in the dodo regeneration (see CHANGELOG.md): demo_slot,
+# fci_judging_prep, legacy_task_mapping and dual_ide_layout were specific to
+# the CoworkAthon hackathon and a two-IDE (Claude + Cursor) monorepo layout
+# that dodo does not have; plan_review_log reviewed a `cowork.plan.md` source
+# document dodo never had.
+
+project_knowledge: docs
