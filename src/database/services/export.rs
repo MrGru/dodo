@@ -77,14 +77,13 @@ pub fn export(
 
     // `rename` replaces atomically on Unix. Windows refuses an existing target,
     // so retry after removing it only once the complete temporary file exists.
-    if let Err(first) = std::fs::rename(&temporary, path) {
-        if !path.exists()
+    if let Err(first) = std::fs::rename(&temporary, path)
+        && (!path.exists()
             || std::fs::remove_file(path).is_err()
-            || std::fs::rename(&temporary, path).is_err()
-        {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(file_error(path, first));
-        }
+            || std::fs::rename(&temporary, path).is_err())
+    {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(file_error(path, first));
     }
 
     Ok(rows)
@@ -242,11 +241,11 @@ fn write_csv_field(writer: &mut impl Write, value: &str) -> std::io::Result<()> 
     writer.write_all(b"\"")?;
     let mut start = 0;
     for (index, _) in value.match_indices('"') {
-        writer.write_all(value[start..index].as_bytes())?;
+        writer.write_all(&value.as_bytes()[start..index])?;
         writer.write_all(b"\"\"")?;
         start = index + 1;
     }
-    writer.write_all(value[start..].as_bytes())?;
+    writer.write_all(&value.as_bytes()[start..])?;
     writer.write_all(b"\"")
 }
 
