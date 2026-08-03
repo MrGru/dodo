@@ -52,9 +52,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, Hsla, InteractiveElement as _,
-    IntoElement, ParentElement as _, Pixels, Render, SharedString, Styled as _, Subscription, Task,
-    Window, div, px,
+    App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, Hsla,
+    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, SharedString,
+    Styled as _, Subscription, Task, Window, div, px,
 };
 use gpui_component::input::InputState;
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
@@ -76,6 +76,7 @@ use crate::database::state::tabs::{QueryTab, QueryTabs};
 use crate::database::state::tree::{Content, Forest, Notice, Outline, RowRef};
 use crate::database::views::connection_form::{self, ConnectionForm, FormEvent};
 use crate::database::views::result_grid::ResultDelegate;
+use crate::database::{DatabaseCopyCell, DatabaseCopyRow, KEY_CONTEXT};
 use crate::i18n::{Language, Str, t};
 
 /// The left panel's default width, and the range the divider allows.
@@ -142,7 +143,11 @@ impl DatabaseView {
                 TreeEvent::Collapsed(id) => this.on_collapsed(id.to_string(), cx),
             });
 
-        let table = cx.new(|cx| TableState::new(ResultDelegate::default(), window, cx));
+        let table = cx.new(|cx| {
+            TableState::new(ResultDelegate::default(), window, cx)
+                .cell_selectable(true)
+                .row_header(false)
+        });
 
         let mut this = Self {
             connections: ConnectionsState::new(),
@@ -742,6 +747,30 @@ impl DatabaseView {
         cx.notify();
     }
 
+    fn copy_cell(&mut self, _: &DatabaseCopyCell, _: &mut Window, cx: &mut Context<Self>) {
+        let text = {
+            let table = self.table.read(cx);
+            table
+                .selected_cell()
+                .and_then(|(row, column)| table.delegate().copy_cell_text(row, column))
+        };
+        if let Some(text) = text {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    fn copy_row(&mut self, _: &DatabaseCopyRow, _: &mut Window, cx: &mut Context<Self>) {
+        let text = {
+            let table = self.table.read(cx);
+            table
+                .selected_cell()
+                .and_then(|(row, _)| table.delegate().copy_row_text(row))
+        };
+        if let Some(text) = text {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
     pub(super) fn format(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let engine = self
             .connections
@@ -1007,7 +1036,10 @@ impl Render for DatabaseView {
 
         div()
             .size_full()
+            .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::copy_cell))
+            .on_action(cx.listener(Self::copy_row))
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)

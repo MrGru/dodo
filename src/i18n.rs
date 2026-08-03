@@ -957,6 +957,10 @@ pub enum Str {
 
     // Round 2: PostgreSQL's non-executing query plan.
     DbExplain,
+
+    // Round 2: result-grid clipboard actions.
+    DbCopyCell,
+    DbCopyRow,
 }
 
 impl Str {
@@ -3014,6 +3018,11 @@ impl Str {
 
             (Str::DbExplain, Language::English) => "Explain".into(),
             (Str::DbExplain, Language::Vietnamese) => "Giải thích".into(),
+
+            (Str::DbCopyCell, Language::English) => "Copy cell".into(),
+            (Str::DbCopyCell, Language::Vietnamese) => "Sao chép ô".into(),
+            (Str::DbCopyRow, Language::English) => "Copy row".into(),
+            (Str::DbCopyRow, Language::Vietnamese) => "Sao chép dòng".into(),
         }
     }
 }
@@ -3814,6 +3823,8 @@ mod tests {
             plain(Str::DbCancelledHint),
             with(Str::DbCancelFailed(DETAIL.into()), &[DETAIL]),
             plain(Str::DbExplain),
+            plain(Str::DbCopyCell),
+            plain(Str::DbCopyRow),
         ]
     }
 
@@ -4388,6 +4399,8 @@ mod tests {
             Str::DbCancelledHint => 555,
             Str::DbCancelFailed(_) => 556,
             Str::DbExplain => 557,
+            Str::DbCopyCell => 558,
+            Str::DbCopyRow => 559,
         }
     }
 
