@@ -37,19 +37,19 @@ impl History {
         if split_statements(&statement).is_empty() {
             return false;
         }
-        let before = self.entries.clone();
-        self.entries.insert(
-            0,
-            HistoryEntry {
-                scope,
-                statement,
-                recorded_at: now(),
-                outcome,
-                duration_ms,
-            },
-        );
+        let entry = HistoryEntry {
+            scope,
+            statement,
+            recorded_at: now(),
+            outcome,
+            duration_ms,
+        };
+        if entry.stored_bytes() > MAX_BYTES {
+            return false;
+        }
+        self.entries.insert(0, entry);
         self.entries = retained(std::mem::take(&mut self.entries));
-        self.entries != before
+        true
     }
 
     pub fn clear(&mut self) -> bool {
@@ -156,6 +156,21 @@ mod tests {
 
         let too_large = retained(vec![entry(4, MAX_BYTES + 1)]);
         assert!(too_large.is_empty(), "oversized text must not be truncated");
+
+        let mut history = History::default();
+        assert!(history.record(
+            scope("local"),
+            "SELECT 1".into(),
+            HistoryOutcome::Succeeded,
+            None,
+        ));
+        assert!(!history.record(
+            scope("local"),
+            "x".repeat(MAX_BYTES + 1),
+            HistoryOutcome::Failed,
+            None,
+        ));
+        assert_eq!(history.snapshot().len(), 1, "old history must survive");
     }
 
     #[test]
