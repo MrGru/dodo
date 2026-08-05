@@ -1115,6 +1115,20 @@ pub enum Str {
     DbCatalogKindNamespace,
     DbCatalogKindKey,
     DbCatalogKindObject,
+
+    // Database Explorer: filling the connection form from a pasted URI.
+    DbFieldUri,
+    DbFieldUriPlaceholder,
+    DbFillFromUri,
+    DbUriFilled,
+    DbUriIgnored(String),
+    DbUriTlsNotApplied,
+    DbUriEmpty,
+    DbUriNoScheme,
+    DbUriUnknownScheme(String),
+    DbUriInvalidPort(String),
+    DbUriMissingFile,
+    DbUriInvalidEscape,
 }
 
 impl Str {
@@ -3657,6 +3671,78 @@ impl Str {
             (Str::DbCatalogKindKey, Language::Vietnamese) => "Khóa".into(),
             (Str::DbCatalogKindObject, Language::English) => "Object".into(),
             (Str::DbCatalogKindObject, Language::Vietnamese) => "Đối tượng".into(),
+            (Str::DbFieldUri, Language::English) => "Connection URI".into(),
+            (Str::DbFieldUri, Language::Vietnamese) => "URI kết nối".into(),
+            // An example URI, not prose: the same in every language, and
+            // written per-language anyway so a new language still has to add
+            // its row rather than fall into a catch-all.
+            (Str::DbFieldUriPlaceholder, Language::English) => {
+                "postgresql://user:password@host:5432/database".into()
+            }
+            (Str::DbFieldUriPlaceholder, Language::Vietnamese) => {
+                "postgresql://user:password@host:5432/database".into()
+            }
+            (Str::DbFillFromUri, Language::English) => "Fill from URI".into(),
+            (Str::DbFillFromUri, Language::Vietnamese) => "Điền từ URI".into(),
+            (Str::DbUriFilled, Language::English) => {
+                "Filled in from the URI. Check the fields before saving.".into()
+            }
+            (Str::DbUriFilled, Language::Vietnamese) => {
+                "Đã điền từ URI. Hãy kiểm tra các trường trước khi lưu.".into()
+            }
+            (Str::DbUriIgnored(parts), Language::English) => {
+                format!("Read but not applied: {parts}").into()
+            }
+            (Str::DbUriIgnored(parts), Language::Vietnamese) => {
+                format!("Đã đọc nhưng không áp dụng: {parts}").into()
+            }
+            (Str::DbUriTlsNotApplied, Language::English) => {
+                "This URI asks for TLS, but dodo's Redis client connects without it.".into()
+            }
+            (Str::DbUriTlsNotApplied, Language::Vietnamese) => {
+                "URI này yêu cầu TLS, nhưng ứng dụng khách Redis của dodo kết nối mà không dùng \
+                 TLS."
+                    .into()
+            }
+            (Str::DbUriEmpty, Language::English) => "Paste a connection URI first.".into(),
+            (Str::DbUriEmpty, Language::Vietnamese) => "Hãy dán một URI kết nối trước.".into(),
+            (Str::DbUriNoScheme, Language::English) => {
+                "This has no scheme, so there is nothing to say which database it is. Start it \
+                 with postgresql://, mysql://, sqlite:// or redis://."
+                    .into()
+            }
+            (Str::DbUriNoScheme, Language::Vietnamese) => {
+                "Chuỗi này không có lược đồ nên không biết đây là cơ sở dữ liệu nào. Hãy bắt đầu \
+                 bằng postgresql://, mysql://, sqlite:// hoặc redis://."
+                    .into()
+            }
+            (Str::DbUriUnknownScheme(scheme), Language::English) => format!(
+                "dodo cannot connect to \"{scheme}\". Use postgresql, mysql, sqlite or redis."
+            )
+            .into(),
+            (Str::DbUriUnknownScheme(scheme), Language::Vietnamese) => format!(
+                "dodo không kết nối được tới \"{scheme}\". Hãy dùng postgresql, mysql, sqlite \
+                 hoặc redis."
+            )
+            .into(),
+            (Str::DbUriInvalidPort(port), Language::English) => {
+                format!("\"{port}\" is not a port number.").into()
+            }
+            (Str::DbUriInvalidPort(port), Language::Vietnamese) => {
+                format!("\"{port}\" không phải là số cổng.").into()
+            }
+            (Str::DbUriMissingFile, Language::English) => {
+                "This URI names no database file.".into()
+            }
+            (Str::DbUriMissingFile, Language::Vietnamese) => {
+                "URI này không nêu tệp cơ sở dữ liệu nào.".into()
+            }
+            (Str::DbUriInvalidEscape, Language::English) => {
+                "A percent-escape in this URI is not valid UTF-8.".into()
+            }
+            (Str::DbUriInvalidEscape, Language::Vietnamese) => {
+                "Một chuỗi thoát phần trăm trong URI này không phải UTF-8 hợp lệ.".into()
+            }
         }
     }
 }
@@ -4620,6 +4706,18 @@ mod tests {
             plain(Str::DbCatalogKindKey),
             plain(Str::DbCatalogKindObject),
             plain(Str::DbSavedQueryScope),
+            plain(Str::DbFieldUri),
+            term(Str::DbFieldUriPlaceholder),
+            plain(Str::DbFillFromUri),
+            plain(Str::DbUriFilled),
+            with(Str::DbUriIgnored(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbUriTlsNotApplied),
+            plain(Str::DbUriEmpty),
+            plain(Str::DbUriNoScheme),
+            with(Str::DbUriUnknownScheme(DETAIL.into()), &[DETAIL]),
+            with(Str::DbUriInvalidPort(DETAIL.into()), &[DETAIL]),
+            plain(Str::DbUriMissingFile),
+            plain(Str::DbUriInvalidEscape),
         ]
     }
 
@@ -5318,6 +5416,18 @@ mod tests {
             Str::DbCatalogKindKey => 679,
             Str::DbCatalogKindObject => 680,
             Str::DbSavedQueryScope => 681,
+            Str::DbFieldUri => 682,
+            Str::DbFieldUriPlaceholder => 683,
+            Str::DbFillFromUri => 684,
+            Str::DbUriFilled => 685,
+            Str::DbUriIgnored(_) => 686,
+            Str::DbUriTlsNotApplied => 687,
+            Str::DbUriEmpty => 688,
+            Str::DbUriNoScheme => 689,
+            Str::DbUriUnknownScheme(_) => 690,
+            Str::DbUriInvalidPort(_) => 691,
+            Str::DbUriMissingFile => 692,
+            Str::DbUriInvalidEscape => 693,
         }
     }
 
