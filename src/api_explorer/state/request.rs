@@ -719,12 +719,21 @@ impl RequestState {
     /// Called when the body type changes rather than at render time, because
     /// re-pointing the highlighter re-parses the document — cheap once, wasteful
     /// every frame.
+    ///
+    /// The `refresh` is not optional. `set_highlighter` drops the highlighter
+    /// and cancels its parse task without scheduling a replacement, so on its
+    /// own it leaves the editor uncoloured until the user's next keystroke;
+    /// `refresh` is what marks the next render as the one that re-parses. See
+    /// the module doc of `database::state::editor` for the full diagnosis, and
+    /// `state::tab::refresh_body`, which gets the same effect from the
+    /// `set_value` it happens to make straight afterwards.
     pub fn apply_body_language(&self, cx: &mut gpui::App) {
         let Some(language) = self.body_type.editor_language() else {
             return;
         };
         self.body_editor.update(cx, |state, cx| {
             state.set_highlighter(language, cx);
+            state.refresh(cx);
         });
     }
 
