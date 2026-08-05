@@ -57,6 +57,8 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, ScrollStrategy,
     SharedString, Styled as _, Subscription, Task, Window, div, px,
 };
+use gpui_component::button::ButtonVariant;
+use gpui_component::dialog::DialogButtonProps;
 use gpui_component::input::InputState;
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::table::TableState;
@@ -340,18 +342,26 @@ impl DatabaseView {
         let id = query.id;
         let name = query.name;
         let view = cx.entity();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        // An alert dialog for the same reason `delete` uses one: a plain
+        // `Dialog` draws no confirm button for `on_ok`.
+        window.open_alert_dialog(cx, move |alert, _, cx| {
             let view = view.clone();
-            dialog
+            alert
                 .title(t(Str::DbSavedQueryDeleteTitle, cx))
-                .child(t(Str::DbSavedQueryDeleteMessage(name.clone()), cx))
-                .on_ok(move |_, window, cx| {
+                .description(t(Str::DbSavedQueryDeleteMessage(name.clone()), cx))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t(Str::DbSavedQueryDelete, cx))
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(t(Str::DbCancel, cx))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _, cx| {
                     view.update(cx, |this, cx| {
                         if this.saved_queries.delete(id) {
                             this.persist_query_data(cx);
                         }
                     });
-                    window.close_dialog(cx);
                     true
                 })
         });
@@ -362,18 +372,24 @@ impl DatabaseView {
             return;
         }
         let view = cx.entity();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_alert_dialog(cx, move |alert, _, cx| {
             let view = view.clone();
-            dialog
+            alert
                 .title(t(Str::DbHistoryClearTitle, cx))
-                .child(t(Str::DbHistoryClearMessage, cx))
-                .on_ok(move |_, window, cx| {
+                .description(t(Str::DbHistoryClearMessage, cx))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t(Str::DbHistoryClear, cx))
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(t(Str::DbCancel, cx))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _, cx| {
                     view.update(cx, |this, cx| {
                         if this.history.clear() {
                             this.persist_query_data(cx);
                         }
                     });
-                    window.close_dialog(cx);
                     true
                 })
         });
@@ -824,25 +840,45 @@ impl DatabaseView {
         let name = profile.display_name();
         let view = cx.entity();
 
-        window.open_dialog(cx, move |dialog, _, cx| {
+        // An **alert** dialog, not a plain one: `Dialog` renders a footer only
+        // when it is given one, so a plain dialog carrying `on_ok` draws no
+        // confirm button at all and can be accepted only by the Enter key —
+        // every control the user can see on it cancels. `AlertDialog` is what
+        // builds the OK/Cancel footer from `button_props`. Same shape as
+        // `docker::views::containers`' delete confirmation.
+        window.open_alert_dialog(cx, move |alert, _, cx| {
             let view = view.clone();
-            dialog
+            alert
                 .title(t(Str::DbDeleteConnectionTitle, cx))
-                .child(t(Str::DbDeleteConnectionMessage(name.clone()), cx))
-                .on_ok(move |_, window, cx| {
-                    view.update(cx, |this, cx| {
-                        this.drivers.remove(&id);
-                        this.close_detail_for(id, cx);
-                        this.connections.delete(id);
-                        this.forest.forget(id);
-                        this.sync_tree_items(cx);
-                        this.persist(cx);
-                        cx.notify();
-                    });
-                    window.close_dialog(cx);
+                .description(t(Str::DbDeleteConnectionMessage(name.clone()), cx))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t(Str::DbDeleteConnection, cx))
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(t(Str::DbCancel, cx))
+                        .show_cancel(true),
+                )
+                // Returning `true` is what closes it: the library calls
+                // `close_dialog` for us, so closing it here as well would pop a
+                // second dialog off the stack.
+                .on_ok(move |_, _, cx| {
+                    view.update(cx, |this, cx| this.confirm_delete(id, cx));
                     true
                 })
         });
+    }
+
+    /// What confirming the deletion actually does, in the order the three
+    /// layers have to change: the live handle and anything drawn from it, then
+    /// the model, then the widget's rows, then the saved document.
+    fn confirm_delete(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.drivers.remove(&id);
+        self.close_detail_for(id, cx);
+        self.connections.delete(id);
+        self.forest.forget(id);
+        self.sync_tree_items(cx);
+        self.persist(cx);
+        cx.notify();
     }
 
     // ---- the object tree -------------------------------------------------
