@@ -82,6 +82,120 @@ fn pane_title(view: View, docker_page: DockerPage) -> Str {
     }
 }
 
+/// The widths and heights the layout is built from, in logical pixels. They are
+/// plain `f32` so the derived numbers below stay readable arithmetic rather than
+/// a second set of magic constants; `px(..)` goes on at the few use sites.
+///
+/// `MAIN_MIN_*` is the floor the main pane is held at: below it dodo's own
+/// tables and toolbars start clipping their right-hand ends, so squeezing
+/// further buys nothing a scrollbar does not buy better. 520 is the width at
+/// which that crowding was first recorded.
+const MAIN_MIN_WIDTH: f32 = 520.;
+const MAIN_MIN_HEIGHT: f32 = 360.;
+/// The sidebar's two widths. The collapsed one is `COLLAPSED_WIDTH` in the
+/// pinned checkout's `sidebar/mod.rs`, which the library does not export.
+const SIDEBAR_WIDTH: f32 = 240.;
+const SIDEBAR_RAIL_WIDTH: f32 = 48.;
+/// The pane's own chrome around the tool: `p_4` left and right; and `p_4` top
+/// and bottom plus the header row (`h_8`) and the `gap_4` under it.
+const PANE_CHROME_WIDTH: f32 = 32.;
+const PANE_CHROME_HEIGHT: f32 = 80.;
+
+/// The window width at which the sidebar gives up its labels.
+///
+/// **Derived, not chosen**: it is exactly the width at which an expanded
+/// sidebar would push the main pane below [`MAIN_MIN_WIDTH`]. Narrower than
+/// this and the labels are costing the content more than they are worth.
+const AUTO_COLLAPSE_WIDTH: f32 = SIDEBAR_WIDTH + PANE_CHROME_WIDTH + MAIN_MIN_WIDTH;
+
+/// The smallest window dodo asks the platform to allow: the icon rail, plus the
+/// main pane at its minimum. Handed to `WindowOptions::window_min_size` in
+/// `main.rs`, which is what stops a drag before the layout has to cope at all —
+/// the scroll container in [`Layout::render`] is the fallback for when it does.
+pub fn window_min_size() -> Size<Pixels> {
+    size(
+        px(SIDEBAR_RAIL_WIDTH + PANE_CHROME_WIDTH + MAIN_MIN_WIDTH),
+        px(PANE_CHROME_HEIGHT + MAIN_MIN_HEIGHT),
+    )
+}
+
+/// Whether the sidebar is showing icons only, and how it came to be that way.
+///
+/// **The width rule is edge-triggered, and that is the whole reason this is a
+/// struct rather than a `width < AUTO_COLLAPSE_WIDTH` test inside `render`.** A
+/// level-triggered rule re-collapses the sidebar on the very next frame after
+/// the user expands it, so at a narrow width the toggle would appear broken —
+/// a control that undoes itself is worse than no control at all. Only the
+/// window *crossing* the breakpoint moves the sidebar:
+///
+/// * Crossing downward collapses it, and records that the width did it.
+/// * Crossing upward expands it again — but only if the collapse was the
+///   width's own. A sidebar the user collapsed by hand stays collapsed.
+/// * The toggle always wins and hands ownership back to the user: after a
+///   manual press the sidebar stays exactly as left until the next crossing.
+///
+/// None of it is persisted; [`Layout::new`] says why.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct SidebarState {
+    collapsed: bool,
+    /// Set only when [`SidebarState::resize`] was the one that collapsed it,
+    /// which is what [`SidebarState::resize`] later needs in order to know
+    /// whether re-expanding would be restoring the user's state or overriding
+    /// it.
+    collapsed_by_width: bool,
+    /// Which side of the breakpoint the last width was on, or `None` before the
+    /// first frame — so the first width ever seen is recorded rather than
+    /// treated as a crossing, and the opening state is whatever [`Layout::new`]
+    /// asked for.
+    narrow: Option<bool>,
+}
+
+impl SidebarState {
+    /// How dodo opens: on the icon rail, by choice rather than by width.
+    const fn new() -> Self {
+        Self {
+            collapsed: true,
+            collapsed_by_width: false,
+            narrow: None,
+        }
+    }
+
+    /// Apply the width rule to a new window width.
+    ///
+    /// Pure, and idempotent for any width on the same side of the breakpoint —
+    /// which is what makes it safe to call once per frame from `render`.
+    fn resize(mut self, width: Pixels) -> Self {
+        let narrow = width < px(AUTO_COLLAPSE_WIDTH);
+        let crossed = self.narrow.is_some_and(|was| was != narrow);
+        self.narrow = Some(narrow);
+
+        if !crossed {
+            return self;
+        }
+
+        if narrow {
+            if !self.collapsed {
+                self.collapsed = true;
+                self.collapsed_by_width = true;
+            }
+        } else if self.collapsed_by_width {
+            self.collapsed = false;
+            self.collapsed_by_width = false;
+        }
+
+        self
+    }
+
+    /// The user pressed the toggle. Their choice, and theirs to keep.
+    fn toggle(self) -> Self {
+        Self {
+            collapsed: !self.collapsed,
+            collapsed_by_width: false,
+            ..self
+        }
+    }
+}
+
 /// A tool row that names itself while the sidebar is collapsed to icons.
 ///
 /// **Wrapping is the only way to get that tooltip, and there is no risk of a
@@ -210,10 +324,7 @@ fn footer_button(
 
 pub struct Layout {
     collapsible: SidebarCollapsible,
-    /// Whether the sidebar is showing icons only. **Starts `true`** — see
-    /// [`Layout::new`] — and is not persisted, so every launch opens on the
-    /// icon rail whatever the last session did.
-    collapsed: bool,
+    sidebar: SidebarState,
     active: View,
     json_formatter: Entity<JsonFormatter>,
     encoder_decoder: Entity<EncoderDecoder>,
@@ -236,7 +347,7 @@ impl Layout {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             collapsible: SidebarCollapsible::Icon,
-            collapsed: true,
+            sidebar: SidebarState::new(),
             active: View::JsonFormatter,
             json_formatter: cx.new(|cx| JsonFormatter::new(window, cx)),
             encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
@@ -283,8 +394,15 @@ impl Layout {
 }
 
 impl Render for Layout {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let icon_collapsed = self.collapsed && self.collapsible == SidebarCollapsible::Icon;
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The width rule is applied here rather than from a resize observer,
+        // and deliberately without a `cx.notify()`: GPUI re-renders on resize
+        // anyway, this frame is built from the value below, and `resize` is
+        // idempotent within one side of the breakpoint — so a frame at an
+        // unchanged width changes nothing and no render can schedule another.
+        self.sidebar = self.sidebar.resize(window.viewport_size().width);
+
+        let icon_collapsed = self.sidebar.collapsed && self.collapsible == SidebarCollapsible::Icon;
         let title = pane_title(self.active, self.docker.read(cx).page());
 
         h_flex()
@@ -293,8 +411,8 @@ impl Render for Layout {
             .child(
                 Sidebar::new("side-bar")
                     .collapsible(self.collapsible)
-                    .collapsed(self.collapsed)
-                    .w(px(240.))
+                    .collapsed(self.sidebar.collapsed)
+                    .w(px(SIDEBAR_WIDTH))
                     .header(
                         SidebarHeader::new().child(
                             h_flex()
@@ -366,19 +484,50 @@ impl Render for Layout {
                                     )
                                     .ghost()
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.collapsed = !this.collapsed;
+                                        this.sidebar = this.sidebar.toggle();
                                         cx.notify();
                                     })),
                             )
                             .child(div().font_bold().child(t(title, cx))),
                     )
-                    .child(div().flex_1().min_h_0().map(|this| match self.active {
-                        View::JsonFormatter => this.child(self.json_formatter.clone()),
-                        View::EncoderDecoder => this.child(self.encoder_decoder.clone()),
-                        View::ApiExplorer => this.child(self.api_explorer.clone()),
-                        View::Docker => this.child(self.docker.clone()),
-                        View::Database => this.child(self.database.clone()),
-                    })),
+                    // The tool scrolls rather than being squeezed. The inner
+                    // box is `size_full` so on any ordinary window it is
+                    // exactly the pane and nothing scrolls at all; `min_w` /
+                    // `min_h` are the floor under that, and the only thing they
+                    // change is that below it the content keeps its size and
+                    // this container gains a scrollbar.
+                    //
+                    // The header row above stays outside, so the pane title and
+                    // the sidebar toggle never scroll away.
+                    //
+                    // `w_full` on the scroll container is load-bearing: one
+                    // that sizes to its content leaves rules and rows stopping
+                    // short of the pane's edge.
+                    .child(
+                        div()
+                            .id("main-pane")
+                            .w_full()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_scroll()
+                            .child(
+                                div()
+                                    .size_full()
+                                    .min_w(px(MAIN_MIN_WIDTH))
+                                    .min_h(px(MAIN_MIN_HEIGHT))
+                                    .map(|this| match self.active {
+                                        View::JsonFormatter => {
+                                            this.child(self.json_formatter.clone())
+                                        }
+                                        View::EncoderDecoder => {
+                                            this.child(self.encoder_decoder.clone())
+                                        }
+                                        View::ApiExplorer => this.child(self.api_explorer.clone()),
+                                        View::Docker => this.child(self.docker.clone()),
+                                        View::Database => this.child(self.database.clone()),
+                                    }),
+                            ),
+                    ),
             )
     }
 }
@@ -387,12 +536,22 @@ impl Render for Layout {
 mod tests {
     use std::mem::{Discriminant, discriminant};
 
+    use gpui::px;
     use gpui_component::Collapsible as _;
     use gpui_component::sidebar::SidebarMenuItem;
 
-    use super::{ToolItem, View, pane_title};
+    use super::{
+        AUTO_COLLAPSE_WIDTH, MAIN_MIN_HEIGHT, MAIN_MIN_WIDTH, PANE_CHROME_HEIGHT,
+        PANE_CHROME_WIDTH, SIDEBAR_RAIL_WIDTH, SIDEBAR_WIDTH, SidebarState, ToolItem, View,
+        pane_title, window_min_size,
+    };
     use crate::docker::DockerPage;
     use crate::i18n::Str;
+
+    /// A width comfortably on each side of the breakpoint. 1280 and 520 are the
+    /// two the layout is reviewed at.
+    const WIDE: f32 = 1280.;
+    const NARROW: f32 = 520.;
 
     fn title_of(view: View, page: DockerPage) -> Discriminant<Str> {
         discriminant(&pane_title(view, page))
@@ -428,6 +587,107 @@ mod tests {
         // group of children — an icon-collapsed sidebar renders no children at
         // all, which is what made Docker's four pages unreachable.
         assert_eq!(View::ALL.len(), 5);
+    }
+
+    #[test]
+    fn the_breakpoint_is_where_labels_would_start_costing_the_pane_its_minimum() {
+        // The rule the constant exists to express: at exactly the breakpoint an
+        // expanded sidebar still leaves the main pane its minimum, and one pixel
+        // narrower it does not.
+        assert_eq!(
+            AUTO_COLLAPSE_WIDTH - SIDEBAR_WIDTH - PANE_CHROME_WIDTH,
+            MAIN_MIN_WIDTH
+        );
+        assert_eq!(AUTO_COLLAPSE_WIDTH, 792.);
+    }
+
+    #[test]
+    fn the_smallest_allowed_window_still_holds_the_pane_minimum() {
+        let min = window_min_size();
+
+        assert_eq!(
+            min.width,
+            px(SIDEBAR_RAIL_WIDTH + PANE_CHROME_WIDTH + MAIN_MIN_WIDTH)
+        );
+        assert_eq!(min.height, px(PANE_CHROME_HEIGHT + MAIN_MIN_HEIGHT));
+        assert_eq!(min, gpui::size(px(600.), px(440.)));
+
+        // …and a window at that floor is narrow enough that the rail, not the
+        // labelled sidebar, is what the width leaves room for. If these two
+        // ever disagree the smallest window would open with a sidebar it cannot
+        // afford.
+        assert!(min.width < px(AUTO_COLLAPSE_WIDTH));
+    }
+
+    #[test]
+    fn dodo_opens_collapsed_and_the_first_width_seen_is_not_a_crossing() {
+        let start = SidebarState::new();
+        assert!(start.collapsed);
+        assert!(!start.collapsed_by_width);
+
+        // Opening wide must not expand a sidebar the app deliberately opened
+        // collapsed…
+        assert!(start.resize(px(WIDE)).collapsed);
+        // …and opening narrow must not mark it as the width's doing, or the
+        // first widening would expand it.
+        let narrow_first = start.resize(px(NARROW));
+        assert!(narrow_first.collapsed);
+        assert!(!narrow_first.collapsed_by_width);
+        assert!(narrow_first.resize(px(WIDE)).collapsed);
+    }
+
+    #[test]
+    fn narrowing_past_the_breakpoint_collapses_the_sidebar_and_widening_restores_it() {
+        let expanded = SidebarState::new().resize(px(WIDE)).toggle();
+        assert!(!expanded.collapsed);
+
+        let collapsed = expanded.resize(px(NARROW));
+        assert!(collapsed.collapsed);
+        assert!(collapsed.collapsed_by_width);
+
+        let restored = collapsed.resize(px(WIDE));
+        assert!(!restored.collapsed);
+        assert!(!restored.collapsed_by_width);
+    }
+
+    #[test]
+    fn the_breakpoint_itself_counts_as_wide() {
+        let expanded = SidebarState::new().resize(px(WIDE)).toggle();
+
+        assert!(!expanded.resize(px(AUTO_COLLAPSE_WIDTH)).collapsed);
+        assert!(expanded.resize(px(AUTO_COLLAPSE_WIDTH - 1.)).collapsed);
+    }
+
+    #[test]
+    fn expanding_the_sidebar_at_a_narrow_width_is_not_undone_by_the_next_frame() {
+        // The defect this whole struct exists to prevent: `render` applies the
+        // width rule every frame, so a level-triggered rule would collapse the
+        // sidebar again before the user let go of the mouse.
+        let mut state = SidebarState::new().resize(px(WIDE)).resize(px(NARROW));
+        state = state.toggle();
+        assert!(!state.collapsed);
+
+        for _ in 0..10 {
+            state = state.resize(px(NARROW));
+            assert!(!state.collapsed, "the width rule must not fight the user");
+        }
+        // Even a different narrow width is not a crossing.
+        assert!(!state.resize(px(NARROW - 100.)).collapsed);
+    }
+
+    #[test]
+    fn a_sidebar_the_user_collapsed_stays_collapsed_when_the_window_grows() {
+        let by_hand = SidebarState::new().resize(px(WIDE));
+        assert!(by_hand.collapsed && !by_hand.collapsed_by_width);
+
+        // Narrow and wide again: nothing here was the width's to restore.
+        let round_trip = by_hand.resize(px(NARROW)).resize(px(WIDE));
+        assert!(round_trip.collapsed);
+
+        // Same once the user has expanded and re-collapsed it by hand.
+        let re_collapsed = by_hand.toggle().toggle();
+        assert!(re_collapsed.collapsed);
+        assert!(re_collapsed.resize(px(NARROW)).resize(px(WIDE)).collapsed);
     }
 
     #[test]
