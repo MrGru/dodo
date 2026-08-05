@@ -220,6 +220,58 @@ cx.subscribe(&self.choice, |this, state, event: &SelectEvent<Vec<SharedString>>,
 `gpui_component::setting` is a complete settings UI — sidebar, search box, right pane. Do not
 hand-roll one. `Dialog` already provides a close button, Escape, and overlay-click dismissal.
 
+### A confirmation must be `open_alert_dialog`; `Dialog::on_ok` alone draws no button
+
+**`Dialog` renders a footer only when it is given one.** `.on_ok(..)` / `.on_cancel(..)` set
+`button_props`, but `DialogButtonProps::render_ok` / `render_cancel` are called from exactly one
+place in the library — `AlertDialog::into_dialog`, which supplies the default OK/Cancel footer
+when the author set none. `Dialog`'s own `RenderOnce` never calls them. So
+
+```rust
+window.open_dialog(cx, |dialog, _, cx| dialog.title(..).child(..).on_ok(..));  // WRONG
+```
+
+opens a card with a message and **no confirm button at all**. The close cross runs `on_cancel`,
+the backdrop dismisses, Escape cancels — every control the user can see refuses. `on_ok` is
+reachable only by the `enter` binding in the `Dialog` key context, so the action appears to do
+nothing and a synthetic-keystroke test "confirms" it works. That shipped in dodo: deleting a
+saved connection did nothing at all (`src/database/views/database.rs`, `confirm_delete`'s guard
+test records the diagnosis).
+
+Use the alert dialog, as `docker::views::containers::confirm_delete` and the three confirmations
+in `database::views::database` now do:
+
+```rust
+window.open_alert_dialog(cx, move |alert, _, cx| {
+    let view = view.clone();
+    alert
+        .title(t(Str::DbDeleteConnectionTitle, cx))
+        .description(t(Str::DbDeleteConnectionMessage(name.clone()), cx))
+        .button_props(
+            DialogButtonProps::default()
+                .ok_text(t(Str::DbDeleteConnection, cx))
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text(t(Str::DbCancel, cx))
+                .show_cancel(true),     // default is false — no Cancel button otherwise
+        )
+        .on_ok(move |_, _, cx| { view.update(cx, |this, cx| this.confirm(cx)); true })
+});
+```
+
+`DialogButtonProps` is `gpui_component::dialog`, `ButtonVariant` is `gpui_component::button`.
+**Do not call `window.close_dialog(cx)` inside `on_ok`**: returning `true` makes the library call
+it, and doing both pops two entries off `Root::active_dialogs` — harmless with one dialog open,
+not with two.
+
+A dialog whose body is your own entity (the connection form, the updater, `docker::views::detail`)
+is unaffected: its buttons live in the body it renders, not in the footer.
+
+None of this can be caught at runtime on macOS. `Root::new` calls
+`macos_accessibility::install_window_hit_test_forwarder`, which dereferences a real `NSView`
+(the `not(test)` cfg on it is *gpui-component's* test profile, not dodo's), so a GPUI test window
+cannot host a `Root` and there is no dialog layer to drive. Guard it by scanning source, the way
+`i18n_lint` does.
+
 **`Dialog` is also the only correct way to be modal.** It paints an `anchored().snap_to_window()`
 layer that is `.occlude()`d and `cx.stop_propagation()`s the backdrop, binds `escape` in its own
 `Dialog` key context, `focus_trap`s the card, and restores the previously focused handle on close.
