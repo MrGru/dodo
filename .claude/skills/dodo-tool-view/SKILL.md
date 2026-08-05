@@ -48,10 +48,23 @@ appears, that is the one you missed.
   `t(view.title(), cx)`. A new tool therefore needs a `Str` variant per title, plus one for every
   label, button, placeholder and error message it shows — see `dodo-theming-settings`, which also
   covers parameterized messages and the widgets whose strings do not refresh on their own.
-- **The main pane is a plain flex child**, `div().flex_1().min_h_0()`. Your view gets
-  `size_full()` inside it, so give the root of your `Render` a `v_flex().size_full()` and put
-  `.flex_1().min_h_0()` on whatever should absorb the leftover height. Omitting `min_h_0` makes a
-  multi-line editor grow past the window instead of scrolling.
+- **The main pane is a scroll container with a floor under it.** Your view is handed a
+  `div().size_full().min_w(MAIN_MIN_WIDTH).min_h(MAIN_MIN_HEIGHT)` inside
+  `div().id("main-pane").w_full().flex_1().min_h_0().overflow_scroll()`, so give the root of your
+  `Render` a `v_flex().size_full()` and put `.flex_1().min_h_0()` on whatever should absorb the
+  leftover height. Omitting `min_h_0` makes a multi-line editor grow past the window instead of
+  scrolling. Two consequences worth knowing: your view is **never** narrower than
+  `MAIN_MIN_WIDTH` or shorter than `MAIN_MIN_HEIGHT` (`src/layout.rs` — 520×360 today, and
+  `WindowOptions::window_min_size` stops a resize drag before even that), and on any ordinary
+  window that box is exactly the pane, so the outer container has no scroll range and consumes no
+  wheel events from yours. A tool whose content can genuinely exceed its box still needs its own
+  scrolling — see `src/docker/views/containers.rs` for the `overflow_scroll()` + `min_w(..)`
+  pattern.
+- **The sidebar opens collapsed to icons**, and collapses again on its own if the user expands it
+  and then narrows the window past `AUTO_COLLAPSE_WIDTH`. So a new tool's row is an *icon* first
+  and a label second: the icon has to read on its own, and `View::title` is what the collapsed row
+  shows as its tooltip. `SidebarState` in `src/layout.rs` documents why that rule is
+  edge-triggered — do not turn it into a plain `width <` test in `render`.
 - **Error surfaces** are hand-rolled banners, not a library component — copy
   `EncoderDecoder::error_banner` (`danger` border, `danger.opacity(0.1)` background). Only the
   JSON formatter also pushes an inline diagnostic, and that needs a `code_editor` input; see
