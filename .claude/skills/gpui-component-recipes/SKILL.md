@@ -388,8 +388,8 @@ Sidebar::new("side-bar")
     .collapsed(self.collapsed)
     .w(px(240.))
     .header(SidebarHeader::new().child("Dodo"))
-    .child(SidebarGroup::new(t(Str::Tools, cx)).child(self.menu(cx)))
-    .footer(SidebarFooter::new().child(/* button */))
+    .child(SidebarGroup::new(t(Str::Tools, cx)).children(self.menu(cx)))
+    .footer(/* a plain v_flex — see below */)
 ```
 
 `SidebarMenuItem::on_click` hands you `(&ClickEvent, &mut Window, &mut App)` — an `&mut App`,
@@ -407,6 +407,54 @@ SidebarMenu::new().children(View::ALL.map(|view| {
 }))
 ```
 
+### Collapsed, the rail is 48px and every inset is countable
+
+The collapsed width is `COLLAPSED_WIDTH` in `sidebar/mod.rs` — **48px, and not exported**, so
+dodo restates it. Getting anything to line up with the collapsed tool icons is arithmetic, and
+all of it lives inside the library:
+
+| box | expanded inset | collapsed inset |
+|---|---|---|
+| `Sidebar`'s `#inner` (holds the groups) | `px_3` | `p_2` |
+| `Sidebar`'s `#header` / `#footer` wrappers | `px_3` | `px_2` |
+| `SidebarMenuItem`'s own row | `p_2`, `h_7` | `p_2`, `justify_center` |
+
+So a collapsed menu row gets a 31px box and centres its 16px icon in it. **`SidebarHeader` and
+`SidebarFooter` each add a *second* `p_2`** (plus a hover highlight spanning the whole block),
+which halves that box to 15px and puts anything inside it out of reach of the rail's centre.
+`Sidebar::header`/`footer` take `impl IntoElement`, so the fix is to pass your own element and
+skip the wrapper — `src/layout.rs`'s `footer_button` is the worked example, and its doc comment
+carries the numbers.
+
+### A `SidebarMenuItem` has no tooltip — wrap it in your own `SidebarItem`
+
+There is no tooltip field and no builder for one at this revision, and `SidebarMenu::children`
+accepts nothing but a `SidebarMenuItem`, so it cannot be added from inside the menu either.
+(The upside: there is no library tooltip to duplicate.) `SidebarItem` is a **public trait**
+(`Collapsible + Clone` plus one `render`) and `SidebarGroup<E: SidebarItem>` takes any
+implementation, so a thin wrapper is the way in:
+
+```rust
+impl SidebarItem for ToolItem {
+    fn render(self, id: impl Into<ElementId>, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let id = id.into();
+        div()
+            .id(SharedString::from(format!("tool-tip-{id}")))   // `tooltip` is StatefulInteractiveElement
+            .w_full()
+            .when(self.collapsed, |this| {
+                this.tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
+            })
+            .child(self.item.collapsed(self.collapsed).render(id, window, cx))
+    }
+}
+```
+
+`SidebarGroup` already stacks its children with the same `gap_2` `SidebarMenu` uses, so dropping
+`SidebarMenu` in favour of `SidebarGroup::children` changes nothing that is drawn. Forward the
+`collapsed` flag the group hands you — it is how the row knows to render as an icon *and* how
+the wrapper knows to show the tooltip. This is still one flat row per tool: `dodo-tool-view`
+explains why nesting stays out.
+
 ## Button and Icon
 
 ```rust
@@ -421,3 +469,21 @@ Icon` means any `AppIcon` variant goes in directly — `AppIcon::Json`, no wrapp
 a standalone element, `Icon::new(AppIcon::Settings)` (that is what `AppIcon::view()` in
 `src/app_icon.rs` returns). Note the library's own `Icon::view(cx)` / `IconName::view(cx)` return
 `Entity<Icon>` instead; dodo's same-named helper does not.
+
+### `justify_*` on a `Button` aligns nothing; its padding depends on `.icon()` vs `.child()`
+
+Two traps that look like styling and are not:
+
+- **`Button` wraps its contents in `h_flex().size_full().items_center().justify_center()`.**
+  That inner box fills the button, so `.justify_start()` on the button itself is a **no-op** for
+  where the icon and label land — it only moves a box that is already 100% wide. To left-align a
+  wide button's contents, give *your own child* `.w_full()` and let its own flex do it.
+- **Padding is chosen by whether the button has children.** `.label(..)`/`.child(..)` take the
+  "normal button" branch (`h_8` and **`px_4`** at the default size); an icon-only button
+  (`.icon(..)` with no label and no child) takes `size_8` instead. So a button built with
+  `.child(h_flex().child(icon))` is *not* an icon button, and its 16px side padding is wider
+  than a 48px collapsed sidebar rail can hold. Override with `.px_0()`/`.px_2()`; the user
+  refinement is applied after the size branch, so it wins.
+
+`Button::tooltip(impl Into<SharedString>)` exists and takes plain text — no `Tooltip::new` and no
+closure. Reach for it before hand-rolling one on a wrapper.
