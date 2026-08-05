@@ -42,6 +42,12 @@
 //! existing `Driver::children` seam off-thread; Redis therefore keeps using
 //! cursor-paged `SCAN … TYPE`, never `KEYS` or one query per key.
 //!
+//! The connection form can also be **filled from a pasted URI** — all four
+//! engines, both PostgreSQL schemes, `rediss://`, the `sqlite:` forms. The
+//! parse is [`models::uri`], a pure function unit-tested against every shape a
+//! real URI takes; the form only moves its answer into the inputs and never
+//! saves, connects or tests as a side effect.
+//!
 //! Still not built, and nothing is reserved for them: favourites, saved-query
 //! folders/tags/sharing/import/export, tab restore, autocomplete, or a
 //! background catalog daemon. **Column sorting is not built either**: the

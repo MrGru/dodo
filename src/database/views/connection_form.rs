@@ -26,6 +26,25 @@
 //! screen, not behind a disclosure and not only on first use. dodo stores the
 //! password in plain text in its own data directory, and the one thing that
 //! makes that acceptable is that the user is told every time.
+//!
+//! # Filling the form from a URI
+//!
+//! The first row is a connection URI and a button that fills the rest of the
+//! form in from it. Three things about it are decisions:
+//!
+//! - **It is a button, not a paste handler.** Nothing about the manual flow
+//!   changes, and a URI in the clipboard cannot rewrite fields the user is in
+//!   the middle of typing.
+//! - **It fills, and stops there.** Nothing is saved, connected or tested as a
+//!   side effect: the whole feature is putting the fields on screen for the
+//!   user to look at, which is why the success notice says to check them.
+//! - **A name the user typed is never overwritten.** An empty name gets
+//!   [`ParsedUri::suggested_name`]'s answer; anything else is left alone.
+//!
+//! The parse itself is [`crate::database::models::uri`], where it is unit
+//! tested; this file only moves the answer into the inputs. A failure fills
+//! nothing at all, so the user is never left guessing which fields came from
+//! their paste.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -43,6 +62,7 @@ use crate::database::components::notice::{Tone, notice};
 use crate::database::models::connection::{ConnectionProfile, SslMode};
 use crate::database::models::engine::{Address, Engine};
 use crate::database::models::error::DbError;
+use crate::database::models::uri::{self, ParsedUri, UriError};
 use crate::database::services;
 use crate::i18n::{Language, Str, t};
 
@@ -85,10 +105,31 @@ enum TestState {
     Failed(DbError),
 }
 
+/// What the last press of Fill from URI did. Held rather than rendered on the
+/// spot so the answer survives the repaints that follow it, and cleared the
+/// moment the engine picker or a Save moves the form on.
+#[derive(Default)]
+enum UriState {
+    #[default]
+    Idle,
+    /// The form was filled in. Carries what the URI said that dodo did not
+    /// apply, so the notice can name it.
+    Filled {
+        ignored: Vec<String>,
+        tls_unsupported: bool,
+    },
+    Failed(UriError),
+}
+
 pub struct ConnectionForm {
     /// The profile being edited. Every field but the text ones is edited here
     /// directly; the text ones live in their `InputState` until Save.
     profile: ConnectionProfile,
+
+    /// The pasted URI. Not part of the profile and never saved: it is an input
+    /// to the form, not a field of a connection.
+    uri: Entity<InputState>,
+    uri_state: UriState,
 
     name: Entity<InputState>,
     host: Entity<InputState>,
@@ -150,6 +191,7 @@ impl ConnectionForm {
     fn new(profile: ConnectionProfile, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let name_placeholder = t(Str::DbFieldNamePlaceholder, cx);
         let file_placeholder = t(Str::DbFieldFilePlaceholder, cx);
+        let uri_placeholder = t(Str::DbFieldUriPlaceholder, cx);
 
         let text = |value: &str, window: &mut Window, cx: &mut Context<Self>| {
             let value = value.to_string();
@@ -157,6 +199,8 @@ impl ConnectionForm {
         };
 
         Self {
+            uri: cx.new(|cx| InputState::new(window, cx).placeholder(uri_placeholder)),
+            uri_state: UriState::Idle,
             name: {
                 let value = profile.name.clone();
                 cx.new(|cx| {
@@ -232,7 +276,76 @@ impl ConnectionForm {
 
         self.profile = next;
         self.test = TestState::Idle;
+        // Whatever the URI said, it does not describe this engine any more.
+        self.uri_state = UriState::Idle;
         cx.notify();
+    }
+
+    /// Reads the URI field and fills the rest of the form in from it.
+    ///
+    /// Nothing else happens: no save, no connect, no test. A parse failure
+    /// leaves every field exactly as it was — the parser has no partial
+    /// result — so the only thing that changes is the message under the row.
+    fn fill_from_uri(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = self.uri.read(cx).value().to_string();
+        let parsed = match uri::parse(&input, self.profile.id) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                self.uri_state = UriState::Failed(error);
+                cx.notify();
+                return;
+            }
+        };
+
+        self.apply(&parsed, window, cx);
+        self.uri_state = UriState::Filled {
+            ignored: parsed.ignored,
+            tls_unsupported: parsed.tls_unsupported,
+        };
+        // The fields are not the ones that were tested any more.
+        self.test = TestState::Idle;
+        cx.notify();
+    }
+
+    /// Pushes a parsed profile into every input, and into the two fields the
+    /// profile itself owns (the engine and the TLS mode).
+    ///
+    /// Every input is written, including the ones this engine does not show:
+    /// [`Self::collected`] reads them all, so leaving the previous engine's
+    /// host behind would save it.
+    fn apply(&mut self, parsed: &ParsedUri, window: &mut Window, cx: &mut Context<Self>) {
+        let profile = &parsed.profile;
+
+        // A name the user typed is theirs. Only a blank one is filled in.
+        if self.name.read(cx).value().trim().is_empty() {
+            self.set_text(&self.name.clone(), parsed.suggested_name(), window, cx);
+        }
+        self.set_text(&self.host.clone(), profile.host.clone(), window, cx);
+        self.set_text(&self.port.clone(), profile.port.to_string(), window, cx);
+        self.set_text(&self.database.clone(), profile.database.clone(), window, cx);
+        self.set_text(&self.user.clone(), profile.user.clone(), window, cx);
+        // The password lands in its field like any other, still masked and
+        // still under the storage notice. A pasted one is not treated
+        // differently from a typed one.
+        self.set_text(&self.password.clone(), profile.password.clone(), window, cx);
+        self.set_text(&self.file.clone(), profile.file.clone(), window, cx);
+
+        self.profile = ConnectionProfile {
+            name: self.name.read(cx).value().to_string(),
+            ..profile.clone()
+        };
+    }
+
+    fn set_text(
+        &self,
+        state: &Entity<InputState>,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        state.update(cx, |state, cx| {
+            state.set_value(value, window, cx);
+        });
     }
 
     fn set_ssl_mode(&mut self, mode: SslMode, cx: &mut Context<Self>) {
@@ -297,6 +410,9 @@ impl ConnectionForm {
         self.file.update(cx, |state, cx| {
             state.set_placeholder(file, window, cx);
         });
+        // The URI placeholder is an example URI, declared identical in every
+        // language by `i18n`'s own `term()` guard, so re-pushing it would be a
+        // provable no-op rather than a fix.
     }
 
     // ---- rendering -------------------------------------------------------
@@ -416,6 +532,62 @@ impl ConnectionForm {
         )
     }
 
+    /// The URI row and whatever the last press of its button had to say.
+    fn uri_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .w_full()
+            .gap_2()
+            .child(
+                self.field(
+                    Str::DbFieldUri,
+                    h_flex()
+                        .w_full()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&self.uri).small()),
+                        )
+                        .child(
+                            Button::new("db-fill-from-uri")
+                                .small()
+                                .outline()
+                                .label(t(Str::DbFillFromUri, cx))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.fill_from_uri(window, cx);
+                                })),
+                        )
+                        .into_any_element(),
+                    cx,
+                ),
+            )
+            .map(|this| match &self.uri_state {
+                UriState::Idle => this,
+                UriState::Failed(error) => {
+                    this.child(notice(Tone::Danger, t(error.message(), cx), cx))
+                }
+                UriState::Filled {
+                    ignored,
+                    tls_unsupported,
+                } => this
+                    .child(notice(Tone::Success, t(Str::DbUriFilled, cx), cx))
+                    .when(!ignored.is_empty(), |this| {
+                        // Named, not dropped: the user gets to see that dodo
+                        // read the parameter and chose not to act on it.
+                        this.child(notice(
+                            Tone::Warning,
+                            t(Str::DbUriIgnored(ignored.join(", ")), cx),
+                            cx,
+                        ))
+                    })
+                    .when(*tls_unsupported, |this| {
+                        this.child(notice(Tone::Warning, t(Str::DbUriTlsNotApplied, cx), cx))
+                    }),
+            })
+            .into_any_element()
+    }
+
     fn file_fields(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         vec![self.text_field(Str::DbFieldFile, &self.file.clone(), cx)]
     }
@@ -469,6 +641,7 @@ impl Render for ConnectionForm {
         v_flex()
             .w_full()
             .gap_3()
+            .child(self.uri_row(cx))
             .child(self.text_field(Str::DbFieldName, &self.name.clone(), cx))
             .child(self.render_engine_picker(engine, cx))
             .children(fields)
