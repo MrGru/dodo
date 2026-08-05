@@ -8,11 +8,31 @@ archaeology session. It writes:
 
     assets/macos/dodo.icns                          picked up by
                                                     scripts/macos-app-bundle.sh
-    assets/windows/dodo.ico                         shipped in the Windows zip
+    assets/windows/dodo.ico                         embedded in dodo.exe by
+                                                    build.rs, and shipped loose
+                                                    in the Windows zip
     assets/linux/hicolor/<n>x<n>/apps/dodo.png      shipped in the Linux tar.gz
+    assets/branding/dodo-256.png                    embedded in the binary by
+                                                    src/window_icon.rs
 
 `assets/linux/dodo.desktop` is hand-written and committed, not generated - it
 is text, not artwork.
+
+dodo-256.png is the odd one out and the reason is worth stating: every other
+artifact above is read by a packaging step, so it only has to exist next to the
+binary. That one is read by dodo itself, at runtime, through `include_bytes!` -
+which is what lets a *bare* executable (no .app, no installed .desktop) still
+tell macOS and X11 what it looks like. It is therefore the only derived icon
+whose bytes end up inside the shipped binary; 256 is the largest size either
+consumer can actually draw, so it is also the smallest one that costs nothing
+in quality. See RUNTIME_ICON_SIZE below.
+
+It is byte-identical to assets/linux/hicolor/256x256/apps/dodo.png today, and
+that is a decision rather than something to tidy away: git stores identical
+content once, so the copy costs the repository nothing, while pointing
+`include_bytes!` at a path under assets/linux/ from code that also runs on
+macOS reads as a bug and couples the runtime icon to a packaging layout that
+may legitimately change.
 
 All of the above are committed. Packaging must not depend on this script (and
 cannot: `iconutil` only exists on macOS, so a Linux runner could never build
@@ -71,6 +91,14 @@ ICO_SIZES = [16, 32, 48, 64, 128, 256]
 # The hicolor sizes a desktop environment actually looks for. 512 is included
 # because GNOME Shell and KDE both use it for the app grid on HiDPI.
 LINUX_SIZES = [16, 24, 32, 48, 64, 128, 256, 512]
+
+# The one derived PNG that is embedded in the binary rather than shipped beside
+# it, read by src/window_icon.rs. 256 because that is the ceiling for both of
+# its consumers: the macOS Dock draws at most 128pt, which is 256px on a Retina
+# display, and an X11 _NET_WM_ICON is a task-bar/Alt-Tab thumbnail. Anything
+# larger is bytes in every macOS and Linux binary that nothing ever draws --
+# 512 costs 192,510 against this one's 46,586.
+RUNTIME_ICON_SIZE = 256
 
 # ICO entries at or below this edge are written as 32-bit BMP; larger ones as
 # PNG. PNG-in-ICO needs Windows Vista or newer, which is not a real constraint
@@ -211,7 +239,12 @@ def generate(master_path: Path, out_root: Path) -> list[str]:
 
     # Every size is rendered once and reused: the iconset needs 32/256/512 twice
     # and the Linux and Windows sets overlap with it.
-    needed = sorted({s for _, s in ICNS_SIZES} | set(ICO_SIZES) | set(LINUX_SIZES))
+    needed = sorted(
+        {s for _, s in ICNS_SIZES}
+        | set(ICO_SIZES)
+        | set(LINUX_SIZES)
+        | {RUNTIME_ICON_SIZE}
+    )
     rendered: dict[int, bytearray] = {}
     for size in needed:
         rendered[size] = (
@@ -264,6 +297,18 @@ def generate(master_path: Path, out_root: Path) -> list[str]:
         target.mkdir(parents=True, exist_ok=True)
         MASTER.write_rgba_png(target / "dodo.png", size, size, rendered[size])
     print(f"  wrote {len(LINUX_SIZES)} hicolor PNGs")
+
+    # --- Embedded in the binary -------------------------------------------
+    branding_dir = out_root / "assets/branding"
+    branding_dir.mkdir(parents=True, exist_ok=True)
+    runtime_icon = branding_dir / f"dodo-{RUNTIME_ICON_SIZE}.png"
+    MASTER.write_rgba_png(
+        runtime_icon,
+        RUNTIME_ICON_SIZE,
+        RUNTIME_ICON_SIZE,
+        rendered[RUNTIME_ICON_SIZE],
+    )
+    print(f"  wrote {runtime_icon}")
 
     return problems
 
