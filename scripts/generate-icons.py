@@ -96,8 +96,8 @@ LINUX_SIZES = [16, 24, 32, 48, 64, 128, 256, 512]
 # it, read by src/window_icon.rs. 256 because that is the ceiling for both of
 # its consumers: the macOS Dock draws at most 128pt, which is 256px on a Retina
 # display, and an X11 _NET_WM_ICON is a task-bar/Alt-Tab thumbnail. Anything
-# larger is bytes in every macOS and Linux binary that nothing ever draws --
-# 512 costs 192,510 against this one's 46,586.
+# larger is bytes in every macOS and Linux binary that nothing ever draws, and
+# the next size up is roughly four times this one on disk.
 RUNTIME_ICON_SIZE = 256
 
 # ICO entries at or below this edge are written as 32-bit BMP; larger ones as

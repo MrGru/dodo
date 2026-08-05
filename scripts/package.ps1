@@ -83,12 +83,13 @@ foreach ($doc in @("README.md", "LICENSE", "THIRD-PARTY-NOTICES.md")) {
 }
 
 # The multi-resolution application icon, shipped as a loose file next to the
-# .exe. It is NOT embedded in the executable: doing that needs a Windows-only
-# build-dependency and a build.rs branch that this project cannot build or
-# test on any machine it has ever run on. The consequence, deliberately
-# accepted, is that Explorer and the taskbar show the generic executable icon;
-# the .ico is here so a shortcut, an installer or an MSI can use the real one.
-# See "Windows icon" in docs/release.md for the change that would embed it.
+# .exe. The .exe now also carries it as an RT_GROUP_ICON resource, compiled in
+# by build.rs, which is what makes Explorer and the taskbar show dodo's artwork
+# rather than the generic executable glyph -- so this copy is no longer the
+# only thing standing between a user and a blank icon. It stays because a
+# shortcut, an installer or a future MSI wants the .ico as a file, and because
+# an archive that carries its own icon is self-describing.
+# See "Windows icon: embedded" in docs/release.md.
 $ico = Join-Path $repoRoot "assets\windows\dodo.ico"
 if (-not (Test-Path $ico)) { throw "missing $ico; run: python3 scripts/generate-icons.py" }
 Copy-Item $ico $stage

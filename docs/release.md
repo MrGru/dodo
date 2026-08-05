@@ -316,6 +316,11 @@ wordmark. Two files in `assets/branding/` are the whole source of truth:
 | `dodo-artwork-source.png` | the original supplied artwork, 1254×1254, **opaque**, tile on a black canvas. Never edited. |
 | `dodo-1024.png` | the 1024×1024 RGBA master every icon is derived from: the same art with everything outside the tile's rounded border cut to full transparency. |
 
+`assets/branding/dodo-256.png` sits beside them and is **not** a source: it is
+derived from the master like everything else in the next table, and lives here
+only because it is the one derived icon that is not tied to a single platform.
+Never hand-edit it.
+
 ### Regenerating
 
 ```sh
@@ -344,55 +349,127 @@ All of it is **committed**, because packaging must not depend on the host:
 | Artifact | Sizes | Shipped as |
 |---|---|---|
 | `assets/macos/dodo.icns` | 16/32/128/256/512 at 1× and 2× | `dodo.app/Contents/Resources/dodo.icns`, named by `CFBundleIconFile` |
-| `assets/windows/dodo.ico` | 16/32/48/64/128/256 | a loose file next to `dodo.exe` in the ZIP |
+| `assets/windows/dodo.ico` | 16/32/48/64/128/256 | **compiled into `dodo.exe`** by `build.rs`, and also a loose file next to it in the ZIP |
 | `assets/linux/hicolor/<n>x<n>/apps/dodo.png` | 16/24/32/48/64/128/256/512 | `share/icons/hicolor/…` in the tar.gz |
 | `assets/linux/dodo.desktop` | — | `share/applications/dodo.desktop` in the tar.gz (hand-written, not generated) |
+| `assets/branding/dodo-256.png` | 256 | **embedded in the binary** by `src/window_icon.rs`, macOS and Linux only |
 
 The Linux tar.gz lays those out under `share/` exactly as they must end up on
 disk, so installing is `cp -r share/ ~/.local/` (or `/usr/local/`) with no
 renaming, and a future `.deb`/AppImage job can copy the tree wholesale.
 
-**None of this is embedded in the binary.** `src/assets.rs` embeds `assets/`
-through `rust-embed` but with explicit `#[include]` filters — `icons/**/*.svg`
-and `themes/**/*.json` — and every path above falls outside both. Confirmed by
-measurement: `target/release/dodo` is 20,513,488 bytes before and after adding
-them, byte for byte. Anything new under `assets/` that must stay out of the
-binary has to stay outside those two filters; check the size, do not assume.
+**Only the last row is embedded in the binary, and not through `rust-embed`.**
+`src/assets.rs` embeds `assets/` with explicit `#[include]` filters —
+`icons/**/*.svg` and `themes/**/*.json` — and every path in the table falls
+outside both, which is why the branding artwork and the packaged icons cost the
+binary nothing. Confirmed by measurement when they were added:
+`target/release/dodo` was 20,513,488 bytes before and after, byte for byte.
+Anything new under `assets/` that must stay out of the binary has to stay
+outside those two filters; check the size, do not assume.
 
-### Windows icon: shipped, not embedded
+`dodo-256.png` reaches the binary by a different mechanism — an
+`include_bytes!` in `src/window_icon.rs`, under
+`#[cfg(any(target_os = "macos", target_os = "linux"))]` — so unlike everything
+above it, it does add to the macOS and Linux binaries: roughly the size of the
+committed file, which is why the generator derives 256 and not 512. A Windows
+build does not carry it at all; `build.rs` has already put a `.ico` in the
+resource table, which is where Windows looks.
 
-Making Explorer and the taskbar show the icon for `dodo.exe` itself requires
-embedding a Win32 `RT_GROUP_ICON` resource, which needs a build-dependency
-(`winresource` or `winres`) plus a `build.rs` branch. **Not done, deliberately.**
+### Windows icon: embedded
 
-The consequence, accepted: `dodo.exe` shows the generic executable icon in
-Explorer and on the taskbar. The `.ico` ships next to it, so a shortcut, an
-installer or a future MSI can point at the real one.
+`dodo.exe` carries an `RT_GROUP_ICON` resource built from
+`assets/windows/dodo.ico`, which is what Explorer, the taskbar and Alt-Tab
+read. Three pieces:
 
-The reasoning: dodo has never been built or run on Windows or by a Windows
-runner (the Windows matrix row is `experimental` and non-blocking), so the
-build.rs branch could not be tested, only hoped at — and it would add an
-unverifiable subtree to `Cargo.lock`, which is the *only* pin on the four git
-dependencies. Doing it once Windows is genuinely built is three edits:
+- `winresource` as a **target-scoped build-dependency** in `Cargo.toml`;
+- `embed_windows_icon` at the end of `build.rs`;
+- the resulting `Cargo.lock` entry, landed as its own reviewed commit.
 
-```toml
-# Cargo.toml — must be target-scoped, so macOS and Linux builds never see it
-[target.'cfg(windows)'.build-dependencies]
-winresource = "0.1"
+The `.ico` still ships loose in the ZIP as well, for shortcuts and any future
+MSI.
+
+**The two `cfg`s involved are different questions with different answers, and
+this is the part that will catch the next person.** Cargo evaluates a
+*target*-scoped **build**-dependency against the **target**
+(rust-lang/cargo#4932), so `winresource` is in the graph exactly when something
+is being built for Windows. Verified rather than assumed:
+
+```
+$ for t in aarch64-apple-darwin x86_64-apple-darwin \
+           x86_64-unknown-linux-gnu x86_64-pc-windows-msvc; do
+    cargo metadata --format-version 1 --filter-platform $t | grep -c winresource
+  done
+# present for x86_64-pc-windows-msvc only
 ```
 
-```rust
-// build.rs, at the end of main()
-#[cfg(windows)]
-winresource::WindowsResource::new()
-    .set_icon("assets/windows/dodo.ico")
-    .compile()
-    .expect("embedding the Windows icon");
-```
+The `#[cfg(windows)]` inside `build.rs`, by contrast, is the **host**, because
+a build script is compiled for the machine that runs it. The two agree on a
+native Windows build — which is the only kind `.github/workflows` does — and
+disagree otherwise: a Windows binary cross-built from a Mac would get no icon
+(the `#[cfg(not(windows))]` arm emits a `cargo:warning` rather than letting
+that be silent), and a non-Windows target built *on* Windows would fail to
+compile `build.rs`. Nothing dodo does hits the second; a target-scoped
+build-dependency cannot express "host", so it is recorded instead of guarded.
 
-then `cargo build` once on Windows to update `Cargo.lock`, as its own reviewed
-commit (see `docs/build-optimization.md` on why the lockfile is handled that
-way), and check Explorer actually shows it.
+**Embedding failure panics**, which is the one exception to `build.rs`'s
+"never fail the build" rule and is called out at the top of that file. The
+reasoning: a packaging step that quietly does nothing is exactly how the
+generic icon survived this long. If a runner ever turns up without `rc.exe`,
+the one-line retreat is to replace the `.expect(...)` in `embed_windows_icon`
+with a `cargo:warning` — but do that knowing the icon is then unverifiable
+again.
+
+**What has actually been checked, and what has not.** Checked from macOS:
+`winresource` 0.1.31's API against the exact call (`cargo check` of a
+throwaway crate carrying the same `build.rs` body, per
+[Checking a Windows fix without a Windows machine](#checking-a-windows-fix-without-a-windows-machine));
+the four-target `cargo metadata` result above; and that the committed `.ico`
+decodes as a well-formed 6-entry `ICONDIR` — 16/32/48/64 as 32-bit DIBs,
+128/256 as PNG, every offset in bounds. **Not checked: that `rc.exe` finds and
+links it, and that Explorer draws it.** dodo has never been built or run on
+Windows. The first person with a Windows machine should run
+`cargo build --release --locked` and confirm the `.exe` shows dodo's artwork in
+Explorer; until then this row is written-but-unverified, exactly like the rest
+of the Windows packaging.
+
+### The bare-binary cases
+
+The rows above all assume the OS can find a *file*: a bundle's `Info.plist`, an
+installed `.desktop` entry, a resource table. Two launches have none of that,
+and both are what a developer does every day.
+
+**macOS, run directly** (`cargo run`, `target/release/dodo`). A bare Mach-O has
+no `Info.plist` and no `Contents/Resources`, so there is nothing for
+`CFBundleIconFile` to name and the Dock draws the generic executable tile. This
+is expected by design and is *not* the same bug as a broken bundle — the
+bundled `.app` has always been right. `src/window_icon.rs` answers it at
+runtime with `-[NSApplication setApplicationIconImage:]`, which is the only
+route available: GPUI exposes no dock-icon API at all.
+
+**A bundled `.app` is deliberately skipped**, detected by the executable's path
+shape (`<name>.app/Contents/MacOS/<exe>`) rather than by an `NSBundle` call, so
+the decision is unit-tested on any host. The reason to skip is quality, not
+safety: `dodo.icns` carries hand-built 16 and 32 pt variants that a downscaled
+256 px PNG cannot match. If that check ever regresses, the visible result is the
+same artwork slightly softer at small sizes — not a generic icon.
+
+**Linux, every session type.** GPUI leaves `WindowOptions::app_id` at `None`,
+and it turns out that alone was enough to break the icon everywhere: with no
+app id, a Wayland `xdg_toplevel` reports nothing for the compositor to match
+`dodo.desktop` against, and GPUI's X11 backend never calls `set_app_id`, so the
+window carries **no `WM_CLASS` at all** and `StartupWMClass=dodo` matches
+nothing. The desktop file's own comment predicted this. `window_icon::APP_ID`
+is now set on every window, and a unit test fails if the constant and the
+desktop entry's filename, `StartupWMClass` and `Icon=` drift apart.
+
+`WindowOptions::icon` is set too, which covers one further case: an **X11**
+session running a binary whose `.desktop` was never installed. It is X11-only —
+GPUI's Wayland backend implements no equivalent (`xdg-toplevel-icon-v1` is not
+wired up), so a bare binary under Wayland is not reachable from inside dodo and
+needs the tarball's `share/` tree installed.
+
+None of the Linux half can be checked from here; see the honesty note under
+"Verified, not assumed".
 
 ### Verified, not assumed
 
@@ -408,6 +485,50 @@ A `.icns` that `iconutil` accepted can still render as a blank generic document
   size**, screenshotted, after `lsregister -f` on the freshly built bundle.
 
 Repeat at least the last one after any artwork change.
+
+**That list was, and is, about one case out of five, and reading it as a
+verdict on "the icon" is what let four broken ones sit unnoticed.** It says
+nothing about the bare binary, about Windows or about either Linux session
+type. Corrected scope:
+
+| Case | Status |
+|---|---|
+| macOS, bundled `.app` | **seen working**, and re-confirmed by the captain on 2026-08-05 — the four bullets above |
+| macOS, bare binary | fixed at runtime; the fix compiles and its bundle-detection is unit-tested, but **nobody has looked at the Dock yet** |
+| Windows | fixed at build time; API call and `.ico` structure checked from macOS, **never built on Windows** |
+| Linux, Wayland | `app_id` now set; **never built or run on Linux** |
+| Linux, X11 | `app_id` + `_NET_WM_ICON` now set; **never built or run on Linux** |
+
+The rule that produced the first row is the one to keep: *look at the pixels*.
+Everything else in this section is a proxy.
+
+#### Checking the macOS cases without guessing
+
+The Dock caches aggressively, and a stale Launch Services registration is the
+usual reason a "fix" looks like it did nothing. Build and inspect from a clean
+state:
+
+```sh
+cargo dist                                          # target/release/dodo
+scripts/macos-app-bundle.sh --binary target/release/dodo
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+    -f dist/dodo.app                                # re-register, do not trust the cache
+```
+
+Then:
+
+- **bundled** — open `dist/dodo.app` from Finder. Its Dock tile comes from
+  `Contents/Resources/dodo.icns`; `src/window_icon.rs` deliberately does not
+  touch it. Confirm nothing regressed.
+- **bare** — run `target/release/dodo` (or `cargo run`) from a terminal. Its
+  Dock tile now comes from the embedded 256 px PNG. This is the case that was
+  broken.
+
+Non-visual checks that need no launch, and are what CI or a scripted check can
+do: `plutil -p dist/dodo.app/Contents/Info.plist` must show
+`CFBundleIconFile => dodo`, `dist/dodo.app/Contents/Resources/dodo.icns` must
+exist, and `sips -g pixelWidth dist/dodo.app/Contents/Resources/dodo.icns` must
+decode it.
 
 ---
 
@@ -908,18 +1029,19 @@ download and buys nothing they can use.
 **Telemetry.** Not implemented and not scaffolded. This is a local developer
 tool; the burden of proof is on adding it.
 
-**Embedding the Windows icon in the .exe.** See "Windows icon" under
-[Application icon](#application-icon); the `.ico` ships, the executable does
-not carry it.
+**Application icons.** Done on every platform and every launch method — see
+[Application icon](#application-icon). What remains is not code: **somebody has
+to look at Windows and Linux.** Both are written-but-unverified, and the table
+under "Verified, not assumed" says exactly which claim is standing on what.
 
-**An in-app window icon.** GPUI exposes `WindowOptions::icon`, documented in
-`crates/gpui/src/platform.rs` as *"Icon image (X11 only)"*. It does nothing on
-macOS (where the Dock and window icon come from the bundle's `CFBundleIconFile`
-instead) and nothing on Windows or Wayland, and it takes an
-`image::RgbaImage`, which would mean a direct `image` dependency and a PNG
-decode on the startup path. For a field that only affects a platform dodo has
-never been built on, that is not a trade worth making, so dodo does not set it.
-If Linux ever becomes a supported target, revisit it there.
+**A Wayland window icon for a bare binary.** The one case still genuinely
+unreachable. `WindowOptions::icon` is X11-only in the pinned GPUI, and its
+Wayland backend implements no equivalent — the `xdg-toplevel-icon-v1` protocol
+that would provide one is not wired up there. So a Linux binary run without its
+`share/applications/dodo.desktop` installed shows a generic icon under Wayland
+and there is nothing dodo can do about it from inside. Revisit if GPUI adds the
+protocol; until then, the answer is to install the tarball's `share/` tree,
+which is one `cp -r`.
 
 ---
 
