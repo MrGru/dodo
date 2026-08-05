@@ -1,13 +1,13 @@
 ---
 name: dodo-database-internals
-description: Deep internals of src/database/ that no single file makes obvious - the one-tree-many-roots connection model, why a connection hover card can never carry a password, DataTable's shared row-height knob, the self-contained-module invariant and its grep check, why the Driver capability set only grows with a control that reads it, the object tree as a driver-answered question rather than a hard-coded ladder, the placeholder-child trick for an unopened tree node, PageBuffer's memory bound and why no LIMIT is ever injected, round 5's write-boundary types, PostgreSQL's binary row decoding, the MySQL/MariaDB driver, the Redis non-SQL driver, round 6's query-data persistence and catalog search, and the plain-text credential posture. Load before touching anything under src/database/.
+description: Deep internals of src/database/ that no single file makes obvious - the one-tree-many-roots connection model, why a connection hover card can never carry a password, DataTable's shared row-height knob, the self-contained-module invariant and its grep check, why the Driver capability set only grows with a control that reads it, the object tree as a driver-answered question rather than a hard-coded ladder, the placeholder-child trick for an unopened tree node, PageBuffer's memory bound and why no LIMIT is ever injected, round 5's write-boundary types, PostgreSQL's binary row decoding, the MySQL/MariaDB driver, the Redis non-SQL driver, round 6's query-data persistence and catalog search, the plain-text credential posture, and how a pasted connection URI fills the form. Load before touching anything under src/database/.
 ---
 
 **`src/database/`** is the Database Explorer — create a connection, browse its objects, run a
 query, read the result, and safely edit identified SQL rows — **PostgreSQL, SQLite, MySQL/MariaDB
 and Redis as of round 6**. Same five-layer split as the other multi-file tools;
 **`src/database/mod.rs` is the authority** on the structure, shipped rounds and deliberate cuts.
-Fifteen things worth knowing before touching it:
+Sixteen things worth knowing before touching it:
 
 - **The left panel is one tree and the connections are its roots**, not a list stacked on a
   tree. `state::tree::Forest` holds one `CatalogTree` per connection, so selecting a connection
@@ -98,3 +98,15 @@ Fifteen things worth knowing before touching it:
   UI, with a notice that is never absent. The report's `CredentialStore` trait is deliberately not
   built — one storage behaviour does not need a trait. `models/connection.rs` states the posture
   and a store test asserts the password really is in the file, so nobody later assumes otherwise.
+- **A pasted connection URI is parsed in `models/uri.rs`, not in the form.** `uri::parse` is a
+  pure `&str` → `ConnectionProfile` function, so every shape a real URI takes is a unit test
+  rather than something checked by clicking; `views/connection_form.rs` only pushes the answer
+  into the inputs. Three properties are load-bearing and each has a test: the engine comes from
+  the scheme and an unknown scheme is an **error, never a silent PostgreSQL**; a parse either
+  succeeds whole or changes nothing, so no user is left guessing which fields came from their
+  paste; and anything the URI carried that dodo does not model — an unknown query parameter, a
+  second host, a fragment, `rediss://`'s TLS — is reported rather than dropped. Each engine's
+  accepted forms are cited in the module doc **from the crate that dials it** (`tokio-postgres`'s
+  `Config`, the `mysql` crate's `from_url`/`from_hash_map`, the `redis` crate's `ConnectionInfo`);
+  add a form only with the same kind of evidence. It builds on `ConnectionProfile::new`, which is
+  what keeps an omitted port on the engine's default rather than `0`.
