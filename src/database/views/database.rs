@@ -2210,8 +2210,8 @@ mod tests {
     use crate::database::state::connections::ConnectionsState;
     use crate::database::state::tree::RowRef;
 
-    #[gpui::test]
-    fn load_saved_populates_tree_and_new_connections_remain_visible(cx: &mut TestAppContext) {
+    /// The page on a test window, with its constructor's disk load finished.
+    fn mount(cx: &mut TestAppContext) -> (Entity<DatabaseView>, VisualTestContext) {
         cx.update(gpui_component::init);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |window, cx| {
@@ -2221,24 +2221,36 @@ mod tests {
         });
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         let database: Entity<DatabaseView> = window.root(&mut cx).unwrap();
-
-        // Finish the constructor's disk load before substituting the isolated store.
         cx.run_until_parked();
-        let saved = ConnectionProfile {
-            name: "Saved SQLite".into(),
-            file: "/tmp/saved.sqlite".into(),
-            ..ConnectionProfile::new(7, Engine::Sqlite)
-        };
+        (database, cx)
+    }
+
+    fn saved(id: u64, name: &str) -> ConnectionProfile {
+        ConnectionProfile {
+            name: name.into(),
+            file: format!("/tmp/{name}.sqlite"),
+            ..ConnectionProfile::new(id, Engine::Sqlite)
+        }
+    }
+
+    /// Substitutes an isolated store holding `profiles` and adopts it through
+    /// the real asynchronous load, leaving the page as a launch would.
+    fn adopt(
+        database: &Entity<DatabaseView>,
+        profiles: Vec<ConnectionProfile>,
+        selected: Option<u64>,
+        cx: &mut VisualTestContext,
+    ) -> Arc<InMemoryConnectionStore> {
         let store = Arc::new(InMemoryConnectionStore::default());
         store
             .persist(&ConnectionDocument {
-                connections: vec![saved],
-                selected: Some(7),
+                connections: profiles,
+                selected,
                 ..ConnectionDocument::default()
             })
             .unwrap();
-        database.update(&mut cx, |database, cx| {
-            database.store = store;
+        database.update(cx, |database, cx| {
+            database.store = store.clone();
             database.connections = ConnectionsState::new();
             database
                 .tree_state
@@ -2246,30 +2258,135 @@ mod tests {
             database.load_saved(cx);
         });
         cx.run_until_parked();
-
-        assert_eq!(
-            database.read_with(&cx, |database, _| database.connections.profiles().len()),
-            1
-        );
-        assert_tree_has_root(&database, 7, &mut cx);
-
-        database.update(&mut cx, |database, cx| {
-            database.on_form_saved(ConnectionProfile::new(8, Engine::Sqlite), cx);
-        });
-        assert_tree_has_root(&database, 8, &mut cx);
+        store
     }
 
-    fn assert_tree_has_root(database: &Entity<DatabaseView>, id: u64, cx: &mut VisualTestContext) {
+    /// Whether the tree **widget** — not the model — holds a root row for `id`.
+    /// `set_selected_item` resolves by element id and leaves the selection
+    /// empty when the row is not there.
+    fn tree_has_root(database: &Entity<DatabaseView>, id: u64, cx: &mut VisualTestContext) -> bool {
         let tree = database.read_with(cx, |database, _| database.tree_state.clone());
         let root = TreeItem::new(RowRef::root(id), "");
         tree.update(cx, |state, cx| {
             state.set_selected_item(Some(&root), cx);
         });
+        tree.read_with(cx, |state, _| {
+            state.selected_item().map(|item| item.id.to_string())
+        }) == Some(RowRef::root(id))
+    }
+
+    fn stored_ids(store: &Arc<InMemoryConnectionStore>) -> Vec<u64> {
+        store
+            .load()
+            .unwrap()
+            .connections
+            .iter()
+            .map(|profile| profile.id)
+            .collect()
+    }
+
+    #[gpui::test]
+    fn load_saved_populates_tree_and_new_connections_remain_visible(cx: &mut TestAppContext) {
+        let (database, mut cx) = mount(cx);
+        adopt(&database, vec![saved(7, "Saved SQLite")], Some(7), &mut cx);
+
         assert_eq!(
-            tree.read_with(cx, |state, _| {
-                state.selected_item().map(|item| item.id.to_string())
-            }),
-            Some(RowRef::root(id))
+            database.read_with(&cx, |database, _| database.connections.profiles().len()),
+            1
+        );
+        assert!(tree_has_root(&database, 7, &mut cx));
+
+        database.update(&mut cx, |database, cx| {
+            database.on_form_saved(ConnectionProfile::new(8, Engine::Sqlite), cx);
+        });
+        assert!(tree_has_root(&database, 8, &mut cx));
+    }
+
+    /// Confirming the deletion has to move **all three** layers, and each one
+    /// is checked separately: a row that survives while the store is emptied is
+    /// a different bug from one where nothing is removed at all.
+    ///
+    /// The layers below this are unit tested on their own and pass; what this
+    /// covers is the composition — the real page, the real store, the profile
+    /// list adopted through the real asynchronous load, and the widget items
+    /// the panel actually draws from.
+    #[gpui::test]
+    fn confirming_delete_removes_the_row_the_profile_and_the_saved_document(
+        cx: &mut TestAppContext,
+    ) {
+        let (database, mut cx) = mount(cx);
+        let store = adopt(
+            &database,
+            vec![saved(7, "first"), saved(8, "second")],
+            Some(7),
+            &mut cx,
+        );
+        assert!(tree_has_root(&database, 7, &mut cx));
+        assert_eq!(stored_ids(&store), vec![7, 8]);
+
+        database.update(&mut cx, |database, cx| database.confirm_delete(7, cx));
+        cx.run_until_parked();
+
+        assert!(
+            database.read_with(&cx, |database, _| database.connections.find(7).is_none()),
+            "the profile is still in the model"
+        );
+        assert!(
+            !tree_has_root(&database, 7, &mut cx),
+            "the row is still in the tree"
+        );
+        assert!(
+            tree_has_root(&database, 8, &mut cx),
+            "the connection that was not deleted lost its row"
+        );
+        assert_eq!(
+            stored_ids(&store),
+            vec![8],
+            "the saved document still names the deleted connection"
+        );
+    }
+
+    /// The bug this file was fixed for: a plain `Dialog` renders a footer only
+    /// when it is given one, so a `window.open_dialog(..).on_ok(..)`
+    /// confirmation draws **no confirm button at all**. Everything the user can
+    /// click on it — the close cross, the backdrop — runs `on_cancel`; only the
+    /// Enter key reaches `on_ok`. `AlertDialog` is what builds the OK/Cancel
+    /// footer from `button_props`, which is why every confirmation here (and in
+    /// `docker::views`) is opened with `open_alert_dialog`.
+    ///
+    /// Source-level because it cannot be reached at runtime here:
+    /// `gpui_component::Root::new` installs a macOS accessibility hook that
+    /// dereferences a real `NSView`, so a GPUI test window cannot host a
+    /// `Root`, and without a `Root` there is no dialog layer to drive.
+    /// Only the production half is scanned, bounded by the **first**
+    /// `#[cfg(test)]` — the attribute on this module. This module's own text
+    /// names the pattern it forbids (including in this very sentence), and a
+    /// guard that fails on its own description is a guard nobody keeps.
+    #[test]
+    fn confirmations_use_an_alert_dialog_so_they_have_a_confirm_button() {
+        let source = include_str!("database.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields the leading half");
+
+        let offenders: Vec<usize> = production
+            .match_indices("window.open_dialog(")
+            .filter(|(at, _)| {
+                // Up to whatever opens the next overlay, so one builder's
+                // `on_ok` is not blamed on the call before it.
+                let rest = &production[at + 1..];
+                let builder = rest.split("window.open_").next().unwrap_or(rest);
+                builder.contains(".on_ok(") && !builder.contains(".footer(")
+            })
+            .map(|(at, _)| production[..at].lines().count())
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "plain `open_dialog` on line(s) {offenders:?} carries `on_ok` with no `footer`, so it \
+             renders no confirm button — use `open_alert_dialog` (see \
+             `docker::views::containers::confirm_delete`)"
         );
     }
 }
