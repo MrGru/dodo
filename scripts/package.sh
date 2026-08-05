@@ -126,6 +126,13 @@ done
 # These are committed artifacts (scripts/generate-icons.py regenerates them);
 # packaging never builds them, because most of the tooling to do so is macOS
 # only. Missing files are a hard error rather than a quietly icon-less archive.
+#
+# Installing them is not optional decoration: dodo.desktop is what a Wayland
+# compositor matches the window's app_id against to find `Icon=`, so a binary
+# run without it shows a generic task-bar icon no matter what the binary does.
+# src/window_icon.rs covers the X11 half of that gap on its own (_NET_WM_ICON)
+# and cannot cover the Wayland half. See "The bare-binary cases" in
+# docs/release.md.
 if [ "$platform" = "linux" ]; then
     desktop_file="$repo_root/assets/linux/dodo.desktop"
     hicolor="$repo_root/assets/linux/hicolor"

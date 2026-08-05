@@ -30,10 +30,10 @@
 /// and `assets/linux` is packaged beside the binary and costs it nothing;
 /// `src/assets.rs`'s `#[include]` filters (`icons/**/*.svg`, `themes/**/*.json`)
 /// deliberately exclude all of it. This one is reached by `include_bytes!`
-/// instead, which is a different mechanism with a different bill: 46,586 bytes,
-/// and only on the two platforms whose `cfg` below admits it — a Windows build
-/// never contains it, because `build.rs` has already put a `.ico` in the
-/// executable's resource table where Windows expects to find one.
+/// instead — a different mechanism with a real bill, roughly the size of the
+/// committed file, and only on the two platforms whose `cfg` below admits it.
+/// A Windows build never contains it, because `build.rs` has already put a
+/// `.ico` in the executable's resource table where Windows expects to find one.
 ///
 /// 256 is the ceiling for both consumers (the macOS Dock draws at most 128pt,
 /// which is 256px on a Retina display; an X11 `_NET_WM_ICON` is a task-bar
