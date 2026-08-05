@@ -2,9 +2,10 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::sidebar::{
-    Sidebar, SidebarCollapsible, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem,
+    Sidebar, SidebarCollapsible, SidebarGroup, SidebarHeader, SidebarItem, SidebarMenuItem,
 };
-use gpui_component::{ActiveTheme, StyledExt as _, h_flex, v_flex};
+use gpui_component::tooltip::Tooltip;
+use gpui_component::{ActiveTheme, Collapsible, StyledExt as _, h_flex, v_flex};
 
 use crate::api_explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
@@ -81,6 +82,66 @@ fn pane_title(view: View, docker_page: DockerPage) -> Str {
     }
 }
 
+/// A tool row that names itself while the sidebar is collapsed to icons.
+///
+/// **Wrapping is the only way to get that tooltip, and there is no risk of a
+/// second one.** `SidebarMenuItem` at the pinned revision has no tooltip of its
+/// own — `sidebar/menu.rs` has neither the field nor the builder — and
+/// `SidebarMenu::children` accepts nothing but a `SidebarMenuItem`, so it
+/// cannot be added from inside the menu either. `SidebarItem` is public though,
+/// and `SidebarGroup` takes any implementation of it, so the rows go into the
+/// group directly, each inside a `div` carrying the tooltip. `SidebarGroup`
+/// already stacks its children with the same `gap_2` `SidebarMenu` used, so
+/// dropping `SidebarMenu` changes nothing that is drawn.
+///
+/// This is still one flat row per tool — [`SidebarMenuItem::children`] stays
+/// unused, for the reason [`View`] gives.
+#[derive(Clone)]
+struct ToolItem {
+    item: SidebarMenuItem,
+    /// The row's own translated title, the very string its label shows. A
+    /// tooltip that read differently from the label would be a second string
+    /// to translate and a second thing to keep in step.
+    title: SharedString,
+    collapsed: bool,
+}
+
+impl Collapsible for ToolItem {
+    fn is_collapsed(&self) -> bool {
+        self.collapsed
+    }
+
+    fn collapsed(mut self, collapsed: bool) -> Self {
+        self.collapsed = collapsed;
+        self
+    }
+}
+
+impl SidebarItem for ToolItem {
+    fn render(
+        self,
+        id: impl Into<ElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> impl IntoElement {
+        let id = id.into();
+        let collapsed = self.collapsed;
+        let title = self.title;
+
+        div()
+            // Its own id, not the row's: `tooltip` comes from
+            // `StatefulInteractiveElement`, so the wrapper has to be stateful,
+            // and reusing the row's id for the element above it reads like a
+            // mistake even though the two paths differ.
+            .id(SharedString::from(format!("tool-tip-{id}")))
+            .w_full()
+            .when(collapsed, |this| {
+                this.tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
+            })
+            .child(self.item.collapsed(collapsed).render(id, window, cx))
+    }
+}
+
 /// One sidebar-footer row: the icon, and the label beside it when the sidebar
 /// is wide enough to have one.
 ///
@@ -120,12 +181,16 @@ fn footer_button(
     icon_collapsed: bool,
     cx: &App,
 ) -> Button {
+    // Translated once: collapsed it is the tooltip, expanded it is the label.
+    // The tooltip is never a second string written for the purpose.
+    let label = t(label, cx);
+
     Button::new(id)
         .ghost()
         .w_full()
         .map(|this| {
             if icon_collapsed {
-                this.px_0()
+                this.px_0().tooltip(label.clone())
             } else {
                 this.px_2()
             }
@@ -138,12 +203,7 @@ fn footer_button(
                 .when(!icon_collapsed, |this| {
                     // Fixed-length label in a 240px-wide sidebar: without these
                     // it wraps to two lines and pushes the footer taller.
-                    this.child(
-                        div()
-                            .flex_shrink_0()
-                            .whitespace_nowrap()
-                            .child(t(label, cx)),
-                    )
+                    this.child(div().flex_shrink_0().whitespace_nowrap().child(label))
                 }),
         )
 }
@@ -188,16 +248,17 @@ impl Layout {
 
     /// The sidebar menu: one flat row per tool, no nesting. Nesting is what the
     /// icon-collapsed sidebar cannot render, so there is none.
-    fn menu(&self, cx: &mut Context<Self>) -> SidebarMenu {
-        SidebarMenu::new().children(View::ALL.map(|view| self.tool_item(view, cx)))
+    fn menu(&self, cx: &mut Context<Self>) -> [ToolItem; View::ALL.len()] {
+        View::ALL.map(|view| self.tool_item(view, cx))
     }
 
     /// A flat, top-level tool row. Docker is one of these like any other: the
     /// click enters the section on whichever page its rail last had selected,
     /// which resumes that page's polling; every other tool pauses it.
-    fn tool_item(&self, view: View, cx: &mut Context<Self>) -> SidebarMenuItem {
+    fn tool_item(&self, view: View, cx: &mut Context<Self>) -> ToolItem {
         let layout = cx.entity();
-        SidebarMenuItem::new(t(view.title(), cx))
+        let title = t(view.title(), cx);
+        let item = SidebarMenuItem::new(title.clone())
             .icon(view.icon().view())
             .active(self.active == view)
             .on_click(move |_, _, cx| {
@@ -209,7 +270,15 @@ impl Layout {
                     });
                     cx.notify();
                 });
-            })
+            });
+
+        ToolItem {
+            item,
+            title,
+            // `SidebarGroup` hands every child its own collapsed state on the
+            // way to rendering it, so this is only a starting value.
+            collapsed: false,
+        }
     }
 }
 
@@ -238,7 +307,7 @@ impl Render for Layout {
                                 .when(!icon_collapsed, |this| this.child("Dodo")),
                         ),
                     )
-                    .child(SidebarGroup::new(t(Str::Tools, cx)).child(self.menu(cx)))
+                    .child(SidebarGroup::new(t(Str::Tools, cx)).children(self.menu(cx)))
                     .footer(
                         // A plain stack, not a `SidebarFooter` — see
                         // [`footer_button`] for why, and for where its two
@@ -318,12 +387,29 @@ impl Render for Layout {
 mod tests {
     use std::mem::{Discriminant, discriminant};
 
-    use super::{View, pane_title};
+    use gpui_component::Collapsible as _;
+    use gpui_component::sidebar::SidebarMenuItem;
+
+    use super::{ToolItem, View, pane_title};
     use crate::docker::DockerPage;
     use crate::i18n::Str;
 
     fn title_of(view: View, page: DockerPage) -> Discriminant<Str> {
         discriminant(&pane_title(view, page))
+    }
+
+    /// The source of one item, from its signature down to the next line that
+    /// starts a new top-level item. Enough to ask what a given function does
+    /// without depending on how it is formatted inside.
+    fn item_source<'a>(source: &'a str, signature: &str) -> &'a str {
+        let start = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("`{signature}` is gone from src/layout.rs"));
+        let body = &source[start..];
+        match body.find("\n}\n") {
+            Some(end) => &body[..end],
+            None => body,
+        }
     }
 
     #[test]
@@ -342,6 +428,45 @@ mod tests {
         // group of children — an icon-collapsed sidebar renders no children at
         // all, which is what made Docker's four pages unreachable.
         assert_eq!(View::ALL.len(), 5);
+    }
+
+    #[test]
+    fn a_tool_row_takes_the_collapsed_state_the_group_hands_it() {
+        // `SidebarGroup` calls `collapsed(..)` on each child on its way to
+        // rendering it, and `ToolItem` decides whether to show a tooltip from
+        // that same flag. Dropping it on the floor would leave every collapsed
+        // icon anonymous, and nothing else would fail.
+        let item = ToolItem {
+            item: SidebarMenuItem::new("JSON Formatter"),
+            title: "JSON Formatter".into(),
+            collapsed: false,
+        };
+
+        assert!(!item.is_collapsed());
+        assert!(item.clone().collapsed(true).is_collapsed());
+        assert!(!item.collapsed(true).collapsed(false).is_collapsed());
+    }
+
+    #[test]
+    fn every_icon_on_the_collapsed_rail_can_still_name_itself() {
+        // A source scan, because a tooltip cannot be driven from a test on
+        // macOS: `Root::new` dereferences a real `NSView`, so there is no
+        // window to hover. Both call sites are checked because they reach the
+        // tooltip by different routes — the tool rows through `ToolItem`,
+        // which exists only for this, and the footer through `Button::tooltip`.
+        let source = include_str!("layout.rs");
+
+        assert!(
+            item_source(source, "fn footer_button(").contains(".tooltip("),
+            "the collapsed footer buttons show no label, so they must show a tooltip",
+        );
+        assert!(
+            item_source(source, "impl SidebarItem for ToolItem").contains(".tooltip("),
+            "the collapsed tool rows show no label, so they must show a tooltip",
+        );
+        // …and the extraction really is bounded, or the two above would pass
+        // on any file that mentions a tooltip anywhere.
+        assert!(!item_source(source, "fn pane_title(").contains(".tooltip("));
     }
 
     #[test]
