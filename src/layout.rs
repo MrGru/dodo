@@ -150,6 +150,9 @@ fn footer_button(
 
 pub struct Layout {
     collapsible: SidebarCollapsible,
+    /// Whether the sidebar is showing icons only. **Starts `true`** — see
+    /// [`Layout::new`] — and is not persisted, so every launch opens on the
+    /// icon rail whatever the last session did.
     collapsed: bool,
     active: View,
     json_formatter: Entity<JsonFormatter>,
@@ -160,10 +163,20 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// dodo opens on the **icon rail**, not the labelled sidebar: the tools are
+    /// five fixed entries a user learns once, and the pane they are choosing
+    /// between is the whole point of the window, so 240px of permanent chrome
+    /// is a poor default. The toggle in the pane header is unchanged, and every
+    /// collapsed icon carries its title as a tooltip, which is what keeps the
+    /// rail readable to someone who has not learned it yet.
+    ///
+    /// The choice is **not persisted**, deliberately: dodo's six saved files are
+    /// listed in `CLAUDE.md`, adding a seventh is a decision of its own, and a
+    /// sidebar that opens the same way every time is at least predictable.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             collapsible: SidebarCollapsible::Icon,
-            collapsed: false,
+            collapsed: true,
             active: View::JsonFormatter,
             json_formatter: cx.new(|cx| JsonFormatter::new(window, cx)),
             encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
