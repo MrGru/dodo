@@ -198,6 +198,27 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
 ] }
 
+# Embeds the `RT_GROUP_ICON` resource that makes Explorer and the taskbar show
+# `assets/windows/dodo.ico` for `dodo.exe` itself; see the `#[cfg(windows)]`
+# block at the end of `build.rs`. Target-scoped, and that word is load-bearing
+# in a way worth stating: cargo evaluates a `[target.…]` **build**-dependency
+# against the *target*, not the host (rust-lang/cargo#4932), so this crate is
+# in the graph exactly when something is being built for Windows and a macOS or
+# Linux build never compiles it. Verified with
+# `cargo tree -e build --target <triple>`; the recorded result is in
+# "Windows icon: embedded" in `docs/release.md`.
+#
+# `default-features = false` drops the `toml` feature. Its only job is to read
+# an optional `[package.metadata.winresource]` table out of this file and merge
+# it into the VERSIONINFO block; dodo has no such table, so the feature buys
+# nothing and costs a `toml` + `serde` build subtree — plus a
+# `parse_cargo_toml(...).unwrap()` inside `WindowsResource::new` that only
+# exists while it is on. The VERSIONINFO dodo does get (ProductName,
+# FileDescription, FileVersion, ProductVersion) comes from `CARGO_PKG_*`, which
+# needs no features at all.
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "0.1.31", default-features = false }
+
 [dev-dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
 

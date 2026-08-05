@@ -1,12 +1,22 @@
 //! Embeds release metadata (git revision, build time, target, toolchain) into
 //! the binary, where `src/build_info.rs` reads it back out with `env!`.
 //!
+//! It also embeds the Windows application icon, which is the one thing here
+//! that is not metadata; see `embed_windows_icon` at the bottom.
+//!
 //! Two rules shape everything here:
 //!
-//! 1. **It never fails the build.** `git` may be missing, `.git` may not exist
-//!    (a `cargo package` tarball, a Docker `COPY .`), `rustc -vV` may not be
-//!    runnable. Every lookup degrades to a placeholder instead of panicking, so
-//!    a source-only build of dodo still compiles and still runs.
+//! 1. **Metadata lookups never fail the build.** `git` may be missing, `.git`
+//!    may not exist (a `cargo package` tarball, a Docker `COPY .`), `rustc -vV`
+//!    may not be runnable. Every lookup degrades to a placeholder instead of
+//!    panicking, so a source-only build of dodo still compiles and still runs.
+//!
+//!    **The Windows icon is the one deliberate exception and it panics.** It is
+//!    a packaging requirement rather than a nice-to-have string: a silent
+//!    fallback would leave "the icon is embedded" a claim nobody can check on a
+//!    platform this project has never run. The reasoning, and the one-line edit
+//!    that turns it back into a warning if a runner ever turns up without
+//!    `rc.exe`, are in "Windows icon: embedded" in `docs/release.md`.
 //! 2. **CI wins over the local checkout.** GitHub Actions builds from a
 //!    detached HEAD in a shallow clone, where `git rev-parse --abbrev-ref HEAD`
 //!    says `HEAD` and `git describe` sees no tags. The `GITHUB_*` environment
@@ -37,6 +47,9 @@ fn main() {
     // accurate in CI, which always builds from a fresh checkout, and after any
     // commit or checkout locally. `touch build.rs` forces a re-stamp.
     println!("cargo:rerun-if-changed=build.rs");
+    // The artwork the Windows resource is built from. Committed, so a
+    // regeneration by `scripts/generate-icons.py` must re-run this script.
+    println!("cargo:rerun-if-changed={WINDOWS_ICON}");
     for path in git_watch_paths() {
         println!("cargo:rerun-if-changed={path}");
     }
@@ -61,10 +74,18 @@ fn main() {
         env::var("TARGET").unwrap_or_else(|_| UNKNOWN.into()),
     );
     emit("DODO_RUST_VERSION", rust_version());
+
+    embed_windows_icon();
 }
 
 const UNKNOWN: &str = "unknown";
 const NONE: &str = "none";
+
+/// The committed `.ico`, relative to `CARGO_MANIFEST_DIR`. Generated from
+/// `assets/branding/dodo-1024.png` by `scripts/generate-icons.py`; it also
+/// ships as a loose file next to `dodo.exe`, for shortcuts and any future
+/// installer.
+const WINDOWS_ICON: &str = "assets/windows/dodo.ico";
 
 fn emit(key: &str, value: String) {
     println!("cargo:rustc-env={key}={value}");
@@ -245,4 +266,57 @@ fn git(args: &[&str]) -> Option<String> {
     }
     let value = String::from_utf8(out.stdout).ok()?.trim().to_string();
     (!value.is_empty()).then_some(value)
+}
+
+/// Compiles `assets/windows/dodo.ico` into an `RT_GROUP_ICON` resource and
+/// links it into `dodo.exe`, which is what makes Explorer, the taskbar and
+/// Alt-Tab show dodo's artwork instead of the generic executable glyph. It also
+/// gives the file a VERSIONINFO block (ProductName, FileDescription,
+/// FileVersion, ProductVersion, all from `CARGO_PKG_*`), which is what the
+/// Properties dialog reads.
+///
+/// **Two `cfg`s are in play here and they are not the same one.** The
+/// `winresource` build-dependency is declared under
+/// `[target.'cfg(windows)'.build-dependencies]`, and cargo evaluates a
+/// *target*-scoped **build**-dependency against the **target**
+/// (rust-lang/cargo#4932) — verified with `cargo metadata --filter-platform`,
+/// which lists `winresource` for `x86_64-pc-windows-msvc` and for none of the
+/// other three release triples. The `#[cfg(windows)]` below, by contrast, is
+/// the **host**, because a build script is compiled for the machine running it.
+/// So:
+///
+/// - host Windows, target Windows — the release and CI path — both are true
+///   and the icon is embedded;
+/// - host macOS/Linux, target Windows — a cross-build — the crate is there but
+///   this arm is compiled out, so the icon is silently *not* embedded. The
+///   `#[cfg(not(windows))]` arm below turns that silence into a warning;
+/// - host Windows, target anything else — the crate is absent while this arm
+///   still compiles, so `build.rs` would fail to build. Nothing dodo does hits
+///   that (its Windows builds are native), and it is recorded rather than
+///   guarded because a target-scoped build-dependency cannot express "host".
+#[cfg(windows)]
+fn embed_windows_icon() {
+    // Panics rather than degrading; see rule 1 at the top of this file for why
+    // this one thing is allowed to. `expect` on the `Result` is deliberate —
+    // `winresource` reports a missing `rc.exe`/`windres` and a rejected `.ico`
+    // through it, and both mean the produced `dodo.exe` would not be the file
+    // the release claims to ship.
+    winresource::WindowsResource::new()
+        .set_icon(WINDOWS_ICON)
+        .compile()
+        .expect("embedding assets/windows/dodo.ico into dodo.exe");
+}
+
+/// No-op off Windows — with one warning, for the case that would otherwise be
+/// silent: a Windows binary cross-built from a non-Windows host gets no icon,
+/// because the arm above is compiled for the host. `.github/workflows` builds
+/// Windows natively today; if that ever changes, this is the line that says so.
+#[cfg(not(windows))]
+fn embed_windows_icon() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!(
+            "cargo:warning=cross-building for Windows from a non-Windows host: \
+             {WINDOWS_ICON} is NOT embedded in dodo.exe (see embed_windows_icon in build.rs)"
+        );
+    }
 }
