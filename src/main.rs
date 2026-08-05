@@ -84,6 +84,11 @@ fn main() {
 
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(900.), px(620.)), cx)),
+            // Stops a resize drag before the layout has to cope: the icon rail
+            // plus the main pane at its minimum. `layout::window_min_size`
+            // derives it, and the scroll container in `Layout::render` is what
+            // covers the case where a platform ignores this.
+            window_min_size: Some(layout::window_min_size()),
             // What a Linux desktop matches `assets/linux/dodo.desktop` against
             // to find the icon; inert on macOS and Windows. See
             // `window_icon::APP_ID` for why the value is not arbitrary.
