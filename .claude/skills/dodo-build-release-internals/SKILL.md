@@ -44,15 +44,36 @@ was not. Six things worth knowing before touching it:
 
 **The application icon is a committed pipeline, not a file someone dropped in.** `assets/branding/`
 holds the original artwork and the 1024 RGBA master; `python3 scripts/generate-icons.py` derives
-the macOS `.icns`, the Windows `.ico` and the Linux hicolor PNGs from it, and all of those are
-committed because packaging must not depend on the host (`iconutil` is macOS-only). Read
-"Application icon" in `docs/release.md` before touching any of it — it records why the Windows
-`.exe` does not embed its icon, why GPUI's `WindowOptions::icon` is not set, and that a `.icns`
-`iconutil` accepted can still render blank. **Do not confuse `assets/{branding,macos,windows,
-linux}` with `assets/icons`**: only `icons/**/*.svg` and `themes/**/*.json` are embedded in the
-binary (the `#[include]` filters in `src/assets.rs`), which is why the branding artwork costs zero
-bytes. Anything new under `assets/` that must stay out of the binary has to stay outside those two
-filters — measure the binary, do not assume.
+the macOS `.icns`, the Windows `.ico`, the Linux hicolor PNGs and one 256px PNG from it, and all of
+those are committed because packaging must not depend on the host (`iconutil` is macOS-only). Read
+"Application icon" in `docs/release.md` before touching any of it — it is the authority. Five
+things it records that are not obvious from the files:
+
+- **The question is answered in three unrelated places.** `build.rs` compiles the `.ico` into
+  `dodo.exe` as an `RT_GROUP_ICON`; `scripts/macos-app-bundle.sh` puts the `.icns` in the bundle;
+  `src/window_icon.rs` covers at runtime what no file can — a bare macOS binary's Dock tile
+  (`-[NSApplication setApplicationIconImage:]`, since GPUI exposes no dock-icon API) and the Linux
+  `app_id`. Changing one of the three fixes one launch path.
+- **`WindowOptions::app_id` was the whole Linux bug.** GPUI leaves it `None`, and with no app id a
+  Wayland toplevel is unmatchable against `dodo.desktop` *and* an X11 window carries no `WM_CLASS`
+  at all — so `StartupWMClass=dodo` matched nothing either. `window_icon::APP_ID`, the desktop
+  file's name, its `StartupWMClass` and its `Icon=` must all stay equal; a unit test enforces it.
+- **`WindowOptions::icon` is X11-only and the pinned GPUI means it.** Wayland has no equivalent
+  there, so a bare Linux binary under Wayland is not fixable from inside dodo.
+- **The `winresource` build-dependency is target-scoped, and cargo resolves that against the
+  *target*** (rust-lang/cargo#4932) while `#[cfg(windows)]` inside `build.rs` is the *host*. They
+  agree only on a native Windows build. `embed_windows_icon` documents both mismatches.
+- **"Verified, not assumed" speaks for the macOS bundle alone.** That is the only one of the five
+  launch paths anyone has looked at. Do not read it as a verdict on the icon generally — doing so
+  is how four broken cases survived.
+
+**Do not confuse `assets/{branding,macos,windows,linux}` with `assets/icons`**: only
+`icons/**/*.svg` and `themes/**/*.json` are embedded in the binary through `rust-embed` (the
+`#[include]` filters in `src/assets.rs`), which is why the packaged icon artwork costs zero bytes.
+The one exception is `assets/branding/dodo-256.png`, which `src/window_icon.rs` pulls in with
+`include_bytes!` — a different mechanism the filters do not govern. Anything new under `assets/`
+that must stay out of the binary has to stay outside those two filters *and* out of an
+`include_bytes!`.
 
 ## The update manifest
 
