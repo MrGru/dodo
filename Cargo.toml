@@ -192,6 +192,46 @@ redis = { version = "1.5", default-features = false }
 # adding a feature here over hand-declaring an `extern "system"` signature —
 # this host cannot compile the Windows target, so the signatures need to come
 # from something the Windows compiler will check.
+# AppKit, for exactly one call: `-[NSApplication setApplicationIconImage:]` in
+# `src/window_icon.rs`, which is what gives a *directly run* macOS binary
+# dodo's Dock icon. A bundled .app needs none of this — it has an Info.plist —
+# and GPUI exposes no dock-icon API at all (`WindowOptions::icon` is X11 only),
+# so a platform call is the only route.
+#
+# **Neither crate is new to the graph**: both versions are exactly what
+# `gpui_macos` already depends on, so this adds no package to `Cargo.lock` and
+# nothing new to compile beyond the two class modules the features below switch
+# on. Features are additive across a graph, so listing only what this call
+# needs is the whole cost. `NSResponder` is not decoration — it is
+# `NSApplication`'s superclass, and objc2's generated bindings will not compile
+# a class whose superclass feature is off.
+#
+# The typed bindings are preferred over `objc`'s raw `msg_send!` for the reason
+# already stated for `windows-sys` below: a checked signature beats a
+# hand-written one, especially for a call nobody here can run in CI.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSImage",
+    "NSResponder",
+] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = [
+    "NSData",
+] }
+
+# Decodes the embedded 256px PNG into the RGBA buffer GPUI's X11 backend writes
+# into `_NET_WM_ICON` (`WindowOptions::icon`, which is X11-only). Scoped to
+# Linux because that is the only `cfg` that names the type: `src/main.rs` sets
+# the field inside a `#[cfg(target_os = "linux")]` block precisely so that a
+# macOS or Windows build never has to name `image` at all.
+#
+# Not a new package either — `gpui` already depends on `image` 0.25 with `png`
+# among its formats, so this resolves to the crate and the feature already in
+# the graph and compiles nothing extra.
+[target.'cfg(target_os = "linux")'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

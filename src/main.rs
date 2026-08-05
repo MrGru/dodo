@@ -26,6 +26,7 @@ mod layout;
 mod paths;
 mod settings;
 mod updater;
+mod window_icon;
 
 use gpui::*;
 use gpui_component::*;
@@ -74,9 +75,27 @@ fn main() {
         // debugging session.
         updater::init(cx);
         init_close_window_binding(cx);
+        // Dock icon for a directly-run macOS binary; a no-op inside a .app and
+        // on every other platform. Here rather than earlier because it needs
+        // the `NSApplication` GPUI has by now created, and it must be on the
+        // main thread — which this closure is.
+        #[cfg(target_os = "macos")]
+        window_icon::set_macos_dock_icon();
 
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(900.), px(620.)), cx)),
+            // What a Linux desktop matches `assets/linux/dodo.desktop` against
+            // to find the icon; inert on macOS and Windows. See
+            // `window_icon::APP_ID` for why the value is not arbitrary.
+            app_id: Some(window_icon::APP_ID.to_owned()),
+            // `icon` exists on every platform and is read by exactly one —
+            // GPUI's X11 backend, which writes it into `_NET_WM_ICON`. The
+            // `cfg` on the *field* rather than a function returning `None`
+            // elsewhere is what keeps `image` a Linux-only dependency: no other
+            // target ever names the type. `..Default::default()` supplies the
+            // `None` they get instead.
+            #[cfg(target_os = "linux")]
+            icon: window_icon::x11_icon(),
             ..Default::default()
         };
 
