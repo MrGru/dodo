@@ -13,15 +13,18 @@
 //! tree names things without any backend owning the vocabulary ([`catalog`]),
 //! the password-free persisted query schema ([`library`]), the proof that a
 //! row has a catalog-backed unique identity ([`identity`]),
-//! and the sole generated-mutation SQL owner ([`statement`]).
+//! and the sole generated-mutation SQL owner ([`statement`]), and how a pasted
+//! connection URI becomes a filled-in form ([`uri`]).
 //!
-//! The two exceptions to "nothing but data", both deliberate:
+//! The three exceptions to "nothing but data", all deliberate:
 //!
 //! - [`error::DbError`] and a few others name [`Str`](crate::i18n::Str),
 //!   because an error that cannot say itself in two languages is not finished.
 //!   `Str` is itself plain data.
 //! - [`sql_format`] names `sqlformat`. It is a pure text-in/text-out crate, not
 //!   a driver, and that module is the only place allowed to name it.
+//! - [`uri`] names `percent-encoding`, for the same reason: a codec, already in
+//!   the tree for the Encoder/Decoder, with no I/O and nothing to mock.
 
 pub mod catalog;
 pub mod connection;
@@ -35,4 +38,5 @@ pub mod query;
 pub mod split;
 pub mod sql_format;
 pub mod statement;
+pub mod uri;
 pub mod value;
