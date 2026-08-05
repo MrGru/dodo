@@ -2,8 +2,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::sidebar::{
-    Sidebar, SidebarCollapsible, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu,
-    SidebarMenuItem,
+    Sidebar, SidebarCollapsible, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem,
 };
 use gpui_component::{ActiveTheme, StyledExt as _, h_flex, v_flex};
 
@@ -80,6 +79,73 @@ fn pane_title(view: View, docker_page: DockerPage) -> Str {
         View::Docker => docker_page.title(),
         other => other.title(),
     }
+}
+
+/// One sidebar-footer row: the icon, and the label beside it when the sidebar
+/// is wide enough to have one.
+///
+/// **Lining the collapsed icon up with the tool icons above is arithmetic, not
+/// taste**, and it is worth writing down because two of the three numbers come
+/// from inside the widget library (`sidebar/mod.rs`, `sidebar/menu.rs` and
+/// `button/button.rs` in the pinned checkout):
+///
+/// * Collapsed the rail is 48px and `Sidebar` insets the menu (`#inner`'s
+///   `p_2`) and the footer (`px_2`) by the same 8px, so each gets the same
+///   31px-wide box. A menu row fills that box and centres its icon in it, so
+///   the footer button has to fill it too — hence `w_full` and **`px_0`**,
+///   because `Button`'s own `px_4` is wider than the whole box and pushes its
+///   contents out past the right-hand edge.
+/// * Expanded both are inset 12px (`px_3`) and a menu row puts its icon 8px
+///   further in (`p_2`), so `px_2` on the button lands the footer icon in the
+///   same column, and the label in the same column as the row labels.
+///
+/// Two things this deliberately does *not* use, having read what they do:
+///
+/// * **`SidebarFooter`** — it adds a second `p_2` the menu rows do not have,
+///   which halves the collapsed box to 15px and leaves no way to reach the
+///   rail's centre, plus a hover highlight spanning the whole footer that a
+///   menu row has no counterpart for. `Sidebar::footer` takes any element, so
+///   the `v_flex` goes in directly. It is still a stack rather than two loose
+///   buttons: the sidebar's own footer wrapper is an `h_flex`, so siblings
+///   would sit side by side.
+/// * **`.justify_start()`** — which these buttons used to carry, and which
+///   cannot align anything here: `Button` wraps its children in an
+///   `h_flex().size_full().justify_center()`, so the outer justification never
+///   reaches the icon. The child's own `w_full` is what left-aligns the
+///   expanded row.
+fn footer_button(
+    id: &'static str,
+    icon: AppIcon,
+    label: Str,
+    icon_collapsed: bool,
+    cx: &App,
+) -> Button {
+    Button::new(id)
+        .ghost()
+        .w_full()
+        .map(|this| {
+            if icon_collapsed {
+                this.px_0()
+            } else {
+                this.px_2()
+            }
+        })
+        .child(
+            h_flex()
+                .gap_2()
+                .when(!icon_collapsed, |this| this.w_full())
+                .child(icon.view())
+                .when(!icon_collapsed, |this| {
+                    // Fixed-length label in a 240px-wide sidebar: without these
+                    // it wraps to two lines and pushes the footer taller.
+                    this.child(
+                        div()
+                            .flex_shrink_0()
+                            .whitespace_nowrap()
+                            .child(t(label, cx)),
+                    )
+                }),
+        )
 }
 
 pub struct Layout {
@@ -161,64 +227,38 @@ impl Render for Layout {
                     )
                     .child(SidebarGroup::new(t(Str::Tools, cx)).child(self.menu(cx)))
                     .footer(
-                        // `SidebarFooter` is an `h_flex`, so two `w_full`
-                        // buttons handed to it directly would sit side by side
-                        // and fight over a 240px sidebar. The stack is what
-                        // keeps each one a full-width row, as the lone Settings
-                        // button always was.
-                        SidebarFooter::new().child(
-                            v_flex()
-                                .w_full()
-                                .gap_1()
-                                .child(
-                                    // Beside Settings rather than inside it: this is
-                                    // an action, not a preference, and the one
-                                    // preference it carries ("check automatically")
-                                    // lives in the dialog it opens.
-                                    Button::new("check-for-updates")
-                                        .ghost()
-                                        .w_full()
-                                        .justify_start()
-                                        .child(
-                                            h_flex().gap_2().child(AppIcon::Download.view()).when(
-                                                !icon_collapsed,
-                                                |this| {
-                                                    // Fixed-length label in a
-                                                    // 240px-wide sidebar: without
-                                                    // these it wraps to two lines
-                                                    // and pushes the footer taller.
-                                                    this.child(
-                                                        div()
-                                                            .flex_shrink_0()
-                                                            .whitespace_nowrap()
-                                                            .child(t(Str::CheckForUpdates, cx)),
-                                                    )
-                                                },
-                                            ),
-                                        )
-                                        .on_click(|_, window, cx| updater::open(window, cx)),
+                        // A plain stack, not a `SidebarFooter` — see
+                        // [`footer_button`] for why, and for where its two
+                        // paddings come from. `gap_2` is the menu's own row
+                        // gap, so collapsed the icons keep the same rhythm all
+                        // the way down the rail.
+                        v_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(
+                                // Beside Settings rather than inside it: this is
+                                // an action, not a preference, and the one
+                                // preference it carries ("check automatically")
+                                // lives in the dialog it opens.
+                                footer_button(
+                                    "check-for-updates",
+                                    AppIcon::Download,
+                                    Str::CheckForUpdates,
+                                    icon_collapsed,
+                                    cx,
                                 )
-                                .child(
-                                    Button::new("open-settings")
-                                        .ghost()
-                                        .w_full()
-                                        .justify_start()
-                                        .child(
-                                            h_flex().gap_2().child(AppIcon::Settings.view()).when(
-                                                !icon_collapsed,
-                                                |this| {
-                                                    this.child(
-                                                        div()
-                                                            .flex_shrink_0()
-                                                            .whitespace_nowrap()
-                                                            .child(t(Str::Settings, cx)),
-                                                    )
-                                                },
-                                            ),
-                                        )
-                                        .on_click(|_, window, cx| settings::open(window, cx)),
-                                ),
-                        ),
+                                .on_click(|_, window, cx| updater::open(window, cx)),
+                            )
+                            .child(
+                                footer_button(
+                                    "open-settings",
+                                    AppIcon::Settings,
+                                    Str::Settings,
+                                    icon_collapsed,
+                                    cx,
+                                )
+                                .on_click(|_, window, cx| settings::open(window, cx)),
+                            ),
                     ),
             )
             .child(
