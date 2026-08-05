@@ -12,6 +12,15 @@ comments there are the authority on structure. This file is only a map — for a
 map's resolution, load the matching skill from the table below rather than reading a whole module
 cold.
 
+**`_bmad/`, `_bmad-output/` and `bmad.config.yaml` are tracked, and are not the authority for
+anything.** They are bmad scaffolding kept for contributors who work that way; the repo owner does
+not, and decided on 2026-08-05 that they stay — so their presence is settled, not an oversight.
+Authority is this file, the skills it indexes, each module's `mod.rs` doc comments and `docs/`.
+`_bmad-output/` reads authoritative and is not: its PRD, epics, per-story files and
+`sprint-status.yaml` are not kept in step with what actually lands. A session that is not
+deliberately running a bmad workflow should not read, follow or update any of it — in particular
+it must not mark a story or `sprint-status.yaml` to reflect work it just did.
+
 `src/main.rs` also owns **app lifecycle**, and both halves are counter-intuitive enough to name
 here: a release Windows build is a **GUI-subsystem** binary (no console window behind the app),
 which costs it valid standard handles, so `attach_parent_console` buys them back on the
