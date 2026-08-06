@@ -88,7 +88,7 @@ jobs:
     # the tree is clean and any new diff is a real regression. Do not re-add
     # `continue-on-error` — run `cargo fmt --all` instead.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt
@@ -112,7 +112,7 @@ jobs:
     # definition with the reason written next to them; there is no crate-level
     # allow, so a new warning fails the build. Keep it that way.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
         with:
           components: clippy
@@ -132,7 +132,7 @@ jobs:
     name: test
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: test
@@ -184,7 +184,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             experimental: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Still required on Linux: `cargo check` does not link, but the -sys
       # crates in this graph run build scripts that call pkg-config and compile
@@ -218,7 +218,7 @@ jobs:
     name: build (macos-arm64, debug)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup-rust
         with:
