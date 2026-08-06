@@ -383,16 +383,18 @@ impl Render for CleanerView {
                                         .when_some(
                                             self.state.result_for(self.state.category()),
                                             |container, result| {
-                                                container.children(result.items.iter().map(|item| {
-                                                    h_flex()
-                                                        .justify_between()
-                                                        .w_full()
-                                                        .py_1()
-                                                        .child(item.display_name.clone())
-                                                        .child(Self::format_bytes(
-                                                            item.logical_size,
-                                                        ))
-                                                }))
+                                                container.children(result.items.iter().map(
+                                                    |item| {
+                                                        h_flex()
+                                                            .justify_between()
+                                                            .w_full()
+                                                            .py_1()
+                                                            .child(item.display_name.clone())
+                                                            .child(Self::format_bytes(
+                                                                item.logical_size,
+                                                            ))
+                                                    },
+                                                ))
                                             },
                                         )
                                         .when(
