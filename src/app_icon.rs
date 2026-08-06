@@ -16,6 +16,7 @@ pub enum AppIcon {
     Dodo,
     Binary,
     Json,
+    Cleaner,
     Palette,
     /// Used by the Settings dialog's search box, via the library's
     /// `IconName::Search`.
@@ -116,6 +117,7 @@ impl IconNamed for AppIcon {
             Self::Dodo => "icons/dodo.svg",
             Self::Binary => "icons/binary.svg",
             Self::Json => "icons/json.svg",
+            Self::Cleaner => "icons/cleaner.svg",
             Self::Palette => "icons/palatte.svg",
             Self::Search => "icons/search.svg",
             Self::Settings => "icons/settings.svg",
