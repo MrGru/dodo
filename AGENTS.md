@@ -2,7 +2,7 @@
 
 `dodo` is a Rust desktop app: a single window with a collapsible sidebar, where each sidebar
 entry swaps the main pane to a self-contained developer tool (JSON formatter, Encoder/Decoder,
-API Explorer, Docker, Database Explorer) plus, in the sidebar footer, a Settings dialog and a
+API Explorer, Docker, Database Explorer, Cleaner) plus, in the sidebar footer, a Settings dialog and a
 **Check for updates** dialog. It is built on GPUI (Zed's UI framework) and the `gpui-component`
 widget library, both pulled from git and pinned only by `Cargo.lock`. See `README.md` for the
 user-facing description and `Cargo.toml` for exact dependency sources.
@@ -42,6 +42,15 @@ the outside-world crate), `state/`, `components/`, `views/`. Each module's own `
 comments are the authority on its split and what shipped when; the matching skill below is where
 the non-obvious parts of each are written down — load it before changing anything in one of these
 three modules rather than inferring the design from the files cold.
+
+**`src/cleaner/` is the same shape but is unfinished, and that changes how to read it.** Its
+`mod.rs` is the authority and says so: round 1 ships the domain contract, the state machine and a
+mock incremental scan UI, with **no destructive cleanup path, no permission checks and no real
+scanners**. So much of `core/` is defined ahead of anything that constructs it, and every such
+item carries a `#[allow(dead_code)]` naming what will construct it and when the allow comes off.
+**Those are pending work, not dead code to delete** — annotate a new one the same way rather than
+removing the item, and remove an allow when its producer lands. The two whole-module allows
+(`core::permissions`, `core::safety`) mark the two areas that do not exist at all yet.
 
 **dodo persists seven things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
 behind a trait so the state layer never learns where they live: `collections.json`
@@ -144,8 +153,16 @@ Seven things about build and release that catch people:
   measurement depends on.
 - **`fmt` and `clippy` are blocking jobs; keep them green.** Run `cargo fmt --all` and
   `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
-  (34 unformatted files, 12 warnings) is paid off; there is no crate-level `allow`, and the two
-  surviving suppressions are `#[allow]`ed at their definition with the reason inline.
+  (34 unformatted files, 12 warnings) is paid off, and **there is no crate-level `allow`** — every
+  suppression is `#[allow]`ed at the item it applies to (or, where a whole module is the pending
+  unit, as an inner attribute under that module's `//!` docs) with the reason and the condition for
+  removing it written next to it. Copy that shape; never widen an `allow` to quieten a lint.
+  Dead-code warnings in a module under construction are **scaffolding, not defects**: annotate,
+  do not delete. `.githooks/pre-push` runs `fmt`, `clippy` and `cargo test --locked` and refuses
+  the push if any fails; it is opt-in per clone with `git config core.hooksPath .githooks`
+  (see "Pre-push checks" in `README.md` for its cost and the `--no-verify` bypass).
+  Note that `cargo build` alone does **not** prove the tree is green — `src/i18n.rs`'s test module
+  is exhaustive over `Str`, so new strings break `cargo test` while the app still builds.
   `build (windows-x64)` failed on its one real run (a `#[cfg(unix)]`-only bollard connector; fixed
   by the platform split in `docker/services/engine.rs`, not yet confirmed green) and
   `build (macos-x64)` is unverified — those rows are
