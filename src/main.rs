@@ -84,7 +84,8 @@ fn main() {
         // debugging session.
         updater::init(cx);
         // Installs the session global and the quit-time flush of
-        // `session.json`. It reads nothing here — the read is awaited below.
+        // `session.json`. It reads nothing here — the read is awaited below,
+        // because the window cannot be opened until its geometry is known.
         session::init(cx);
         init_close_window_binding(cx);
         // Dock icon for a directly-run macOS binary; a no-op inside a .app and
@@ -94,36 +95,57 @@ fn main() {
         #[cfg(target_os = "macos")]
         window_icon::set_macos_dock_icon();
 
-        let window_options = WindowOptions {
-            window_bounds: Some(WindowBounds::centered(size(px(900.), px(620.)), cx)),
-            // Stops a resize drag before the layout has to cope: the icon rail
-            // plus the main pane at its minimum. `layout::window_min_size`
-            // derives it, and the scroll container in `Layout::render` is what
-            // covers the case where a platform ignores this.
-            window_min_size: Some(layout::window_min_size()),
-            // What a Linux desktop matches `assets/linux/dodo.desktop` against
-            // to find the icon; inert on macOS and Windows. See
-            // `window_icon::APP_ID` for why the value is not arbitrary.
-            app_id: Some(window_icon::APP_ID.to_owned()),
-            // `icon` exists on every platform and is read by exactly one —
-            // GPUI's X11 backend, which writes it into `_NET_WM_ICON`. The
-            // `cfg` on the *field* rather than a function returning `None`
-            // elsewhere is what keeps `image` a Linux-only dependency: no other
-            // target ever names the type. `..Default::default()` supplies the
-            // `None` they get instead.
-            #[cfg(target_os = "linux")]
-            icon: window_icon::x11_icon(),
-            ..Default::default()
-        };
-
         cx.spawn(async move |cx| {
-            // `session.json` decides the theme and the font size, so it is read
-            // *before* the window exists rather than applied over a frame the
-            // user has already seen. It is one small local file, read on the
-            // background executor; a missing or unreadable one leaves every
-            // default exactly as it was before session restoration existed.
+            // `session.json` decides the theme, the font size and the window
+            // rectangle, so it is read *before* the window exists rather than
+            // applied over a frame the user has already seen. It is one small
+            // local file, read on the background executor; a missing or
+            // unreadable one leaves every default exactly as it was before
+            // session restoration existed.
             session::load(cx).await;
-            cx.update(settings::apply_session);
+
+            let window_options = cx.update(|cx| {
+                // Theme, font size, border radius and language, in that
+                // order — see `settings::apply_session`.
+                settings::apply_session(cx);
+
+                WindowOptions {
+                    // The saved rectangle has already been placed against
+                    // the displays that exist now, so an unplugged monitor
+                    // or a changed resolution arrives here as `None` or as
+                    // a corrected rectangle, never as somewhere
+                    // unreachable. `session::models::geometry` is where
+                    // that judgement lives.
+                    window_bounds: Some(
+                        session::Session::window_bounds(cx)
+                            .unwrap_or_else(|| session::default_window_bounds(cx)),
+                    ),
+                    // Stops a resize drag before the layout has to cope:
+                    // the icon rail plus the main pane at its minimum.
+                    // `layout::window_min_size` derives it, and the scroll
+                    // container in `Layout::render` is what covers the case
+                    // where a platform ignores this. A *restored* window is
+                    // held to the same floor by `geometry::place`, which
+                    // this option cannot do for it — the platform only
+                    // polices dragging.
+                    window_min_size: Some(layout::window_min_size()),
+                    // What a Linux desktop matches `assets/linux/dodo.desktop`
+                    // against to find the icon; inert on macOS and Windows.
+                    // See `window_icon::APP_ID` for why the value is not
+                    // arbitrary.
+                    app_id: Some(window_icon::APP_ID.to_owned()),
+                    // `icon` exists on every platform and is read by
+                    // exactly one — GPUI's X11 backend, which writes it
+                    // into `_NET_WM_ICON`. The `cfg` on the *field* rather
+                    // than a function returning `None` elsewhere is what
+                    // keeps `image` a Linux-only dependency: no other
+                    // target ever names the type. `..Default::default()`
+                    // supplies the `None` they get instead.
+                    #[cfg(target_os = "linux")]
+                    icon: window_icon::x11_icon(),
+                    ..Default::default()
+                }
+            });
 
             cx.open_window(window_options, |window, cx| {
                 let view = cx.new(|cx| DodoApp::new(window, cx));
