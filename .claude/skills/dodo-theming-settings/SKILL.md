@@ -30,6 +30,29 @@ on the background executor, coalesced writes, and a `SettingField` here whose cl
 write the global. Do **not** add storage to `settings.rs` itself; it has none and deliberately keeps
 none.
 
+**The Features page is the one that picks neither, and it is worth knowing why before copying it.**
+Which tools the sidebar lists is `Layout`'s state, because changing it has to move the main pane off
+a tool that has just stopped being listed — so `settings::open` is handed a `WeakEntity<Layout>` and
+the page calls `Layout::set_tool_enabled` / `move_tool`, which persist through `Session` and fix the
+open tool as one act. Three consequences, all of which bite:
+
+- **The handle is weak and must not be read while the page is constructed.** `settings::open` is
+  reached from a click listener that has `Layout` leased; a read there panics at runtime with no
+  compile error. `gpui-component-recipes` has the general form.
+- **A change must `cx.refresh_windows()`.** The control lives in the dialog layer, a different
+  entity, so `cx.notify()` on `Layout` repaints the sidebar and leaves the row the user just pressed
+  showing its old value. `Layout::tool_list_changed` does it; `QuickNav::edit` does the same for the
+  same reason.
+- **A row is built by hand, not by `SettingField`.** A `SettingItem` is a label with a control beside
+  it and no way to reach the row, so it can carry a switch but not a drag handle, a drop target or a
+  position — and the position is the feature. `SettingItem::render` hands over the whole row instead.
+  Reordering is gpui's own drag-and-drop (`on_drag` on the handle, `drag_over` + `on_drop` on the
+  row — the primitives the library's dock tab bar uses) **plus** move-up/move-down buttons, which
+  are the keyboard path a drag has none of. Ship both; the buttons are not a fallback.
+
+The rules themselves are nowhere near `settings.rs`: `session::models::features` is pure and holds
+all of them, including the floor of one visible tool. Put a new rule there, not in the page.
+
 ## Themes
 
 Theme JSON is vendored verbatim from gpui-component's own `themes/` directory into
