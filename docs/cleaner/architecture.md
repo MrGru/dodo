@@ -46,10 +46,14 @@ Cleaner is wired as a top-level tool in:
 - `src/cleaner/macos/scanners/mail_files.rs` discovers versioned Mail attachment/download roots and treats them as explicit user-data review items.
 - `src/cleaner/macos/scanners/trash_bins.rs` analyzes Trash bins as review-only roots.
 - `src/cleaner/macos/scanners/installed_apps.rs` indexes `.app` bundles from the standard top-level application roots and extracts basic Info.plist metadata.
-- `src/cleaner/macos/applications/` (Phase 9) holds app identity normalization, leftover-location
-  matching, confidence scoring and the uninstall review workflow — shared by the `InstalledApps`
-  scanner and the review dialog, so it is a sibling of `scanners/` rather than a member of it. See
-  `docs/cleaner/application-matching.md`.
+- `src/cleaner/macos/applications/` (Phase 9, extended in Phase 10) holds app identity
+  normalization, leftover-location matching, confidence scoring, the uninstall review workflow and
+  (Phase 10) the inverse question, orphan detection (`applications/orphans.rs`) — shared by the
+  `InstalledApps`/`OrphanedFiles` scanners and the review dialog, so it is a sibling of `scanners/`
+  rather than a member of it. See `docs/cleaner/application-matching.md`.
+- `src/cleaner/core/ignore.rs` and `src/cleaner/services/ignore_store.rs` (Phase 10) hold the
+  orphan-detection "keep" list — `cleaner-ignored-items.json`, dodo's eighth persisted file — behind
+  the same trait/versioned-JSON discipline every other store here uses.
 - `src/cleaner/views/uninstall_review_dialog.rs` renders the uninstall review dialog as its own
   entity (per the `saved_query_form` / `row_editor` pattern), opened from an Installed Apps row.
 - `src/cleaner/macos/cleanup.rs` owns cleanup planning and allow-list validation, separate from GPUI rendering.

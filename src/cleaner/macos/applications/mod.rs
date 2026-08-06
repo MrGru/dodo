@@ -18,9 +18,14 @@
 //!   [`locations::LeftoverMatch`] candidates.
 //! - [`review`]: orchestrates the above into an [`review::UninstallReview`]
 //!   the view can render, refusing protected apps per the ticket.
+//! - [`orphans`] (Phase 10): the inverse question — walks the same fixed
+//!   location list and flags entries *no* installed app's identity explains,
+//!   using the whole installed-app index rather than one `AppIdentity` at a
+//!   time.
 
 pub mod bundle;
 pub mod confidence;
 pub mod identity;
 pub mod locations;
+pub mod orphans;
 pub mod review;

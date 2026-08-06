@@ -218,6 +218,19 @@ impl CleanerState {
         };
     }
 
+    /// Removes one item from a category's results and from the current
+    /// selection, without a rescan and without going through the cleanup
+    /// pipeline. Used by "Keep" (Phase 10): once the ignore list has been
+    /// told to remember the path (`views::cleaner_view::CleanerView::mark_kept`),
+    /// the item disappears from view immediately rather than waiting for the
+    /// next scan to leave it out.
+    pub fn remove_item(&mut self, category: CleanerCategory, id: CleanableItemId) {
+        if let Some(result) = self.results.get_mut(&category) {
+            result.items.retain(|item| item.id != id);
+        }
+        self.selected_items.remove(&id);
+    }
+
     pub fn cleanup_report(&self) -> Option<&CleanupReport> {
         self.cleanup_report.as_ref()
     }
@@ -342,5 +355,51 @@ mod tests {
         assert_eq!(state.selected_count_for(CleanerCategory::UserCache), 1);
         state.clear_selection_for(CleanerCategory::UserCache);
         assert_eq!(state.selected_count_for(CleanerCategory::UserCache), 0);
+    }
+
+    #[test]
+    fn remove_item_hides_it_immediately_without_a_rescan() {
+        use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata};
+        use crate::cleaner::core::risk::{RiskLevel, SelectionPolicy};
+
+        let mut state = CleanerState::default();
+        let item = CleanableItem {
+            id: CleanableItemId(7),
+            category: CleanerCategory::OrphanedFiles,
+            group: None,
+            display_name: "Orphan".into(),
+            path: "/tmp/orphan".into(),
+            logical_size: 10,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::ReviewRecommended,
+            selection_policy: SelectionPolicy::SelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        };
+        state.push_result(CategoryScanResult {
+            category: CleanerCategory::OrphanedFiles,
+            items: vec![item],
+            scanned_entries: 1,
+            estimated_reclaimable_bytes: 10,
+            warnings: Vec::new(),
+            completeness: ScanCompleteness::Complete,
+        });
+        assert_eq!(state.selected_count_for(CleanerCategory::OrphanedFiles), 1);
+
+        state.remove_item(CleanerCategory::OrphanedFiles, CleanableItemId(7));
+
+        assert_eq!(state.selected_count_for(CleanerCategory::OrphanedFiles), 0);
+        assert!(
+            state
+                .result_for(CleanerCategory::OrphanedFiles)
+                .expect("category still has a result")
+                .items
+                .is_empty(),
+            "the kept item must be gone from the visible results"
+        );
     }
 }

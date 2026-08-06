@@ -102,11 +102,21 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
                 allowed_categories: vec![CleanerCategory::InstalledApps],
             });
         }
+        // Phase 10 orphan candidates are found under this exact same
+        // user-scope leftover root list (see
+        // `macos::applications::orphans::find_orphans_from`), so they share
+        // these `AllowedRoot` entries with the uninstall review workflow
+        // rather than getting a second, duplicate set. System-scope orphan
+        // candidates stay scan-only for the same reason Phase 9's do:
+        // nothing below adds `/Library/...` for `OrphanedFiles` either.
         for root in locations::user_scope_leftover_roots(home.as_path()) {
             allowed_roots.push(AllowedRoot {
                 path: root,
                 allow_root_itself: false,
-                allowed_categories: vec![CleanerCategory::InstalledApps],
+                allowed_categories: vec![
+                    CleanerCategory::InstalledApps,
+                    CleanerCategory::OrphanedFiles,
+                ],
             });
         }
     }
@@ -234,6 +244,58 @@ mod tests {
         );
         assert!(
             app_roots
+                .iter()
+                .all(|root| !root.path.starts_with("/Library")),
+            "system-scope leftover locations must stay scan-only, never allow-listed"
+        );
+    }
+
+    #[test]
+    fn orphaned_files_policy_covers_the_same_user_scope_leftovers_but_not_system_scope() {
+        let policy = policy_for(&CleanableItem {
+            id: CleanableItemId(1),
+            category: CleanerCategory::OrphanedFiles,
+            group: None,
+            display_name: String::new(),
+            path: PathBuf::from("/tmp/orphan"),
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::ReviewRecommended,
+            selection_policy: SelectionPolicy::NotSelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        });
+
+        let orphan_roots: Vec<_> = policy
+            .allowed_roots
+            .iter()
+            .filter(|root| {
+                root.allowed_categories
+                    .contains(&CleanerCategory::OrphanedFiles)
+            })
+            .collect();
+        assert!(
+            orphan_roots
+                .iter()
+                .any(|root| root.path.ends_with("Library/Application Support")),
+            "user-scope leftover roots must be allow-listed for OrphanedFiles"
+        );
+        assert!(
+            !orphan_roots
+                .iter()
+                .any(|root| root.path.as_path() == std::path::Path::new("/Applications")),
+            "OrphanedFiles never includes an app bundle root — only leftover locations"
+        );
+        assert!(
+            orphan_roots.iter().all(|root| !root.allow_root_itself),
+            "an allowed root must never authorize deleting itself outright"
+        );
+        assert!(
+            orphan_roots
                 .iter()
                 .all(|root| !root.path.starts_with("/Library")),
             "system-scope leftover locations must stay scan-only, never allow-listed"

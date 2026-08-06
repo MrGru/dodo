@@ -1,4 +1,4 @@
-# Application matching (Phase 9)
+# Application matching (Phase 9, extended in Phase 10)
 
 Identity normalization, leftover-location matching, confidence scoring and the uninstall review
 workflow now live under `src/cleaner/macos/applications/`, a sibling of `scanners/` rather than a
@@ -87,9 +87,61 @@ app bundle itself has no checkbox and is always included. Confirming calls
   `Security` framework or shelling out to `codesign`), and this phase adds neither a new dependency
   nor an external process for it. The scoring and matching logic still handles a `Some` team id
   correctly and is unit-tested with one; only *populating* the field from a real scan is missing.
+  This includes the Phase 10 installed-app index (`installed_apps::installed_app_identities`) —
+  every identity it builds also has `team_id: None`, for the same reason.
 - Entitlements (e.g. an app's actual `com.apple.security.application-groups` value) are not parsed.
   Group Container matching is a name-based heuristic (team-id prefix, vendor, app-specific text),
   not a real entitlement read.
 - Confidence scoring does not yet distinguish a validated `High` match from an unvalidated one, so
   `High` never defaults to selected even though the ticket allows it for "carefully validated"
   cases.
+
+## Orphan detection (Phase 10)
+
+`applications/orphans.rs` asks the inverse of Phase 9's question. `locations::find_leftovers`
+answers "what does *this one app* own?" for a single [`AppIdentity`]; `orphans::find_orphans`
+(wrapping the injectable `find_orphans_from`) walks the exact same fixed location list and asks,
+for every entry found there, "does *any* installed app's identity explain this?" — using the whole
+installed-app index at once. An entry no identity explains becomes an `OrphanCandidate`.
+
+- **The installed-app index** (`scanners::installed_apps::installed_app_identities`) is built from
+  the same fixed root list and `Info.plist` parsing the `InstalledApps` scanner uses — one list, so
+  the scanner and the orphan detector never disagree about what "installed" means. It is a plain
+  `Vec<AppIdentity>`: a dedicated index type would have been a thin wrapper over that, so there
+  isn't one.
+- **Ownership check.** An entry is "owned" — and therefore not an orphan — when
+  `locations::classify_name_match` (identifier-suffixed and generically-scanned locations) or
+  `locations::classify_group_container` (Group Containers) returns `Some(_)` for *any* identity in
+  the index, including a weak vendor-only match. Only an entry no identity explains at all becomes
+  an `OrphanCandidate`. There is no "ambiguous with another app" penalty here — that penalty exists
+  to downgrade a match *for one known app* when a second app could also explain it, and an orphan
+  is by definition explained by no app, so the situation never arises.
+- **`OrphanReason`**, exactly as the ticket suggests it: `BundleIdentifierNotInstalled` (Containers),
+  `StaleSavedState` (Saved Application State), `StalePreference` (Preferences),
+  `MissingOwnerApplication` (LaunchAgents/LaunchDaemons), `UnknownContainerOwner` (Group
+  Containers), `AppNameNotInstalled` (every generically-named location — Application Support,
+  Caches, Logs, WebKit, HTTPStorages, Cookies, Services, Autosave Information).
+- **Confidence reuses Phase 9's scheme rather than inventing a second one.** Every location keeps
+  the same base `NameMatchKind` Phase 9 assigned it when checking a *known* identity's ownership —
+  `ExactSandboxContainer` for Containers, `ExactSavedStateIdentifier` for Saved Application State,
+  `ExactPreferenceIdentifier` for Preferences and LaunchAgents/LaunchDaemons — run through the same
+  `total_score`/`classify` pipeline (including the protected-system-path penalty, which is why
+  every system-scope orphan candidate is `SharedOrUnsafe` regardless of location). Group Containers
+  is always scored via the negative `SharedContainer` kind, and every generically-named location
+  uses the conservative `PartialAppNameMatch` (20 points, `Low`) — there is no *matched* signal to
+  grade the strength of, since every candidate that reaches these locations failed to match
+  anything at all.
+- **Apple's own namespace is never flagged.** Any entry whose name starts with `com.apple.`
+  (case-insensitively) is skipped before it is ever scored, in every scope — see
+  `docs/cleaner/known-limitations.md` for why.
+- **The "keep" list** (`core::ignore`, `services::ignore_store`) is dodo's eighth persisted file,
+  `cleaner-ignored-items.json`. It follows the `script-consent.json`/`quick-nav.json` discipline —
+  an explicit `version` refused if higher than this build understands — and keys each kept item by
+  its absolute path string rather than its `CleanableItemId`, since that id is a session-local hash
+  with no promise of surviving a restart. `scanners::orphaned_files::OrphanedFilesScanner::scan`
+  loads this list itself (self-contained, like every other macOS scanner reading its own inputs)
+  and filters candidates before they ever become `CleanableItem`s, so a kept path does not reappear
+  on rescan.
+- **CLI tools without `.app` bundles are not detected.** See
+  `docs/cleaner/known-limitations.md` for why this is a deliberate scope cut rather than an
+  oversight.

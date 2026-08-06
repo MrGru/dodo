@@ -24,4 +24,9 @@ pub enum ItemCapability {
     RemoveArchitecture,
     RemoveLocalization,
     RunExternalCleanup,
+    /// Marks an orphan-detection candidate as reviewed-and-kept (Phase 10):
+    /// exclude it from future scans without cleaning it up. See
+    /// `crate::cleaner::core::ignore` and
+    /// `crate::cleaner::services::ignore_store`.
+    MarkAsKept,
 }

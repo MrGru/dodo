@@ -108,6 +108,19 @@ pub fn classify(score: i32) -> MatchConfidence {
     }
 }
 
+/// The human-readable label for a confidence bucket, used by both the
+/// uninstall review workflow ([`super::review`]) and orphan detection
+/// ([`super::orphans`]).
+pub fn confidence_label(confidence: MatchConfidence) -> &'static str {
+    match confidence {
+        MatchConfidence::Confirmed => "Confirmed",
+        MatchConfidence::High => "High",
+        MatchConfidence::Medium => "Medium",
+        MatchConfidence::Low => "Low",
+        MatchConfidence::SharedOrUnsafe => "Shared or unsafe",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

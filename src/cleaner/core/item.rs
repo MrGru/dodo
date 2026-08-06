@@ -41,6 +41,7 @@ pub enum ItemMetadata {
     NodeTool(NodeToolMetadata),
     UniversalBinary(UniversalBinaryMetadata),
     Language(LanguageMetadata),
+    OrphanedFile(OrphanedFileMetadata),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -79,4 +80,46 @@ pub struct UniversalBinaryMetadata {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LanguageMetadata {
     pub language_code: String,
+}
+
+/// Why an orphan-detection candidate (Phase 10) is considered orphaned, per
+/// the ticket's suggested enum. Attached to every
+/// [`ItemMetadata::OrphanedFile`] item so a future UI or test can filter or
+/// explain a result by reason rather than only by its free-text
+/// `CleanableItem::explanation`.
+///
+/// Lives beside the other metadata structs in `core` rather than in
+/// `macos::applications::orphans` — like `ApplicationMetadata`'s `bundle_id`
+/// and `team_id`, this is plain data populated by macOS-only matching logic,
+/// and `ItemMetadata` stays self-contained without depending on `macos`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OrphanReason {
+    /// A `~/Library/Containers/<bundle id>` (or equivalent identifier-keyed)
+    /// entry whose bundle id matches no installed app.
+    BundleIdentifierNotInstalled,
+    /// A generically-named leftover (Application Support, Caches, Logs,
+    /// WebKit, HTTPStorages, Cookies, Services, Autosave Information) whose
+    /// name does not resemble any installed app closely enough to explain it.
+    AppNameNotInstalled,
+    /// A `~/Library/LaunchAgents` (or `LaunchDaemons`) entry naming an app or
+    /// bundle id that is not installed — something is supposed to launch it,
+    /// and nothing can.
+    MissingOwnerApplication,
+    /// A `~/Library/Saved Application State/<bundle id>.savedState` entry
+    /// whose bundle id matches no installed app.
+    StaleSavedState,
+    /// A `~/Library/Preferences/<bundle id>.plist` entry whose bundle id
+    /// matches no installed app.
+    StalePreference,
+    /// A `~/Library/Group Containers` entry no installed app's identity
+    /// claims. Ownership of a group container can never be confidently
+    /// attributed to one specific missing app — see
+    /// `macos::applications::orphans` — so this reason is always the most
+    /// conservative confidence bucket.
+    UnknownContainerOwner,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct OrphanedFileMetadata {
+    pub reason: OrphanReason,
 }

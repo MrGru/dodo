@@ -10,6 +10,7 @@ use gpui_component::{ActiveTheme, Disableable as _, StyledExt as _, h_flex, v_fl
 use crate::cleaner::core::cancellation::CancellationToken;
 use crate::cleaner::core::category::{CleanerCategory, CleanerSection};
 use crate::cleaner::core::errors::{CleanupError, ScanError};
+use crate::cleaner::core::ignore::{IgnoredItemsDocument, path_signature};
 use crate::cleaner::core::item::{CleanableItem, CleanableItemId};
 use crate::cleaner::core::permissions::{MacPermission, PermissionService, PermissionState};
 use crate::cleaner::core::progress::{ProgressSink, ScanProgress};
@@ -23,6 +24,9 @@ use crate::cleaner::core::scanner::CleanerScanner;
 use crate::cleaner::macos::applications::review as uninstall_review;
 #[cfg(target_os = "macos")]
 use crate::cleaner::macos::{cleanup, permissions, platform};
+use crate::cleaner::services::ignore_store::{
+    DiskOrphanIgnoreStore, OrphanIgnoreStore, OrphanIgnoreStoreError,
+};
 use crate::cleaner::state::{CleanerState, CleanerStatus, default_scanners};
 #[cfg(target_os = "macos")]
 use crate::cleaner::views::uninstall_review_dialog;
@@ -51,10 +55,24 @@ pub struct CleanerView {
     pump_task: Option<Task<()>>,
     progress_rx: Option<std::sync::mpsc::Receiver<ScanProgress>>,
     cancellation: Option<CancellationToken>,
+    /// Where the orphan-detection "keep" list lives; see
+    /// `crate::cleaner::services::ignore_store`. Not `#[cfg(target_os = "macos")]`
+    /// like `permission_service` — the store itself is plain JSON I/O with no
+    /// macOS API calls, only the `OrphanedFiles` items that ever carry
+    /// `ItemCapability::MarkAsKept` are macOS-only.
+    ignore_store: Arc<dyn OrphanIgnoreStore>,
+    /// The loaded keep list, kept in memory so "Keep" does not need a
+    /// load-modify-persist round trip through disk for every click.
+    ignored_paths: std::collections::BTreeSet<String>,
+    ignore_load_task: Option<Task<()>>,
+    /// What went wrong reading or writing `cleaner-ignored-items.json`, if
+    /// anything. `None` in the ordinary case, including a first run with no
+    /// file yet.
+    ignore_store_error: Option<OrphanIgnoreStoreError>,
 }
 
 impl CleanerView {
-    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut view = Self {
             state: CleanerState::default(),
             scanners: default_scanners(),
@@ -67,9 +85,14 @@ impl CleanerView {
             pump_task: None,
             progress_rx: None,
             cancellation: None,
+            ignore_store: Arc::new(DiskOrphanIgnoreStore::new()),
+            ignored_paths: std::collections::BTreeSet::new(),
+            ignore_load_task: None,
+            ignore_store_error: None,
         };
         #[cfg(target_os = "macos")]
-        view.refresh_permission_state(_cx);
+        view.refresh_permission_state(cx);
+        view.load_ignored_paths(cx);
         view
     }
 
@@ -129,6 +152,69 @@ impl CleanerView {
                     .description(format!("{error:?}"))
             });
         }
+    }
+
+    /// Loads `cleaner-ignored-items.json` on the background executor. Called
+    /// once from [`Self::new`]; a failure leaves `ignored_paths` empty and
+    /// records the error for the banner rather than blocking the rest of the
+    /// panel — the same "fail closed, keep going" shape every other store in
+    /// dodo uses.
+    fn load_ignored_paths(&mut self, cx: &mut Context<Self>) {
+        let store = self.ignore_store.clone();
+        self.ignore_load_task = Some(cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { store.load() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match loaded {
+                    Ok(document) => {
+                        this.ignored_paths = document.ignored_paths;
+                        this.ignore_store_error = None;
+                    }
+                    Err(error) => this.ignore_store_error = Some(error),
+                }
+                this.ignore_load_task = None;
+                cx.notify();
+            });
+        }));
+    }
+
+    /// "Keep": marks an orphan-detection candidate as reviewed and excluded
+    /// from future scans (Phase 10). Removes the item from view immediately
+    /// — [`CleanerState::remove_item`] — rather than waiting on the save,
+    /// and persists the updated keep list on the background executor
+    /// afterwards. A path already in the list (should not normally happen,
+    /// since the item would already be gone from view) is a no-op: nothing
+    /// new to persist.
+    fn mark_kept(&mut self, item: CleanableItem, cx: &mut Context<Self>) {
+        if !self
+            .ignored_paths
+            .insert(path_signature(item.path.as_path()))
+        {
+            return;
+        }
+        self.state.remove_item(item.category, item.id);
+        cx.notify();
+
+        let document = IgnoredItemsDocument {
+            ignored_paths: self.ignored_paths.clone(),
+            ..IgnoredItemsDocument::default()
+        };
+        let store = self.ignore_store.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { store.persist(&document) })
+                .await;
+            if let Err(error) = result {
+                let _ = this.update(cx, |this, cx| {
+                    this.ignore_store_error = Some(error);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn set_section(&mut self, section: CleanerSection, cx: &mut Context<Self>) {
@@ -780,6 +866,14 @@ impl Render for CleanerView {
                                         .text_color(cx.theme().muted_foreground)
                                         .child(t(Self::status_label(self.state.status()), cx)),
                                 )
+                                .when_some(self.ignore_store_error.as_ref(), |this, error| {
+                                    this.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().danger)
+                                            .child(t(error.message(), cx)),
+                                    )
+                                })
                                 .when(
                                     Self::category_permission_requirement(self.state.category())
                                         == Some(MacPermission::FullDiskAccess),
@@ -1042,6 +1136,10 @@ impl Render for CleanerView {
                                                                 .capabilities
                                                                 .contains(&ItemCapability::UninstallApplication);
                                                             let uninstall_item = item.clone();
+                                                            let can_keep = item
+                                                                .capabilities
+                                                                .contains(&ItemCapability::MarkAsKept);
+                                                            let keep_item = item.clone();
                                                             v_flex()
                                                                 .gap_1()
                                                                 .rounded(cx.theme().radius)
@@ -1171,6 +1269,27 @@ impl Render for CleanerView {
                                                                                                 this.begin_uninstall_review(
                                                                                                     uninstall_item.clone(),
                                                                                                     window,
+                                                                                                    cx,
+                                                                                                );
+                                                                                            },
+                                                                                        )),
+                                                                                    )
+                                                                                })
+                                                                                .when(can_keep, |row| {
+                                                                                    row.child(
+                                                                                        Button::new((
+                                                                                            "cleaner-keep-item",
+                                                                                            item_id.0,
+                                                                                        ))
+                                                                                        .ghost()
+                                                                                        .label(t(
+                                                                                            Str::CleanerKeepItem,
+                                                                                            cx,
+                                                                                        ))
+                                                                                        .on_click(cx.listener(
+                                                                                            move |this, _, _, cx| {
+                                                                                                this.mark_kept(
+                                                                                                    keep_item.clone(),
                                                                                                     cx,
                                                                                                 );
                                                                                             },
