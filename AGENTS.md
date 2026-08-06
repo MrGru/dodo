@@ -80,8 +80,12 @@ on screen would freeze system-appearance following for everyone who never opened
 **restoring window geometry opts out of gpui's own placement care**: `Window::new` only cascades and
 clamps in `default_bounds`, the branch it takes when `window_bounds` is `None`, so a supplied
 rectangle goes to the platform unexamined. `session::models::geometry` is the replacement — clamp to
-a display that still exists, honour `layout::window_min_size`, centre on the primary when the saved
-display is gone — and it is a pure function so all of it is tested without a frame.
+a display that still exists, honour `layout::window_min_size`, centre on the preferred display when
+the saved one is gone — and it is a pure function so all of it is tested without a frame. It is
+paired with a saved display **UUID**, because on macOS the rectangle alone cannot say which monitor
+it meant: every coordinate the pinned gpui reports there is display-*local* (`MacDisplay::bounds`
+returns `(0, 0)` for every display). `models::document::WindowRecord` names the four functions that
+prove it. Do not "simplify" that pairing away.
 
 **`src/quick_nav/` is the one feature that is not a tool**: a vim-shaped normal mode where
 `Cmd+V` / `Ctrl+V` / `p` sends the clipboard to whichever tool can read it, and `Esc` leaves a
