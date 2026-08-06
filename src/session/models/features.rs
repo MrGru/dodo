@@ -176,8 +176,21 @@ impl Features {
     /// Whether switching `code` off is allowed — false for the last visible
     /// tool, which is rule 2 stated as a question the *control* can ask before
     /// the user presses it.
+    ///
+    /// Also false for a tool that is **already** hidden, which has nothing to
+    /// hide. That is why the control asks [`Features::can_toggle`] instead:
+    /// reading this one directly would draw every hidden tool's switch dead and
+    /// leave the user no way to bring a tool back.
     pub fn can_hide(&self, code: &str) -> bool {
         self.is_enabled(code) && self.visible().count() > 1
+    }
+
+    /// Whether this tool's switch may be pressed at all — in either direction.
+    ///
+    /// Switching a tool *on* is never refused, so this is false for exactly one
+    /// tool in exactly one state: the last visible one.
+    pub fn can_toggle(&self, code: &str) -> bool {
+        !self.is_enabled(code) || self.can_hide(code)
     }
 
     /// The tool to show, given the one the caller would like.
@@ -431,6 +444,27 @@ mod tests {
             !features.can_hide("beta"),
             "an already-hidden tool has nothing to hide",
         );
+    }
+
+    /// The question the switch actually asks, and the reason it is not
+    /// `can_hide`: a hidden tool must stay pressable, or switching one off
+    /// would be a one-way door.
+    #[test]
+    fn only_the_last_visible_tools_switch_is_dead() {
+        let mut features = Features::resolve(None, &KNOWN);
+        assert!(KNOWN.iter().all(|code| features.can_toggle(code)));
+
+        for code in ["beta", "gamma", "delta"] {
+            features.set_enabled(code, false).expect("three may go");
+        }
+
+        assert!(!features.can_toggle("alpha"), "the last one may not go off");
+        for hidden in ["beta", "gamma", "delta"] {
+            assert!(
+                features.can_toggle(hidden),
+                "{hidden} is hidden, so its switch has to bring it back",
+            );
+        }
     }
 
     /// A hand-edited file that switched everything off is repaired rather than

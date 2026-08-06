@@ -719,7 +719,7 @@ fn feature_list(layout: &WeakEntity<Layout>, cx: &mut App) -> AnyElement {
                 ix,
                 features.all().len(),
                 feature.enabled,
-                !features.can_hide(feature.code),
+                !features.can_toggle(feature.code),
                 cx,
             )
         })
@@ -741,12 +741,15 @@ fn feature_list(layout: &WeakEntity<Layout>, cx: &mut App) -> AnyElement {
 /// One tool's row: the handle, the tool, the two move buttons, the switch.
 ///
 /// `locked` is "this is the last tool the sidebar has", which
-/// [`Features::can_hide`] answers. The switch is then drawn **disabled with the
-/// reason beside it** rather than left live to refuse a press: the refusal is
-/// the same either way — [`Layout::set_tool_enabled`] enforces it whatever the
-/// control does — but a control that visibly cannot be pressed, next to a
-/// sentence saying why, explains itself before the user is puzzled rather than
-/// after.
+/// `Features::can_toggle` answers — **not** `can_hide`, which is also false for
+/// a tool that is already hidden and would draw every hidden tool's switch dead,
+/// making switching one off a one-way door.
+///
+/// A locked switch is drawn **disabled with the reason beside it** rather than
+/// left live to refuse a press: the refusal is the same either way —
+/// [`Layout::set_tool_enabled`] enforces it whatever the control does — but a
+/// control that visibly cannot be pressed, next to a sentence saying why,
+/// explains itself before the user is puzzled rather than after.
 #[allow(clippy::too_many_arguments)]
 fn feature_row(
     layout: &WeakEntity<Layout>,
