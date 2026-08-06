@@ -69,11 +69,12 @@ use crate::app_icon::AppIcon;
 use crate::database::models::catalog::{NodeId, NodeKind, NodeLabel};
 use crate::database::models::connection::ConnectionProfile;
 use crate::database::models::detail::{DetailRequest, DetailTarget};
-use crate::database::models::engine::Engine;
+use crate::database::models::engine::{Address, Engine};
 use crate::database::models::library::{HistoryOutcome, QueryDataDocument, QueryScope, SavedQuery};
 use crate::database::models::page::PageBudget;
 use crate::database::models::sql_format;
 use crate::database::models::statement::{GeneratedBatch, generate};
+use crate::database::models::uri::ParsedUri;
 use crate::database::models::value::{ColumnMeta, Value};
 use crate::database::services::connection_store::{ConnectionStore, DiskConnectionStore};
 use crate::database::services::export::{self, ExportFormat};
@@ -928,6 +929,83 @@ impl DatabaseView {
             None => self.on_connection_expanded(row.connection, cx),
             Some(node) => self.on_node_expanded(row.connection, node, cx),
         }
+    }
+
+    /// Quick navigation's entry point: a connection URI that was pasted at the
+    /// app rather than typed into the form.
+    ///
+    /// # What "an existing connection" means
+    ///
+    /// [`same_target`]: the same engine pointed at the same place — host, port
+    /// and database for a server, the file path for SQLite. Deliberately **not**
+    /// the credentials, and deliberately not the name: two saved connections
+    /// differing only in their password are the same database, and a pasted URI
+    /// naming a database you already have is a request to open it, not to
+    /// acquire a second copy of it.
+    ///
+    /// # A pasted password never overwrites a stored one
+    ///
+    /// When an existing connection matches, its profile is **not touched** —
+    /// not the password, not the user, not the SSL mode. A quick-navigation
+    /// paste is a navigation, and silently rewriting a stored credential from a
+    /// URI someone copied out of a chat message is not something a jump should
+    /// be able to do. If the paste carried a password that differs from the
+    /// stored one, the pane says so, so the user can go and change it
+    /// deliberately if that was the intent. Editing a connection is what the
+    /// form is for.
+    ///
+    /// A URI naming no saved connection creates one, named by
+    /// [`ParsedUri::suggested_name`], and *that* one keeps the pasted password:
+    /// there is nothing to overwrite.
+    ///
+    /// Either way the connection is then opened exactly as clicking its root
+    /// would open it — see [`Self::on_connection_expanded`].
+    pub fn accept_uri(&mut self, parsed: &ParsedUri, cx: &mut Context<Self>) {
+        let existing = self
+            .connections
+            .profiles()
+            .iter()
+            .find(|saved| same_target(saved, &parsed.profile))
+            .cloned();
+
+        let (connection, notice) = match existing {
+            Some(saved) => {
+                let pasted = parsed.profile.password.trim();
+                let overwritten = !pasted.is_empty() && pasted != saved.password.trim();
+                let name = saved.display_name();
+                (
+                    saved.id,
+                    if overwritten {
+                        Str::QuickNavKeptStoredPassword(name)
+                    } else {
+                        Str::QuickNavOpenedConnection(name)
+                    },
+                )
+            }
+            None => {
+                // `adopt` replaces the whole document when the load lands, so
+                // creating before it would write a connection that the next
+                // moment discards. Milliseconds at startup, but silent data loss
+                // is not worth the shortcut.
+                if !self.connections.loaded() {
+                    self.edit_notice = Some((Str::QuickNavConnectionsLoading, false));
+                    cx.notify();
+                    return;
+                }
+
+                let mut profile = parsed.profile.clone();
+                profile.id = self.connections.document().next_id();
+                profile.name = parsed.suggested_name();
+                let (id, name) = (profile.id, profile.display_name());
+
+                self.connections.save(profile);
+                self.persist(cx);
+                (id, Str::QuickNavCreatedConnection(name))
+            }
+        };
+
+        self.edit_notice = Some((notice, true));
+        self.on_connection_expanded(connection, cx);
     }
 
     /// Opening a connection root **connects it**, the way every database client
@@ -2127,6 +2205,34 @@ pub(super) fn row_looks(
     }
 }
 
+/// Whether two profiles point at the **same database**.
+///
+/// The engine, plus the address and nothing else: host, port and database for a
+/// server; the file path for SQLite. Credentials, the connection's name and the
+/// SSL mode are deliberately excluded — [`DatabaseView::accept_uri`] says why,
+/// and it is the only caller.
+///
+/// The host is compared case-insensitively because DNS is, and both sides are
+/// trimmed because a pasted URI carries whatever whitespace the copy did.
+///
+/// Deliberately **not** `points_elsewhere` from `state::connections`, which is
+/// its exact opposite in spirit: that one asks "did this edit move the
+/// connection somewhere else", so it must count a changed password as a move.
+/// Here a changed password is the same database with a different key.
+fn same_target(a: &ConnectionProfile, b: &ConnectionProfile) -> bool {
+    if a.engine != b.engine {
+        return false;
+    }
+    match a.engine.address() {
+        Address::File => a.file.trim() == b.file.trim(),
+        Address::Network => {
+            a.host.trim().eq_ignore_ascii_case(b.host.trim())
+                && a.port == b.port
+                && a.database.trim() == b.database.trim()
+        }
+    }
+}
+
 fn connection_look(id: u64, connections: &ConnectionsState, cx: &App) -> ConnectionLook {
     let status = connections.status(id);
     let dot = match status {
@@ -2203,8 +2309,8 @@ mod tests {
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
     use gpui_component::tree::TreeItem;
 
-    use super::DatabaseView;
-    use crate::database::models::connection::{ConnectionDocument, ConnectionProfile};
+    use super::{DatabaseView, same_target};
+    use crate::database::models::connection::{ConnectionDocument, ConnectionProfile, SslMode};
     use crate::database::models::engine::Engine;
     use crate::database::services::connection_store::{ConnectionStore, InMemoryConnectionStore};
     use crate::database::state::connections::ConnectionsState;
@@ -2283,6 +2389,96 @@ mod tests {
             .iter()
             .map(|profile| profile.id)
             .collect()
+    }
+
+    // ---- what quick navigation counts as "the same connection" -------------
+
+    fn server(id: u64, host: &str, port: u16, database: &str) -> ConnectionProfile {
+        ConnectionProfile {
+            host: host.into(),
+            port,
+            database: database.into(),
+            ..ConnectionProfile::new(id, Engine::PostgreSql)
+        }
+    }
+
+    #[test]
+    fn the_same_server_and_database_is_the_same_connection() {
+        let saved = server(1, "db.example.com", 5432, "shop");
+        assert!(same_target(
+            &saved,
+            &server(99, "db.example.com", 5432, "shop")
+        ));
+
+        // DNS is case-insensitive, and a pasted URI carries whatever whitespace
+        // the copy did.
+        assert!(same_target(
+            &saved,
+            &server(99, "DB.Example.COM", 5432, "shop")
+        ));
+        assert!(same_target(
+            &saved,
+            &server(99, " db.example.com ", 5432, " shop ")
+        ));
+    }
+
+    #[test]
+    fn a_different_host_port_database_or_engine_is_a_different_connection() {
+        let saved = server(1, "db.example.com", 5432, "shop");
+
+        assert!(!same_target(
+            &saved,
+            &server(1, "other.example.com", 5432, "shop")
+        ));
+        assert!(!same_target(
+            &saved,
+            &server(1, "db.example.com", 6543, "shop")
+        ));
+        assert!(!same_target(
+            &saved,
+            &server(1, "db.example.com", 5432, "billing")
+        ));
+
+        let mysql = ConnectionProfile {
+            host: "db.example.com".into(),
+            port: 5432,
+            database: "shop".into(),
+            ..ConnectionProfile::new(1, Engine::MySql)
+        };
+        assert!(
+            !same_target(&saved, &mysql),
+            "same address, different engine: not the same database",
+        );
+    }
+
+    /// The rule that makes a pasted password safe: credentials are not part of
+    /// identity, so a URI carrying a different password opens the connection you
+    /// already have rather than creating a second one — and
+    /// [`DatabaseView::accept_uri`] then leaves the stored password alone.
+    #[test]
+    fn credentials_and_name_are_not_part_of_being_the_same_connection() {
+        let saved = ConnectionProfile {
+            name: "Production".into(),
+            user: "alice".into(),
+            password: "stored".into(),
+            ..server(1, "db.example.com", 5432, "shop")
+        };
+        let pasted = ConnectionProfile {
+            name: String::new(),
+            user: "bob".into(),
+            password: "pasted".into(),
+            ssl_mode: SslMode::Require,
+            ..server(0, "db.example.com", 5432, "shop")
+        };
+
+        assert!(same_target(&saved, &pasted));
+    }
+
+    #[test]
+    fn a_file_engine_is_identified_by_its_file() {
+        let file = saved(1, "app");
+        assert!(same_target(&file, &saved(99, "app")));
+        assert!(!same_target(&file, &saved(99, "other")));
     }
 
     #[gpui::test]

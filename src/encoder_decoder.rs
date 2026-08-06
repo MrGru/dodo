@@ -31,8 +31,13 @@ const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'(')
     .remove(b')');
 
+/// Which conversion the dropdown has selected.
+///
+/// `pub` only so that quick navigation can say which one a pasted value needs;
+/// nothing outside this module constructs an `EncoderDecoder` or reads its
+/// state.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Format {
+pub enum Format {
     Base64,
     Base64UrlSafe,
     Url,
@@ -152,6 +157,38 @@ impl EncoderDecoder {
             state.set_selected_index(selected, window, cx);
             cx.notify();
         });
+    }
+
+    /// Selects `format`, loads `text` and decodes it in one act.
+    ///
+    /// Quick navigation's entry point (`quick_nav`). The format is set rather
+    /// than guessed because detection already knows which one it is looking at —
+    /// which alphabet a Base64 string is written in, or that it is a JWT — and
+    /// the dropdown has to agree with what the output pane is showing.
+    ///
+    /// [`Self::decode`] routes JWT to the three-pane view by itself, so there is
+    /// one path here and not two.
+    pub fn accept_decode(
+        &mut self,
+        text: String,
+        format: Format,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let row = FORMATS
+            .iter()
+            .position(|(candidate, _)| *candidate == format)
+            .unwrap_or_default();
+        self.format.update(cx, |state, cx| {
+            state.set_selected_index(Some(IndexPath::new(row)), window, cx);
+            cx.notify();
+        });
+
+        self.input.update(cx, |state, cx| {
+            state.set_value(text, window, cx);
+            cx.notify();
+        });
+        self.decode(window, cx);
     }
 
     fn format(&self, cx: &App) -> Format {

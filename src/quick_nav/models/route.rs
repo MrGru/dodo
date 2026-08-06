@@ -15,8 +15,6 @@
 use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::database::models::uri::ParsedUri;
 
-use super::detect::Detector;
-
 /// A tool to open, and what to put in it.
 ///
 /// Adding a tool to quick navigation means one variant here, one arm in
@@ -41,19 +39,4 @@ pub enum Route {
     /// describes. The `id` inside the profile is a placeholder — see
     /// [`Detector::PLACEHOLDER_ID`](super::detect::Detector::PLACEHOLDER_ID).
     Database(Box<ParsedUri>),
-}
-
-impl Route {
-    /// Which detector produced this. Only tests and the module docs need it,
-    /// but it is the thing that makes a detection test read as an assertion
-    /// about *routing* rather than about a payload.
-    pub fn detector(&self) -> Detector {
-        match self {
-            Route::Json(_) => Detector::Json,
-            Route::Jwt(_) => Detector::Jwt,
-            Route::Base64 { .. } => Detector::Base64,
-            Route::Curl(_) => Detector::Curl,
-            Route::Database(_) => Detector::DatabaseUri,
-        }
-    }
 }

@@ -200,7 +200,7 @@ impl QuickNav {
                     .await;
 
                 if let Err(error) = result {
-                    let _ = cx.update(|cx| Self::report(error, cx));
+                    cx.update(|cx| Self::report(error, cx));
                 }
             }));
         });
@@ -256,7 +256,7 @@ pub fn init(cx: &mut App) {
             .spawn(async move { store.load() })
             .await;
 
-        let _ = cx.update(|cx| match loaded {
+        cx.update(|cx| match loaded {
             Ok(document) => QuickNav::adopt(document, cx),
             // A settings file this build cannot read leaves the defaults in
             // place — the feature on, every detector at its built-in behaviour —

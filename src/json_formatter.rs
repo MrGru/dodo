@@ -78,6 +78,22 @@ impl JsonFormatter {
         });
     }
 
+    /// Loads text into the editor and formats it in one act.
+    ///
+    /// Quick navigation's entry point (`quick_nav`): a pasted JSON document
+    /// should already be pretty-printed by the time the pane appears, because
+    /// arriving at a formatter that has not formatted anything is a jump that
+    /// did half the job. Invalid JSON still surfaces here exactly as it does
+    /// when the user presses Format — banner plus inline diagnostic — rather
+    /// than being silently dropped.
+    pub fn accept_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |state, cx| {
+            state.set_value(text, window, cx);
+            cx.notify();
+        });
+        self.format(window, cx);
+    }
+
     /// The currently selected indent width in spaces (defaults to 2).
     fn indent_width(&self, cx: &App) -> usize {
         self.indent
