@@ -50,6 +50,12 @@ open tool as one act. Three consequences, all of which bite:
   row — the primitives the library's dock tab bar uses) **plus** move-up/move-down buttons, which
   are the keyboard path a drag has none of. Ship both; the buttons are not a fallback.
 
+**Enter does not press a button in this dialog; Space does.** `Button` is a tab stop and gpui
+synthesizes a click from either key on a focused element, but `Dialog` binds `enter` to
+`ConfirmDialog` in its own key context and the default `on_ok` returns `true`, which closes the
+card. That is true of every control in the Settings dialog and always has been — do not "fix" it
+from inside a page.
+
 The rules themselves are nowhere near `settings.rs`: `session::models::features` is pure and holds
 all of them, including the floor of one visible tool. Put a new rule there, not in the page.
 
