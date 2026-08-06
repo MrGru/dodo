@@ -8,6 +8,7 @@ use crate::cleaner::core::category::CleanerCategory;
 use crate::cleaner::core::errors::ScanError;
 use crate::cleaner::core::progress::{ProgressSink, ScanPhase, ScanProgress};
 use crate::cleaner::core::report::ScanWarning;
+use crate::cleaner::core::risk::RiskLevel;
 use crate::cleaner::core::scan_root::{AggregateMode, ScanRoot};
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(125);
@@ -389,6 +390,38 @@ fn same_filesystem(
         || root_device.is_none()
         || current_device.is_none()
         || root_device == current_device
+}
+
+/// Best-effort size measurement for a single path, reusing this module's own
+/// bounded/aggregated traversal rather than a second implementation. Returns
+/// `0` on any error (missing path, permission denied, cancelled) — every
+/// caller already labels a size produced this way as *estimated*.
+///
+/// Shared by the Phase 9 uninstall review workflow
+/// (`macos::applications::review`) and Phase 10 orphan detection
+/// (`macos::scanners::orphaned_files`): both need the size of one already-
+/// identified path outside the category's own main traversal, and neither
+/// needs progress reporting or cancellation for a single best-effort call.
+pub fn measure_size(path: &Path, category: CleanerCategory, risk: RiskLevel) -> u64 {
+    struct NoopProgress;
+    impl ProgressSink for NoopProgress {
+        fn report(&self, _progress: ScanProgress) {}
+    }
+
+    let root = ScanRoot {
+        path: path.to_path_buf(),
+        max_depth: None,
+        follow_symlinks: false,
+        cross_filesystems: false,
+        include_hidden: true,
+        aggregate_mode: AggregateMode::WholeRoot,
+        permission: None,
+        risk,
+    };
+    scan_root(&root, category, &NoopProgress, &CancellationToken::new())
+        .ok()
+        .and_then(|result| result.entries.first().map(|entry| entry.logical_size))
+        .unwrap_or(0)
 }
 
 fn map_root_error(path: PathBuf, error: std::io::Error) -> ScanError {

@@ -12,17 +12,14 @@
 
 use std::path::Path;
 
-use crate::cleaner::core::cancellation::CancellationToken;
 use crate::cleaner::core::category::CleanerCategory;
-use crate::cleaner::core::fs::scan_root;
+use crate::cleaner::core::fs::measure_size;
 use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata, ItemWarning};
-use crate::cleaner::core::progress::ProgressSink;
 use crate::cleaner::core::risk::{ItemCapability, RiskLevel, SelectionPolicy};
-use crate::cleaner::core::scan_root::{AggregateMode, ScanRoot};
 
-use super::confidence::{self, MatchConfidence, NameMatchKind};
+use super::confidence::{self, MatchConfidence, NameMatchKind, confidence_label};
 use super::identity::AppIdentity;
-use super::locations::{self, LeftoverLocation, LeftoverMatch, LocationScope};
+use super::locations::{self, LeftoverLocation, LeftoverMatch, LocationScope, location_label};
 
 /// Why [`build_uninstall_review`] refused to build a review at all — as
 /// opposed to a review full of low-confidence items, which is not an error.
@@ -85,7 +82,11 @@ pub fn build_uninstall_review(
     let candidates = matches.into_iter().map(build_candidate).collect();
 
     let app_item = CleanableItem {
-        logical_size: measure(app.path.as_path()),
+        logical_size: measure_size(
+            app.path.as_path(),
+            CleanerCategory::InstalledApps,
+            RiskLevel::ReviewRecommended,
+        ),
         capabilities: vec![
             ItemCapability::UninstallApplication,
             ItemCapability::MoveToTrash,
@@ -165,7 +166,11 @@ fn build_candidate(candidate: LeftoverMatch) -> UninstallCandidate {
     let logical_size = if is_system {
         0
     } else {
-        measure(candidate.path.as_path())
+        measure_size(
+            candidate.path.as_path(),
+            CleanerCategory::InstalledApps,
+            RiskLevel::ReviewRecommended,
+        )
     };
 
     let item = CleanableItem {
@@ -202,16 +207,6 @@ fn explanation_for(kind: NameMatchKind, confidence: MatchConfidence) -> String {
     )
 }
 
-fn confidence_label(confidence: MatchConfidence) -> &'static str {
-    match confidence {
-        MatchConfidence::Confirmed => "Confirmed",
-        MatchConfidence::High => "High",
-        MatchConfidence::Medium => "Medium",
-        MatchConfidence::Low => "Low",
-        MatchConfidence::SharedOrUnsafe => "Shared or unsafe",
-    }
-}
-
 fn signal_label(kind: NameMatchKind) -> &'static str {
     match kind {
         NameMatchKind::ExactBundleIdentifier => "exact bundle identifier match",
@@ -230,61 +225,6 @@ fn signal_label(kind: NameMatchKind) -> &'static str {
         NameMatchKind::SharedContainer => "shared container",
         NameMatchKind::KnownSharedVendorDirectory => "known shared vendor directory",
     }
-}
-
-fn location_label(location: LeftoverLocation) -> &'static str {
-    match location {
-        LeftoverLocation::ApplicationSupport => "Application Support",
-        LeftoverLocation::Caches => "Caches",
-        LeftoverLocation::Preferences => "Preferences",
-        LeftoverLocation::Containers => "Containers",
-        LeftoverLocation::GroupContainers => "Group Containers",
-        LeftoverLocation::Logs => "Logs",
-        LeftoverLocation::SavedApplicationState => "Saved Application State",
-        LeftoverLocation::LaunchAgents => "LaunchAgents",
-        LeftoverLocation::WebKit => "WebKit",
-        LeftoverLocation::HttpStorages => "HTTPStorages",
-        LeftoverLocation::Cookies => "Cookies",
-        LeftoverLocation::Services => "Services",
-        LeftoverLocation::AutosaveInformation => "Autosave Information",
-        LeftoverLocation::SystemApplicationSupport => "/Library/Application Support",
-        LeftoverLocation::SystemCaches => "/Library/Caches",
-        LeftoverLocation::SystemPreferences => "/Library/Preferences",
-        LeftoverLocation::SystemLaunchAgents => "/Library/LaunchAgents",
-        LeftoverLocation::SystemLaunchDaemons => "/Library/LaunchDaemons",
-        LeftoverLocation::SystemPrivilegedHelperTools => "/Library/PrivilegedHelperTools",
-    }
-}
-
-/// Best-effort size measurement, reusing the same bounded/aggregated
-/// traversal the rest of Cleaner uses rather than a second implementation.
-/// Returns `0` on any error (missing path, permission denied, cancelled) —
-/// callers already label these as *estimated* sizes.
-fn measure(path: &Path) -> u64 {
-    let root = ScanRoot {
-        path: path.to_path_buf(),
-        max_depth: None,
-        follow_symlinks: false,
-        cross_filesystems: false,
-        include_hidden: true,
-        aggregate_mode: AggregateMode::WholeRoot,
-        permission: None,
-        risk: RiskLevel::ReviewRecommended,
-    };
-    scan_root(
-        &root,
-        CleanerCategory::InstalledApps,
-        &NoopProgress,
-        &CancellationToken::new(),
-    )
-    .ok()
-    .and_then(|result| result.entries.first().map(|entry| entry.logical_size))
-    .unwrap_or(0)
-}
-
-struct NoopProgress;
-impl ProgressSink for NoopProgress {
-    fn report(&self, _progress: crate::cleaner::core::progress::ScanProgress) {}
 }
 
 fn item_id(path: &Path) -> CleanableItemId {

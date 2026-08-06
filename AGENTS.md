@@ -43,15 +43,18 @@ comments are the authority on its split and what shipped when; the matching skil
 the non-obvious parts of each are written down — load it before changing anything in one of these
 three modules rather than inferring the design from the files cold.
 
-**dodo persists seven things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
+**dodo persists eight things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
 behind a trait so the state layer never learns where they live: `collections.json`
 (`api_explorer::services::collection_store`), `environments.json` (`services::variable_store`),
 `script-consent.json` (`services::consent_store`, the imported scripts the user has approved),
 `updater.json` (`updater::services::config_store`), `connections.json`
 (`database::services::connection_store`, which also holds database passwords in plain text — see
 `dodo-database-internals`), `query-data.json` (`database::services::query_store`, saved queries
-plus bounded query history, with query text intentionally stored as plain text) and
-`quick-nav.json` (`quick_nav::services::config_store`). The
+plus bounded query history, with query text intentionally stored as plain text), `quick-nav.json`
+(`quick_nav::services::config_store`) and `cleaner-ignored-items.json`
+(`cleaner::services::ignore_store`, the orphan-detection candidates the user has marked "Keep",
+keyed by absolute path string rather than a `CleanableItemId` since that id is a session-local
+hash with no promise of surviving a restart). The
 `dodo-theming-settings` skill's "nothing is persisted across restarts" is therefore scoped to
 appearance/language settings only — including the **Run scripts** setting, which is a
 `ScriptPolicy` global and deliberately starts
@@ -86,8 +89,8 @@ of them; copy that trick rather than a `cfg` split for anything else platform-sh
 
 The files version differently, and the difference is deliberate. A `RequestSnapshot` inside
 `collections.json` is versioned only by `#[serde(default)]`, which copes with *added* fields and
-nothing else. `environments.json`, `script-consent.json`, `updater.json`, `connections.json` and
-`query-data.json` and `quick-nav.json` carry an explicit
+nothing else. `environments.json`, `script-consent.json`, `updater.json`, `connections.json`,
+`query-data.json`, `quick-nav.json` and `cleaner-ignored-items.json` carry an explicit
 `"version"` from their very first write, and their `parse_document` **refuses** a file whose
 version is higher rather than half-reading it. Copy that pattern for any new file; do not copy
 `collections.json`'s.

@@ -14,6 +14,7 @@
 pub mod core;
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod services;
 pub mod state;
 pub mod views;
 

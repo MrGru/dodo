@@ -4,6 +4,7 @@ pub mod cancellation;
 pub mod category;
 pub mod errors;
 pub mod fs;
+pub mod ignore;
 pub mod item;
 pub mod permissions;
 pub mod progress;

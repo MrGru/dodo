@@ -475,6 +475,34 @@ pub fn classify_group_container(entry_name: &str, identity: &AppIdentity) -> Opt
     }
 }
 
+/// The human-readable label for a leftover location, used by both the
+/// uninstall review workflow ([`super::review`]) and orphan detection
+/// ([`super::orphans`]) so the two features describe the same locations the
+/// same way.
+pub fn location_label(location: LeftoverLocation) -> &'static str {
+    match location {
+        LeftoverLocation::ApplicationSupport => "Application Support",
+        LeftoverLocation::Caches => "Caches",
+        LeftoverLocation::Preferences => "Preferences",
+        LeftoverLocation::Containers => "Containers",
+        LeftoverLocation::GroupContainers => "Group Containers",
+        LeftoverLocation::Logs => "Logs",
+        LeftoverLocation::SavedApplicationState => "Saved Application State",
+        LeftoverLocation::LaunchAgents => "LaunchAgents",
+        LeftoverLocation::WebKit => "WebKit",
+        LeftoverLocation::HttpStorages => "HTTPStorages",
+        LeftoverLocation::Cookies => "Cookies",
+        LeftoverLocation::Services => "Services",
+        LeftoverLocation::AutosaveInformation => "Autosave Information",
+        LeftoverLocation::SystemApplicationSupport => "/Library/Application Support",
+        LeftoverLocation::SystemCaches => "/Library/Caches",
+        LeftoverLocation::SystemPreferences => "/Library/Preferences",
+        LeftoverLocation::SystemLaunchAgents => "/Library/LaunchAgents",
+        LeftoverLocation::SystemLaunchDaemons => "/Library/LaunchDaemons",
+        LeftoverLocation::SystemPrivilegedHelperTools => "/Library/PrivilegedHelperTools",
+    }
+}
+
 fn is_ambiguous_with_other_apps(
     path: &Path,
     identity: &AppIdentity,

@@ -1,6 +1,7 @@
 mod installed_apps;
 mod large_old_files;
 pub(crate) mod mail_files;
+mod orphaned_files;
 mod system_junk;
 mod trash_bins;
 mod user_cache;
@@ -12,6 +13,7 @@ use crate::cleaner::core::scanner::CleanerScanner;
 pub use installed_apps::InstalledAppsScanner;
 pub use large_old_files::LargeOldFilesScanner;
 pub use mail_files::MailFilesScanner;
+pub use orphaned_files::OrphanedFilesScanner;
 pub use system_junk::SystemJunkScanner;
 pub use trash_bins::TrashBinsScanner;
 pub use user_cache::UserCacheScanner;
@@ -24,5 +26,6 @@ pub fn default_scanners() -> Vec<Arc<dyn CleanerScanner>> {
         Arc::new(LargeOldFilesScanner::new()),
         Arc::new(TrashBinsScanner::new()),
         Arc::new(InstalledAppsScanner::new()),
+        Arc::new(OrphanedFilesScanner::new()),
     ]
 }

@@ -1247,6 +1247,13 @@ pub enum Str {
     CleanerConfidenceMedium,
     CleanerConfidenceLow,
     CleanerConfidenceSharedOrUnsafe,
+    CleanerKeepItem,
+    CleanerIgnoreStoreError(String),
+    CleanerIgnoreStoreMissingVersion,
+    CleanerIgnoreStoreUnsupportedVersion {
+        found: u64,
+        understood: u32,
+    },
 }
 
 impl Str {
@@ -1655,6 +1662,42 @@ impl Str {
             (Str::CleanerConfidenceSharedOrUnsafe, Language::Vietnamese) => {
                 "Chia sẻ hoặc không an toàn".into()
             }
+            (Str::CleanerKeepItem, Language::English) => "Keep".into(),
+            (Str::CleanerKeepItem, Language::Vietnamese) => "Giữ lại".into(),
+            (Str::CleanerIgnoreStoreError(detail), Language::English) => format!(
+                "cleaner-ignored-items.json could not be read or written: {detail}"
+            )
+            .into(),
+            (Str::CleanerIgnoreStoreError(detail), Language::Vietnamese) => format!(
+                "Không đọc hoặc ghi được cleaner-ignored-items.json: {detail}"
+            )
+            .into(),
+            (Str::CleanerIgnoreStoreMissingVersion, Language::English) => {
+                "cleaner-ignored-items.json carries no version, so it was not written by dodo. \
+                 It is being left alone and no items are marked kept."
+                    .into()
+            }
+            (Str::CleanerIgnoreStoreMissingVersion, Language::Vietnamese) => {
+                "cleaner-ignored-items.json không có trường version nên không phải do dodo ghi. \
+                 dodo giữ nguyên tệp và không mục nào được đánh dấu giữ lại."
+                    .into()
+            }
+            (
+                Str::CleanerIgnoreStoreUnsupportedVersion { found, understood },
+                Language::English,
+            ) => format!(
+                "cleaner-ignored-items.json is version {found}; this dodo understands \
+                 {understood}. The file is being left alone and no items are marked kept."
+            )
+            .into(),
+            (
+                Str::CleanerIgnoreStoreUnsupportedVersion { found, understood },
+                Language::Vietnamese,
+            ) => format!(
+                "cleaner-ignored-items.json là phiên bản {found}; bản dodo này hiểu phiên bản \
+                 {understood}. dodo giữ nguyên tệp và không mục nào được đánh dấu giữ lại."
+            )
+            .into(),
 
             (Str::JsonPlaceholder, Language::English) => {
                 "Paste JSON here, then click Format.".into()
@@ -5432,6 +5475,16 @@ mod tests {
             plain(Str::CleanerConfidenceMedium),
             plain(Str::CleanerConfidenceLow),
             plain(Str::CleanerConfidenceSharedOrUnsafe),
+            plain(Str::CleanerKeepItem),
+            with(Str::CleanerIgnoreStoreError(DETAIL.into()), &[DETAIL]),
+            plain(Str::CleanerIgnoreStoreMissingVersion),
+            with(
+                Str::CleanerIgnoreStoreUnsupportedVersion {
+                    found: NUMBER as u64,
+                    understood: 1,
+                },
+                &[NUMBER_TEXT, "1"],
+            ),
         ]
     }
 
@@ -6246,6 +6299,10 @@ mod tests {
             Str::CleanerConfidenceMedium => 794,
             Str::CleanerConfidenceLow => 795,
             Str::CleanerConfidenceSharedOrUnsafe => 796,
+            Str::CleanerKeepItem => 797,
+            Str::CleanerIgnoreStoreError(_) => 798,
+            Str::CleanerIgnoreStoreMissingVersion => 799,
+            Str::CleanerIgnoreStoreUnsupportedVersion { .. } => 800,
         }
     }
 

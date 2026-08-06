@@ -42,6 +42,9 @@ Current guarantees:
   `Cookies`, `Services`, `Autosave Information`) for `CleanerCategory::InstalledApps` only — the
   matching system-scope roots (`/Library/...`) are deliberately absent, so an uninstall-review
   candidate found there fails `OutsideAllowedRoot` even if a UI bug ever let it through selected;
+- Phase 10 adds `CleanerCategory::OrphanedFiles` to those same user-scope `AllowedRoot` entries
+  rather than a second, duplicate set — orphan candidates are found under the identical location
+  list — and, like Phase 9, never adds the matching system-scope roots;
 - cleanup uses native macOS Trash moves rather than permanent deletion;
 - review-oriented categories can exist without a cleanup capability (Trash Bins currently does).
 
