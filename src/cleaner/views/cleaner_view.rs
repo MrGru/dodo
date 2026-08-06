@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::*;
+use gpui::{StatefulInteractiveElement as _, *};
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::{ActiveTheme, h_flex, v_flex};
+use gpui_component::{ActiveTheme, Disableable as _, StyledExt as _, h_flex, v_flex};
 
 use crate::cleaner::core::cancellation::CancellationToken;
 use crate::cleaner::core::category::{CleanerCategory, CleanerSection};
@@ -372,6 +372,7 @@ impl Render for CleanerView {
                                 )
                                 .child(
                                     div()
+                                        .id("cleaner-results-scroll")
                                         .flex_1()
                                         .min_h_0()
                                         .rounded(cx.theme().radius)
@@ -381,8 +382,8 @@ impl Render for CleanerView {
                                         .p_2()
                                         .when_some(
                                             self.state.result_for(self.state.category()),
-                                            |div, result| {
-                                                div.children(result.items.iter().map(|item| {
+                                            |container, result| {
+                                                container.children(result.items.iter().map(|item| {
                                                     h_flex()
                                                         .justify_between()
                                                         .w_full()
@@ -396,8 +397,8 @@ impl Render for CleanerView {
                                         )
                                         .when(
                                             self.state.result_for(self.state.category()).is_none(),
-                                            |div| {
-                                                div.child(
+                                            |container| {
+                                                container.child(
                                                     div()
                                                         .text_color(cx.theme().muted_foreground)
                                                         .child(t(Str::CleanerNoResultsYet, cx)),
