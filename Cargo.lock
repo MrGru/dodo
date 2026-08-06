@@ -1605,6 +1605,7 @@ dependencies = [
  "percent-encoding",
  "postgres",
  "redis",
+ "regex",
  "reqwest",
  "rquickjs",
  "rusqlite",

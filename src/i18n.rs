@@ -1129,6 +1129,34 @@ pub enum Str {
     DbUriInvalidPort(String),
     DbUriMissingFile,
     DbUriInvalidEscape,
+
+    // Quick navigation: the settings page, and what a jump reports.
+    QuickNavigation,
+    QuickNavEnabled,
+    QuickNavEnabledDescription,
+    QuickNavCurlPattern,
+    QuickNavDatabasePattern,
+    QuickNavJwtPattern,
+    QuickNavJsonPattern,
+    QuickNavBase64Pattern,
+    QuickNavGateDescription,
+    QuickNavShapeDescription,
+    QuickNavPatternPlaceholder,
+    QuickNavPatternInvalid(String),
+    QuickNavPatternTooLong {
+        length: usize,
+        limit: usize,
+    },
+    QuickNavStorageProblem,
+    QuickNavStoreError(String),
+    QuickNavStoreMissingVersion,
+    QuickNavStoreUnsupportedVersion {
+        found: u64,
+        understood: u32,
+    },
+    QuickNavOpenedConnection(String),
+    QuickNavKeptStoredPassword(String),
+    QuickNavCreatedConnection(String),
 }
 
 impl Str {
@@ -3743,6 +3771,134 @@ impl Str {
             (Str::DbUriInvalidEscape, Language::Vietnamese) => {
                 "Một chuỗi thoát phần trăm trong URI này không phải UTF-8 hợp lệ.".into()
             }
+
+            (Str::QuickNavigation, Language::English) => "Quick navigation".into(),
+            (Str::QuickNavigation, Language::Vietnamese) => "Điều hướng nhanh".into(),
+            (Str::QuickNavEnabled, Language::English) => "Paste to navigate".into(),
+            (Str::QuickNavEnabled, Language::Vietnamese) => "Dán để điều hướng".into(),
+            (Str::QuickNavEnabledDescription, Language::English) => {
+                "With no input focused, Cmd+V, Ctrl+V or p reads the clipboard and opens the tool \
+                 that can handle it. Press Esc inside an input to leave it first."
+                    .into()
+            }
+            (Str::QuickNavEnabledDescription, Language::Vietnamese) => {
+                "Khi không có ô nhập nào đang được chọn, Cmd+V, Ctrl+V hoặc p sẽ đọc bảng nhớ tạm \
+                 và mở công cụ xử lý được nội dung đó. Nhấn Esc trong ô nhập để rời khỏi nó trước."
+                    .into()
+            }
+            (Str::QuickNavCurlPattern, Language::English) => "cURL pattern".into(),
+            (Str::QuickNavCurlPattern, Language::Vietnamese) => "Mẫu cURL".into(),
+            (Str::QuickNavDatabasePattern, Language::English) => "Database URI pattern".into(),
+            (Str::QuickNavDatabasePattern, Language::Vietnamese) => {
+                "Mẫu URI cơ sở dữ liệu".into()
+            }
+            (Str::QuickNavJwtPattern, Language::English) => "JWT pattern".into(),
+            (Str::QuickNavJwtPattern, Language::Vietnamese) => "Mẫu JWT".into(),
+            (Str::QuickNavJsonPattern, Language::English) => "JSON pattern".into(),
+            (Str::QuickNavJsonPattern, Language::Vietnamese) => "Mẫu JSON".into(),
+            (Str::QuickNavBase64Pattern, Language::English) => "Base64 pattern".into(),
+            (Str::QuickNavBase64Pattern, Language::Vietnamese) => "Mẫu Base64".into(),
+            (Str::QuickNavGateDescription, Language::English) => {
+                "Optional. dodo already has a real parser for this format and uses it; a pattern \
+                 here only narrows what is offered to it. Leave it empty to try the parser on \
+                 everything."
+                    .into()
+            }
+            (Str::QuickNavGateDescription, Language::Vietnamese) => {
+                "Tùy chọn. dodo đã có bộ phân tích thật cho định dạng này và luôn dùng nó; mẫu ở \
+                 đây chỉ thu hẹp phần được đưa vào bộ phân tích. Để trống để thử bộ phân tích với \
+                 mọi nội dung."
+                    .into()
+            }
+            (Str::QuickNavShapeDescription, Language::English) => {
+                "The shape a candidate must have. Leave it empty for the built-in one; either way \
+                 the text still has to decode before dodo will jump."
+                    .into()
+            }
+            (Str::QuickNavShapeDescription, Language::Vietnamese) => {
+                "Hình dạng mà một ứng viên phải có. Để trống để dùng mẫu dựng sẵn; dù thế nào thì \
+                 nội dung vẫn phải giải mã được thì dodo mới chuyển sang công cụ."
+                    .into()
+            }
+            (Str::QuickNavPatternPlaceholder, Language::English) => {
+                "Regular expression".into()
+            }
+            (Str::QuickNavPatternPlaceholder, Language::Vietnamese) => {
+                "Biểu thức chính quy".into()
+            }
+            (Str::QuickNavPatternInvalid(detail), Language::English) => {
+                format!("This pattern is not valid, so the built-in one is being used: {detail}")
+                    .into()
+            }
+            (Str::QuickNavPatternInvalid(detail), Language::Vietnamese) => format!(
+                "Mẫu này không hợp lệ nên dodo đang dùng mẫu dựng sẵn: {detail}"
+            )
+            .into(),
+            (Str::QuickNavPatternTooLong { length, limit }, Language::English) => format!(
+                "This pattern is {length} characters long; the limit is {limit}. The built-in one \
+                 is being used."
+            )
+            .into(),
+            (Str::QuickNavPatternTooLong { length, limit }, Language::Vietnamese) => format!(
+                "Mẫu này dài {length} ký tự, vượt giới hạn {limit}. dodo đang dùng mẫu dựng sẵn."
+            )
+            .into(),
+            (Str::QuickNavStorageProblem, Language::English) => "Saved settings".into(),
+            (Str::QuickNavStorageProblem, Language::Vietnamese) => "Cài đặt đã lưu".into(),
+            (Str::QuickNavStoreError(detail), Language::English) => {
+                format!("quick-nav.json could not be read or written: {detail}").into()
+            }
+            (Str::QuickNavStoreError(detail), Language::Vietnamese) => {
+                format!("Không đọc hoặc ghi được quick-nav.json: {detail}").into()
+            }
+            (Str::QuickNavStoreMissingVersion, Language::English) => {
+                "quick-nav.json carries no version, so it was not written by dodo. It is being \
+                 left alone and the defaults are in use."
+                    .into()
+            }
+            (Str::QuickNavStoreMissingVersion, Language::Vietnamese) => {
+                "quick-nav.json không có trường version nên không phải do dodo ghi. dodo giữ \
+                 nguyên tệp và dùng giá trị mặc định."
+                    .into()
+            }
+            (
+                Str::QuickNavStoreUnsupportedVersion { found, understood },
+                Language::English,
+            ) => format!(
+                "quick-nav.json is version {found}; this dodo understands {understood}. The \
+                 defaults are in use and the file is being left alone."
+            )
+            .into(),
+            (
+                Str::QuickNavStoreUnsupportedVersion { found, understood },
+                Language::Vietnamese,
+            ) => format!(
+                "quick-nav.json là phiên bản {found}; bản dodo này hiểu phiên bản {understood}. \
+                 dodo dùng giá trị mặc định và giữ nguyên tệp."
+            )
+            .into(),
+            (Str::QuickNavOpenedConnection(name), Language::English) => {
+                format!("Opened the saved connection \"{name}\".").into()
+            }
+            (Str::QuickNavOpenedConnection(name), Language::Vietnamese) => {
+                format!("Đã mở kết nối đã lưu \"{name}\".").into()
+            }
+            (Str::QuickNavKeptStoredPassword(name), Language::English) => format!(
+                "Opened the saved connection \"{name}\". Its stored password was kept; the pasted \
+                 one was not used."
+            )
+            .into(),
+            (Str::QuickNavKeptStoredPassword(name), Language::Vietnamese) => format!(
+                "Đã mở kết nối đã lưu \"{name}\". dodo giữ mật khẩu đã lưu; mật khẩu vừa dán không \
+                 được dùng."
+            )
+            .into(),
+            (Str::QuickNavCreatedConnection(name), Language::English) => {
+                format!("Created the connection \"{name}\" from the pasted URI.").into()
+            }
+            (Str::QuickNavCreatedConnection(name), Language::Vietnamese) => {
+                format!("Đã tạo kết nối \"{name}\" từ URI vừa dán.").into()
+            }
         }
     }
 }
@@ -4718,6 +4874,38 @@ mod tests {
             with(Str::DbUriInvalidPort(DETAIL.into()), &[DETAIL]),
             plain(Str::DbUriMissingFile),
             plain(Str::DbUriInvalidEscape),
+            plain(Str::QuickNavigation),
+            plain(Str::QuickNavEnabled),
+            plain(Str::QuickNavEnabledDescription),
+            plain(Str::QuickNavCurlPattern),
+            plain(Str::QuickNavDatabasePattern),
+            plain(Str::QuickNavJwtPattern),
+            plain(Str::QuickNavJsonPattern),
+            plain(Str::QuickNavBase64Pattern),
+            plain(Str::QuickNavGateDescription),
+            plain(Str::QuickNavShapeDescription),
+            plain(Str::QuickNavPatternPlaceholder),
+            with(Str::QuickNavPatternInvalid(DETAIL.into()), &[DETAIL]),
+            with(
+                Str::QuickNavPatternTooLong {
+                    length: NUMBER,
+                    limit: 512,
+                },
+                &[NUMBER_TEXT, "512"],
+            ),
+            plain(Str::QuickNavStorageProblem),
+            with(Str::QuickNavStoreError(DETAIL.into()), &[DETAIL]),
+            plain(Str::QuickNavStoreMissingVersion),
+            with(
+                Str::QuickNavStoreUnsupportedVersion {
+                    found: 9,
+                    understood: 1,
+                },
+                &["9", "1"],
+            ),
+            with(Str::QuickNavOpenedConnection(DETAIL.into()), &[DETAIL]),
+            with(Str::QuickNavKeptStoredPassword(DETAIL.into()), &[DETAIL]),
+            with(Str::QuickNavCreatedConnection(DETAIL.into()), &[DETAIL]),
         ]
     }
 
@@ -5428,6 +5616,27 @@ mod tests {
             Str::DbUriInvalidPort(_) => 691,
             Str::DbUriMissingFile => 692,
             Str::DbUriInvalidEscape => 693,
+
+            Str::QuickNavigation => 694,
+            Str::QuickNavEnabled => 695,
+            Str::QuickNavEnabledDescription => 696,
+            Str::QuickNavCurlPattern => 697,
+            Str::QuickNavDatabasePattern => 698,
+            Str::QuickNavJwtPattern => 699,
+            Str::QuickNavJsonPattern => 700,
+            Str::QuickNavBase64Pattern => 701,
+            Str::QuickNavGateDescription => 702,
+            Str::QuickNavShapeDescription => 703,
+            Str::QuickNavPatternPlaceholder => 704,
+            Str::QuickNavPatternInvalid(_) => 705,
+            Str::QuickNavPatternTooLong { .. } => 706,
+            Str::QuickNavStorageProblem => 707,
+            Str::QuickNavStoreError(_) => 708,
+            Str::QuickNavStoreMissingVersion => 709,
+            Str::QuickNavStoreUnsupportedVersion { .. } => 710,
+            Str::QuickNavOpenedConnection(_) => 711,
+            Str::QuickNavKeptStoredPassword(_) => 712,
+            Str::QuickNavCreatedConnection(_) => 713,
         }
     }
 
