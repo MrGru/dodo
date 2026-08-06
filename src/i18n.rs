@@ -1206,6 +1206,17 @@ pub enum Str {
         found: u64,
         understood: u32,
     },
+
+    // The Features settings page: which tools the sidebar lists, and in what
+    // order. Appended for the same reason as the block above — `position` is a
+    // fixed numbering.
+    Features,
+    FeaturesDescription,
+    FeatureShowInSidebar,
+    FeatureDragToReorder,
+    FeatureMoveUp,
+    FeatureMoveDown,
+    FeatureLastVisibleTool,
 }
 
 impl Str {
@@ -4094,6 +4105,33 @@ impl Str {
                 )
                 .into()
             }
+
+            (Str::Features, Language::English) => "Features".into(),
+            (Str::Features, Language::Vietnamese) => "Tính năng".into(),
+            (Str::FeaturesDescription, Language::English) => {
+                "Choose which tools the sidebar lists, and in what order. Drag a row by its \
+                 handle, or use the arrows."
+                    .into()
+            }
+            (Str::FeaturesDescription, Language::Vietnamese) => {
+                "Chọn những công cụ hiện trong thanh bên và thứ tự của chúng. Kéo một dòng bằng \
+                 tay cầm, hoặc dùng các mũi tên."
+                    .into()
+            }
+            (Str::FeatureShowInSidebar, Language::English) => "Show in the sidebar".into(),
+            (Str::FeatureShowInSidebar, Language::Vietnamese) => "Hiện trong thanh bên".into(),
+            (Str::FeatureDragToReorder, Language::English) => "Drag to reorder".into(),
+            (Str::FeatureDragToReorder, Language::Vietnamese) => "Kéo để sắp xếp lại".into(),
+            (Str::FeatureMoveUp, Language::English) => "Move up".into(),
+            (Str::FeatureMoveUp, Language::Vietnamese) => "Chuyển lên".into(),
+            (Str::FeatureMoveDown, Language::English) => "Move down".into(),
+            (Str::FeatureMoveDown, Language::Vietnamese) => "Chuyển xuống".into(),
+            (Str::FeatureLastVisibleTool, Language::English) => {
+                "At least one tool has to stay in the sidebar.".into()
+            }
+            (Str::FeatureLastVisibleTool, Language::Vietnamese) => {
+                "Thanh bên phải giữ lại ít nhất một công cụ.".into()
+            }
         }
     }
 }
@@ -5153,6 +5191,14 @@ mod tests {
                 },
                 &["9", "1"],
             ),
+            // The Features settings page.
+            plain(Str::Features),
+            plain(Str::FeaturesDescription),
+            plain(Str::FeatureShowInSidebar),
+            plain(Str::FeatureDragToReorder),
+            plain(Str::FeatureMoveUp),
+            plain(Str::FeatureMoveDown),
+            plain(Str::FeatureLastVisibleTool),
         ]
     }
 
@@ -5925,6 +5971,13 @@ mod tests {
             Str::SessionStoreError(_) => 751,
             Str::SessionStoreMissingVersion => 752,
             Str::SessionStoreUnsupportedVersion { .. } => 753,
+            Str::Features => 754,
+            Str::FeaturesDescription => 755,
+            Str::FeatureShowInSidebar => 756,
+            Str::FeatureDragToReorder => 757,
+            Str::FeatureMoveUp => 758,
+            Str::FeatureMoveDown => 759,
+            Str::FeatureLastVisibleTool => 760,
         }
     }
 
