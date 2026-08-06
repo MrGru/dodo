@@ -6,11 +6,18 @@
 //! writes that directly and every change is live. Language is the one setting
 //! with no home in `Theme`; it lives in [`crate::i18n::Language`].
 //!
-//! Nothing here is persisted across restarts **except quick navigation**, whose
-//! settings live in `quick-nav.json` — see [`crate::quick_nav`] and the note in
-//! `AGENTS.md`. It is the exception because its fields hold text the user typed:
-//! a detector pattern thrown away at the next launch would be worse than not
-//! offering the field at all.
+//! **Every setting here is persisted across restarts except one**, in
+//! `session.json` — see [`crate::session`], which the captain asked for on
+//! 2026-08-06. (Quick navigation keeps its own file, `quick-nav.json`, because
+//! it was already there and its fields hold text the user typed.)
+//!
+//! The exception is **Run scripts**, and it is not an omission. `ScriptPolicy`
+//! goes back to the cautious `Ask for imported` at every launch because it is
+//! the gate in front of running code that arrived inside someone else's
+//! collection file, not a preference about how the app looks. The *approvals*
+//! it collects are persisted, per script, in `script-consent.json`, which is
+//! the right granularity for that memory. [`run_scripts_field`] says the same
+//! thing at the control; [`crate::session`]'s module doc argues it.
 //!
 //! The dialog body is [`SettingsView`]: a quick-navigation search box above the
 //! library's own settings panel. Typing fuzzy-matches every setting and picking
@@ -37,6 +44,7 @@ use crate::assets::Assets;
 use crate::i18n::{Language, Str, t};
 use crate::quick_nav::QuickNav;
 use crate::quick_nav::models::detect::Detector;
+use crate::session::Session;
 
 /// Base text size in px, largest first. `Theme::font_size` drives the window's
 /// rem size (see the library's `Root::render`), so these scale the whole UI.
@@ -545,31 +553,48 @@ fn pages(highlight: Option<Setting>, cx: &App) -> Vec<SettingPage> {
     let appearance = t(Str::Appearance, cx);
     let lit = |setting: Setting| highlight == Some(setting);
 
+    let mut general_group = SettingGroup::new()
+        .title(general.clone())
+        .item(
+            SettingItem::new(
+                t(Str::Language, cx),
+                highlighted(language_field(), lit(Setting::Language), cx),
+            )
+            .description(t(Str::LanguageDescription, cx))
+            .keywords([general.clone()]),
+        )
+        .item(
+            SettingItem::new(
+                t(Str::RunScripts, cx),
+                highlighted(run_scripts_field(cx), lit(Setting::RunScripts), cx),
+            )
+            .description(t(Str::RunScriptsDescription, cx))
+            .keywords([general.clone()]),
+        );
+
+    // Only when there is something wrong with `session.json` — and there is
+    // something to say, because a refused file means nothing is being saved at
+    // all this run. In the ordinary case, first run included, this row is not
+    // there. Same treatment as quick navigation's storage row below.
+    if let Some(problem) = Session::store_error(cx) {
+        general_group = general_group.item(
+            // The message is the *description*; the control is empty because
+            // there is nothing here to change.
+            SettingItem::new(
+                t(Str::SessionStorageProblem, cx),
+                SettingField::render(|_, _, _| div()),
+            )
+            .description(t(problem, cx))
+            .keywords([general.clone()]),
+        );
+    }
+
     vec![
         SettingPage::new(general.clone())
             .icon(AppIcon::Sliders)
             .resettable(false)
             .default_open(true)
-            .group(
-                SettingGroup::new()
-                    .title(general.clone())
-                    .item(
-                        SettingItem::new(
-                            t(Str::Language, cx),
-                            highlighted(language_field(), lit(Setting::Language), cx),
-                        )
-                        .description(t(Str::LanguageDescription, cx))
-                        .keywords([general.clone()]),
-                    )
-                    .item(
-                        SettingItem::new(
-                            t(Str::RunScripts, cx),
-                            highlighted(run_scripts_field(cx), lit(Setting::RunScripts), cx),
-                        )
-                        .description(t(Str::RunScriptsDescription, cx))
-                        .keywords([general]),
-                    ),
-            ),
+            .group(general_group),
         SettingPage::new(appearance.clone())
             .icon(AppIcon::Palette)
             .resettable(false)
@@ -741,17 +766,26 @@ fn language_field() -> SettingField<SharedString> {
     SettingField::dropdown(
         options,
         |cx: &App| Language::current(cx).code().into(),
-        |value: SharedString, cx: &mut App| Language::from_code(&value).set(cx),
+        |value: SharedString, cx: &mut App| {
+            let language = Language::from_code(&value);
+            language.set(cx);
+            // Persisted here rather than inside `Language::set`: `i18n` is the
+            // mechanism and has no business knowing dodo writes files.
+            Session::set_language(language.code(), cx);
+        },
     )
     .default_value(Language::default().code())
 }
 
 /// Whether the API Explorer runs a request's scripts.
 ///
-/// Not persisted, like every other setting here, which is why the default is
-/// the cautious one: a fresh launch asks about imported scripts rather than
-/// running them. The *approvals* the prompt collects are persisted separately —
-/// see `api_explorer::services::consent_store`.
+/// **The one setting on this page that is not persisted**, now that
+/// `session.json` keeps the rest: a fresh launch always asks about imported
+/// scripts rather than running them. A security default that silently stopped
+/// resetting is exactly the kind of change nobody notices until it matters, so
+/// this stays deliberate rather than convenient. The *approvals* the prompt
+/// collects are persisted separately, per script — see
+/// `api_explorer::services::consent_store`.
 fn run_scripts_field(cx: &App) -> SettingField<SharedString> {
     let options = ConsentPolicy::ALL
         .map(|policy| (policy.code().into(), t(policy.label(), cx)))
@@ -774,7 +808,9 @@ fn font_size_field(cx: &App) -> SettingField<SharedString> {
         options,
         |cx: &App| size_value(f32::from(Theme::global(cx).font_size)),
         |value: SharedString, cx: &mut App| {
-            set_font_size(value.parse().unwrap_or(DEFAULT_FONT_SIZE), cx)
+            let size = value.parse().unwrap_or(DEFAULT_FONT_SIZE);
+            set_font_size(size, cx);
+            Session::set_font_size(size, cx);
         },
     )
     .default_value(size_value(DEFAULT_FONT_SIZE))
@@ -788,7 +824,11 @@ fn radius_field() -> SettingField<SharedString> {
     SettingField::dropdown(
         options,
         |cx: &App| size_value(f32::from(Theme::global(cx).radius)),
-        |value: SharedString, cx: &mut App| set_radius(value.parse().unwrap_or(DEFAULT_RADIUS), cx),
+        |value: SharedString, cx: &mut App| {
+            let radius = value.parse().unwrap_or(DEFAULT_RADIUS);
+            set_radius(radius, cx);
+            Session::set_border_radius(radius, cx);
+        },
     )
     .default_value(size_value(DEFAULT_RADIUS))
 }
@@ -806,9 +846,45 @@ fn theme_field() -> SettingField<SharedString> {
     SettingField::scrollable_dropdown(
         options,
         |cx: &App| Theme::global(cx).theme_name().clone(),
-        |value: SharedString, cx: &mut App| set_theme(&value, cx),
+        |value: SharedString, cx: &mut App| {
+            set_theme(&value, cx);
+            Session::set_theme(value.to_string(), cx);
+        },
     )
     .default_value(THEMES[0])
+}
+
+/// Applies the appearance choices `session.json` held, if any.
+///
+/// Called from `main` **after** `session::load` and **before** the window is
+/// opened, so the first frame is already the user's theme rather than a flash
+/// of the default one.
+///
+/// The order matters and is the same order the dialog produces by hand: the
+/// theme first, because [`set_theme`] re-asserts the font size and radius that
+/// were current over whatever the theme config brought with it, then the two
+/// explicit values over that. Doing it the other way round would let a theme's
+/// own numbers win over the user's.
+///
+/// A field the user never touched stays `None` and is not applied at all —
+/// notably the theme, because `gpui_component::init` picks light or dark from
+/// the *system appearance* and forcing "Default Light" over that merely because
+/// it was what the app happened to show would break appearance following for
+/// everyone who never opened this dialog. `session::models::document` argues it
+/// at more length.
+pub fn apply_session(cx: &mut App) {
+    if let Some(name) = Session::theme(cx) {
+        set_theme(&name, cx);
+    }
+    if let Some(size) = Session::font_size(cx) {
+        set_font_size(size, cx);
+    }
+    if let Some(radius) = Session::border_radius(cx) {
+        set_radius(radius, cx);
+    }
+    if let Some(code) = Session::language(cx) {
+        Language::from_code(&code).set(cx);
+    }
 }
 
 fn set_font_size(size: f32, cx: &mut App) {
@@ -825,6 +901,15 @@ fn set_radius(radius: f32, cx: &mut App) {
     cx.refresh_windows();
 }
 
+/// Applies a registered theme by name, keeping the user's font size and radius.
+///
+/// **Does not persist**, unlike the three field writers above, because
+/// [`apply_session`] calls it on the restore path too and a restore that wrote
+/// back what it had just read would be noise. The dialog's own writer persists;
+/// see [`theme_field`].
+///
+/// An unregistered name is a no-op, which is also what makes a `session.json`
+/// naming a theme this build dropped harmless rather than fatal.
 fn set_theme(name: &str, cx: &mut App) {
     let Some(config) = ThemeRegistry::global(cx).themes().get(name).cloned() else {
         eprintln!("theme {name} is not registered");

@@ -1195,6 +1195,17 @@ pub enum Str {
     QuickNavKeptStoredPassword(String),
     QuickNavCreatedConnection(String),
     QuickNavConnectionsLoading,
+
+    // Session restoration: what `session.json` can go wrong with. Appended
+    // rather than filed beside the Settings block above because `position` is
+    // a fixed numbering and renumbering it would touch every variant.
+    SessionStorageProblem,
+    SessionStoreError(String),
+    SessionStoreMissingVersion,
+    SessionStoreUnsupportedVersion {
+        found: u64,
+        understood: u32,
+    },
 }
 
 impl Str {
@@ -4050,6 +4061,39 @@ impl Str {
                  lát."
                     .into()
             }
+
+            (Str::SessionStorageProblem, Language::English) => "Saved session".into(),
+            (Str::SessionStorageProblem, Language::Vietnamese) => "Phiên đã lưu".into(),
+            (Str::SessionStoreError(detail), Language::English) => {
+                format!("session.json could not be read or written: {detail}").into()
+            }
+            (Str::SessionStoreError(detail), Language::Vietnamese) => {
+                format!("Không đọc hoặc ghi được session.json: {detail}").into()
+            }
+            (Str::SessionStoreMissingVersion, Language::English) => {
+                "session.json carries no version, so it was not written by dodo. It is being left \
+                 alone and nothing is being saved this run."
+                    .into()
+            }
+            (Str::SessionStoreMissingVersion, Language::Vietnamese) => {
+                "session.json không có trường version nên không phải do dodo ghi. dodo giữ nguyên \
+                 tệp và không lưu gì trong lần chạy này."
+                    .into()
+            }
+            (Str::SessionStoreUnsupportedVersion { found, understood }, Language::English) => {
+                format!(
+                    "session.json is version {found}; this dodo understands {understood}. It is \
+                     being left alone and nothing is being saved this run."
+                )
+                .into()
+            }
+            (Str::SessionStoreUnsupportedVersion { found, understood }, Language::Vietnamese) => {
+                format!(
+                    "session.json là phiên bản {found}; bản dodo này hiểu phiên bản {understood}. \
+                     dodo giữ nguyên tệp và không lưu gì trong lần chạy này."
+                )
+                .into()
+            }
         }
     }
 }
@@ -5098,6 +5142,17 @@ mod tests {
             plain(Str::CleanerCategoryDockerCache),
             plain(Str::CleanerCategoryUniversalBinaries),
             plain(Str::CleanerCategoryLanguageFiles),
+            // Session restoration.
+            plain(Str::SessionStorageProblem),
+            with(Str::SessionStoreError(DETAIL.into()), &[DETAIL]),
+            plain(Str::SessionStoreMissingVersion),
+            with(
+                Str::SessionStoreUnsupportedVersion {
+                    found: 9,
+                    understood: 1,
+                },
+                &["9", "1"],
+            ),
         ]
     }
 
@@ -5866,6 +5921,10 @@ mod tests {
             Str::CleanerCategoryDockerCache => 747,
             Str::CleanerCategoryUniversalBinaries => 748,
             Str::CleanerCategoryLanguageFiles => 749,
+            Str::SessionStorageProblem => 750,
+            Str::SessionStoreError(_) => 751,
+            Str::SessionStoreMissingVersion => 752,
+            Str::SessionStoreUnsupportedVersion { .. } => 753,
         }
     }
 
