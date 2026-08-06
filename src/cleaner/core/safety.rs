@@ -1,3 +1,10 @@
+//! Where deletion is allowed to reach, and where it must never.
+//!
+//! Both types are pending for the whole module: round 1 has no destructive
+//! cleanup path, so nothing builds a policy to check against. The allow comes
+//! off with the first deletion.
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 
 use crate::cleaner::core::category::CleanerCategory;
