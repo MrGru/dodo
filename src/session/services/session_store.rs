@@ -224,6 +224,7 @@ mod tests {
             y: 80.,
             width: 1000.,
             height: 700.,
+            display: Some("6E1E9C3F-0000-0000-0000-000000000001".to_owned()),
         });
         document.workspace.active_tool = Some("database".to_owned());
         document.workspace.sidebar_collapsed = Some(false);

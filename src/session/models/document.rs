@@ -121,7 +121,26 @@ pub struct Appearance {
 /// `Windowed` and nothing else, so a green-button-zoomed window is saved as
 /// `Windowed` at the zoomed rectangle — which restores to the same place
 /// anyway. Windows and Linux do report it, and it is honoured there.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+///
+/// # Why the display is remembered by UUID
+///
+/// **The rectangle alone cannot say which monitor it was on**, and on macOS it
+/// provably cannot. In the pinned checkout `MacDisplay::bounds` returns an
+/// origin of `(0, 0)` for *every* display — it throws `CGDisplayBounds`' global
+/// origin away — `MacDisplay::visible_bounds` subtracts the screen origin back
+/// out, `MacWindow::bounds` subtracts it too, and `MacWindow::open` adds the
+/// target screen's origin back on. Every macOS coordinate here is therefore
+/// **display-local**, so "x = 120" means the same thing on the laptop panel and
+/// on the monitor beside it, and no arithmetic over rectangles can tell them
+/// apart. Windows and Linux do report real global bounds.
+///
+/// [`PlatformDisplay::uuid`](gpui::PlatformDisplay::uuid) is documented as
+/// "stable … across system restarts", which is exactly the identity needed, and
+/// it is what `WindowOptions::display_id` is resolved from at launch. A UUID
+/// that is not attached any more is the unplugged monitor: the window comes
+/// back on the primary display instead, and [`super::geometry::place`] makes
+/// sure it is somewhere reachable.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WindowRecord {
     #[serde(default)]
     pub mode: WindowMode,
@@ -129,6 +148,11 @@ pub struct WindowRecord {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    /// The display's stable UUID, or `None` when the platform would not give
+    /// one — which is not an error, only a window that comes back on the
+    /// primary display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
 }
 
 /// Windowed, zoomed, or filling the display.
@@ -191,6 +215,7 @@ mod tests {
             y: 34.,
             width: 1000.,
             height: 700.,
+            display: Some("6E1E9C3F-0000-0000-0000-000000000001".to_owned()),
         });
         document.workspace.active_tool = Some("docker".to_owned());
         document.workspace.sidebar_collapsed = Some(false);

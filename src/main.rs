@@ -120,6 +120,12 @@ fn main() {
                         session::Session::window_bounds(cx)
                             .unwrap_or_else(|| session::default_window_bounds(cx)),
                     ),
+                    // The monitor the window was on, when it is still attached.
+                    // Paired with the rectangle above rather than optional
+                    // decoration: on macOS every coordinate gpui reports is
+                    // display-*local*, so the rectangle alone cannot say which
+                    // screen it meant. `Session::window_display` has the detail.
+                    display_id: session::Session::window_display(cx),
                     // Stops a resize drag before the layout has to cope:
                     // the icon rail plus the main pane at its minimum.
                     // `layout::window_min_size` derives it, and the scroll

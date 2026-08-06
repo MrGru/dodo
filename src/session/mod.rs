@@ -75,11 +75,13 @@
 pub mod models;
 pub mod services;
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, AsyncApp, BorrowAppContext as _, Bounds, Global, Pixels, Task, WindowBounds, px, size,
+    App, AsyncApp, BorrowAppContext as _, Bounds, DisplayId, Global, Pixels, PlatformDisplay, Task,
+    WindowBounds, px, size,
 };
 
 use crate::i18n::Str;
@@ -171,16 +173,42 @@ impl Session {
     /// *now* by [`models::geometry::place_record`], so an unplugged monitor, a
     /// changed resolution and a size below the layout's minimum are all already
     /// dealt with by the time a `WindowBounds` comes back.
+    ///
+    /// The display the window was on comes first in the list handed to `place`,
+    /// which is what makes it both the preferred display and the one an
+    /// unplaceable rectangle is centred on. Gone, the primary takes its place.
     pub fn window_bounds(cx: &App) -> Option<WindowBounds> {
-        let record = Self::read(cx, |document| document.window)?;
-        let bounds =
-            geometry::place_record(&record, &displays(cx), crate::layout::window_min_size())?;
+        let record = Self::read(cx, |document| document.window.clone())?;
+        let bounds = geometry::place_record(
+            &record,
+            &displays(record.display.as_deref(), cx),
+            crate::layout::window_min_size(),
+        )?;
 
         Some(match record.mode {
             WindowMode::Windowed => WindowBounds::Windowed(bounds),
             WindowMode::Maximized => WindowBounds::Maximized(bounds),
             WindowMode::Fullscreen => WindowBounds::Fullscreen(bounds),
         })
+    }
+
+    /// The display to open on, for `WindowOptions::display_id`.
+    ///
+    /// **Not a nicety — on macOS it is the only thing that can put the window
+    /// back on the right monitor.** Every macOS coordinate in the pinned gpui is
+    /// display-*local*, so the saved rectangle says where on a screen the window
+    /// was and nothing about which screen; [`models::document::WindowRecord`]
+    /// has the four functions that prove it. Pairing the rectangle with the
+    /// display named here is what makes it mean the same thing on the way back
+    /// in as it did on the way out.
+    ///
+    /// `None` — no saved display, or one that is not attached any more — leaves
+    /// gpui on the primary display, which is the unplugged-monitor case.
+    pub fn window_display(cx: &App) -> Option<DisplayId> {
+        let uuid = Self::read(cx, |document| {
+            document.window.as_ref().and_then(|w| w.display.clone())
+        })?;
+        display_by_uuid(&uuid, cx).map(|display| display.id())
     }
 
     pub fn set_language(code: impl Into<String>, cx: &mut App) {
@@ -220,8 +248,11 @@ impl Session {
     ///
     /// The rectangle stored is gpui's **restore** rectangle in every mode: for
     /// a maximized or fullscreen window that is the size it returns to, which
-    /// is what makes unzooming after a restart land somewhere sensible.
-    pub fn set_window(bounds: WindowBounds, cx: &mut App) {
+    /// is what makes unzooming after a restart land somewhere sensible. It is
+    /// stored **with the display it is measured against** — see
+    /// [`Session::window_display`] for why the rectangle is meaningless without
+    /// it on macOS.
+    pub fn set_window(bounds: WindowBounds, display: Option<String>, cx: &mut App) {
         let (mode, rect) = match bounds {
             WindowBounds::Windowed(rect) => (WindowMode::Windowed, rect),
             WindowBounds::Maximized(rect) => (WindowMode::Maximized, rect),
@@ -236,6 +267,7 @@ impl Session {
                 y,
                 width,
                 height,
+                display,
             });
         });
     }
@@ -329,25 +361,36 @@ impl Session {
     }
 }
 
-/// Every attached display's usable area, **primary first**.
+/// The display with this UUID, if it is still attached.
+fn display_by_uuid(uuid: &str, cx: &App) -> Option<Rc<dyn PlatformDisplay>> {
+    cx.displays()
+        .into_iter()
+        .find(|display| display.uuid().is_ok_and(|found| found.to_string() == uuid))
+}
+
+/// Every attached display's usable area, **most preferred first**.
+///
+/// The order is [`models::geometry::place`]'s contract — the first entry is the
+/// display a window with nowhere else to go is centred on, and `App::displays`
+/// promises no order of its own — so `remembered` leads when it is still
+/// attached, and the primary display otherwise.
 ///
 /// `visible_bounds` rather than `bounds` excludes the macOS menu bar and the
 /// Windows taskbar, so a clamped window lands under neither; it is what gpui's
-/// own `default_bounds` uses. Primary-first is
-/// [`models::geometry::place`]'s contract: it is the display a window with
-/// nowhere else to go is centred on, and `App::displays` does not promise an
-/// order.
-fn displays(cx: &App) -> Vec<Bounds<Pixels>> {
-    let primary = cx.primary_display();
-    let primary_id = primary.as_ref().map(|display| display.id());
+/// own `default_bounds` uses.
+fn displays(remembered: Option<&str>, cx: &App) -> Vec<Bounds<Pixels>> {
+    let first = remembered
+        .and_then(|uuid| display_by_uuid(uuid, cx))
+        .or_else(|| cx.primary_display());
+    let first_id = first.as_ref().map(|display| display.id());
 
-    primary
+    first
         .iter()
         .map(|display| display.visible_bounds())
         .chain(
             cx.displays()
                 .iter()
-                .filter(|display| Some(display.id()) != primary_id)
+                .filter(|display| Some(display.id()) != first_id)
                 .map(|display| display.visible_bounds()),
         )
         .collect()
@@ -559,6 +602,7 @@ mod tests {
                         origin: point(px(0.), px(0.)),
                         size: size(px(width), px(620.)),
                     }),
+                    None,
                     cx,
                 );
             }
@@ -581,7 +625,7 @@ mod tests {
             size: size(px(900.), px(620.)),
         };
 
-        cx.update(|cx| Session::set_window(WindowBounds::Fullscreen(restore), cx));
+        cx.update(|cx| Session::set_window(WindowBounds::Fullscreen(restore), None, cx));
         settle(cx);
 
         let window = store.load().expect("loads").window.expect("a window");
@@ -625,6 +669,7 @@ mod tests {
                     y: 60.,
                     width: 1000.,
                     height: 700.,
+                    display: None,
                 }),
             );
 
@@ -652,6 +697,7 @@ mod tests {
                 y: 400.,
                 width: 1000.,
                 height: 700.,
+                display: None,
             }),
         );
 
@@ -680,6 +726,7 @@ mod tests {
                 y: 0.,
                 width: 0.,
                 height: 0.,
+                display: None,
             }),
         );
         assert!(cx.update(|cx| Session::window_bounds(cx)).is_none());
