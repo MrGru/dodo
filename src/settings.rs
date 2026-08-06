@@ -878,6 +878,17 @@ fn feature_row(
 /// One of the two reorder buttons, which are also the whole keyboard path
 /// through this page — a drag has no keyboard equivalent, and the sidebar it
 /// edits is keyboard-navigable.
+///
+/// **The keyboard activation here is Space, not Enter, and that is not a
+/// choice.** `Button` is a tab stop by default and gpui synthesizes a click from
+/// either key on a focused element — but `Dialog` binds `enter` to
+/// `ConfirmDialog` in its own key context, whose default `on_ok` returns `true`
+/// and closes the card. That is how every control in this dialog has always
+/// behaved, so it is not this page's to change; Space is the conventional
+/// button key and it reaches the button. A disabled button is not a tab stop
+/// (`Button::render` only calls `track_focus` when it is enabled), so Tab skips
+/// the top row's Up and the bottom row's Down rather than landing on a control
+/// that does nothing.
 #[allow(clippy::too_many_arguments)]
 fn move_button(
     layout: &WeakEntity<Layout>,
