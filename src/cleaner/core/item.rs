@@ -31,7 +31,11 @@ pub struct ItemWarning {
     pub message: String,
 }
 
+/// Per-category detail hung off an item. The mock scanners produce `Generic`
+/// only; each remaining variant is constructed by the real scanner for its
+/// category. `#[allow(dead_code)]` comes off as those land.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
 pub enum ItemMetadata {
     Generic,
     Application(ApplicationMetadata),

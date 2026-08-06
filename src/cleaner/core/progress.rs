@@ -12,7 +12,12 @@ pub struct ScanProgress {
     pub discovered_bytes: u64,
 }
 
+/// The phases a scan reports through. The mock scanners only ever report
+/// `Preparing`, `Traversing` and `Completed`; the other four belong to the real
+/// macOS scanners (permission checks, root discovery, aggregation,
+/// classification). `#[allow(dead_code)]` comes off with them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
 pub enum ScanPhase {
     Preparing,
     CheckingPermissions,
