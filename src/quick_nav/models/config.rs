@@ -87,12 +87,20 @@ impl QuickNavDocument {
             .unwrap_or_default()
     }
 
-    /// Sets one detector's pattern. An empty one removes the key rather than
-    /// storing a blank, so a file that has never been customized stays empty and
-    /// a cleared field really does mean "back to the default".
+    /// Sets one detector's pattern. A **wholly empty** one removes the key
+    /// rather than storing a blank, so a file that has never been customized
+    /// stays empty and a cleared field really does mean "back to the default".
+    ///
+    /// Emptiness is `is_empty`, not `trim().is_empty()`, and that is not
+    /// fussiness. The settings field writes back on every keystroke and then
+    /// re-reads what it wrote to keep the box in step; if a lone space were
+    /// normalized away here, the box would be cleared under someone in the act
+    /// of typing ` ^curl`. Whitespace-only sources are treated as absent at the
+    /// point they are *used* instead — [`super::pattern::compile`] trims — so
+    /// nothing downstream sees the difference.
     pub fn set_pattern(&mut self, detector: Detector, source: impl Into<String>) {
         let source = source.into();
-        if source.trim().is_empty() {
+        if source.is_empty() {
             self.patterns.remove(detector.code());
         } else {
             self.patterns.insert(detector.code().to_owned(), source);
@@ -128,7 +136,7 @@ mod tests {
         assert_eq!(document.pattern(Detector::Base64), "^[A-Za-z0-9+/]+=*$");
         assert_eq!(document.pattern(Detector::Jwt), "");
 
-        document.set_pattern(Detector::Base64, "  ");
+        document.set_pattern(Detector::Base64, "");
         assert_eq!(
             document.pattern(Detector::Base64),
             "",
@@ -137,6 +145,24 @@ mod tests {
         assert!(
             document.patterns.is_empty(),
             "and it leaves no key behind in the file",
+        );
+    }
+
+    /// The settings field writes on every keystroke and reads back what it
+    /// wrote, so normalizing whitespace away here would clear the box under
+    /// someone in the act of typing ` ^curl`. Blankness is dealt with where the
+    /// pattern is compiled instead.
+    #[test]
+    fn a_whitespace_only_pattern_is_kept_verbatim_rather_than_normalized() {
+        let mut document = QuickNavDocument::default();
+        document.set_pattern(Detector::Curl, " ");
+        assert_eq!(document.pattern(Detector::Curl), " ");
+
+        // …and it still means "no pattern" by the time it is used.
+        assert!(
+            crate::quick_nav::models::pattern::compile(document.pattern(Detector::Curl))
+                .expect("blank is not an error")
+                .is_none()
         );
     }
 
