@@ -376,6 +376,31 @@ mod tests {
         );
     }
 
+    /// The list is preference-ordered, not merely display-ordered: whichever
+    /// display is first is the one an unplaceable window is centred on. It is
+    /// how `Session::window_bounds` says "put it back on the monitor it was
+    /// on", and on macOS it is the *only* thing that can say so — every
+    /// coordinate gpui reports there is display-local.
+    #[test]
+    fn the_first_display_is_the_one_a_homeless_window_lands_on() {
+        // Overlapping neither display, so rule 4 decides.
+        let saved = rect(9000., 9000., 1000., 700.);
+
+        let on_laptop = place(saved, &[laptop(), external()], min()).expect("placed");
+        assert_eq!(
+            laptop().intersect(&on_laptop),
+            on_laptop,
+            "with the laptop preferred it must land there",
+        );
+
+        let on_external = place(saved, &[external(), laptop()], min()).expect("placed");
+        assert_eq!(
+            external().intersect(&on_external),
+            on_external,
+            "and with the external monitor preferred, there instead",
+        );
+    }
+
     #[test]
     fn a_record_from_the_file_is_placed_the_same_way() {
         let record = WindowRecord {
@@ -384,6 +409,7 @@ mod tests {
             y: 80.,
             width: 1000.,
             height: 700.,
+            display: None,
         };
         assert_eq!(
             place_record(&record, &[laptop()], min()),

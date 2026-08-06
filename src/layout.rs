@@ -464,7 +464,14 @@ impl Layout {
             // matters and how. The `Subscription` has to be held or it
             // unsubscribes immediately.
             _bounds: cx.observe_window_bounds(window, |_, window, cx| {
-                Session::set_window(window.window_bounds(), cx);
+                // The display's stable UUID, not its `DisplayId`, which is only
+                // an index into this run's display list. `Session::set_window`
+                // says why the rectangle needs it at all.
+                let display = window
+                    .display(cx)
+                    .and_then(|display| display.uuid().ok())
+                    .map(|uuid| uuid.to_string());
+                Session::set_window(window.window_bounds(), display, cx);
             }),
             json_formatter: cx.new(|cx| JsonFormatter::new(window, cx)),
             encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
