@@ -68,6 +68,17 @@ const THEMES: [&str; 16] = [
     "Catppuccin Frappe",
 ];
 
+/// Width of the dialog card, and of the settings panel's own sidebar inside it.
+///
+/// Named because the row layout depends on what is left over: the card spends
+/// 2px on its border and `Dialog`'s own `Edges::all(16)` padding on each side,
+/// the settings sidebar takes [`SIDEBAR_WIDTH`] of the rest, and each setting
+/// row is what remains less the page's own `px_4`.
+/// `row_layout::a_pattern_row_stays_inside_the_card` does that arithmetic
+/// against a real frame; see [`pattern_field`] for why it matters.
+const DIALOG_WIDTH: Pixels = px(760.);
+const SIDEBAR_WIDTH: Pixels = px(200.);
+
 /// Height of the search box once the user has typed something. It is fixed so
 /// that the list's own `size_full` layout has a definite box to fill; an empty
 /// query collapses the box back to [`collapsed_height`].
@@ -127,7 +138,7 @@ pub fn open(window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |dialog, _, cx| {
         dialog
             .title(t(Str::Settings, cx))
-            .w(px(760.))
+            .w(DIALOG_WIDTH)
             .child(view.clone())
     });
 }
@@ -508,7 +519,7 @@ impl Render for SettingsView {
             .child(
                 div().flex_1().min_h_0().child(
                     Settings::new(SharedString::from(format!("dodo-settings-{}", self.nonce)))
-                        .sidebar_width(px(200.))
+                        .sidebar_width(SIDEBAR_WIDTH)
                         .header_style(&StyleRefinement::default().hidden())
                         .default_selected_index(SelectIndex {
                             page_ix: self.page_ix,
@@ -635,7 +646,7 @@ fn quick_nav_page(highlight: Option<Setting>, cx: &App) -> SettingPage {
         };
 
         group = group.item(
-            SettingItem::new(
+            input_item(
                 t(detector.label(), cx),
                 highlighted(
                     pattern_field(detector),
@@ -670,12 +681,38 @@ fn quick_nav_page(highlight: Option<Setting>, cx: &App) -> SettingPage {
         .group(group)
 }
 
+/// A setting item whose control is a text input — **use this rather than
+/// [`SettingItem::new`] for every [`SettingField::input`]**, here or on a future
+/// page.
+///
+/// The only difference is `layout(Axis::Vertical)`, and it is not cosmetic: an
+/// input is the widest of the *fixed*-width controls the library builds, wide
+/// enough that a side-by-side row here cannot hold it. [`pattern_field`] has the
+/// numbers. Stacked, the control is `w_full` and therefore bounded by the row at
+/// any dialog or window size, which is also what the library falls back to on
+/// its own once the panel is narrow enough.
+fn input_item(title: SharedString, field: SettingField<SharedString>) -> SettingItem {
+    SettingItem::new(title, field).layout(Axis::Vertical)
+}
+
 /// One detector's pattern, as a plain text field.
 ///
 /// The library's string field emits a change per keystroke; the coalescing that
 /// keeps that from writing the file once per character lives in
 /// [`QuickNav::set_pattern`], not here. The value is stored **raw** — untrimmed,
 /// uncompiled — so the field never fights the user mid-edit.
+///
+/// **Its item is built by [`input_item`], which stacks it.**
+/// `setting::fields::string::StringField::render` gives an input `w_64` (256px)
+/// in a horizontal row, where a switch or a dropdown is content-sized and a
+/// number input is half as wide. `SettingItem::render_item` caps the label
+/// column at `max_w_3_5` and lets it grow into whatever the 256px control
+/// leaves, but nothing shrinks the control, so a row narrower than
+/// `256 + gap + 0.6 * row` cannot hold both and the input is laid out past the
+/// row's right edge, where the dialog clips it. At [`DIALOG_WIDTH`] each row is 494px and the input
+/// lands 70px outside — the regression the stacked layout fixes. The library
+/// reaches for the same stacked layout by itself, but only once the whole panel
+/// has dropped to 480px. `row_layout` measures both halves of that.
 fn pattern_field(detector: Detector) -> SettingField<SharedString> {
     SettingField::input(
         move |cx: &App| QuickNav::pattern(detector, cx).into(),
@@ -894,5 +931,162 @@ mod tests {
         assert_eq!(super::fold("Giao diện"), "Giao dien");
         assert_eq!(super::fold("Định dạng"), "Dinh dang");
         assert_eq!(super::fold("Border radius"), "Border radius");
+    }
+}
+
+/// Measures a setting row against the box that has to contain it.
+///
+/// These are the only tests here that need a frame. They do not drive the
+/// dialog — `Root::new` dereferences a real `NSView`, so a dialog cannot be
+/// hosted in a GPUI test window on macOS — but the dialog contributes nothing
+/// to a row's width except the box it hands the panel, so the panel is rendered
+/// directly into a div of exactly that width ([`DIALOG_WIDTH`] less
+/// `CARD_CHROME`) and the row is measured inside it.
+///
+/// The field is a stand-in rather than the real [`pattern_field`]: nothing can
+/// tag a library-internal element for `debug_bounds`, so the probe reproduces
+/// what `setting::fields::string::StringField::render` builds — `w_64` in a
+/// horizontal row, `w_full` in a stacked one. Should upstream drop that fixed
+/// width, [`a_side_by_side_row_would_not_fit`] fails and this whole workaround
+/// can go.
+#[cfg(test)]
+mod row_layout {
+    use gpui::prelude::FluentBuilder as _;
+    use gpui::{
+        AppContext as _, Axis, Bounds, Context, InteractiveElement as _, IntoElement,
+        ParentElement as _, Pixels, Render, SharedString, StyleRefinement, Styled as _,
+        TestAppContext, VisualTestContext, Window, WindowBounds, WindowOptions, div, point, px,
+        size,
+    };
+    use gpui_component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
+
+    use super::{DIALOG_WIDTH, SIDEBAR_WIDTH};
+
+    /// What the dialog card keeps for itself before the panel sees any width:
+    /// a 1px border and `Dialog`'s default `Edges::all(16)` padding, per side.
+    const CARD_CHROME: Pixels = px(34.);
+
+    /// The settings panel, sized and configured exactly as the dialog does it,
+    /// holding one item that stands in for a quick-navigation pattern row.
+    ///
+    /// `stacked` picks how that item is built: through [`super::input_item`],
+    /// which is the production path, or through the bare [`SettingItem::new`]
+    /// it replaced.
+    struct Probe {
+        width: Pixels,
+        stacked: bool,
+    }
+
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let title = SharedString::from("Database URI pattern");
+            let field = SettingField::render(|options, _, _| {
+                let horizontal = matches!(options.layout, Axis::Horizontal);
+                div()
+                    .debug_selector(|| "field".into())
+                    .h(px(32.))
+                    .map(|this| {
+                        if horizontal {
+                            this.w_64()
+                        } else {
+                            this.w_full()
+                        }
+                    })
+            });
+
+            let item = if self.stacked {
+                super::input_item(title, field)
+            } else {
+                SettingItem::new(title, field)
+            };
+
+            let page = SettingPage::new("Quick navigation").resettable(false).group(
+                SettingGroup::new().title("Quick navigation").item(
+                    item
+                    // The longest of the three descriptions these rows carry:
+                    // the label column's width is what the control has to fit
+                    // beside, so a short one would understate the row.
+                    .description(
+                        "Optional. dodo already has a real parser for this format and uses it; a \
+                         pattern here only narrows what is offered to it. Leave it empty to try \
+                         the parser on everything.",
+                    ),
+                ),
+            );
+
+            div()
+                .w(self.width)
+                .h(px(440.))
+                .debug_selector(|| "panel".into())
+                .child(
+                    Settings::new("row-layout-probe")
+                        .sidebar_width(SIDEBAR_WIDTH)
+                        .header_style(&StyleRefinement::default().hidden())
+                        .pages(vec![page]),
+                )
+        }
+    }
+
+    /// Right edge of the row's control, and of the box that must contain it.
+    fn edges(cx: &mut TestAppContext, width: Pixels, stacked: bool) -> (Pixels, Pixels) {
+        cx.update(gpui_component::init);
+
+        let window = cx
+            .update(|cx| {
+                cx.open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds {
+                            origin: point(px(0.), px(0.)),
+                            size: size(px(1200.), px(800.)),
+                        })),
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|_| Probe { width, stacked }),
+                )
+            })
+            .unwrap();
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        let field = cx.debug_bounds("field").expect("the probe row was drawn");
+        let panel = cx.debug_bounds("panel").expect("the probe panel was drawn");
+        (field.right(), panel.right())
+    }
+
+    /// The panel width the dialog actually hands the settings panel, plus what
+    /// it would have at the narrowest the window itself can be dragged. The
+    /// dialog does not resize with the window, so the second is hypothetical
+    /// today — but measuring both says the row is bounded by its own box rather
+    /// than by luck about how much room happens to be there.
+    fn widths() -> [Pixels; 2] {
+        [
+            DIALOG_WIDTH - CARD_CHROME,
+            crate::layout::window_min_size().width - CARD_CHROME,
+        ]
+    }
+
+    #[gpui::test]
+    fn a_pattern_row_stays_inside_the_card(cx: &mut TestAppContext) {
+        for width in widths() {
+            let (field, panel) = edges(cx, width, true);
+            assert!(
+                field <= panel,
+                "at a {width:?} panel the stacked control reaches {field:?}, past {panel:?}"
+            );
+        }
+    }
+
+    /// Why [`super::input_item`] exists. Not a wish — if this ever stops
+    /// overflowing, the stacked layout is no longer load-bearing and the row can
+    /// go back to sitting beside its label.
+    #[gpui::test]
+    fn a_side_by_side_row_would_not_fit(cx: &mut TestAppContext) {
+        let width = DIALOG_WIDTH - CARD_CHROME;
+        let (field, panel) = edges(cx, width, false);
+        assert!(
+            field > panel,
+            "a horizontal input row now fits ({field:?} within {panel:?}); \
+             super::input_item's stacked layout may no longer be needed"
+        );
     }
 }
