@@ -52,23 +52,36 @@ item carries a `#[allow(dead_code)]` naming what will construct it and when the 
 removing the item, and remove an allow when its producer lands. The two whole-module allows
 (`core::permissions`, `core::safety`) mark the two areas that do not exist at all yet.
 
-**dodo persists seven things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
+**dodo persists eight things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
 behind a trait so the state layer never learns where they live: `collections.json`
 (`api_explorer::services::collection_store`), `environments.json` (`services::variable_store`),
 `script-consent.json` (`services::consent_store`, the imported scripts the user has approved),
 `updater.json` (`updater::services::config_store`), `connections.json`
 (`database::services::connection_store`, which also holds database passwords in plain text — see
 `dodo-database-internals`), `query-data.json` (`database::services::query_store`, saved queries
-plus bounded query history, with query text intentionally stored as plain text) and
-`quick-nav.json` (`quick_nav::services::config_store`). The
-`dodo-theming-settings` skill's "nothing is persisted across restarts" is therefore scoped to
-appearance/language settings only — including the **Run scripts** setting, which is a
-`ScriptPolicy` global and deliberately starts
-each launch at the cautious `Ask for imported`. `updater.json` and `quick-nav.json` are the two
-exceptions, for the same reason in both cases: a setting that holds *what the user typed or
-decided about a specific thing* cannot expire each launch without becoming a lie — `skipped_version`
-for the updater, an edited detector pattern for quick navigation. Persistence and initial load run
-on the background executor, never the UI thread.
+plus bounded query history, with query text intentionally stored as plain text),
+`quick-nav.json` (`quick_nav::services::config_store`) and `session.json`
+(`session::services::session_store`). Persistence and initial load run on the background executor,
+never the UI thread.
+
+**`session.json` is what makes "nothing is persisted across restarts" obsolete**, and any doc still
+saying it — including the `dodo-theming-settings` skill — is stale rather than describing a
+decision. The captain asked for session restoration on 2026-08-06, and `src/session/mod.rs` is the
+authority: theme, font size, border radius, language, the window's rectangle **and mode**, the open
+tool, and the sidebar's collapsed state. **The one exception is `Run scripts`**, a `ScriptPolicy`
+global that still starts each launch at the cautious `Ask for imported` — it is the gate in front of
+running code that arrived inside someone else's collection file, not a preference, and its approvals
+are persisted per script in `script-consent.json` instead. Do not quietly start persisting it; that
+is the captain's call.
+
+Two things about that file that are decisions rather than details. **Every field is an `Option` and
+absent means *never chosen*** — writing `"Default Light"` into a fresh file merely because that was
+on screen would freeze system-appearance following for everyone who never opened the dialog. And
+**restoring window geometry opts out of gpui's own placement care**: `Window::new` only cascades and
+clamps in `default_bounds`, the branch it takes when `window_bounds` is `None`, so a supplied
+rectangle goes to the platform unexamined. `session::models::geometry` is the replacement — clamp to
+a display that still exists, honour `layout::window_min_size`, centre on the primary when the saved
+display is gone — and it is a pure function so all of it is tested without a frame.
 
 **`src/quick_nav/` is the one feature that is not a tool**: a vim-shaped normal mode where
 `Cmd+V` / `Ctrl+V` / `p` sends the clipboard to whichever tool can read it, and `Esc` leaves a

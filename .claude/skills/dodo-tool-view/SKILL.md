@@ -27,13 +27,24 @@ never rebuild a view on selection.
    (`Self::Foo => "icons/foo.svg"`). The path is what reaches the asset source; the variant name
    is arbitrary. Watch the existing `Palette => "icons/palatte.svg"` — filename typo, variant
    spelled correctly.
-5. **`src/layout.rs`** — four edits, three of which the compiler will demand:
+5. **`src/layout.rs`** — five edits, four of which the compiler will demand:
    - a `View` variant;
    - bump the arity and contents of `const ALL: [View; N]` (this one is silent if you forget —
      the menu simply will not list your tool);
    - an arm in `View::title` and in `View::icon`;
+   - **an arm in `View::code`**, which is what `session.json` stores so the tool can be reopened
+     on next launch. This one is a **compatibility surface**, not just another match arm: pick a
+     kebab-case identifier, never a title, and never reuse a code that has shipped for a different
+     tool. `View::from_code` falls back to `View::DEFAULT` for anything it does not recognise, so
+     a removed or renamed tool degrades to "opens on the default" rather than failing to start —
+     which is also what happens to everyone who had your tool open if you change its code later.
    - a `Entity<YourTool>` field on `Layout`, initialised in `Layout::new`, and an arm in the
      main-pane `match self.active` inside `Layout::render`.
+
+   One more thing if the tool needs to *start something* when it becomes active — Docker's polling
+   is the existing case. `Layout::activate` is the normal path, but a restored session opens
+   straight onto the tool with no click, and there is no `self` to call `activate` on inside the
+   constructor. `Layout::new` builds the Docker entity first and tells it by hand; copy that.
 
 6. **`src/i18n.rs`** — `View::title` returns a `Str`, not a string, so the tool needs a `Str`
    variant for its sidebar title and one for every label inside it. Load `dodo-i18n-text` before
