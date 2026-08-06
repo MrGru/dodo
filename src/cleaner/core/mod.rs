@@ -1,6 +1,9 @@
+#![allow(dead_code)]
+
 pub mod cancellation;
 pub mod category;
 pub mod errors;
+pub mod fs;
 pub mod item;
 pub mod permissions;
 pub mod progress;
@@ -8,5 +11,6 @@ pub mod report;
 pub mod risk;
 pub mod safety;
 pub mod scan_context;
+pub mod scan_root;
 pub mod scanner;
 pub mod selection;

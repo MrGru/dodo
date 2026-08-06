@@ -1,7 +1,10 @@
+#![allow(dead_code)]
+
 mod cleaner_state;
 mod mock;
+mod registry;
 
 pub use cleaner_state::{CleanerState, CleanerStatus};
-pub use mock::default_scanners;
 #[cfg(test)]
 pub use mock::MockScanner;
+pub use registry::default_scanners;
