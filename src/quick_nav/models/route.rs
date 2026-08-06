@@ -15,6 +15,8 @@
 use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::database::models::uri::ParsedUri;
 
+use super::detect::Detector;
+
 /// A tool to open, and what to put in it.
 ///
 /// Adding a tool to quick navigation means one variant here, one arm in
@@ -39,4 +41,24 @@ pub enum Route {
     /// describes. The `id` inside the profile is a placeholder — see
     /// [`Detector::PLACEHOLDER_ID`](super::detect::Detector::PLACEHOLDER_ID).
     Database(Box<ParsedUri>),
+}
+
+impl Route {
+    /// Which detector produced this route.
+    ///
+    /// The inverse of [`Detector::detect`], and the reason `Layout` can decide
+    /// *where* a route goes from one mapping rather than from a second `match`
+    /// beside `apply_route`'s. It exists because the sidebar's tool list can now
+    /// switch a tool off, and a detector whose tool is not listed must not be
+    /// tried at all — which means asking, before detection, which detectors are
+    /// still in play.
+    pub fn detector(&self) -> Detector {
+        match self {
+            Route::Json(_) => Detector::Json,
+            Route::Jwt(_) => Detector::Jwt,
+            Route::Base64 { .. } => Detector::Base64,
+            Route::Curl(_) => Detector::Curl,
+            Route::Database(_) => Detector::DatabaseUri,
+        }
+    }
 }
