@@ -26,6 +26,7 @@ mod json_formatter;
 mod layout;
 mod paths;
 mod quick_nav;
+mod session;
 mod settings;
 mod updater;
 mod window_icon;
@@ -82,6 +83,9 @@ fn main() {
         // keys today, and keeping the position means adding one later is not a
         // debugging session.
         updater::init(cx);
+        // Installs the session global and the quit-time flush of
+        // `session.json`. It reads nothing here — the read is awaited below.
+        session::init(cx);
         init_close_window_binding(cx);
         // Dock icon for a directly-run macOS binary; a no-op inside a .app and
         // on every other platform. Here rather than earlier because it needs
@@ -113,6 +117,14 @@ fn main() {
         };
 
         cx.spawn(async move |cx| {
+            // `session.json` decides the theme and the font size, so it is read
+            // *before* the window exists rather than applied over a frame the
+            // user has already seen. It is one small local file, read on the
+            // background executor; a missing or unreadable one leaves every
+            // default exactly as it was before session restoration existed.
+            session::load(cx).await;
+            cx.update(settings::apply_session);
+
             cx.open_window(window_options, |window, cx| {
                 let view = cx.new(|cx| DodoApp::new(window, cx));
                 // This first level on the window, should be a Root.
