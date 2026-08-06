@@ -68,7 +68,8 @@ never the UI thread.
 saying it — including the `dodo-theming-settings` skill — is stale rather than describing a
 decision. The captain asked for session restoration on 2026-08-06, and `src/session/mod.rs` is the
 authority: theme, font size, border radius, language, the window's rectangle **and mode**, the open
-tool, and the sidebar's collapsed state. **The one exception is `Run scripts`**, a `ScriptPolicy`
+tool, the sidebar's collapsed state, and **which tools the sidebar lists at all and in what order**.
+**The one exception is `Run scripts`**, a `ScriptPolicy`
 global that still starts each launch at the cautious `Ask for imported` — it is the gate in front of
 running code that arrived inside someone else's collection file, not a preference, and its approvals
 are persisted per script in `script-consent.json` instead. Do not quietly start persisting it; that
@@ -86,6 +87,24 @@ paired with a saved display **UUID**, because on macOS the rectangle alone canno
 it meant: every coordinate the pinned gpui reports there is display-*local* (`MacDisplay::bounds`
 returns `(0, 0)` for every display). `models::document::WindowRecord` names the four functions that
 prove it. Do not "simplify" that pairing away.
+
+**The Features settings page is why `View::ALL` is no longer the sidebar's order.** The captain
+asked on 2026-08-06 for per-tool on/off plus drag reordering, persisted; `session::models::features`
+is the authority and is pure, so every rule is a unit test rather than something found by looking at
+the app. Four of them matter outside that file: a stored entry naming a tool this build lacks is
+**dropped** and a tool the file never names comes back **beside its default neighbour**, enabled;
+**at least one tool always stays visible**, enforced in the model and drawn as a disabled switch with
+the reason beside it; the tool on screen is always a listed one, which is the single function
+`Features::active` answering both "the remembered tool was switched off" and "the open tool was just
+switched off"; and **a switched-off tool is not a quick-navigation route** — `layout` drops its
+detectors before `detect_among` runs, so a pasted `curl` with the API Explorer off falls through
+rather than reopening it. The last one is the trap: `detect_among`'s allowed list is a **membership
+test and never an order**, because `Detector::ORDER` is a correctness property (most specific first)
+and the sidebar's order is a preference. `Layout::features` is the live list, `View::for_detector` is
+the single mapping both `apply_route` and `allowed_detectors` read, and `settings::features_page`
+builds the rows by hand because a `SettingItem` cannot carry a position. Adding the field is also
+what took `session.json` to **schema version 2**; an older build would have read it, dropped the key
+and written it back pruned.
 
 **`src/quick_nav/` is the one feature that is not a tool**: a vim-shaped normal mode where
 `Cmd+V` / `Ctrl+V` / `p` sends the clipboard to whichever tool can read it, and `Esc` leaves a

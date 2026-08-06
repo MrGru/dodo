@@ -64,14 +64,24 @@ What ships today:
   built from it, and a database URI opens the matching saved connection or
   creates one. `Esc` inside a text field leaves it and gets you back to that mode.
   When nothing is recognised confidently, nothing happens. It can be switched off
-  in Settings, where each format's matching pattern can also be edited; those
-  settings are the one thing in that dialog that survives a restart.
+  in Settings, where each format's matching pattern can also be edited. A tool
+  you have switched off in Settings → Features is not a paste target: its
+  detector is skipped entirely, so the text falls through to whatever else can
+  read it rather than reopening a tool you hid.
 
-The sidebar footer holds **Settings** (language, theme, font size, border radius,
-the script-execution policy and quick navigation) and **Check for updates**, an
-in-app updater that downloads a release, verifies its SHA-256, installs it and
-restarts. It can check on its own at startup, but never downloads anything
-without you pressing a button.
+The sidebar footer holds **Settings** and **Check for updates**, an in-app updater
+that downloads a release, verifies its SHA-256, installs it and restarts. It can
+check on its own at startup, but never downloads anything without you pressing a
+button.
+
+Settings covers language, theme, font size, border radius, the script-execution
+policy, quick navigation, and **Features** - which of the tools above the sidebar
+lists, and in what order. Drag a row by its handle or use the arrows to reorder
+it, and switch off the ones you do not use; at least one tool has to stay. Every
+one of these survives a restart except the script-execution policy, which goes
+back to asking about imported scripts at every launch on purpose. So do the
+window's size, position and display, the open tool, and whether the sidebar is
+collapsed.
 
 ## Tech stack
 
@@ -199,6 +209,7 @@ already know about. CI still runs the same checks.
 │   ├── database/       # Databases     ┘ components, views
 │   ├── updater/        # The in-app updater, same five layers
 │   ├── quick_nav/      # Clipboard detection and the normal-mode key bindings
+│   ├── session/        # session.json: appearance, window, open tool, tool list
 │   ├── app_icon.rs     # AppIcon enum mapping icon names to embedded SVG paths
 │   ├── assets.rs       # rust-embed AssetSource that loads embedded icons
 │   └── window_icon.rs  # Runtime window/Dock icon and the Linux app_id
