@@ -36,6 +36,15 @@
 //! A wrong jump throws away whatever the user was looking at; not jumping costs
 //! them one click.
 //!
+//! **This order is not the sidebar's**, and the two must never be conflated.
+//! The Features settings page lets the user drag the sidebar's tools into any
+//! order they like; that is a preference. This list is a correctness property —
+//! every position above is forced by an overlap with something below it — so
+//! [`detect_among`] iterates `ORDER` whatever order its caller's slice of
+//! allowed detectors is in. What the sidebar *does* decide is which detectors
+//! are allowed at all: a tool the user switched off is not a paste target, so
+//! its detector is skipped and the text falls through to the next one.
+//!
 //! # Patterns versus parsers — the design judgement in this module
 //!
 //! The captain asked for user-editable regexes. For cURL, database URIs and
@@ -307,14 +316,28 @@ impl Default for Patterns {
     }
 }
 
-/// Reads `text` and says where it should go, or `None` for "do nothing".
-pub fn detect(text: &str, patterns: &Patterns) -> Option<Route> {
+/// Reads `text` and says where it should go, or `None` for "do nothing",
+/// considering only the detectors in `allowed`.
+///
+/// **The sidebar's tool list is what narrows it.** A tool the user has switched
+/// off is not a paste target: its detector is skipped entirely, so the text
+/// falls through to the next one or nowhere at all. Re-enabling a tool the user
+/// turned off — even for one keystroke, even helpfully — would be the app
+/// overruling the setting, so the alternative was never on the table.
+///
+/// **`allowed` is a membership test and never an order.** The iteration is
+/// [`Detector::ORDER`]'s, whatever order the caller's slice is in, because that
+/// order is a correctness property — most specific first, every position forced
+/// by an overlap below it — and the sidebar's is a preference. Dragging Base64
+/// above JWT in the Features page must not change what a pasted token does.
+pub fn detect_among(text: &str, patterns: &Patterns, allowed: &[Detector]) -> Option<Route> {
     if text.len() > MAX_INPUT_BYTES || text.trim().is_empty() {
         return None;
     }
 
     Detector::ORDER
         .into_iter()
+        .filter(|detector| allowed.contains(detector))
         .find_map(|detector| detector.detect(text, patterns.pattern(detector)))
 }
 
@@ -458,10 +481,17 @@ fn passes(gate: Option<&Regex>, candidate: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Detector, MAX_INPUT_BYTES, Patterns, detect};
+    use super::{Detector, MAX_INPUT_BYTES, Patterns, detect_among};
     use crate::i18n::Language;
     use crate::quick_nav::models::config::QuickNavDocument;
     use crate::quick_nav::models::route::Route;
+
+    /// Detection with every detector in play — what the app does when the user
+    /// has switched nothing off, and the baseline the narrowing tests below are
+    /// measured against.
+    fn detect(text: &str, patterns: &Patterns) -> Option<Route> {
+        detect_among(text, patterns, &Detector::ORDER)
+    }
 
     /// A real token: `{"alg":"HS256","typ":"JWT"}` over
     /// `{"sub":"1234567890","name":"Ada Lovelace","iat":1516239022}`.
@@ -474,16 +504,9 @@ mod tests {
     }
 
     /// Which detector claimed the text — the thing most of these tests are
-    /// really asserting. A test affordance rather than a `Route` method: nothing
-    /// the app does needs to ask a route where it came from.
+    /// really asserting.
     fn detector_of(text: &str) -> Option<Detector> {
-        route(text).map(|route| match route {
-            Route::Json(_) => Detector::Json,
-            Route::Jwt(_) => Detector::Jwt,
-            Route::Base64 { .. } => Detector::Base64,
-            Route::Curl(_) => Detector::Curl,
-            Route::Database(_) => Detector::DatabaseUri,
-        })
+        route(text).map(|route| route.detector())
     }
 
     // ---- the ambiguous cases, which are the point of the order ------------
@@ -770,6 +793,83 @@ mod tests {
         // The real ones still work.
         assert!(detect("SGVsbG8sIHdvcmxkIQ==", &patterns).is_some());
         assert!(detect(JWT, &patterns).is_some());
+    }
+
+    // ---- narrowing to the tools the sidebar still lists ---------------------
+
+    /// A detector left out of `allowed` is not tried, and the text goes to the
+    /// next one that can read it. `layout` decides what is allowed; this is the
+    /// rule underneath that decision.
+    #[test]
+    fn a_detector_that_is_not_allowed_is_skipped_entirely() {
+        let patterns = Patterns::default();
+        let curl = "curl -X POST https://example.com -d '{\"a\":1}'";
+
+        assert_eq!(
+            detect_among(curl, &patterns, &Detector::ORDER).map(|r| r.detector()),
+            Some(Detector::Curl),
+        );
+
+        let without_curl = [
+            Detector::DatabaseUri,
+            Detector::Jwt,
+            Detector::Json,
+            Detector::Base64,
+        ];
+        assert_eq!(detect_among(curl, &patterns, &without_curl), None);
+        assert_eq!(
+            detect_among("{\"a\":1}", &patterns, &without_curl).map(|r| r.detector()),
+            Some(Detector::Json),
+            "the body on its own still has somewhere to go",
+        );
+    }
+
+    #[test]
+    fn allowing_nothing_routes_nothing() {
+        let patterns = Patterns::default();
+        for text in [JWT, "{\"a\":1}", "SGVsbG8sIHdvcmxkIQ=="] {
+            assert_eq!(detect_among(text, &patterns, &[]), None);
+        }
+    }
+
+    /// **`allowed` is a membership test, never an order.** The Features page
+    /// lets the user drag the sidebar into any order they like, and the caller
+    /// may well hand its detectors over in that order — but a JWT is Base64,
+    /// and only `ORDER` keeps it out of the decoder.
+    #[test]
+    fn the_allowed_list_cannot_reorder_detection() {
+        let patterns = Patterns::default();
+        let mut backwards = Detector::ORDER;
+        backwards.reverse();
+
+        assert_eq!(
+            detect_among(JWT, &patterns, &backwards).map(|r| r.detector()),
+            Some(Detector::Jwt),
+        );
+        assert_eq!(
+            detect_among(
+                "curl https://example.com -d '{\"a\":1}'",
+                &patterns,
+                &backwards
+            )
+            .map(|r| r.detector()),
+            Some(Detector::Curl),
+        );
+        // Base64 listed first still does not get to claim a token.
+        assert_eq!(
+            detect_among(JWT, &patterns, &[Detector::Base64, Detector::Jwt]).map(|r| r.detector()),
+            Some(Detector::Jwt),
+        );
+    }
+
+    /// A duplicate in `allowed` is a caller's mistake, not a second attempt.
+    #[test]
+    fn a_repeated_detector_is_still_tried_once() {
+        let patterns = Patterns::default();
+        assert_eq!(
+            detect_among(JWT, &patterns, &[Detector::Jwt, Detector::Jwt]),
+            Some(Route::Jwt(JWT.to_owned())),
+        );
     }
 
     // ---- the list itself --------------------------------------------------

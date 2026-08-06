@@ -15,6 +15,7 @@ use crate::docker::{DockerPage, DockerView};
 use crate::encoder_decoder::{EncoderDecoder, Format};
 use crate::i18n::{Str, t};
 use crate::json_formatter::JsonFormatter;
+use crate::quick_nav::models::detect::Detector;
 use crate::quick_nav::models::route::Route;
 use crate::quick_nav::{self, LeaveInsertMode, QuickNav, QuickNavigate};
 use crate::session::Session;
@@ -159,6 +160,24 @@ impl View {
             .active(wanted)
             .and_then(View::lookup)
             .unwrap_or(View::DEFAULT)
+    }
+
+    /// The tool a detected paste belongs to.
+    ///
+    /// **The one mapping from `quick_nav`'s list onto this one**, read twice
+    /// and for two different reasons: [`Layout::apply_route`] uses it to decide
+    /// where a route goes, and [`Layout::allowed_detectors`] uses it *before*
+    /// detection to decide which detectors a switched-off tool has taken out of
+    /// play. Two copies could disagree, and the disagreement would be silent.
+    ///
+    /// Not injective: the Encoder/Decoder answers for both JWT and Base64.
+    fn for_detector(detector: Detector) -> View {
+        match detector {
+            Detector::Curl => View::ApiExplorer,
+            Detector::DatabaseUri => View::Database,
+            Detector::Jwt | Detector::Base64 => View::EncoderDecoder,
+            Detector::Json => View::JsonFormatter,
+        }
     }
 }
 
@@ -623,18 +642,20 @@ impl Layout {
     /// `Cmd+V` / `Ctrl+V` / `p` in normal mode: read the clipboard, work out
     /// what it is, and go there.
     ///
-    /// Nothing happens on three ordinary paths — the feature is off, the
-    /// clipboard holds no text, or nothing was recognised confidently — and in
-    /// each the keystroke is propagated, because a shortcut that silently
-    /// swallows a key it did not use is worse than one that declines it.
+    /// Nothing happens on four ordinary paths — the feature is off, the
+    /// clipboard holds no text, nothing was recognised confidently, or the only
+    /// tool that could have taken it is switched off — and in each the keystroke
+    /// is propagated, because a shortcut that silently swallows a key it did not
+    /// use is worse than one that declines it.
     ///
     /// `quick_nav`'s key context is what guarantees this only runs with no input
     /// focused; there is no mode flag to consult and none to get out of step.
     fn quick_navigate(&mut self, _: &QuickNavigate, window: &mut Window, cx: &mut Context<Self>) {
+        let allowed = Self::allowed_detectors(&self.features);
         let route = cx
             .read_from_clipboard()
             .and_then(|item| item.text())
-            .and_then(|text| QuickNav::detect(&text, cx));
+            .and_then(|text| QuickNav::detect(&text, &allowed, cx));
 
         let Some(route) = route else {
             cx.propagate();
@@ -643,20 +664,46 @@ impl Layout {
         self.apply_route(route, window, cx);
     }
 
+    /// The detectors whose tool the sidebar still lists.
+    ///
+    /// **A switched-off tool is not a paste target.** The user said they only
+    /// want these features; pasting a `curl` with the API Explorer off must not
+    /// bring it back, so the detector is dropped before detection runs and the
+    /// text falls through to whatever else can read it — or nowhere. The
+    /// alternative, re-enabling the tool for the jump, would be the app
+    /// overruling a setting the user had just changed.
+    ///
+    /// The returned order is [`Detector::ORDER`]'s and means nothing:
+    /// `detect_among` treats this as a membership test, precisely so that the
+    /// sidebar's order can never leak into the detection order.
+    fn allowed_detectors(features: &Features) -> Vec<Detector> {
+        Detector::ORDER
+            .into_iter()
+            .filter(|detector| features.is_enabled(View::for_detector(*detector).code()))
+            .collect()
+    }
+
     /// Hands a detected route to the tool that owns it.
     ///
     /// **The one place a `Route` meets a `View`**, which is what keeps adding a
     /// tool to quick navigation from being an edit in three files: the detector
     /// decides *what*, this decides *where*, and neither knows the other's list.
+    ///
+    /// *Where* is [`View::for_detector`] and nothing else — the `match` below
+    /// only carries the payload. They used to be one `match` doing both, which
+    /// was fine until [`Layout::allowed_detectors`] needed the same mapping
+    /// before any route existed; two copies of it could disagree about which
+    /// tool a detector belongs to, and the one that could disagree silently is
+    /// the one deciding whether the detector runs at all.
     fn apply_route(&mut self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
+        self.activate(View::for_detector(route.detector()), cx);
+
         match route {
             Route::Json(text) => {
-                self.activate(View::JsonFormatter, cx);
                 self.json_formatter
                     .update(cx, |view, cx| view.accept_text(text, window, cx));
             }
             Route::Jwt(token) => {
-                self.activate(View::EncoderDecoder, cx);
                 self.encoder_decoder.update(cx, |view, cx| {
                     view.accept_decode(token, Format::Jwt, window, cx)
                 });
@@ -667,17 +714,14 @@ impl Layout {
                 } else {
                     Format::Base64
                 };
-                self.activate(View::EncoderDecoder, cx);
                 self.encoder_decoder
                     .update(cx, |view, cx| view.accept_decode(text, format, window, cx));
             }
             Route::Curl(snapshot) => {
-                self.activate(View::ApiExplorer, cx);
                 self.api_explorer
                     .update(cx, |view, cx| view.accept_curl(*snapshot, window, cx));
             }
             Route::Database(parsed) => {
-                self.activate(View::Database, cx);
                 self.database
                     .update(cx, |view, cx| view.accept_uri(&parsed, cx));
             }
@@ -921,12 +965,13 @@ mod tests {
     use gpui_component::sidebar::SidebarMenuItem;
 
     use super::{
-        AUTO_COLLAPSE_WIDTH, MAIN_MIN_HEIGHT, MAIN_MIN_WIDTH, PANE_CHROME_HEIGHT,
+        AUTO_COLLAPSE_WIDTH, Layout, MAIN_MIN_HEIGHT, MAIN_MIN_WIDTH, PANE_CHROME_HEIGHT,
         PANE_CHROME_WIDTH, SIDEBAR_RAIL_WIDTH, SIDEBAR_WIDTH, SidebarState, ToolItem, View,
         pane_title, window_min_size,
     };
     use crate::docker::DockerPage;
     use crate::i18n::Str;
+    use crate::quick_nav::models::detect::{Detector, Patterns, detect_among};
     use crate::session::models::features::Features;
 
     /// A width comfortably on each side of the breakpoint. 1280 and 520 are the
@@ -1093,6 +1138,108 @@ mod tests {
             View::shown(&features, Some(View::Docker.code())),
             View::Database,
         );
+    }
+
+    // ---- quick navigation meets the tool list ------------------------------
+
+    /// The mapping both `apply_route` and `allowed_detectors` read. If a
+    /// detector ever answered for a different tool than the route it produces
+    /// lands in, switching that tool off would silence the wrong detector.
+    #[test]
+    fn every_detector_names_the_tool_its_route_lands_in() {
+        for (detector, view) in [
+            (Detector::Curl, View::ApiExplorer),
+            (Detector::DatabaseUri, View::Database),
+            (Detector::Jwt, View::EncoderDecoder),
+            (Detector::Json, View::JsonFormatter),
+            (Detector::Base64, View::EncoderDecoder),
+        ] {
+            assert_eq!(View::for_detector(detector), view);
+        }
+    }
+
+    /// Trap 4, and the captain's own example: pasting a `curl` with the API
+    /// Explorer switched off. The detector is not tried at all, so the text
+    /// falls through to the next one that can read it — here the JSON body —
+    /// and the API Explorer is **not** switched back on to receive it.
+    #[test]
+    fn a_switched_off_tool_is_not_a_paste_target() {
+        let text = "curl -X POST https://api.example.com/v1/orders \
+                    -H 'Content-Type: application/json' -d '{\"item\":\"widget\"}'";
+        let patterns = Patterns::default();
+
+        let mut features = everything();
+        assert_eq!(
+            detect_among(text, &patterns, &Layout::allowed_detectors(&features))
+                .map(|route| route.detector()),
+            Some(Detector::Curl),
+        );
+
+        features
+            .set_enabled(View::ApiExplorer.code(), false)
+            .expect("five others remain");
+        let allowed = Layout::allowed_detectors(&features);
+
+        assert!(!allowed.contains(&Detector::Curl));
+        assert_eq!(
+            detect_among(text, &patterns, &allowed).map(|route| route.detector()),
+            None,
+            "the whole command is not JSON, so nothing else claims it either",
+        );
+
+        // …and the body on its own still reaches the formatter, which is what
+        // "falls through to the next detector" looks like when there is one.
+        assert_eq!(
+            detect_among("{\"item\":\"widget\"}", &patterns, &allowed)
+                .map(|route| route.detector()),
+            Some(Detector::Json),
+        );
+    }
+
+    /// Switching off the Encoder/Decoder takes **both** of its detectors out of
+    /// play, because `for_detector` is not injective.
+    #[test]
+    fn switching_off_one_tool_can_silence_two_detectors() {
+        let mut features = everything();
+        features
+            .set_enabled(View::EncoderDecoder.code(), false)
+            .expect("five others remain");
+
+        let allowed = Layout::allowed_detectors(&features);
+        assert!(!allowed.contains(&Detector::Jwt));
+        assert!(!allowed.contains(&Detector::Base64));
+        assert!(allowed.contains(&Detector::Json));
+    }
+
+    /// Trap 5: the sidebar's order is a preference and detection's is a
+    /// correctness property. Dragging the Encoder/Decoder above everything —
+    /// or below it — must not change what a pasted token or a pasted `curl`
+    /// does.
+    #[test]
+    fn the_sidebar_order_never_becomes_the_detection_order() {
+        const JWT: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.c2ln";
+        let curl = "curl -X POST https://api.example.com -d '{\"a\":1}'";
+        let patterns = Patterns::default();
+
+        // Every tool, walked into every position: the Encoder/Decoder first,
+        // then last, then back where it started.
+        for at in [0, View::ALL.len() - 1, 1] {
+            let mut features = everything();
+            features.move_to(View::EncoderDecoder.code(), at);
+            features.move_to(View::ApiExplorer.code(), View::ALL.len() - 1);
+            let allowed = Layout::allowed_detectors(&features);
+
+            assert_eq!(
+                detect_among(JWT, &patterns, &allowed).map(|route| route.detector()),
+                Some(Detector::Jwt),
+                "a JWT is Base64, and only the detection order keeps it out of the decoder",
+            );
+            assert_eq!(
+                detect_among(curl, &patterns, &allowed).map(|route| route.detector()),
+                Some(Detector::Curl),
+                "a cURL command carrying JSON belongs to the API Explorer wherever its row is",
+            );
+        }
     }
 
     /// Trap 7: the Features page can only ever hide a **tool**, and the
