@@ -1,6 +1,6 @@
 ---
 name: gpui-component-recipes
-description: Verified gpui-component widget APIs for dodo - text inputs and code editors (InputState/Input), inline diagnostics, Select dropdowns, dialogs and the Settings panel, Sidebar menus, Buttons, Icons, and the trait imports each one needs. Load before writing or editing any render/new method that builds a gpui-component widget, when a widget call does not compile ("no method named ...", "trait not in scope"), or when a widget builds but nothing appears on screen.
+description: Verified gpui-component widget APIs for dodo - text inputs and code editors (InputState/Input), inline diagnostics, Select dropdowns, dialogs and the Settings panel, Sidebar menus, Buttons, Icons, the trait imports each one needs, and how gpui decides which key binding wins. Load before writing or editing any render/new method that builds a gpui-component widget, before adding or changing a key binding, focus handle or key context, when a widget call does not compile ("no method named ...", "trait not in scope"), when a widget builds but nothing appears on screen, or when a keystroke reaches the wrong handler or none at all.
 ---
 
 Pinned revision: `gpui-component` **3c270ed** (see `Cargo.lock`). Source of truth is
@@ -13,6 +13,36 @@ three points at this revision**: it is `window.open_dialog` / `close_dialog`, no
 `open_modal` / `close_modal`; the module is `gpui_component::setting` (singular), not
 `settings`; and `SelectState` has no `selected_item()` — use `selected_index(cx)` or
 `selected_value()`.
+
+## Key bindings: depth decides who wins, and `!` is how you say "not here"
+
+Everything below is gpui's, not the widget library's, but it is where dodo's key handling lives
+and it has bitten a round already. `crates/gpui/src/keymap.rs` and `keymap/context.rs` are the
+source; `src/quick_nav/mod.rs` is the worked example, and its tests drive the predicates directly
+with `KeyContext::parse` + `KeyBindingContextPredicate::depth_of`, which needs no window.
+
+- **A binding with `None` context is treated as the *deepest* match, not the shallowest.**
+  `Keymap::binding_enabled` returns `Some(contexts.len())` for one. So a context-less binding beats
+  the focused input's own bindings — bind `p` that way and the letter disappears from every text
+  field in the app. Give every app-level binding a context.
+- **gpui collects *all* matching bindings, sorts them deepest-context-first, and dispatches each
+  in turn until one stops propagating** (`Window::dispatch_key_event`). That is what lets a
+  shallow binding be a fallback: `InputState::escape` calls `cx.propagate()` unless it has a
+  completion popup or an IME composition to close, so an `escape` bound at an ancestor context runs
+  only when the input declined it. Ties at equal depth go to whichever was registered *later* —
+  hence every `dodo::init` running after `gpui_component::init`.
+- **`!Foo` is evaluated against the whole dispatch path**, not just the node being tested
+  (`KeyBindingContextPredicate::Not`). So `MyPane && !Input` means "somewhere under MyPane, with no
+  text input anywhere between the focused element and the root" — the honest way to express a
+  vim-style normal mode, because it is derived from real focus rather than from a flag you maintain.
+- **With nothing focused, the dispatch path is the window root alone.**
+  `focus_node_id_in_rendered_frame` falls back to `root_node_id()` when `window.focus` is `None`,
+  so *none* of your `key_context`s are in the path and none of your bindings match. If a binding
+  must work before the user has clicked anything, give the view a `FocusHandle`, `track_focus` it
+  on the element carrying the context, and `window.focus(&handle, cx)` in its constructor.
+- **A dialog is not inside your pane.** `Root::render_dialog_layer` is mounted by `DodoApp::render`
+  as a *sibling* of `Layout`, so a dialog's focus path contains none of the pane's contexts. You do
+  not need to exclude dialogs from a pane-scoped binding; they are already out of reach.
 
 ## Overlays are mounted by us, never by `Root`
 
