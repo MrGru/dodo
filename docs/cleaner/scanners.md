@@ -27,6 +27,9 @@ Results are returned as typed `CategoryScanResult` values.
 - `src/cleaner/macos/scanners/installed_apps.rs` provides first-pass installed-app indexing.
 - `src/cleaner/macos/scanners/orphaned_files.rs` provides Full-Disk-Access-gated orphan detection
   (Phase 10), reusing Phase 9's identity/location/confidence machinery in reverse.
+- `src/cleaner/macos/scanners/xcode_junk.rs` provides Xcode/CoreSimulator developer-cache analysis
+  (Phase 11).
+- `src/cleaner/macos/scanners/homebrew_cache.rs` provides Homebrew download-cache analysis (Phase 11).
 - `src/cleaner/state/mock.rs` remains for unit tests that validate the orchestration layer in isolation.
 
 ### User Cache scanner
@@ -119,6 +122,58 @@ Current behavior:
 - grants `ItemCapability::MarkAsKept` to every result, system-scope included, so "Keep" is always
   available even where cleanup is not;
 - never detects CLI tools without an `.app` bundle — see `docs/cleaner/known-limitations.md`.
+
+### Xcode Junk scanner
+
+Eight fixed roots under `~/Library/Developer` and `~/Library/org.swift.swiftpm`, each tagged with a
+risk/selection/capability set that never drifts from `macos::cleanup::policy_for`'s allow-list
+(`xcode_junk::cleanup_allowed_roots` is the single list both read):
+
+| Root | Risk | Selected by default | `MoveToTrash` |
+|---|---|---|---|
+| `Xcode/DerivedData` | `SafeRecreatable` | yes | yes |
+| `Xcode/UserData/Previews` | `SafeRecreatable` | yes | yes |
+| `CoreSimulator/Caches` | `SafeRecreatable` | yes | yes |
+| `Xcode/Archives` | `ReviewRecommended` | no | no |
+| `Xcode/iOS DeviceSupport` | `ReviewRecommended` | no | no |
+| `CoreSimulator/Devices` | `ReviewRecommended` | no | no |
+| `XCTestDevices` | `ReviewRecommended` | no | no |
+| `org.swift.swiftpm` | `ReviewRecommended` | no | no |
+
+Current behavior:
+
+- aggregates every root by immediate child (`AggregateMode::ImmediateChildren`), so no item's path
+  ever equals its own allow-listed root — an intentional choice: `macos::safety::validate_path`
+  rejects deleting an allowed root outright, so an item whose path equals the root would silently
+  fail cleanup;
+- groups `DerivedData` entries by project, stripping a plausible trailing `-<hash>` from Xcode's
+  `<ProjectName>-<hash>` naming convention (`derived_data_project_name`);
+- calls a read-only `NSRunningApplication` check once per scan (`macos::platform::xcode::
+  is_xcode_running`) and, when Xcode is running, attaches an `ItemWarning` to every `DerivedData`
+  item plus one category-level `ScanWarning` — this warns rather than blocking the scan;
+- never grants `ItemCapability::MoveToTrash` to Archives, iOS DeviceSupport, CoreSimulator Devices,
+  XCTestDevices or the SwiftPM cache, matching the allow-list exactly — see
+  `docs/cleaner/known-limitations.md` for why each of those stays scan-only this phase;
+- CoreSimulator Devices and XCTestDevices are never added to the cleanup allow-list at all, even
+  though the scanner can see them — the same "scan-only until a more deliberate workflow exists"
+  posture Phase 9 used for system-scope leftover roots.
+
+### Homebrew Cache scanner
+
+Current behavior:
+
+- resolves the cache root in two tiers only — the `HOMEBREW_CACHE` environment variable, then the
+  default `~/Library/Caches/Homebrew` — never the Cellar and never `brew --cache` (see
+  `docs/cleaner/known-limitations.md` for why the ticket's second tier was skipped);
+  `homebrew_cache::resolve_cache_root` is the single function both this scanner and
+  `macos::cleanup::policy_for` call, so cleanup can never allow-list a root the scan did not use;
+- separates a `Cask/` subdirectory into its own "Cask cache" group and a `Logs/` subdirectory into
+  its own "Logs" group when either is present, and folds everything else at the top level into one
+  "Download cache" group — Homebrew does not otherwise separate formula bottles from source
+  tarballs on disk;
+- marks every item `SafeRecreatable`/`SelectedByDefault` with `MoveToTrash`, matching
+  `UserCacheScanner`'s bar for a `Caches`-namespaced root;
+- never scans the Cellar and never invokes `brew cleanup` or any other mutating Homebrew command.
 
 ### Unimplemented categories
 

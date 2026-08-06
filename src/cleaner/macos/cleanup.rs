@@ -10,7 +10,7 @@ use crate::cleaner::core::safety::{
 };
 use crate::cleaner::macos::applications::locations;
 use crate::cleaner::macos::platform::move_to_trash;
-use crate::cleaner::macos::scanners::mail_files;
+use crate::cleaner::macos::scanners::{homebrew_cache, mail_files, xcode_junk};
 use crate::paths;
 
 pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
@@ -117,6 +117,37 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
                     CleanerCategory::InstalledApps,
                     CleanerCategory::OrphanedFiles,
                 ],
+            });
+        }
+
+        // Xcode Junk (Phase 11): only the three sub-paths
+        // `xcode_junk::cleanup_allowed_roots` marks "normally recreatable" —
+        // DerivedData, the SwiftUI preview cache and CoreSimulator's own
+        // `Caches` — are allow-listed. Archives, iOS DeviceSupport,
+        // CoreSimulator Devices, XCTestDevices and the SwiftPM cache stay
+        // scan-only; see `macos::scanners::xcode_junk` and
+        // `docs/cleaner/known-limitations.md`.
+        for root in xcode_junk::cleanup_allowed_roots(home.as_path()) {
+            allowed_roots.push(AllowedRoot {
+                path: root,
+                allow_root_itself: false,
+                allowed_categories: vec![CleanerCategory::XcodeJunk],
+            });
+        }
+
+        // Homebrew Cache (Phase 11): scoped to the exact detected cache root
+        // only — never `/opt/homebrew` or `/usr/local` broadly, and never the
+        // Cellar. Reuses the scanner's own detection order (the
+        // `HOMEBREW_CACHE` environment variable, else the default location)
+        // so cleanup can never authorize a root the scan itself did not use.
+        if let Some(cache_root) = homebrew_cache::resolve_cache_root(
+            std::env::var_os("HOMEBREW_CACHE").map(PathBuf::from),
+            Some(home.as_path()),
+        ) {
+            allowed_roots.push(AllowedRoot {
+                path: cache_root,
+                allow_root_itself: false,
+                allowed_categories: vec![CleanerCategory::HomebrewCache],
             });
         }
     }
@@ -299,6 +330,111 @@ mod tests {
                 .iter()
                 .all(|root| !root.path.starts_with("/Library")),
             "system-scope leftover locations must stay scan-only, never allow-listed"
+        );
+    }
+
+    #[test]
+    fn xcode_junk_policy_covers_only_the_three_recreatable_subpaths() {
+        let policy = policy_for(&CleanableItem {
+            id: CleanableItemId(1),
+            category: CleanerCategory::XcodeJunk,
+            group: None,
+            display_name: String::new(),
+            path: PathBuf::from("/tmp/derived-data"),
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::SafeRecreatable,
+            selection_policy: SelectionPolicy::SelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        });
+
+        let xcode_roots: Vec<_> = policy
+            .allowed_roots
+            .iter()
+            .filter(|root| {
+                root.allowed_categories
+                    .contains(&CleanerCategory::XcodeJunk)
+            })
+            .collect();
+        assert_eq!(
+            xcode_roots.len(),
+            3,
+            "only DerivedData, Previews and CoreSimulator/Caches may be allow-listed"
+        );
+        assert!(
+            xcode_roots
+                .iter()
+                .any(|root| root.path.ends_with("DerivedData"))
+        );
+        assert!(
+            xcode_roots
+                .iter()
+                .any(|root| root.path.ends_with("Previews"))
+        );
+        assert!(
+            xcode_roots
+                .iter()
+                .any(|root| root.path.ends_with("CoreSimulator/Caches"))
+        );
+        assert!(
+            !xcode_roots
+                .iter()
+                .any(|root| root.path.ends_with("Archives")),
+            "Xcode Archives must stay scan-only"
+        );
+        assert!(
+            xcode_roots.iter().all(|root| !root.allow_root_itself),
+            "an allowed root must never authorize deleting itself outright"
+        );
+    }
+
+    #[test]
+    fn homebrew_cache_policy_covers_the_detected_cache_root_only() {
+        let policy = policy_for(&CleanableItem {
+            id: CleanableItemId(1),
+            category: CleanerCategory::HomebrewCache,
+            group: None,
+            display_name: String::new(),
+            path: PathBuf::from("/tmp/homebrew-cache"),
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::SafeRecreatable,
+            selection_policy: SelectionPolicy::SelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        });
+
+        let homebrew_roots: Vec<_> = policy
+            .allowed_roots
+            .iter()
+            .filter(|root| {
+                root.allowed_categories
+                    .contains(&CleanerCategory::HomebrewCache)
+            })
+            .collect();
+        assert_eq!(
+            homebrew_roots.len(),
+            1,
+            "exactly one detected cache root should be allow-listed"
+        );
+        assert!(
+            homebrew_roots
+                .iter()
+                .all(|root| !root.path.ends_with("Cellar")),
+            "the Cellar must never be allow-listed"
+        );
+        assert!(
+            homebrew_roots.iter().all(|root| !root.allow_root_itself),
+            "an allowed root must never authorize deleting itself outright"
         );
     }
 }

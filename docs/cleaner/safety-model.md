@@ -45,6 +45,14 @@ Current guarantees:
 - Phase 10 adds `CleanerCategory::OrphanedFiles` to those same user-scope `AllowedRoot` entries
   rather than a second, duplicate set — orphan candidates are found under the identical location
   list — and, like Phase 9, never adds the matching system-scope roots;
+- Phase 11 adds `CleanerCategory::XcodeJunk`, scoped to exactly three sub-paths
+  (`Xcode/DerivedData`, `Xcode/UserData/Previews`, `CoreSimulator/Caches` —
+  `xcode_junk::cleanup_allowed_roots`) even though the scanner reports eight; Archives, iOS
+  DeviceSupport, CoreSimulator Devices, XCTestDevices and the SwiftPM cache stay scan-only. Phase
+  11 also adds `CleanerCategory::HomebrewCache`, scoped to the one cache root
+  `homebrew_cache::resolve_cache_root` detects — never `/opt/homebrew`, `/usr/local` or the
+  Cellar — with the scanner and cleanup calling that same function so the two can never disagree
+  on where the root is;
 - cleanup uses native macOS Trash moves rather than permanent deletion;
 - review-oriented categories can exist without a cleanup capability (Trash Bins currently does).
 
