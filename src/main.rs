@@ -68,6 +68,12 @@ fn main() {
         docker::init(cx);
         // Binds copy-cell and copy-row while the Database result grid has focus.
         database::init(cx);
+        // Binds quick navigation's paste chords and Escape, and starts the
+        // `quick-nav.json` load. Same post-`gpui_component::init` ordering as
+        // the four above, and it matters more here than for any of them: the
+        // Escape binding is deliberately *shallower* than the library's own, so
+        // every existing Escape still wins.
+        quick_nav::init(cx);
         // Loads `updater.json`, sweeps whatever a previous install renamed
         // aside, and schedules the silent background check. Everything it does
         // is asynchronous; it opens no window and blocks nothing. Same

@@ -240,6 +240,10 @@ impl ApiExplorer {
     /// exception is a tab that has nothing in it (unnamed, unedited, empty
     /// URL): reusing that is what stops "paste, paste, paste" from leaving a
     /// trail of blank tabs, and by definition loses nothing.
+    ///
+    /// That policy lives in [`Self::adopt_pasted_request`], because quick
+    /// navigation reaches it too — a `curl` command pasted at the app rather
+    /// than into this field must land in exactly the same place.
     fn on_url_changed(
         &mut self,
         tab: &Entity<RequestTabState>,
@@ -260,30 +264,50 @@ impl ApiExplorer {
             return;
         };
 
-        let pristine = {
-            let state = tab.read(cx);
-            state.request.name.is_none() && !state.request.dirty && previous.trim().is_empty()
-        };
+        // The tab pasted into is reusable only if there is nothing in it to
+        // protect. Judged before the field is restored, because `previous` is
+        // what was there before the paste.
+        let reuse = is_pristine(tab, &previous, cx).then(|| tab.clone());
 
-        if pristine {
-            tab.update(cx, |state, cx| {
-                state.request.apply_snapshot(&snapshot, None, window, cx);
-                // Imported, not saved: the unsaved dot is the honest state.
-                state.request.dirty = true;
-                cx.notify();
-            });
-            self.refresh_body_file(tab, cx);
-        } else {
+        if reuse.is_none() {
             // Put the field back before opening the new tab, so the tab left
             // behind is byte-for-byte what it was.
-            let restored = previous;
             tab.update(cx, |state, cx| {
-                state.request.last_url = restored.clone();
+                state.request.last_url = previous.clone();
                 state
                     .request
                     .url
-                    .update(cx, |input, cx| input.set_value(restored, window, cx));
+                    .update(cx, |input, cx| input.set_value(previous, window, cx));
             });
+        }
+
+        self.adopt_pasted_request(snapshot, reuse, window, cx);
+    }
+
+    /// Puts a request that arrived from outside in front of the user.
+    ///
+    /// Both cURL paste routes end here — the URL field above, and quick
+    /// navigation through [`Self::accept_curl`] — so there is one policy and not
+    /// two. `reuse` is the tab whose contents the caller has established are
+    /// worth nothing; `None` means open a fresh one.
+    ///
+    /// Either way the tab is marked dirty: imported is not saved, and the
+    /// unsaved dot is the honest state.
+    fn adopt_pasted_request(
+        &mut self,
+        snapshot: RequestSnapshot,
+        reuse: Option<Entity<RequestTabState>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(tab) = reuse {
+            tab.update(cx, |state, cx| {
+                state.request.apply_snapshot(&snapshot, None, window, cx);
+                state.request.dirty = true;
+                cx.notify();
+            });
+            self.refresh_body_file(&tab, cx);
+        } else {
             self.open_snapshot(snapshot, None, None, window, cx);
             if let Some(opened) = self.active_tab().cloned() {
                 opened.update(cx, |state, cx| {
@@ -294,6 +318,25 @@ impl ApiExplorer {
             }
         }
         cx.notify();
+    }
+
+    /// Quick navigation's entry point (`quick_nav`): a cURL command that was
+    /// pasted at the app rather than into the URL field.
+    ///
+    /// Deliberately the **same** path as the URL field's, right down to the
+    /// blank-tab reuse — a pasted command behaves identically however it
+    /// arrived, and there is no second import to keep in step.
+    pub fn accept_curl(
+        &mut self,
+        snapshot: RequestSnapshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let reuse = self.active_tab().cloned().filter(|tab| {
+            let url = tab.read(cx).request.last_url.clone();
+            is_pristine(tab, &url, cx)
+        });
+        self.adopt_pasted_request(snapshot, reuse, window, cx);
     }
 
     /// Re-reads the size of the file a restored Binary body points at.
@@ -1197,6 +1240,17 @@ impl Render for ApiExplorer {
                     }),
             )
     }
+}
+
+/// Whether this tab holds nothing worth protecting, so an arriving request may
+/// take it over instead of opening a new one.
+///
+/// `url` is the tab's URL text as it stood *before* whatever prompted the
+/// question — which is not always what the field holds now, because a paste into
+/// the URL field has already replaced it by the time this is asked.
+fn is_pristine(tab: &Entity<RequestTabState>, url: &str, cx: &App) -> bool {
+    let state = tab.read(cx);
+    state.request.name.is_none() && !state.request.dirty && url.trim().is_empty()
 }
 
 /// The name of node `id` if it is somewhere in this subtree.

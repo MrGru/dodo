@@ -157,12 +157,6 @@ impl Detector {
         }
     }
 
-    pub fn from_code(code: &str) -> Option<Detector> {
-        Detector::ORDER
-            .into_iter()
-            .find(|detector| detector.code() == code)
-    }
-
     /// The Settings dialog's label for this detector's pattern field.
     pub fn label(self) -> Str {
         match self {
@@ -304,12 +298,6 @@ impl Patterns {
     /// What was wrong with the user's pattern for `detector`, if anything.
     pub fn error(&self, detector: Detector) -> Option<&PatternError> {
         self.entry(detector).error.as_ref()
-    }
-
-    /// Whether any detector's pattern was refused. The Settings dialog uses it
-    /// to decide whether to say anything at all.
-    pub fn has_errors(&self) -> bool {
-        self.entries.iter().any(|entry| entry.error.is_some())
     }
 }
 
@@ -485,8 +473,17 @@ mod tests {
         detect(text, &Patterns::default())
     }
 
+    /// Which detector claimed the text — the thing most of these tests are
+    /// really asserting. A test affordance rather than a `Route` method: nothing
+    /// the app does needs to ask a route where it came from.
     fn detector_of(text: &str) -> Option<Detector> {
-        route(text).map(|route| route.detector())
+        route(text).map(|route| match route {
+            Route::Json(_) => Detector::Json,
+            Route::Jwt(_) => Detector::Jwt,
+            Route::Base64 { .. } => Detector::Base64,
+            Route::Curl(_) => Detector::Curl,
+            Route::Database(_) => Detector::DatabaseUri,
+        })
     }
 
     // ---- the ambiguous cases, which are the point of the order ------------
@@ -752,7 +749,6 @@ mod tests {
 
         assert!(patterns.error(Detector::Jwt).is_some());
         assert!(patterns.error(Detector::Curl).is_some());
-        assert!(patterns.has_errors());
         assert!(patterns.error(Detector::Json).is_none());
 
         // …and detection still works exactly as it did with no pattern at all.
@@ -795,14 +791,6 @@ mod tests {
         codes.sort_unstable();
         codes.dedup();
         assert_eq!(codes.len(), Detector::ORDER.len(), "codes must be unique");
-    }
-
-    #[test]
-    fn every_code_round_trips_and_an_unknown_one_is_none() {
-        for detector in Detector::ORDER {
-            assert_eq!(Detector::from_code(detector.code()), Some(detector));
-        }
-        assert_eq!(Detector::from_code("graphql"), None);
     }
 
     /// The parser-backed detectors are exactly the ones with no default

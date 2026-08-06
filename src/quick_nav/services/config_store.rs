@@ -208,8 +208,10 @@ mod tests {
     #[test]
     fn a_pattern_survives_a_restart_with_its_version_in_the_file() {
         let path = temp_path();
-        let mut document = QuickNavDocument::default();
-        document.enabled = false;
+        let mut document = QuickNavDocument {
+            enabled: false,
+            ..QuickNavDocument::default()
+        };
         document.set_pattern(Detector::Base64, r"^[A-Za-z0-9+/]{16,}={0,2}$");
 
         DiskQuickNavConfigStore::at(path.clone())

@@ -1141,7 +1141,6 @@ pub enum Str {
     QuickNavBase64Pattern,
     QuickNavGateDescription,
     QuickNavShapeDescription,
-    QuickNavPatternPlaceholder,
     QuickNavPatternInvalid(String),
     QuickNavPatternTooLong {
         length: usize,
@@ -1157,6 +1156,7 @@ pub enum Str {
     QuickNavOpenedConnection(String),
     QuickNavKeptStoredPassword(String),
     QuickNavCreatedConnection(String),
+    QuickNavConnectionsLoading,
 }
 
 impl Str {
@@ -3820,12 +3820,6 @@ impl Str {
                  nội dung vẫn phải giải mã được thì dodo mới chuyển sang công cụ."
                     .into()
             }
-            (Str::QuickNavPatternPlaceholder, Language::English) => {
-                "Regular expression".into()
-            }
-            (Str::QuickNavPatternPlaceholder, Language::Vietnamese) => {
-                "Biểu thức chính quy".into()
-            }
             (Str::QuickNavPatternInvalid(detail), Language::English) => {
                 format!("This pattern is not valid, so the built-in one is being used: {detail}")
                     .into()
@@ -3898,6 +3892,16 @@ impl Str {
             }
             (Str::QuickNavCreatedConnection(name), Language::Vietnamese) => {
                 format!("Đã tạo kết nối \"{name}\" từ URI vừa dán.").into()
+            }
+            (Str::QuickNavConnectionsLoading, Language::English) => {
+                "The saved connections are still loading, so nothing was created. Paste the URI \
+                 again in a moment."
+                    .into()
+            }
+            (Str::QuickNavConnectionsLoading, Language::Vietnamese) => {
+                "Các kết nối đã lưu vẫn đang được tải nên chưa tạo gì cả. Hãy dán lại URI sau giây \
+                 lát."
+                    .into()
             }
         }
     }
@@ -4884,7 +4888,6 @@ mod tests {
             plain(Str::QuickNavBase64Pattern),
             plain(Str::QuickNavGateDescription),
             plain(Str::QuickNavShapeDescription),
-            plain(Str::QuickNavPatternPlaceholder),
             with(Str::QuickNavPatternInvalid(DETAIL.into()), &[DETAIL]),
             with(
                 Str::QuickNavPatternTooLong {
@@ -4906,6 +4909,7 @@ mod tests {
             with(Str::QuickNavOpenedConnection(DETAIL.into()), &[DETAIL]),
             with(Str::QuickNavKeptStoredPassword(DETAIL.into()), &[DETAIL]),
             with(Str::QuickNavCreatedConnection(DETAIL.into()), &[DETAIL]),
+            plain(Str::QuickNavConnectionsLoading),
         ]
     }
 
@@ -5627,16 +5631,16 @@ mod tests {
             Str::QuickNavBase64Pattern => 701,
             Str::QuickNavGateDescription => 702,
             Str::QuickNavShapeDescription => 703,
-            Str::QuickNavPatternPlaceholder => 704,
-            Str::QuickNavPatternInvalid(_) => 705,
-            Str::QuickNavPatternTooLong { .. } => 706,
-            Str::QuickNavStorageProblem => 707,
-            Str::QuickNavStoreError(_) => 708,
-            Str::QuickNavStoreMissingVersion => 709,
-            Str::QuickNavStoreUnsupportedVersion { .. } => 710,
-            Str::QuickNavOpenedConnection(_) => 711,
-            Str::QuickNavKeptStoredPassword(_) => 712,
-            Str::QuickNavCreatedConnection(_) => 713,
+            Str::QuickNavPatternInvalid(_) => 704,
+            Str::QuickNavPatternTooLong { .. } => 705,
+            Str::QuickNavStorageProblem => 706,
+            Str::QuickNavStoreError(_) => 707,
+            Str::QuickNavStoreMissingVersion => 708,
+            Str::QuickNavStoreUnsupportedVersion { .. } => 709,
+            Str::QuickNavOpenedConnection(_) => 710,
+            Str::QuickNavKeptStoredPassword(_) => 711,
+            Str::QuickNavCreatedConnection(_) => 712,
+            Str::QuickNavConnectionsLoading => 713,
         }
     }
 

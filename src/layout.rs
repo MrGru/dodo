@@ -11,9 +11,11 @@ use crate::api_explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
 use crate::database::DatabaseView;
 use crate::docker::{DockerPage, DockerView};
-use crate::encoder_decoder::EncoderDecoder;
+use crate::encoder_decoder::{EncoderDecoder, Format};
 use crate::i18n::{Str, t};
 use crate::json_formatter::JsonFormatter;
+use crate::quick_nav::models::route::Route;
+use crate::quick_nav::{self, LeaveInsertMode, QuickNav, QuickNavigate};
 use crate::settings;
 use crate::updater;
 
@@ -28,6 +30,13 @@ use crate::updater;
 /// Adding a tool means: a variant here, a row in [`View::ALL`], an arm in
 /// [`View::title`]/[`View::icon`], a field on [`Layout`] holding the view
 /// entity, and an arm in the main-pane `match` of [`Layout::render`].
+///
+/// **If the new tool can also accept a pasted value**, quick navigation costs
+/// three more small things and nothing else: a `Detector` variant with its arm
+/// in `quick_nav::models::detect`, a `Route` variant, and an arm in
+/// [`Layout::apply_route`] — which is the one place a route meets a `View`.
+/// `quick_nav::models::detect`'s module doc is where the *order* it goes in has
+/// to be argued.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum View {
     JsonFormatter,
@@ -326,6 +335,17 @@ pub struct Layout {
     collapsible: SidebarCollapsible,
     sidebar: SidebarState,
     active: View,
+    /// Where focus rests in **normal mode**, and the reason this pane is
+    /// focusable at all.
+    ///
+    /// gpui builds a keystroke's dispatch path from the focused element upwards,
+    /// and with *nothing* focused that path is the window root alone — which
+    /// carries none of this pane's key context, so quick navigation's bindings
+    /// would not match and `p` would do nothing until the user had clicked
+    /// something. Holding focus here means "no input is focused" is a real,
+    /// reachable state rather than the absence of one. [`Layout::new`] takes it
+    /// at startup and [`Layout::leave_insert_mode`] takes it back.
+    focus: FocusHandle,
     json_formatter: Entity<JsonFormatter>,
     encoder_decoder: Entity<EncoderDecoder>,
     api_explorer: Entity<ApiExplorer>,
@@ -345,16 +365,127 @@ impl Layout {
     /// listed in `CLAUDE.md`, adding a seventh is a decision of its own, and a
     /// sidebar that opens the same way every time is at least predictable.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // dodo opens in normal mode, so the pane takes focus straight away. See
+        // [`Layout::focus`] for why that has to be someone's rather than nobody's.
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+
         Self {
             collapsible: SidebarCollapsible::Icon,
             sidebar: SidebarState::new(),
             active: View::JsonFormatter,
+            focus,
             json_formatter: cx.new(|cx| JsonFormatter::new(window, cx)),
             encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
             api_explorer: cx.new(|cx| ApiExplorer::new(window, cx)),
             docker: cx.new(|cx| DockerView::new(window, cx)),
             database: cx.new(|cx| DatabaseView::new(window, cx)),
         }
+    }
+
+    /// Switches the main pane, and tells Docker whether its polling should be
+    /// running.
+    ///
+    /// Both the sidebar rows and quick navigation come through here, so a jump
+    /// leaves the app in exactly the state a click would have.
+    fn activate(&mut self, view: View, cx: &mut Context<Self>) {
+        self.active = view;
+        self.docker.update(cx, |docker, cx| match view {
+            View::Docker => docker.activate(cx),
+            _ => docker.set_section_active(false, cx),
+        });
+        cx.notify();
+    }
+
+    /// `Cmd+V` / `Ctrl+V` / `p` in normal mode: read the clipboard, work out
+    /// what it is, and go there.
+    ///
+    /// Nothing happens on three ordinary paths — the feature is off, the
+    /// clipboard holds no text, or nothing was recognised confidently — and in
+    /// each the keystroke is propagated, because a shortcut that silently
+    /// swallows a key it did not use is worse than one that declines it.
+    ///
+    /// `quick_nav`'s key context is what guarantees this only runs with no input
+    /// focused; there is no mode flag to consult and none to get out of step.
+    fn quick_navigate(&mut self, _: &QuickNavigate, window: &mut Window, cx: &mut Context<Self>) {
+        let route = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text())
+            .and_then(|text| QuickNav::detect(&text, cx));
+
+        let Some(route) = route else {
+            cx.propagate();
+            return;
+        };
+        self.apply_route(route, window, cx);
+    }
+
+    /// Hands a detected route to the tool that owns it.
+    ///
+    /// **The one place a `Route` meets a `View`**, which is what keeps adding a
+    /// tool to quick navigation from being an edit in three files: the detector
+    /// decides *what*, this decides *where*, and neither knows the other's list.
+    fn apply_route(&mut self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
+        match route {
+            Route::Json(text) => {
+                self.activate(View::JsonFormatter, cx);
+                self.json_formatter
+                    .update(cx, |view, cx| view.accept_text(text, window, cx));
+            }
+            Route::Jwt(token) => {
+                self.activate(View::EncoderDecoder, cx);
+                self.encoder_decoder.update(cx, |view, cx| {
+                    view.accept_decode(token, Format::Jwt, window, cx)
+                });
+            }
+            Route::Base64 { text, url_safe } => {
+                let format = if url_safe {
+                    Format::Base64UrlSafe
+                } else {
+                    Format::Base64
+                };
+                self.activate(View::EncoderDecoder, cx);
+                self.encoder_decoder
+                    .update(cx, |view, cx| view.accept_decode(text, format, window, cx));
+            }
+            Route::Curl(snapshot) => {
+                self.activate(View::ApiExplorer, cx);
+                self.api_explorer
+                    .update(cx, |view, cx| view.accept_curl(*snapshot, window, cx));
+            }
+            Route::Database(parsed) => {
+                self.activate(View::Database, cx);
+                self.database
+                    .update(cx, |view, cx| view.accept_uri(&parsed, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    /// `Esc`: leave the focused input, which is what puts the app back in normal
+    /// mode.
+    ///
+    /// Bound at this pane's context rather than at normal mode's, because it is
+    /// the way *back* into normal mode and so has to fire while an input has
+    /// focus. Every deeper Escape — a dialog, a popover, a select, a completion
+    /// popup inside the input itself — is dispatched first and consumes the key
+    /// if it wants it; this only ever runs once they have all declined.
+    /// `quick_nav`'s module doc has the full ordering.
+    ///
+    /// Already in normal mode, it propagates rather than consuming: there is
+    /// nothing here to leave.
+    fn leave_insert_mode(
+        &mut self,
+        _: &LeaveInsertMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.focus.is_focused(window) {
+            cx.propagate();
+            return;
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 
     /// The sidebar menu: one flat row per tool, no nesting. Nesting is what the
@@ -373,14 +504,7 @@ impl Layout {
             .icon(view.icon().view())
             .active(self.active == view)
             .on_click(move |_, _, cx| {
-                layout.update(cx, |this, cx| {
-                    this.active = view;
-                    this.docker.update(cx, |docker, cx| match view {
-                        View::Docker => docker.activate(cx),
-                        _ => docker.set_section_active(false, cx),
-                    });
-                    cx.notify();
-                });
+                layout.update(cx, |this, cx| this.activate(view, cx));
             });
 
         ToolItem {
@@ -406,6 +530,16 @@ impl Render for Layout {
         let title = pane_title(self.active, self.docker.read(cx).page());
 
         h_flex()
+            // The pane is where quick navigation's key bindings live, and
+            // `track_focus` is what puts this node in a keystroke's dispatch
+            // path. Both halves are load-bearing: without the context the
+            // bindings never match, and without the focus handle they stop
+            // matching the moment nothing else is focused. See
+            // [`Layout::focus`].
+            .key_context(quick_nav::KEY_CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(Self::quick_navigate))
+            .on_action(cx.listener(Self::leave_insert_mode))
             .size_full()
             .bg(cx.theme().background)
             .child(

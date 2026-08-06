@@ -6,7 +6,11 @@
 //! writes that directly and every change is live. Language is the one setting
 //! with no home in `Theme`; it lives in [`crate::i18n::Language`].
 //!
-//! Nothing is persisted across restarts — see the note in `AGENTS.md`.
+//! Nothing here is persisted across restarts **except quick navigation**, whose
+//! settings live in `quick-nav.json` — see [`crate::quick_nav`] and the note in
+//! `AGENTS.md`. It is the exception because its fields hold text the user typed:
+//! a detector pattern thrown away at the next launch would be worse than not
+//! offering the field at all.
 //!
 //! The dialog body is [`SettingsView`]: a quick-navigation search box above the
 //! library's own settings panel. Typing fuzzy-matches every setting and picking
@@ -31,6 +35,8 @@ use crate::api_explorer::models::script_consent::ConsentPolicy;
 use crate::app_icon::AppIcon;
 use crate::assets::Assets;
 use crate::i18n::{Language, Str, t};
+use crate::quick_nav::QuickNav;
+use crate::quick_nav::models::detect::Detector;
 
 /// Base text size in px, largest first. `Theme::font_size` drives the window's
 /// rem size (see the library's `Root::render`), so these scale the whole UI.
@@ -138,22 +144,33 @@ enum Setting {
     FontSize,
     BorderRadius,
     Theme,
+    QuickNavEnabled,
+    /// One per detector, in [`Detector::ORDER`] — so the searchable list grows
+    /// with the detector list rather than beside it.
+    QuickNavPattern(Detector),
 }
 
 impl Setting {
-    const ALL: [Setting; 5] = [
-        Setting::Language,
-        Setting::RunScripts,
-        Setting::FontSize,
-        Setting::BorderRadius,
-        Setting::Theme,
-    ];
+    /// Every setting, in the order the search box lists ties.
+    fn all() -> Vec<Setting> {
+        let mut all = vec![
+            Setting::Language,
+            Setting::RunScripts,
+            Setting::FontSize,
+            Setting::BorderRadius,
+            Setting::Theme,
+            Setting::QuickNavEnabled,
+        ];
+        all.extend(Detector::ORDER.map(Setting::QuickNavPattern));
+        all
+    }
 
     /// Index into the vec [`pages`] returns — the sidebar entry to open.
     fn page_ix(self) -> usize {
         match self {
             Setting::Language | Setting::RunScripts => 0,
             Setting::FontSize | Setting::BorderRadius | Setting::Theme => 1,
+            Setting::QuickNavEnabled | Setting::QuickNavPattern(_) => 2,
         }
     }
 
@@ -164,6 +181,8 @@ impl Setting {
             Setting::FontSize => Str::FontSize,
             Setting::BorderRadius => Str::BorderRadius,
             Setting::Theme => Str::Theme,
+            Setting::QuickNavEnabled => Str::QuickNavEnabled,
+            Setting::QuickNavPattern(detector) => detector.label(),
         }
     }
 
@@ -173,6 +192,7 @@ impl Setting {
         match self {
             Setting::Language | Setting::RunScripts => Str::General,
             Setting::FontSize | Setting::BorderRadius | Setting::Theme => Str::Appearance,
+            Setting::QuickNavEnabled | Setting::QuickNavPattern(_) => Str::QuickNavigation,
         }
     }
 }
@@ -183,7 +203,7 @@ impl Setting {
 /// lists that section's settings, exactly as the item keywords used to do for
 /// the library's own search box.
 fn haystacks(cx: &App) -> Vec<String> {
-    Setting::ALL
+    Setting::all()
         .iter()
         .map(|setting| format!("{} {}", t(setting.label(), cx), t(setting.section(), cx)))
         .collect()
@@ -265,9 +285,10 @@ impl ListDelegate for SearchDelegate {
         cx: &mut Context<ListState<Self>>,
     ) -> Task<()> {
         self.query = query.trim().to_owned().into();
+        let all = Setting::all();
         self.matches = rank(&self.query, &haystacks(cx))
             .into_iter()
-            .map(|(ix, _)| Setting::ALL[ix])
+            .filter_map(|(ix, _)| all.get(ix).copied())
             .collect();
         Task::ready(())
     }
@@ -569,7 +590,98 @@ fn pages(highlight: Option<Setting>, cx: &App) -> Vec<SettingPage> {
                         .keywords([appearance]),
                     ),
             ),
+        quick_nav_page(highlight, cx),
     ]
+}
+
+/// The Quick navigation section: the master switch, then one pattern field per
+/// detector, in detection order.
+///
+/// The pattern items are **generated from [`Detector::ORDER`]**, so a sixth
+/// detector appears here with no edit to this file. Each one's description is
+/// chosen by [`Detector::has_parser`], which is the "a pattern selects
+/// candidates, the parser confirms" rule showing through to the user: a gate in
+/// front of a real parser reads differently from a shape test, because it *is*
+/// different.
+fn quick_nav_page(highlight: Option<Setting>, cx: &App) -> SettingPage {
+    let title = t(Str::QuickNavigation, cx);
+    let lit = |setting: Setting| highlight == Some(setting);
+
+    let mut group = SettingGroup::new().title(title.clone()).item(
+        SettingItem::new(
+            t(Str::QuickNavEnabled, cx),
+            highlighted(
+                SettingField::switch(
+                    |cx: &App| QuickNav::enabled(cx),
+                    |value: bool, cx: &mut App| QuickNav::set_enabled(value, cx),
+                )
+                .default_value(true),
+                lit(Setting::QuickNavEnabled),
+                cx,
+            ),
+        )
+        .description(t(Str::QuickNavEnabledDescription, cx))
+        .keywords([title.clone()]),
+    );
+
+    for detector in Detector::ORDER {
+        // An unreadable pattern says so here, in place of the description: the
+        // detector is meanwhile running on its built-in default, so the user
+        // needs to know their pattern is not the thing being used.
+        let description = match QuickNav::pattern_error(detector, cx) {
+            Some(error) => t(error.message(), cx),
+            None if detector.has_parser() => t(Str::QuickNavGateDescription, cx),
+            None => t(Str::QuickNavShapeDescription, cx),
+        };
+
+        group = group.item(
+            SettingItem::new(
+                t(detector.label(), cx),
+                highlighted(
+                    pattern_field(detector),
+                    lit(Setting::QuickNavPattern(detector)),
+                    cx,
+                ),
+            )
+            .description(description)
+            .keywords([title.clone()]),
+        );
+    }
+
+    // Only when there is something wrong with the file. In the ordinary case —
+    // including a first run with no file at all — this section is not there.
+    if let Some(problem) = QuickNav::store_error(cx) {
+        group = group.item(
+            // The message is the *description*; the control is empty because
+            // there is nothing here to change. `SettingItem` requires a field,
+            // so an empty render closure is the way to say "none".
+            SettingItem::new(
+                t(Str::QuickNavStorageProblem, cx),
+                SettingField::render(|_, _, _| div()),
+            )
+            .description(t(problem, cx))
+            .keywords([title.clone()]),
+        );
+    }
+
+    SettingPage::new(title)
+        .icon(AppIcon::Binary)
+        .resettable(false)
+        .group(group)
+}
+
+/// One detector's pattern, as a plain text field.
+///
+/// The library's string field emits a change per keystroke; the coalescing that
+/// keeps that from writing the file once per character lives in
+/// [`QuickNav::set_pattern`], not here. The value is stored **raw** — untrimmed,
+/// uncompiled — so the field never fights the user mid-edit.
+fn pattern_field(detector: Detector) -> SettingField<SharedString> {
+    SettingField::input(
+        move |cx: &App| QuickNav::pattern(detector, cx).into(),
+        move |value: SharedString, cx: &mut App| QuickNav::set_pattern(detector, value, cx),
+    )
+    .default_value(SharedString::default())
 }
 
 /// Marks the field the search box jumped to. The style refines the field's own
