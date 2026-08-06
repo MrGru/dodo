@@ -46,6 +46,12 @@ Cleaner is wired as a top-level tool in:
 - `src/cleaner/macos/scanners/mail_files.rs` discovers versioned Mail attachment/download roots and treats them as explicit user-data review items.
 - `src/cleaner/macos/scanners/trash_bins.rs` analyzes Trash bins as review-only roots.
 - `src/cleaner/macos/scanners/installed_apps.rs` indexes `.app` bundles from the standard top-level application roots and extracts basic Info.plist metadata.
+- `src/cleaner/macos/scanners/xcode_junk.rs` (Phase 11) analyzes eight fixed roots under
+  `~/Library/Developer` and `~/Library/org.swift.swiftpm`, and
+  `src/cleaner/macos/scanners/homebrew_cache.rs` (Phase 11) analyzes Homebrew's download cache —
+  see `docs/cleaner/scanners.md`.
+- `src/cleaner/macos/platform/xcode.rs` (Phase 11) adds a read-only `NSRunningApplication` check
+  the Xcode Junk scanner uses to warn on `DerivedData`, alongside the existing Finder/Trash calls.
 - `src/cleaner/macos/applications/` (Phase 9, extended in Phase 10) holds app identity
   normalization, leftover-location matching, confidence scoring, the uninstall review workflow and
   (Phase 10) the inverse question, orphan detection (`applications/orphans.rs`) — shared by the

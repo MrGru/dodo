@@ -228,6 +228,13 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSResponder",
     # Cleaner's Finder integration and future permission/settings deep links.
     "NSWorkspace",
+    # Cleaner's Xcode Junk scanner (Phase 11): a read-only check for whether
+    # Xcode is currently running, via `NSRunningApplication::
+    # runningApplicationsWithBundleIdentifier`. Adds nothing new to the
+    # graph — this feature's own requirements (`bitflags`,
+    # `objc2-foundation/{NSArray,NSDate,NSString,NSURL}`) are already pulled
+    # in by the `NSApplication` feature above.
+    "NSRunningApplication",
 ] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = [
     "NSArray",

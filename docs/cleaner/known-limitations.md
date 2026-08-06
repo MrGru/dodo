@@ -37,7 +37,57 @@
   correctly (unit-tested with one) — only real extraction is missing.
 - Group Container matching is a name heuristic (team-id prefix, vendor, app-specific text), not a
   real read of an app's `com.apple.security.application-groups` entitlement.
-- No Docker/Xcode/Homebrew/Node provider integrations yet.
+- Phase 11 adds two developer-cache scanners, Xcode Junk and Homebrew Cache. Both are scan+preview
+  only, matching every other category's "review before Trash" flow, and both have deliberate scope
+  cuts:
+  - **Xcode Junk** never allow-lists `Archives`, `iOS DeviceSupport`, `CoreSimulator/Devices` or
+    `XCTestDevices` for cleanup, even though the scanner reports them — they stay scan-only this
+    phase, the same posture Phase 9 used for system-scope leftover roots. Deleting a
+    `CoreSimulator/Devices` or `XCTestDevices` folder directly while CoreSimulator is active is
+    unsafe; the correct removal path is `xcrun simctl delete`, which this phase does not shell out
+    to (no external-process work was in scope here). Each such item's `explanation` says so.
+  - Xcode Junk does not parse `device.plist`/runtime metadata for CoreSimulator Devices or
+    XCTestDevices — items are named by their on-disk folder (a UUID for most simulator devices,
+    already-descriptive version strings like `17.4 (21E219)` for iOS DeviceSupport). Reading
+    `device.plist` for a friendlier device name would need a plist parse this phase does not add,
+    since the item is scan-only either way.
+  - Xcode Archives are grouped by their dated top-level folder
+    (`Archives/<YYYY-MM-DD>/`), not per individual `.xcarchive` inside it — `AggregateMode::
+    ImmediateChildren` aggregates one level, matching every other scanner's convention, rather than
+    a bespoke two-level traversal for a category that is scan-only anyway.
+  - `~/Library/org.swift.swiftpm` is treated uniformly as `ReviewRecommended`/not-selected,
+    regardless of subfolder name. SwiftPM's on-disk cache layout has changed across Xcode versions
+    (a "repositories" or "cache" subfolder is plausibly a safe-to-recreate clone cache in some
+    versions), and this phase does not attempt to tell that apart from checked-out package sources
+    well enough to default-select any of it.
+  - `DerivedData`'s project grouping (stripping a trailing `-<hash>` from Xcode's
+    `<ProjectName>-<hash>` naming convention) is a heuristic (`is_plausible_hash`: ASCII
+    alphanumeric, at least six characters) rather than a match against Xcode's exact hash alphabet.
+    A false-positive strip only shortens a group label; it never changes which path gets scanned or
+    cleaned.
+  - "Warn when Xcode is running" is a single read-only `NSRunningApplication` bundle-identifier
+    check (`macos::platform::xcode::is_xcode_running`), not a check for which specific project
+    Xcode has open — a running Xcode warns on every `DerivedData` item, not just the one it is
+    actively building.
+  - **Homebrew Cache** never invokes `brew --cache` (the ticket's second detection tier, "safe
+    Homebrew configuration output"). Only the `HOMEBREW_CACHE` environment variable and the default
+    `~/Library/Caches/Homebrew` location are used. A *safe* invocation needs a bounded timeout,
+    which `std::process::Command` has no built-in support for and this phase does not add — the
+    ticket itself permits skipping it ("avoid unnecessary process calls"). A non-default install
+    that neither exports `HOMEBREW_CACHE` nor uses the default cache location is invisible to this
+    scanner.
+  - Homebrew Cache does not separate formula-cache entries from Cask-cache entries beyond a literal
+    `Cask/` subdirectory check — Homebrew does not otherwise separate the two on disk, and telling
+    them apart further would need `brew list`/`brew info`, out of scope here.
+  - Homebrew Cache has no dedicated "stale downloads" sub-classification. Every item still carries
+    `modified_at` and the result list sorts by size, so staleness is visible without a second,
+    separately-defined age rule layered on top of Large & Old Files' one-year threshold.
+  - Homebrew Cache's main-root scan and its `Cask/`/`Logs/` sub-scans overlap: the top-level
+    `ImmediateChildren` aggregation already recurses into `Cask/` and `Logs/` to size them (before
+    they are excluded from the "Download cache" group), and then each is scanned again on its own
+    to produce its own group. This duplicates some directory traversal rather than adding an
+    exclusion-list concept to the shared `scan_root` engine for one scanner's need.
+- No Docker/Node provider integrations yet.
 - Non-macOS support is intentionally unavailable and shown as such in UI.
 
 These limitations are intentional: the implementation now has shared traversal, selection, Finder reveal, and Trash groundwork, but broader categories remain blocked until permission, more scanners, and deeper app-analysis phases are in place.
