@@ -1195,6 +1195,58 @@ pub enum Str {
     QuickNavKeptStoredPassword(String),
     QuickNavCreatedConnection(String),
     QuickNavConnectionsLoading,
+    CleanerWarnings,
+    CleanerPath,
+    CleanerExplanation,
+    CleanerCopyPath,
+    CleanerRevealInFinder,
+    CleanerSelectItem,
+    CleanerDeselectItem,
+    CleanerSelectSafeItems,
+    CleanerClearSelection,
+    CleanerCleanSelected,
+    CleanerSelectedCount(usize),
+    CleanerCleanupReport,
+    CleanerCleanupConfirmTitle,
+    CleanerCleanupConfirmMessage {
+        count: usize,
+        size: String,
+    },
+    CleanerCleanupSuccessCount(usize),
+    CleanerCleanupFailureCount(usize),
+    CleanerPermissionTitle,
+    CleanerPermissionExplanation,
+    CleanerPermissionRecheck,
+    CleanerPermissionOpenSettings,
+    CleanerPermissionRevealApp,
+    CleanerPermissionUnknown,
+    CleanerPermissionChecking,
+    CleanerPermissionGranted,
+    CleanerPermissionDenied,
+    CleanerPermissionRestricted,
+    CleanerPermissionRequiresRestart,
+    CleanerPartialPermissionDenied,
+    CleanerPartialRootUnavailable,
+    CleanerPartialCancelled,
+    CleanerPartialUnsupported,
+    CleanerBeginUninstallReview,
+    CleanerUninstallReviewTitle {
+        name: String,
+    },
+    CleanerUninstallLoading,
+    CleanerUninstallRefusedProtected,
+    CleanerUninstallRefusedNotApplication,
+    CleanerUninstallRelatedFilesHeader,
+    CleanerUninstallNoRelatedFiles,
+    CleanerUninstallDestinationNote,
+    CleanerUninstallScanOnlyBadge,
+    CleanerUninstallMoveToTrash,
+    CleanerUninstallClose,
+    CleanerConfidenceConfirmed,
+    CleanerConfidenceHigh,
+    CleanerConfidenceMedium,
+    CleanerConfidenceLow,
+    CleanerConfidenceSharedOrUnsafe,
 }
 
 impl Str {
@@ -1323,7 +1375,9 @@ impl Str {
             (Str::CleanerStatusFailed, Language::English) => "Failed".into(),
             (Str::CleanerStatusFailed, Language::Vietnamese) => "Thất bại".into(),
             (Str::CleanerSectionSmartCare, Language::English) => "Smart Care".into(),
-            (Str::CleanerSectionSmartCare, Language::Vietnamese) => "Smart Care".into(),
+            (Str::CleanerSectionSmartCare, Language::Vietnamese) => {
+                "Dọn dẹp thông minh".into()
+            }
             (Str::CleanerSectionCleanup, Language::English) => "Cleanup".into(),
             (Str::CleanerSectionCleanup, Language::Vietnamese) => "Dọn dẹp".into(),
             (Str::CleanerSectionApplications, Language::English) => "Applications".into(),
@@ -1373,6 +1427,233 @@ impl Str {
             (Str::CleanerCategoryLanguageFiles, Language::English) => "Language Files".into(),
             (Str::CleanerCategoryLanguageFiles, Language::Vietnamese) => {
                 "Tệp ngôn ngữ".into()
+            }
+            (Str::CleanerWarnings, Language::English) => "Warnings".into(),
+            (Str::CleanerWarnings, Language::Vietnamese) => "Cảnh báo".into(),
+            (Str::CleanerPath, Language::English) => "Path".into(),
+            (Str::CleanerPath, Language::Vietnamese) => "Đường dẫn".into(),
+            (Str::CleanerExplanation, Language::English) => "Explanation".into(),
+            (Str::CleanerExplanation, Language::Vietnamese) => "Giải thích".into(),
+            (Str::CleanerCopyPath, Language::English) => "Copy path".into(),
+            (Str::CleanerCopyPath, Language::Vietnamese) => "Sao chép đường dẫn".into(),
+            (Str::CleanerRevealInFinder, Language::English) => "Reveal in Finder".into(),
+            (Str::CleanerRevealInFinder, Language::Vietnamese) => {
+                "Hiện trong Finder".into()
+            }
+            (Str::CleanerSelectItem, Language::English) => "Select".into(),
+            (Str::CleanerSelectItem, Language::Vietnamese) => "Chọn".into(),
+            (Str::CleanerDeselectItem, Language::English) => "Deselect".into(),
+            (Str::CleanerDeselectItem, Language::Vietnamese) => "Bỏ chọn".into(),
+            (Str::CleanerSelectSafeItems, Language::English) => "Select safe items".into(),
+            (Str::CleanerSelectSafeItems, Language::Vietnamese) => {
+                "Chọn mục an toàn".into()
+            }
+            (Str::CleanerClearSelection, Language::English) => "Clear selection".into(),
+            (Str::CleanerClearSelection, Language::Vietnamese) => {
+                "Xoá chọn".into()
+            }
+            (Str::CleanerCleanSelected, Language::English) => "Clean selected".into(),
+            (Str::CleanerCleanSelected, Language::Vietnamese) => {
+                "Dọn mục đã chọn".into()
+            }
+            (Str::CleanerSelectedCount(count), Language::English) => {
+                format!("{count} selected").into()
+            }
+            (Str::CleanerSelectedCount(count), Language::Vietnamese) => {
+                format!("Đã chọn {count} mục").into()
+            }
+            (Str::CleanerCleanupReport, Language::English) => "Cleanup report".into(),
+            (Str::CleanerCleanupReport, Language::Vietnamese) => {
+                "Báo cáo dọn dẹp".into()
+            }
+            (Str::CleanerCleanupConfirmTitle, Language::English) => {
+                "Move selected items to Trash?".into()
+            }
+            (Str::CleanerCleanupConfirmTitle, Language::Vietnamese) => {
+                "Chuyển các mục đã chọn vào Thùng rác?".into()
+            }
+            (
+                Str::CleanerCleanupConfirmMessage { count, size },
+                Language::English,
+            ) => format!("{count} items will be moved to the macOS Trash. Estimated size: {size}.").into(),
+            (
+                Str::CleanerCleanupConfirmMessage { count, size },
+                Language::Vietnamese,
+            ) => format!("{count} mục sẽ được chuyển vào Thùng rác của macOS. Dung lượng ước tính: {size}.").into(),
+            (Str::CleanerCleanupSuccessCount(count), Language::English) => {
+                format!("Moved to Trash: {count}").into()
+            }
+            (Str::CleanerCleanupSuccessCount(count), Language::Vietnamese) => {
+                format!("Đã chuyển vào Thùng rác: {count}").into()
+            }
+            (Str::CleanerCleanupFailureCount(count), Language::English) => {
+                format!("Failed: {count}").into()
+            }
+            (Str::CleanerCleanupFailureCount(count), Language::Vietnamese) => {
+                format!("Thất bại: {count}").into()
+            }
+            (Str::CleanerPermissionTitle, Language::English) => {
+                "Full Disk Access".into()
+            }
+            (Str::CleanerPermissionTitle, Language::Vietnamese) => {
+                "Toàn quyền truy cập ổ đĩa".into()
+            }
+            (Str::CleanerPermissionExplanation, Language::English) => {
+                "Some Cleaner categories need Full Disk Access to inspect protected macOS data safely."
+                    .into()
+            }
+            (Str::CleanerPermissionExplanation, Language::Vietnamese) => {
+                "Một số danh mục Cleaner cần Toàn quyền truy cập ổ đĩa để kiểm tra an toàn dữ liệu macOS được bảo vệ.".into()
+            }
+            (Str::CleanerPermissionRecheck, Language::English) => "Recheck".into(),
+            (Str::CleanerPermissionRecheck, Language::Vietnamese) => {
+                "Kiểm tra lại".into()
+            }
+            (Str::CleanerPermissionOpenSettings, Language::English) => {
+                "Open settings".into()
+            }
+            (Str::CleanerPermissionOpenSettings, Language::Vietnamese) => {
+                "Mở cài đặt".into()
+            }
+            (Str::CleanerPermissionRevealApp, Language::English) => {
+                "Reveal Dodo app".into()
+            }
+            (Str::CleanerPermissionRevealApp, Language::Vietnamese) => {
+                "Hiện ứng dụng Dodo".into()
+            }
+            (Str::CleanerPermissionUnknown, Language::English) => {
+                "Permission state: unknown".into()
+            }
+            (Str::CleanerPermissionUnknown, Language::Vietnamese) => {
+                "Trạng thái quyền: chưa rõ".into()
+            }
+            (Str::CleanerPermissionChecking, Language::English) => {
+                "Permission state: checking".into()
+            }
+            (Str::CleanerPermissionChecking, Language::Vietnamese) => {
+                "Trạng thái quyền: đang kiểm tra".into()
+            }
+            (Str::CleanerPermissionGranted, Language::English) => {
+                "Permission state: granted".into()
+            }
+            (Str::CleanerPermissionGranted, Language::Vietnamese) => {
+                "Trạng thái quyền: đã cấp".into()
+            }
+            (Str::CleanerPermissionDenied, Language::English) => {
+                "Permission state: denied".into()
+            }
+            (Str::CleanerPermissionDenied, Language::Vietnamese) => {
+                "Trạng thái quyền: bị từ chối".into()
+            }
+            (Str::CleanerPermissionRestricted, Language::English) => {
+                "Permission state: restricted".into()
+            }
+            (Str::CleanerPermissionRestricted, Language::Vietnamese) => {
+                "Trạng thái quyền: bị hạn chế".into()
+            }
+            (Str::CleanerPermissionRequiresRestart, Language::English) => {
+                "Permission state: requires restart".into()
+            }
+            (Str::CleanerPermissionRequiresRestart, Language::Vietnamese) => {
+                "Trạng thái quyền: cần khởi động lại".into()
+            }
+            (Str::CleanerPartialPermissionDenied, Language::English) => {
+                "Some locations were skipped because permission was denied.".into()
+            }
+            (Str::CleanerPartialPermissionDenied, Language::Vietnamese) => {
+                "Một số vị trí đã bị bỏ qua vì không đủ quyền.".into()
+            }
+            (Str::CleanerPartialRootUnavailable, Language::English) => {
+                "Some configured roots were unavailable on this machine.".into()
+            }
+            (Str::CleanerPartialRootUnavailable, Language::Vietnamese) => {
+                "Một số thư mục gốc cấu hình sẵn không có trên máy này.".into()
+            }
+            (Str::CleanerPartialCancelled, Language::English) => {
+                "The scan was cancelled before every root completed.".into()
+            }
+            (Str::CleanerPartialCancelled, Language::Vietnamese) => {
+                "Lượt quét đã bị huỷ trước khi mọi thư mục gốc hoàn tất.".into()
+            }
+            (Str::CleanerPartialUnsupported, Language::English) => {
+                "This category will land in a later Cleaner phase.".into()
+            }
+            (Str::CleanerPartialUnsupported, Language::Vietnamese) => {
+                "Danh mục này sẽ được bổ sung ở giai đoạn Cleaner sau.".into()
+            }
+            (Str::CleanerBeginUninstallReview, Language::English) => {
+                "Begin uninstall review".into()
+            }
+            (Str::CleanerBeginUninstallReview, Language::Vietnamese) => {
+                "Bắt đầu xem xét gỡ cài đặt".into()
+            }
+            (Str::CleanerUninstallReviewTitle { name }, Language::English) => {
+                format!("Uninstall {name}?").into()
+            }
+            (Str::CleanerUninstallReviewTitle { name }, Language::Vietnamese) => {
+                format!("Gỡ cài đặt {name}?").into()
+            }
+            (Str::CleanerUninstallLoading, Language::English) => {
+                "Analyzing related files…".into()
+            }
+            (Str::CleanerUninstallLoading, Language::Vietnamese) => {
+                "Đang phân tích các tệp liên quan…".into()
+            }
+            (Str::CleanerUninstallRefusedProtected, Language::English) => {
+                "System apps cannot be uninstalled.".into()
+            }
+            (Str::CleanerUninstallRefusedProtected, Language::Vietnamese) => {
+                "Không thể gỡ cài đặt ứng dụng hệ thống.".into()
+            }
+            (Str::CleanerUninstallRefusedNotApplication, Language::English) => {
+                "This item cannot be reviewed for uninstall.".into()
+            }
+            (Str::CleanerUninstallRefusedNotApplication, Language::Vietnamese) => {
+                "Không thể xem xét gỡ cài đặt cho mục này.".into()
+            }
+            (Str::CleanerUninstallRelatedFilesHeader, Language::English) => {
+                "Related files".into()
+            }
+            (Str::CleanerUninstallRelatedFilesHeader, Language::Vietnamese) => {
+                "Tệp liên quan".into()
+            }
+            (Str::CleanerUninstallNoRelatedFiles, Language::English) => {
+                "No related files were found.".into()
+            }
+            (Str::CleanerUninstallNoRelatedFiles, Language::Vietnamese) => {
+                "Không tìm thấy tệp liên quan nào.".into()
+            }
+            (Str::CleanerUninstallDestinationNote, Language::English) => {
+                "The app and every checked file will move to the macOS Trash. You can restore them from Trash until it is emptied."
+                    .into()
+            }
+            (Str::CleanerUninstallDestinationNote, Language::Vietnamese) => {
+                "Ứng dụng và các tệp đã chọn sẽ được chuyển vào Thùng rác của macOS. Bạn có thể khôi phục từ Thùng rác cho đến khi nó được dọn sạch."
+                    .into()
+            }
+            (Str::CleanerUninstallScanOnlyBadge, Language::English) => {
+                "Scan-only (system location)".into()
+            }
+            (Str::CleanerUninstallScanOnlyBadge, Language::Vietnamese) => {
+                "Chỉ quét (vị trí hệ thống)".into()
+            }
+            (Str::CleanerUninstallMoveToTrash, Language::English) => "Move to Trash".into(),
+            (Str::CleanerUninstallMoveToTrash, Language::Vietnamese) => {
+                "Chuyển vào Thùng rác".into()
+            }
+            (Str::CleanerUninstallClose, Language::English) => "Close".into(),
+            (Str::CleanerUninstallClose, Language::Vietnamese) => "Đóng".into(),
+            (Str::CleanerConfidenceConfirmed, Language::English) => "Confirmed".into(),
+            (Str::CleanerConfidenceConfirmed, Language::Vietnamese) => "Chắc chắn".into(),
+            (Str::CleanerConfidenceHigh, Language::English) => "High".into(),
+            (Str::CleanerConfidenceHigh, Language::Vietnamese) => "Cao".into(),
+            (Str::CleanerConfidenceMedium, Language::English) => "Medium".into(),
+            (Str::CleanerConfidenceMedium, Language::Vietnamese) => "Trung bình".into(),
+            (Str::CleanerConfidenceLow, Language::English) => "Low".into(),
+            (Str::CleanerConfidenceLow, Language::Vietnamese) => "Thấp".into(),
+            (Str::CleanerConfidenceSharedOrUnsafe, Language::English) => "Shared or unsafe".into(),
+            (Str::CleanerConfidenceSharedOrUnsafe, Language::Vietnamese) => {
+                "Chia sẻ hoặc không an toàn".into()
             }
 
             (Str::JsonPlaceholder, Language::English) => {
@@ -5057,6 +5338,100 @@ mod tests {
             with(Str::QuickNavKeptStoredPassword(DETAIL.into()), &[DETAIL]),
             with(Str::QuickNavCreatedConnection(DETAIL.into()), &[DETAIL]),
             plain(Str::QuickNavConnectionsLoading),
+            plain(Str::CleanerTitle),
+            plain(Str::CleanerSidebarTitle),
+            plain(Str::CleanerUnsupportedPlatform),
+            plain(Str::CleanerScan),
+            plain(Str::CleanerCancelScan),
+            plain(Str::CleanerEstimatedReclaimable),
+            plain(Str::CleanerEntriesScanned),
+            plain(Str::CleanerNoResultsYet),
+            plain(Str::CleanerStatusProgress),
+            plain(Str::CleanerStatusIdle),
+            plain(Str::CleanerStatusCheckingPermissions),
+            plain(Str::CleanerStatusScanning),
+            plain(Str::CleanerStatusCancelling),
+            plain(Str::CleanerStatusPartial),
+            plain(Str::CleanerStatusCompleted),
+            plain(Str::CleanerStatusCleaning),
+            plain(Str::CleanerStatusCompletedWithFailures),
+            plain(Str::CleanerStatusFailed),
+            plain(Str::CleanerSectionSmartCare),
+            plain(Str::CleanerSectionCleanup),
+            plain(Str::CleanerSectionApplications),
+            plain(Str::CleanerSectionAdvanced),
+            plain(Str::CleanerCategorySystemJunk),
+            plain(Str::CleanerCategoryUserCache),
+            plain(Str::CleanerCategoryMailFiles),
+            plain(Str::CleanerCategoryTrashBins),
+            plain(Str::CleanerCategoryLargeOldFiles),
+            plain(Str::CleanerCategoryInstalledApps),
+            plain(Str::CleanerCategoryOrphanedFiles),
+            plain(Str::CleanerCategoryAiApps),
+            plain(Str::CleanerCategoryXcodeJunk),
+            plain(Str::CleanerCategoryHomebrewCache),
+            plain(Str::CleanerCategoryNodeToolingCache),
+            plain(Str::CleanerCategoryDockerCache),
+            plain(Str::CleanerCategoryUniversalBinaries),
+            plain(Str::CleanerCategoryLanguageFiles),
+            plain(Str::CleanerWarnings),
+            plain(Str::CleanerPath),
+            plain(Str::CleanerExplanation),
+            plain(Str::CleanerCopyPath),
+            plain(Str::CleanerRevealInFinder),
+            plain(Str::CleanerSelectItem),
+            plain(Str::CleanerDeselectItem),
+            plain(Str::CleanerSelectSafeItems),
+            plain(Str::CleanerClearSelection),
+            plain(Str::CleanerCleanSelected),
+            with(Str::CleanerSelectedCount(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::CleanerCleanupReport),
+            plain(Str::CleanerCleanupConfirmTitle),
+            with(
+                Str::CleanerCleanupConfirmMessage {
+                    count: NUMBER,
+                    size: DETAIL.into(),
+                },
+                &[NUMBER_TEXT, DETAIL],
+            ),
+            with(Str::CleanerCleanupSuccessCount(NUMBER), &[NUMBER_TEXT]),
+            with(Str::CleanerCleanupFailureCount(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::CleanerPermissionTitle),
+            plain(Str::CleanerPermissionExplanation),
+            plain(Str::CleanerPermissionRecheck),
+            plain(Str::CleanerPermissionOpenSettings),
+            plain(Str::CleanerPermissionRevealApp),
+            plain(Str::CleanerPermissionUnknown),
+            plain(Str::CleanerPermissionChecking),
+            plain(Str::CleanerPermissionGranted),
+            plain(Str::CleanerPermissionDenied),
+            plain(Str::CleanerPermissionRestricted),
+            plain(Str::CleanerPermissionRequiresRestart),
+            plain(Str::CleanerPartialPermissionDenied),
+            plain(Str::CleanerPartialRootUnavailable),
+            plain(Str::CleanerPartialCancelled),
+            plain(Str::CleanerPartialUnsupported),
+            plain(Str::CleanerBeginUninstallReview),
+            with(
+                Str::CleanerUninstallReviewTitle {
+                    name: DETAIL.into(),
+                },
+                &[DETAIL],
+            ),
+            plain(Str::CleanerUninstallLoading),
+            plain(Str::CleanerUninstallRefusedProtected),
+            plain(Str::CleanerUninstallRefusedNotApplication),
+            plain(Str::CleanerUninstallRelatedFilesHeader),
+            plain(Str::CleanerUninstallNoRelatedFiles),
+            plain(Str::CleanerUninstallDestinationNote),
+            plain(Str::CleanerUninstallScanOnlyBadge),
+            plain(Str::CleanerUninstallMoveToTrash),
+            plain(Str::CleanerUninstallClose),
+            plain(Str::CleanerConfidenceConfirmed),
+            plain(Str::CleanerConfidenceHigh),
+            plain(Str::CleanerConfidenceMedium),
+            plain(Str::CleanerConfidenceLow),
+            plain(Str::CleanerConfidenceSharedOrUnsafe),
         ]
     }
 
@@ -5788,6 +6163,89 @@ mod tests {
             Str::QuickNavKeptStoredPassword(_) => 711,
             Str::QuickNavCreatedConnection(_) => 712,
             Str::QuickNavConnectionsLoading => 713,
+            Str::CleanerTitle => 714,
+            Str::CleanerSidebarTitle => 715,
+            Str::CleanerUnsupportedPlatform => 716,
+            Str::CleanerScan => 717,
+            Str::CleanerCancelScan => 718,
+            Str::CleanerEstimatedReclaimable => 719,
+            Str::CleanerEntriesScanned => 720,
+            Str::CleanerNoResultsYet => 721,
+            Str::CleanerStatusProgress => 722,
+            Str::CleanerStatusIdle => 723,
+            Str::CleanerStatusCheckingPermissions => 724,
+            Str::CleanerStatusScanning => 725,
+            Str::CleanerStatusCancelling => 726,
+            Str::CleanerStatusPartial => 727,
+            Str::CleanerStatusCompleted => 728,
+            Str::CleanerStatusCleaning => 729,
+            Str::CleanerStatusCompletedWithFailures => 730,
+            Str::CleanerStatusFailed => 731,
+            Str::CleanerSectionSmartCare => 732,
+            Str::CleanerSectionCleanup => 733,
+            Str::CleanerSectionApplications => 734,
+            Str::CleanerSectionAdvanced => 735,
+            Str::CleanerCategorySystemJunk => 736,
+            Str::CleanerCategoryUserCache => 737,
+            Str::CleanerCategoryMailFiles => 738,
+            Str::CleanerCategoryTrashBins => 739,
+            Str::CleanerCategoryLargeOldFiles => 740,
+            Str::CleanerCategoryInstalledApps => 741,
+            Str::CleanerCategoryOrphanedFiles => 742,
+            Str::CleanerCategoryAiApps => 743,
+            Str::CleanerCategoryXcodeJunk => 744,
+            Str::CleanerCategoryHomebrewCache => 745,
+            Str::CleanerCategoryNodeToolingCache => 746,
+            Str::CleanerCategoryDockerCache => 747,
+            Str::CleanerCategoryUniversalBinaries => 748,
+            Str::CleanerCategoryLanguageFiles => 749,
+            Str::CleanerWarnings => 750,
+            Str::CleanerPath => 751,
+            Str::CleanerExplanation => 752,
+            Str::CleanerCopyPath => 753,
+            Str::CleanerRevealInFinder => 754,
+            Str::CleanerSelectItem => 755,
+            Str::CleanerDeselectItem => 756,
+            Str::CleanerSelectSafeItems => 757,
+            Str::CleanerClearSelection => 758,
+            Str::CleanerCleanSelected => 759,
+            Str::CleanerSelectedCount(_) => 760,
+            Str::CleanerCleanupReport => 761,
+            Str::CleanerCleanupConfirmTitle => 762,
+            Str::CleanerCleanupConfirmMessage { .. } => 763,
+            Str::CleanerCleanupSuccessCount(_) => 764,
+            Str::CleanerCleanupFailureCount(_) => 765,
+            Str::CleanerPermissionTitle => 766,
+            Str::CleanerPermissionExplanation => 767,
+            Str::CleanerPermissionRecheck => 768,
+            Str::CleanerPermissionOpenSettings => 769,
+            Str::CleanerPermissionRevealApp => 770,
+            Str::CleanerPermissionUnknown => 771,
+            Str::CleanerPermissionChecking => 772,
+            Str::CleanerPermissionGranted => 773,
+            Str::CleanerPermissionDenied => 774,
+            Str::CleanerPermissionRestricted => 775,
+            Str::CleanerPermissionRequiresRestart => 776,
+            Str::CleanerPartialPermissionDenied => 777,
+            Str::CleanerPartialRootUnavailable => 778,
+            Str::CleanerPartialCancelled => 779,
+            Str::CleanerPartialUnsupported => 780,
+            Str::CleanerBeginUninstallReview => 781,
+            Str::CleanerUninstallReviewTitle { .. } => 782,
+            Str::CleanerUninstallLoading => 783,
+            Str::CleanerUninstallRefusedProtected => 784,
+            Str::CleanerUninstallRefusedNotApplication => 785,
+            Str::CleanerUninstallRelatedFilesHeader => 786,
+            Str::CleanerUninstallNoRelatedFiles => 787,
+            Str::CleanerUninstallDestinationNote => 788,
+            Str::CleanerUninstallScanOnlyBadge => 789,
+            Str::CleanerUninstallMoveToTrash => 790,
+            Str::CleanerUninstallClose => 791,
+            Str::CleanerConfidenceConfirmed => 792,
+            Str::CleanerConfidenceHigh => 793,
+            Str::CleanerConfidenceMedium => 794,
+            Str::CleanerConfidenceLow => 795,
+            Str::CleanerConfidenceSharedOrUnsafe => 796,
         }
     }
 

@@ -86,6 +86,8 @@ reqwest = { version = "0.13", default-features = false, features = [
 rust-embed = "8.12.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Reads macOS app-bundle Info.plist files and Mail metadata conservatively.
+plist = "1"
 base64 = "0.22.1"
 percent-encoding = "2.3.2"
 nucleo-matcher = "0.3"
@@ -224,9 +226,16 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSApplication",
     "NSImage",
     "NSResponder",
+    # Cleaner's Finder integration and future permission/settings deep links.
+    "NSWorkspace",
 ] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = [
+    "NSArray",
     "NSData",
+    "NSError",
+    "NSFileManager",
+    "NSString",
+    "NSURL",
 ] }
 
 # Decodes the embedded 256px PNG into the RGBA buffer GPUI's X11 backend writes

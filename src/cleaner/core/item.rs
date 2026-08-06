@@ -47,6 +47,8 @@ pub enum ItemMetadata {
 pub struct ApplicationMetadata {
     pub bundle_id: Option<String>,
     pub team_id: Option<String>,
+    pub version: Option<String>,
+    pub executable: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]

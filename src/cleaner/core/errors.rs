@@ -30,6 +30,7 @@ pub enum SafetyError {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum CleanupError {
     Safety(SafetyError),
+    Trash(String),
     PermissionRequired(MacPermission),
     ExternalOperationFailed { operation: String, message: String },
 }

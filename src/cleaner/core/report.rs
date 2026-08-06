@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use crate::cleaner::core::category::CleanerCategory;
-use crate::cleaner::core::item::CleanableItem;
+use crate::cleaner::core::errors::CleanupError;
+use crate::cleaner::core::item::{CleanableItem, CleanableItemId};
 use crate::cleaner::core::permissions::PermissionRequirement;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -55,4 +56,26 @@ pub struct SmartCareResult {
     pub estimated_reclaimable_bytes: u64,
     pub permission_warnings: Vec<PermissionRequirement>,
     pub failures: Vec<CategoryFailure>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CleanupItemSuccess {
+    pub id: CleanableItemId,
+    pub path: PathBuf,
+    pub trashed_path: Option<PathBuf>,
+    pub logical_size: u64,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CleanupItemFailure {
+    pub id: CleanableItemId,
+    pub path: PathBuf,
+    pub error: CleanupError,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CleanupReport {
+    pub successes: Vec<CleanupItemSuccess>,
+    pub failures: Vec<CleanupItemFailure>,
+    pub estimated_reclaimed_bytes: u64,
 }
