@@ -7,9 +7,9 @@
 //! it: see *What still resets* below, which is the half of the old design that
 //! was right.
 //!
-//! [`models::document`] is the file and [`services::session_store`] is the seam
-//! onto disk. This file is the global that holds the live document and decides
-//! when it is written.
+//! [`models::document`] is the file, [`models::geometry`] is the only hard part
+//! of it, and [`services::session_store`] is the seam onto disk. This file is
+//! the global that holds the live document and decides when it is written.
 //!
 //! # One file, not three
 //!
@@ -42,32 +42,35 @@
 //! arrived inside someone else's collection file, and "I allowed this once" is
 //! not "allow it every morning from now on". The approvals themselves *are*
 //! persisted, per script, in `script-consent.json` — which is the right
-//! granularity for that memory. [`models::document`]'s module doc states the
-//! same thing, and changing it is the captain's call.
+//! granularity for that memory. `models::document`'s module doc states the same
+//! thing, and changing it is the captain's call.
+//!
+//! Also unrestored, for a much smaller reason: the Docker rail's page and the
+//! Database and API Explorer tabs. The captain asked for the current *tool*.
 //!
 //! # Coalescing
 //!
-//! Nothing here writes on the spot. A change **schedules** a save, and each new
-//! change replaces the pending task — a `Task` cancels when it is dropped, so
-//! only the last change in a burst reaches the disk. This is the shape
-//! [`crate::quick_nav::QuickNav::set_pattern`] already used for per-keystroke
-//! pattern edits, and it is what will keep a resize drag from writing the file
-//! once per frame when the window joins this file.
+//! A resize drag emits a geometry change every frame. Writing on each would be
+//! hundreds of writes for one gesture, so a change **schedules** a save rather
+//! than performing one, and each new change replaces the pending task — a
+//! `Task` cancels when it is dropped, so only the last change in a burst
+//! reaches the disk. This is the shape [`crate::quick_nav::QuickNav::set_pattern`]
+//! already used for per-keystroke pattern edits; [`SAVE_DELAY`] is shorter here
+//! because a drag has no natural end the way releasing a key does.
 //!
 //! The hole a trailing-edge debounce leaves is *quit within the delay*, which
-//! is exactly what someone who changes a setting and then closes the window
-//! does. It is closed by [`flush_on_quit`], registered with `App::on_app_quit`:
-//! gpui awaits those futures before the process ends, so the pending document
-//! still gets written — on the background executor, like every other write
-//! here.
+//! is exactly what someone who resizes and then closes the window does. It is
+//! closed by [`flush_on_quit`], registered with `App::on_app_quit`: gpui awaits
+//! those futures before the process ends, so the pending document still gets
+//! written — on the background executor, like every other write here.
 //!
 //! # An unreadable file is never overwritten
 //!
 //! If the load failed — a version from a newer dodo, or an unreadable file —
-//! dodo **stops saving** for the rest of the run. Refusing to read a newer file
-//! and then flattening it on the first settings change would make the refusal
-//! pointless. The Settings dialog says so; see [`services::session_store`]'s
-//! module doc.
+//! dodo **stops saving** for the rest of the run. Refusing to read a newer
+//! file and then flattening it on the first window move would make the refusal
+//! pointless. The Settings dialog says so; see
+//! [`services::session_store`]'s module doc.
 
 pub mod models;
 pub mod services;
@@ -75,18 +78,21 @@ pub mod services;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{App, AsyncApp, BorrowAppContext as _, Global, Task};
+use gpui::{
+    App, AsyncApp, BorrowAppContext as _, Bounds, Global, Pixels, Task, WindowBounds, px, size,
+};
 
 use crate::i18n::Str;
-use crate::session::models::document::SessionDocument;
+use crate::session::models::document::{SessionDocument, WindowMode, WindowRecord};
+use crate::session::models::geometry;
 use crate::session::services::session_store::{DiskSessionStore, SessionStore, SessionStoreError};
 
 /// How long a change waits before it is written.
 ///
-/// Shorter than quick navigation's 600ms because the burst this will have to
-/// coalesce is a pointer drag rather than typing: frames arrive ~16ms apart, so
-/// 400ms of quiet reliably means the gesture is over, and the shorter the delay
-/// the less a hard kill can lose.
+/// Shorter than quick navigation's 600ms because the burst this coalesces is a
+/// pointer drag rather than typing: frames arrive ~16ms apart, so 400ms of
+/// quiet reliably means the gesture is over, and the shorter the delay the less
+/// a hard kill can lose.
 const SAVE_DELAY: Duration = Duration::from_millis(400);
 
 /// The live session: what will be saved, and the seam onto the file.
@@ -148,6 +154,25 @@ impl Session {
             .and_then(|state| state.store_error.as_ref().map(SessionStoreError::message))
     }
 
+    /// Where to open the window, or `None` to use the caller's default.
+    ///
+    /// This is the whole of the geometry decision as far as the rest of dodo is
+    /// concerned: the saved rectangle is placed against the displays that exist
+    /// *now* by [`models::geometry::place_record`], so an unplugged monitor, a
+    /// changed resolution and a size below the layout's minimum are all already
+    /// dealt with by the time a `WindowBounds` comes back.
+    pub fn window_bounds(cx: &App) -> Option<WindowBounds> {
+        let record = Self::read(cx, |document| document.window)?;
+        let bounds =
+            geometry::place_record(&record, &displays(cx), crate::layout::window_min_size())?;
+
+        Some(match record.mode {
+            WindowMode::Windowed => WindowBounds::Windowed(bounds),
+            WindowMode::Maximized => WindowBounds::Maximized(bounds),
+            WindowMode::Fullscreen => WindowBounds::Fullscreen(bounds),
+        })
+    }
+
     pub fn set_language(code: impl Into<String>, cx: &mut App) {
         let code = code.into();
         Self::edit(cx, |document| document.appearance.language = Some(code));
@@ -168,6 +193,31 @@ impl Session {
         });
     }
 
+    /// Records where the window is now. Called from a bounds observer, so this
+    /// is the burst [`SAVE_DELAY`] exists for.
+    ///
+    /// The rectangle stored is gpui's **restore** rectangle in every mode: for
+    /// a maximized or fullscreen window that is the size it returns to, which
+    /// is what makes unzooming after a restart land somewhere sensible.
+    pub fn set_window(bounds: WindowBounds, cx: &mut App) {
+        let (mode, rect) = match bounds {
+            WindowBounds::Windowed(rect) => (WindowMode::Windowed, rect),
+            WindowBounds::Maximized(rect) => (WindowMode::Maximized, rect),
+            WindowBounds::Fullscreen(rect) => (WindowMode::Fullscreen, rect),
+        };
+        let (x, y, width, height) = geometry::record_of(rect);
+
+        Self::edit(cx, |document| {
+            document.window = Some(WindowRecord {
+                mode,
+                x,
+                y,
+                width,
+                height,
+            });
+        });
+    }
+
     fn read<T>(cx: &App, get: impl FnOnce(&SessionDocument) -> T) -> T
     where
         T: Default,
@@ -182,7 +232,8 @@ impl Session {
     /// Two things it declines to do, both of which would otherwise show up as
     /// disk traffic nobody asked for: it does nothing at all while the file is
     /// untouchable (see the module doc), and it does nothing when the change
-    /// left the document exactly as it was.
+    /// left the document exactly as it was — which is the common case for a
+    /// sidebar click on the tool that is already open.
     fn edit(cx: &mut App, change: impl FnOnce(&mut SessionDocument)) {
         if cx.try_global::<Session>().is_none() {
             return;
@@ -256,12 +307,36 @@ impl Session {
     }
 }
 
+/// Every attached display's usable area, **primary first**.
+///
+/// `visible_bounds` rather than `bounds` excludes the macOS menu bar and the
+/// Windows taskbar, so a clamped window lands under neither; it is what gpui's
+/// own `default_bounds` uses. Primary-first is
+/// [`models::geometry::place`]'s contract: it is the display a window with
+/// nowhere else to go is centred on, and `App::displays` does not promise an
+/// order.
+fn displays(cx: &App) -> Vec<Bounds<Pixels>> {
+    let primary = cx.primary_display();
+    let primary_id = primary.as_ref().map(|display| display.id());
+
+    primary
+        .iter()
+        .map(|display| display.visible_bounds())
+        .chain(
+            cx.displays()
+                .iter()
+                .filter(|display| Some(display.id()) != primary_id)
+                .map(|display| display.visible_bounds()),
+        )
+        .collect()
+}
+
 /// Installs the session global and the quit-time flush.
 ///
 /// Nothing is read here: [`load`] does that, and it has to be awaited before
-/// the window opens so the theme is known for the first frame. Same
-/// post-`gpui_component::init` position as every other `init` in `main.rs`,
-/// though this one binds no keys.
+/// the window opens so the theme and the geometry are known for the first
+/// frame. Same post-`gpui_component::init` position as every other `init` in
+/// `main.rs`, though this one binds no keys.
 pub fn init(cx: &mut App) {
     cx.set_global(Session::new(Arc::new(DiskSessionStore::new())));
     cx.on_app_quit(flush_on_quit).detach();
@@ -288,8 +363,8 @@ pub async fn load(cx: &mut AsyncApp) {
 /// gpui builds these futures while the app is still whole and then awaits them
 /// with a timeout, so everything the write needs — the store, the document, the
 /// executor — is taken **now**, synchronously, and the future itself touches no
-/// `App`. That is also what keeps the write off the UI thread: the future hands
-/// it to the background executor and awaits that.
+/// `App`. That is also what keeps the write off the UI thread: the future
+/// hands it to the background executor and awaits that.
 fn flush_on_quit(cx: &mut App) -> impl Future<Output = ()> + use<> {
     let executor = cx.background_executor().clone();
     let pending = cx.try_global::<Session>().and_then(|state| {
@@ -310,14 +385,20 @@ fn flush_on_quit(cx: &mut App) -> impl Future<Output = ()> + use<> {
     }
 }
 
+/// The default window dodo opens when nothing has been saved — and the size the
+/// restored one is measured against.
+pub fn default_window_bounds(cx: &App) -> WindowBounds {
+    WindowBounds::centered(size(px(900.), px(620.)), cx)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use gpui::TestAppContext;
+    use gpui::{Bounds, Pixels, TestAppContext, WindowBounds, point, px, size};
 
     use super::{SAVE_DELAY, Session, flush_on_quit};
-    use crate::session::models::document::SessionDocument;
+    use crate::session::models::document::{SessionDocument, WindowMode, WindowRecord};
     use crate::session::services::session_store::{
         InMemorySessionStore, SessionStore as _, SessionStoreError,
     };
@@ -441,5 +522,144 @@ mod tests {
             1,
             "quitting must not write for the sake of writing",
         );
+    }
+
+    /// A burst of *geometry* changes is the case the delay really exists for:
+    /// a resize drag emits one every frame, and it must still be one write.
+    #[gpui::test]
+    fn a_resize_drag_is_written_once(cx: &mut TestAppContext) {
+        let store = install(cx, Ok(SessionDocument::new()));
+
+        cx.update(|cx| {
+            for width in [800., 810., 820., 830., 900.] {
+                Session::set_window(
+                    WindowBounds::Windowed(Bounds {
+                        origin: point(px(0.), px(0.)),
+                        size: size(px(width), px(620.)),
+                    }),
+                    cx,
+                );
+            }
+        });
+        settle(cx);
+
+        assert_eq!(store.writes(), 1, "one gesture has to be one write");
+        let window = store.load().expect("loads").window.expect("a window");
+        assert_eq!(window.width, 900., "the last change is the one that lands");
+        assert_eq!(window.mode, WindowMode::Windowed);
+    }
+
+    /// A maximized or fullscreen window keeps its **restore** rectangle, so
+    /// unzooming after a restart lands where it did before.
+    #[gpui::test]
+    fn the_window_mode_survives_with_its_restore_rectangle(cx: &mut TestAppContext) {
+        let store = install(cx, Ok(SessionDocument::new()));
+        let restore = Bounds {
+            origin: point(px(60.), px(40.)),
+            size: size(px(900.), px(620.)),
+        };
+
+        cx.update(|cx| Session::set_window(WindowBounds::Fullscreen(restore), cx));
+        settle(cx);
+
+        let window = store.load().expect("loads").window.expect("a window");
+        assert_eq!(window.mode, WindowMode::Fullscreen);
+        assert_eq!((window.x, window.y), (60., 40.));
+        assert_eq!((window.width, window.height), (900., 620.));
+    }
+
+    #[gpui::test]
+    fn with_no_saved_window_there_is_nothing_to_restore(cx: &mut TestAppContext) {
+        install(cx, Ok(SessionDocument::new()));
+        assert!(cx.update(|cx| Session::window_bounds(cx)).is_none());
+    }
+
+    /// A session holding `record` was loaded.
+    fn with_window(record: WindowRecord) -> Result<SessionDocument, SessionStoreError> {
+        let mut document = SessionDocument::new();
+        document.window = Some(record);
+        Ok(document)
+    }
+
+    /// End to end through the global, on gpui's test display (1920x1080 at the
+    /// origin): the rectangle comes back untouched and in the mode it was saved
+    /// in. `models::geometry` argues each placement rule on its own; this is the
+    /// wiring above it.
+    #[gpui::test]
+    fn a_saved_window_is_restored_in_the_mode_it_was_saved_in(cx: &mut TestAppContext) {
+        for (mode, expected) in [
+            (
+                WindowMode::Windowed,
+                WindowBounds::Windowed as fn(Bounds<Pixels>) -> WindowBounds,
+            ),
+            (WindowMode::Maximized, WindowBounds::Maximized),
+            (WindowMode::Fullscreen, WindowBounds::Fullscreen),
+        ] {
+            install(
+                cx,
+                with_window(WindowRecord {
+                    mode,
+                    x: 100.,
+                    y: 60.,
+                    width: 1000.,
+                    height: 700.,
+                }),
+            );
+
+            let rect = Bounds {
+                origin: point(px(100.), px(60.)),
+                size: size(px(1000.), px(700.)),
+            };
+            assert_eq!(
+                cx.update(|cx| Session::window_bounds(cx)),
+                Some(expected(rect)),
+                "{mode:?} did not survive the round trip",
+            );
+        }
+    }
+
+    /// The awkward case the captain will want to try: quit on a second display,
+    /// unplug it, reopen. The window must not come back where the monitor was.
+    #[gpui::test]
+    fn a_window_saved_on_a_display_that_is_gone_comes_back_on_screen(cx: &mut TestAppContext) {
+        install(
+            cx,
+            with_window(WindowRecord {
+                mode: WindowMode::Windowed,
+                x: 3000.,
+                y: 400.,
+                width: 1000.,
+                height: 700.,
+            }),
+        );
+
+        let restored = cx
+            .update(|cx| Session::window_bounds(cx))
+            .expect("something to open");
+        let rect = restored.get_bounds();
+
+        assert_eq!(rect.size, size(px(1000.), px(700.)), "the size is kept");
+        assert!(
+            rect.origin.x >= px(0.) && rect.right() <= px(1920.),
+            "{rect:?} is off the only display there is",
+        );
+        assert!(rect.origin.y >= px(0.) && rect.bottom() <= px(1080.));
+    }
+
+    /// A hand-edited or corrupt rectangle is "no saved geometry", so `main`
+    /// opens its own default window rather than a zero-sized one.
+    #[gpui::test]
+    fn an_impossible_saved_rectangle_leaves_the_default_window(cx: &mut TestAppContext) {
+        install(
+            cx,
+            with_window(WindowRecord {
+                mode: WindowMode::Windowed,
+                x: 0.,
+                y: 0.,
+                width: 0.,
+                height: 0.,
+            }),
+        );
+        assert!(cx.update(|cx| Session::window_bounds(cx)).is_none());
     }
 }

@@ -17,6 +17,7 @@ use crate::i18n::{Str, t};
 use crate::json_formatter::JsonFormatter;
 use crate::quick_nav::models::route::Route;
 use crate::quick_nav::{self, LeaveInsertMode, QuickNav, QuickNavigate};
+use crate::session::Session;
 use crate::settings;
 use crate::updater;
 
@@ -148,7 +149,8 @@ pub fn window_min_size() -> Size<Pixels> {
 /// * The toggle always wins and hands ownership back to the user: after a
 ///   manual press the sidebar stays exactly as left until the next crossing.
 ///
-/// None of it is persisted; [`Layout::new`] says why.
+/// The window's own geometry is persisted (see [`crate::session`]); none of
+/// this is, yet.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct SidebarState {
     collapsed: bool,
@@ -351,6 +353,9 @@ pub struct Layout {
     /// reachable state rather than the absence of one. [`Layout::new`] takes it
     /// at startup and [`Layout::leave_insert_mode`] takes it back.
     focus: FocusHandle,
+    /// Keeps the window-bounds observer alive: a `Subscription` unsubscribes
+    /// when it drops, so this field is the subscription, not bookkeeping.
+    _bounds: Subscription,
     json_formatter: Entity<JsonFormatter>,
     encoder_decoder: Entity<EncoderDecoder>,
     api_explorer: Entity<ApiExplorer>,
@@ -361,15 +366,14 @@ pub struct Layout {
 
 impl Layout {
     /// dodo opens on the **icon rail**, not the labelled sidebar: the tools are
-    /// five fixed entries a user learns once, and the pane they are choosing
+    /// six fixed entries a user learns once, and the pane they are choosing
     /// between is the whole point of the window, so 240px of permanent chrome
     /// is a poor default. The toggle in the pane header is unchanged, and every
     /// collapsed icon carries its title as a tooltip, which is what keeps the
     /// rail readable to someone who has not learned it yet.
     ///
-    /// The choice is **not persisted**, deliberately: dodo's six saved files are
-    /// listed in `CLAUDE.md`, adding a seventh is a decision of its own, and a
-    /// sidebar that opens the same way every time is at least predictable.
+    /// That choice is not yet persisted; the window's geometry now is, through
+    /// the bounds observer below. See [`crate::session`].
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // dodo opens in normal mode, so the pane takes focus straight away. See
         // [`Layout::focus`] for why that has to be someone's rather than nobody's.
@@ -381,6 +385,13 @@ impl Layout {
             sidebar: SidebarState::new(),
             active: View::JsonFormatter,
             focus,
+            // Every window move and resize, coalesced into a save by
+            // `Session::set_window` — see `session`'s module doc for why that
+            // matters and how. The `Subscription` has to be held or it
+            // unsubscribes immediately.
+            _bounds: cx.observe_window_bounds(window, |_, window, cx| {
+                Session::set_window(window.window_bounds(), cx);
+            }),
             json_formatter: cx.new(|cx| JsonFormatter::new(window, cx)),
             encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
             api_explorer: cx.new(|cx| ApiExplorer::new(window, cx)),
