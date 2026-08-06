@@ -4,8 +4,18 @@ description: How dodo's themes, font size, border radius and language switching 
 ---
 
 Two files own all of this: `src/settings.rs` (the dialog and the app-level state it edits) and
-`src/i18n.rs` (localization). Nothing is persisted across restarts — every setting resets to its
-default on launch. Adding persistence means introducing storage that does not exist today.
+`src/i18n.rs` (localization). Nothing *here* is persisted across restarts — appearance, language
+and Run scripts all reset to their default on launch.
+
+**One page in the dialog is the exception and is not owned by these two files.** The Quick
+navigation page is built by `settings.rs` but every value on it lives in `src/quick_nav/`, in the
+`QuickNav` global, and is saved to `quick-nav.json` — because its fields hold text the user typed
+(a detector pattern), and a pattern that expired each launch would make the field pointless.
+Copy that arrangement if a new setting needs to survive a restart: a store behind a trait in a
+`services/` module, a versioned document that refuses a higher version, load and save on the
+background executor, and a `SettingField` here whose closures read and write the global. Do **not**
+add persistence to the appearance settings by extending `settings.rs` itself; there is no storage
+there and there is deliberately none.
 
 ## Themes
 

@@ -30,6 +30,17 @@ Tools available today:
   state with Retry. **Images**, **Volumes** and **Networks** are placeholder pages
   arriving in a later round, alongside compose grouping, filters and bulk actions.
 
+**Quick navigation** works across all of them, vim-style. Whenever no input is
+focused, `Cmd+V` / `Ctrl+V` — or just `p` — reads the clipboard, works out what
+the text is, and opens the tool that handles it with the value already loaded:
+JSON goes to the formatter and is formatted, Base64 and JWTs go to the
+Encoder / Decoder decoded, a `curl` command opens a new API Explorer tab built
+from it, and a database URI opens the matching saved connection or creates one.
+Press `Esc` inside a text field to leave it and get back to that mode. When
+nothing is recognised confidently, nothing happens. It can be switched off in
+Settings, where each format's matching pattern can also be edited; those
+settings are the one thing in that dialog that survives a restart.
+
 ## Tech stack
 
 - **[gpui](https://www.gpui.rs/)** and **gpui_platform** - the GPUI UI framework,
@@ -39,6 +50,10 @@ Tools available today:
 - **[rust-embed](https://crates.io/crates/rust-embed)** - embeds SVG icons into the
   binary at build time.
 - **[anyhow](https://crates.io/crates/anyhow)** - error handling.
+- **[regex](https://crates.io/crates/regex)** - quick navigation's editable
+  detector patterns. Already in the graph through `gpui`, so it is a direct
+  dependency rather than a new one; it has no backtracking, which is what makes
+  running a user-supplied pattern from a key handler safe.
 - **[reqwest](https://crates.io/crates/reqwest)** - the API Explorer's HTTP client,
   built with rustls rather than the platform TLS stack, so no OpenSSL is needed.
 - **[bollard](https://crates.io/crates/bollard)** - the Docker module's Docker Engine

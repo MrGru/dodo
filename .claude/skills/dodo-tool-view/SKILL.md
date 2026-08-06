@@ -39,6 +39,16 @@ never rebuild a view on selection.
    variant for its sidebar title and one for every label inside it. Load `dodo-i18n-text` before
    writing that text; `cargo test i18n` will fail until each new variant is registered there.
 
+7. **`src/quick_nav/` — only if the tool can accept a pasted value.** Optional, and skipping it
+   costs nothing: the tool simply is not a quick-navigation target. If it should be one, it is
+   three small edits and no more — a `Detector` variant with its arm in `models/detect.rs`, a
+   `Route` variant in `models/route.rs`, and an arm in `Layout::apply_route`, which is the one
+   place a route meets a `View`. Two rules there are not negotiable: **where the tool's format
+   already has a real parser, attempting that parser is the detector** (a regex is not an
+   improvement on a tested parser), and **the position you insert into `Detector::ORDER` has to be
+   argued in that module's doc** — the order is most-specific-first and every existing position is
+   forced by an overlap below it.
+
 `cargo build` catches every step except the `ALL` array. If the tool builds but no sidebar row
 appears, that is the one you missed.
 

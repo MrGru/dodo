@@ -43,20 +43,39 @@ comments are the authority on its split and what shipped when; the matching skil
 the non-obvious parts of each are written down — load it before changing anything in one of these
 three modules rather than inferring the design from the files cold.
 
-**dodo persists six things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
+**dodo persists seven things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
 behind a trait so the state layer never learns where they live: `collections.json`
 (`api_explorer::services::collection_store`), `environments.json` (`services::variable_store`),
 `script-consent.json` (`services::consent_store`, the imported scripts the user has approved),
 `updater.json` (`updater::services::config_store`), `connections.json`
 (`database::services::connection_store`, which also holds database passwords in plain text — see
-`dodo-database-internals`) and `query-data.json` (`database::services::query_store`, saved queries
-plus bounded query history, with query text intentionally stored as plain text). The
+`dodo-database-internals`), `query-data.json` (`database::services::query_store`, saved queries
+plus bounded query history, with query text intentionally stored as plain text) and
+`quick-nav.json` (`quick_nav::services::config_store`). The
 `dodo-theming-settings` skill's "nothing is persisted across restarts" is therefore scoped to
 appearance/language settings only — including the **Run scripts** setting, which is a
 `ScriptPolicy` global and deliberately starts
-each launch at the cautious `Ask for imported`. `updater.json` is the one exception and the
-reason is `skipped_version`: a "skip this version" that expired every launch would make the button
-a lie. Persistence and initial load run on the background executor, never the UI thread.
+each launch at the cautious `Ask for imported`. `updater.json` and `quick-nav.json` are the two
+exceptions, for the same reason in both cases: a setting that holds *what the user typed or
+decided about a specific thing* cannot expire each launch without becoming a lie — `skipped_version`
+for the updater, an edited detector pattern for quick navigation. Persistence and initial load run
+on the background executor, never the UI thread.
+
+**`src/quick_nav/` is the one feature that is not a tool**: a vim-shaped normal mode where
+`Cmd+V` / `Ctrl+V` / `p` sends the clipboard to whichever tool can read it, and `Esc` leaves a
+focused input. Its module docs are the authority and are worth reading before touching key
+handling anywhere — three things there are counter-intuitive. **Normal mode is a key-binding
+context, not a flag**: the bindings carry `Dodo && !Input`, gpui evaluates `!` against the whole
+dispatch path, and that is the only definition — so `p` still types a `p` inside every text field
+and ordinary paste is untouched. **The pane holds a focus handle for this**, because with nothing
+focused gpui's dispatch path is the window root alone and carries none of the pane's context.
+And **`Esc` is bound at the pane, deliberately shallower than every library `Escape`**: gpui tries
+matched bindings deepest-first until one stops propagating, so a dialog, a popover, a select and
+an input's own completion popup all still win, and this fires only once they have declined.
+`models/detect.rs` carries the detection order (most-specific first: cURL → database URI → JWT →
+JSON → Base64) and the rule that resolves the captain's editable-regex request against dodo's
+existing parsers — *a pattern selects candidates, the parser confirms*. `layout.rs`'s
+`apply_route` is the single place a detected route meets a `View`.
 
 `data_dir()` lives in `src/paths.rs`, not under `api_explorer/` any more, and it knows all
 three platforms: `~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME` or
@@ -68,7 +87,7 @@ of them; copy that trick rather than a `cfg` split for anything else platform-sh
 The files version differently, and the difference is deliberate. A `RequestSnapshot` inside
 `collections.json` is versioned only by `#[serde(default)]`, which copes with *added* fields and
 nothing else. `environments.json`, `script-consent.json`, `updater.json`, `connections.json` and
-`query-data.json` carry an explicit
+`query-data.json` and `quick-nav.json` carry an explicit
 `"version"` from their very first write, and their `parse_document` **refuses** a file whose
 version is higher rather than half-reading it. Copy that pattern for any new file; do not copy
 `collections.json`'s.
