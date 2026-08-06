@@ -10,7 +10,7 @@ use crate::cleaner::core::safety::{
 };
 use crate::cleaner::macos::applications::locations;
 use crate::cleaner::macos::platform::move_to_trash;
-use crate::cleaner::macos::scanners::{homebrew_cache, mail_files, xcode_junk};
+use crate::cleaner::macos::scanners::{homebrew_cache, mail_files, node_tooling_cache, xcode_junk};
 use crate::paths;
 
 pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
@@ -148,6 +148,22 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
                 path: cache_root,
                 allow_root_itself: false,
                 allowed_categories: vec![CleanerCategory::HomebrewCache],
+            });
+        }
+
+        // Node Tooling Cache (Phase 11): allow-lists only the locations
+        // `node_tooling_cache::cleanup_allowed_roots` marks `allow_cleanup:
+        // true` for the exact same environment snapshot the scan itself
+        // would take. pnpm's shared store, and anything a future Nub
+        // detection might ever report, are never included — see
+        // `macos::scanners::node_tooling_cache` and
+        // `docs/cleaner/known-limitations.md`.
+        let node_environment = node_tooling_cache::snapshot_environment(Some(home.as_path()));
+        for root in node_tooling_cache::cleanup_allowed_roots(&node_environment) {
+            allowed_roots.push(AllowedRoot {
+                path: root,
+                allow_root_itself: false,
+                allowed_categories: vec![CleanerCategory::NodeToolingCache],
             });
         }
     }
@@ -434,6 +450,44 @@ mod tests {
         );
         assert!(
             homebrew_roots.iter().all(|root| !root.allow_root_itself),
+            "an allowed root must never authorize deleting itself outright"
+        );
+    }
+
+    #[test]
+    fn node_tooling_cache_policy_never_allow_lists_the_pnpm_store() {
+        let policy = policy_for(&CleanableItem {
+            id: CleanableItemId(1),
+            category: CleanerCategory::NodeToolingCache,
+            group: None,
+            display_name: String::new(),
+            path: PathBuf::from("/tmp/node-tooling-cache"),
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::SafeRecreatable,
+            selection_policy: SelectionPolicy::SelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        });
+
+        let node_roots: Vec<_> = policy
+            .allowed_roots
+            .iter()
+            .filter(|root| {
+                root.allowed_categories
+                    .contains(&CleanerCategory::NodeToolingCache)
+            })
+            .collect();
+        assert!(
+            node_roots.iter().all(|root| !root.path.ends_with("store")),
+            "pnpm's content-addressable store must never be allow-listed"
+        );
+        assert!(
+            node_roots.iter().all(|root| !root.allow_root_itself),
             "an allowed root must never authorize deleting itself outright"
         );
     }

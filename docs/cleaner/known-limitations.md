@@ -87,7 +87,54 @@
     they are excluded from the "Download cache" group), and then each is scanned again on its own
     to produce its own group. This duplicates some directory traversal rather than adding an
     exclusion-list concept to the shared `scan_root` engine for one scanner's need.
-- No Docker/Node provider integrations yet.
+- Phase 11 also adds **Node Tooling Cache**, six providers (npm, Yarn Classic, Yarn Berry, pnpm,
+  Bun, Nub) behind one `NodeToolCacheProvider` trait (`src/cleaner/core/node_tool_provider.rs`),
+  driven by `src/cleaner/macos/scanners/node_tooling_cache.rs`. Scan+preview only, same as every
+  other category. Deliberate scope cuts:
+  - **No CLI process call was made anywhere in this phase.** Every location is derived from an
+    environment-variable override or a documented default filesystem path — `npm`, `yarn`, `pnpm`
+    and `bun` are never invoked, and pnpm's own `pnpm config get store-dir` is deliberately not
+    shelled out to either, the same "avoid an extra process call" reasoning `homebrew_cache` used
+    for skipping `brew --cache`. A non-default install that neither sets the relevant environment
+    variable nor uses the documented default location is invisible to the matching provider.
+  - **pnpm's store is scan-only and is never allow-listed for cleanup at all** — not "review
+    required", but structurally excluded from `node_tooling_cache::cleanup_allowed_roots`, so no
+    code path in this phase can move it to Trash regardless of what a future UI bug might let a
+    user select. The store is shared across every pnpm project on the machine; the ticket asks for
+    a future explicit "pnpm store prune" action with its own preview, which this phase does not
+    add. pnpm's separate, smaller registry-metadata cache (`~/Library/Caches/pnpm`) is unaffected
+    and is treated like any other tool's cache.
+  - **Yarn Berry's project-local `.yarn/cache` and Plug'n'Play files (`.pnp.cjs`/`.pnp.data.json`)
+    are out of scope for discovery.** Both require knowing where a Yarn Berry project lives on
+    disk, and there is no fixed, home-relative convention for either — finding one would mean
+    crawling the home directory for arbitrary project checkouts, which the ticket rules out for
+    normal cleanup. Only Yarn Berry's own global cache is discovered. Because project-local pieces
+    are never surfaced at all, the ticket's "must be shown separately and not selected by default"
+    requirement for them is satisfied by construction.
+  - **Bun's project-local dependencies are out of scope for discovery**, for the same reason as
+    above, and **`node_modules` is never touched by any of the six providers**, project-local or
+    otherwise — the shared "never delete `node_modules` automatically" rule applies regardless of
+    scope. Bun's provider also does not fabricate a separate "installation cache", logs directory,
+    or temporary-data directory distinct from its one confidently-documented install cache
+    (`<BUN_INSTALL>/install/cache`) — none of the three has a version-stable location this phase
+    can point at with the same confidence.
+  - **Yarn Classic has no separate logs location.** Unlike npm's `_logs`, there is no documented,
+    stable Yarn Classic log directory distinct from its cache; only the cache is reported.
+  - **Nub's provider always returns an empty result — no location, ever.** Unlike nvm, fnm or
+    Volta, this phase has no well-known, version-stable on-disk convention for a tool named "Nub"
+    to check with confidence, and the ticket explicitly permits falling back to scan-only/reporting
+    nothing when uncertain rather than inventing a directory layout. Reported provisioned Node
+    versions must never be selected by default regardless — moot here, since none are ever
+    reported. `node_tooling::nub::detect_home` checks a defensive `NUB_HOME`-style override purely
+    so a future session with real knowledge of Nub's layout has a wired place to extend; it is
+    never turned into a location today, confirmed or not.
+  - Yarn Berry's default global cache path (`~/Library/Caches/Yarn/Berry`) is a documented
+    convention, the same "best-effort default location" status `homebrew_cache`'s
+    `~/Library/Caches/Homebrew` has — neither is derived by calling the tool itself. Because that
+    path nests inside Yarn Classic's own cache root (`~/Library/Caches/Yarn`), the scanner excludes
+    Yarn Berry's directory from Yarn Classic's own immediate-children enumeration (and, more
+    generally, excludes any immediate child that is also another provider's own location) rather
+    than double-reporting the same cache under two provider names.
 - Non-macOS support is intentionally unavailable and shown as such in UI.
 
 These limitations are intentional: the implementation now has shared traversal, selection, Finder reveal, and Trash groundwork, but broader categories remain blocked until permission, more scanners, and deeper app-analysis phases are in place.

@@ -30,6 +30,8 @@ Results are returned as typed `CategoryScanResult` values.
 - `src/cleaner/macos/scanners/xcode_junk.rs` provides Xcode/CoreSimulator developer-cache analysis
   (Phase 11).
 - `src/cleaner/macos/scanners/homebrew_cache.rs` provides Homebrew download-cache analysis (Phase 11).
+- `src/cleaner/macos/scanners/node_tooling_cache.rs` provides Node.js package-manager cache analysis
+  across six providers under `src/cleaner/macos/scanners/node_tooling/` (Phase 11).
 - `src/cleaner/state/mock.rs` remains for unit tests that validate the orchestration layer in isolation.
 
 ### User Cache scanner
@@ -174,6 +176,47 @@ Current behavior:
 - marks every item `SafeRecreatable`/`SelectedByDefault` with `MoveToTrash`, matching
   `UserCacheScanner`'s bar for a `Caches`-namespaced root;
 - never scans the Cellar and never invokes `brew cleanup` or any other mutating Homebrew command.
+
+### Node Tooling Cache scanner
+
+One `NodeToolCacheProvider` trait (`src/cleaner/core/node_tool_provider.rs` — plain Rust, no macOS
+API, no GPUI, the same split as `CleanerScanner` itself) implemented by six providers under
+`src/cleaner/macos/scanners/node_tooling/`, all driven by one scanner,
+`src/cleaner/macos/scanners/node_tooling_cache.rs`. Every provider reads a `NodeToolEnvironment`
+snapshotted once per scan (`node_tooling_cache::snapshot_environment`) rather than calling
+`std::env::var_os` itself, and returns nothing at all — not an empty group, not an error — when its
+tool shows no sign of being installed.
+
+| Provider | Detects | Selected by default | Allow-listed for cleanup |
+|---|---|---|---|
+| npm | `_cacache` (cache) and `_logs` (logs) under `npm_config_cache` or `~/.npm`, reported as two separate groups | yes (both) | yes (both) |
+| Yarn Classic | `YARN_CACHE_FOLDER` or default `~/Library/Caches/Yarn` | yes | yes |
+| Yarn Berry | global cache only, default `~/Library/Caches/Yarn/Berry` (no env override honored) | yes | yes |
+| pnpm | store (`npm_config_store_dir`/`PNPM_HOME`/default `~/Library/pnpm/store`) and a separate metadata cache (`~/Library/Caches/pnpm`) | store: no; cache: yes | store: **never**; cache: yes |
+| Bun | install cache (`BUN_INSTALL_CACHE_DIR`/`BUN_INSTALL`/default `~/.bun/install/cache`) | yes | yes |
+| Nub | nothing — see below | n/a | n/a |
+
+Current behavior:
+
+- every `allow_cleanup: true` location is scanned with `AggregateMode::ImmediateChildren`, so — same
+  as `homebrew_cache` and `xcode_junk` — no item's path ever equals its own allow-listed root;
+- `node_tooling_cache::cleanup_allowed_roots` reruns the same six providers against the same
+  environment shape and keeps only `allow_cleanup: true` locations, so `macos::cleanup::policy_for`
+  can never allow-list a root the scan itself did not produce;
+- two duplicate-counting guards run before anything is scanned: an exact-path duplicate across two
+  providers is dropped (first provider wins), and an immediate-child entry that is also *another*
+  provider's own location is skipped — the same technique `homebrew_cache` uses for its `Cask`/`Logs`
+  subdirectories, generalized here because Yarn Berry's default global cache
+  (`~/Library/Caches/Yarn/Berry`) nests inside Yarn Classic's own cache root
+  (`~/Library/Caches/Yarn`);
+- pnpm's store is reported with `RiskLevel::UserData`, never selected by default, and — unlike every
+  other location this scanner produces — never allow-listed for cleanup at all: there is no code path
+  in this phase that can move it to Trash;
+- Nub's provider always returns an empty result. It checks a defensive `NUB_HOME` override
+  (`node_tooling::nub::detect_home`) purely so a future session has a wired detection point, but
+  never turns a detection into a reported location — there is no well-known, version-stable
+  filesystem convention for Nub this phase can point at with confidence, unlike nvm/fnm/Volta. See
+  `docs/cleaner/known-limitations.md`.
 
 ### Unimplemented categories
 
