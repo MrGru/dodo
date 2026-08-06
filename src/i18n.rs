@@ -118,6 +118,44 @@ pub enum Str {
     JsonFormatterTitle,
     EncoderDecoderTitle,
     ApiExplorerTitle,
+    CleanerTitle,
+
+    // Cleaner.
+    CleanerSidebarTitle,
+    CleanerUnsupportedPlatform,
+    CleanerScan,
+    CleanerCancelScan,
+    CleanerEstimatedReclaimable,
+    CleanerEntriesScanned,
+    CleanerNoResultsYet,
+    CleanerStatusProgress,
+    CleanerStatusIdle,
+    CleanerStatusCheckingPermissions,
+    CleanerStatusScanning,
+    CleanerStatusCancelling,
+    CleanerStatusPartial,
+    CleanerStatusCompleted,
+    CleanerStatusCleaning,
+    CleanerStatusCompletedWithFailures,
+    CleanerStatusFailed,
+    CleanerSectionSmartCare,
+    CleanerSectionCleanup,
+    CleanerSectionApplications,
+    CleanerSectionAdvanced,
+    CleanerCategorySystemJunk,
+    CleanerCategoryUserCache,
+    CleanerCategoryMailFiles,
+    CleanerCategoryTrashBins,
+    CleanerCategoryLargeOldFiles,
+    CleanerCategoryInstalledApps,
+    CleanerCategoryOrphanedFiles,
+    CleanerCategoryAiApps,
+    CleanerCategoryXcodeJunk,
+    CleanerCategoryHomebrewCache,
+    CleanerCategoryNodeToolingCache,
+    CleanerCategoryDockerCache,
+    CleanerCategoryUniversalBinaries,
+    CleanerCategoryLanguageFiles,
 
     // JSON formatter.
     JsonPlaceholder,
@@ -1227,6 +1265,115 @@ impl Str {
             (Str::EncoderDecoderTitle, Language::Vietnamese) => "Mã hoá / Giải mã".into(),
             (Str::ApiExplorerTitle, Language::English) => "API Explorer".into(),
             (Str::ApiExplorerTitle, Language::Vietnamese) => "Khám phá API".into(),
+            (Str::CleanerTitle, Language::English) => "Cleaner".into(),
+            (Str::CleanerTitle, Language::Vietnamese) => "Dọn dẹp".into(),
+
+            (Str::CleanerSidebarTitle, Language::English) => "Cleaner sections".into(),
+            (Str::CleanerSidebarTitle, Language::Vietnamese) => "Mục dọn dẹp".into(),
+            (Str::CleanerUnsupportedPlatform, Language::English) => {
+                "Cleaner is currently available on macOS. Windows and Linux support will be added in future versions.".into()
+            }
+            (Str::CleanerUnsupportedPlatform, Language::Vietnamese) => {
+                "Cleaner hiện chỉ có trên macOS. Hỗ trợ Windows và Linux sẽ được bổ sung ở các phiên bản sau.".into()
+            }
+            (Str::CleanerScan, Language::English) => "Scan".into(),
+            (Str::CleanerScan, Language::Vietnamese) => "Quét".into(),
+            (Str::CleanerCancelScan, Language::English) => "Cancel".into(),
+            (Str::CleanerCancelScan, Language::Vietnamese) => "Huỷ".into(),
+            (Str::CleanerEstimatedReclaimable, Language::English) => {
+                "Estimated reclaimable".into()
+            }
+            (Str::CleanerEstimatedReclaimable, Language::Vietnamese) => {
+                "Dung lượng thu hồi ước tính".into()
+            }
+            (Str::CleanerEntriesScanned, Language::English) => "Entries scanned".into(),
+            (Str::CleanerEntriesScanned, Language::Vietnamese) => "Mục đã quét".into(),
+            (Str::CleanerNoResultsYet, Language::English) => {
+                "No scan results for this category yet.".into()
+            }
+            (Str::CleanerNoResultsYet, Language::Vietnamese) => {
+                "Chưa có kết quả quét cho danh mục này.".into()
+            }
+            (Str::CleanerStatusProgress, Language::English) => "Progress".into(),
+            (Str::CleanerStatusProgress, Language::Vietnamese) => "Tiến độ".into(),
+            (Str::CleanerStatusIdle, Language::English) => "Idle".into(),
+            (Str::CleanerStatusIdle, Language::Vietnamese) => "Sẵn sàng".into(),
+            (Str::CleanerStatusCheckingPermissions, Language::English) => {
+                "Checking permissions".into()
+            }
+            (Str::CleanerStatusCheckingPermissions, Language::Vietnamese) => {
+                "Đang kiểm tra quyền".into()
+            }
+            (Str::CleanerStatusScanning, Language::English) => "Scanning".into(),
+            (Str::CleanerStatusScanning, Language::Vietnamese) => "Đang quét".into(),
+            (Str::CleanerStatusCancelling, Language::English) => "Cancelling".into(),
+            (Str::CleanerStatusCancelling, Language::Vietnamese) => "Đang huỷ".into(),
+            (Str::CleanerStatusPartial, Language::English) => "Partially completed".into(),
+            (Str::CleanerStatusPartial, Language::Vietnamese) => "Hoàn tất một phần".into(),
+            (Str::CleanerStatusCompleted, Language::English) => "Completed".into(),
+            (Str::CleanerStatusCompleted, Language::Vietnamese) => "Hoàn tất".into(),
+            (Str::CleanerStatusCleaning, Language::English) => "Cleaning".into(),
+            (Str::CleanerStatusCleaning, Language::Vietnamese) => "Đang dọn dẹp".into(),
+            (Str::CleanerStatusCompletedWithFailures, Language::English) => {
+                "Completed with failures".into()
+            }
+            (Str::CleanerStatusCompletedWithFailures, Language::Vietnamese) => {
+                "Hoàn tất kèm lỗi".into()
+            }
+            (Str::CleanerStatusFailed, Language::English) => "Failed".into(),
+            (Str::CleanerStatusFailed, Language::Vietnamese) => "Thất bại".into(),
+            (Str::CleanerSectionSmartCare, Language::English) => "Smart Care".into(),
+            (Str::CleanerSectionSmartCare, Language::Vietnamese) => "Smart Care".into(),
+            (Str::CleanerSectionCleanup, Language::English) => "Cleanup".into(),
+            (Str::CleanerSectionCleanup, Language::Vietnamese) => "Dọn dẹp".into(),
+            (Str::CleanerSectionApplications, Language::English) => "Applications".into(),
+            (Str::CleanerSectionApplications, Language::Vietnamese) => "Ứng dụng".into(),
+            (Str::CleanerSectionAdvanced, Language::English) => "Advanced".into(),
+            (Str::CleanerSectionAdvanced, Language::Vietnamese) => "Nâng cao".into(),
+            (Str::CleanerCategorySystemJunk, Language::English) => "System Junk".into(),
+            (Str::CleanerCategorySystemJunk, Language::Vietnamese) => "Rác hệ thống".into(),
+            (Str::CleanerCategoryUserCache, Language::English) => "User Cache".into(),
+            (Str::CleanerCategoryUserCache, Language::Vietnamese) => "Bộ đệm người dùng".into(),
+            (Str::CleanerCategoryMailFiles, Language::English) => "Mail Files".into(),
+            (Str::CleanerCategoryMailFiles, Language::Vietnamese) => "Tệp Mail".into(),
+            (Str::CleanerCategoryTrashBins, Language::English) => "Trash Bins".into(),
+            (Str::CleanerCategoryTrashBins, Language::Vietnamese) => "Thùng rác".into(),
+            (Str::CleanerCategoryLargeOldFiles, Language::English) => "Large & Old Files".into(),
+            (Str::CleanerCategoryLargeOldFiles, Language::Vietnamese) => {
+                "Tệp lớn & cũ".into()
+            }
+            (Str::CleanerCategoryInstalledApps, Language::English) => "Installed Apps".into(),
+            (Str::CleanerCategoryInstalledApps, Language::Vietnamese) => {
+                "Ứng dụng đã cài".into()
+            }
+            (Str::CleanerCategoryOrphanedFiles, Language::English) => "Orphaned Files".into(),
+            (Str::CleanerCategoryOrphanedFiles, Language::Vietnamese) => "Tệp mồ côi".into(),
+            (Str::CleanerCategoryAiApps, Language::English) => "AI Apps".into(),
+            (Str::CleanerCategoryAiApps, Language::Vietnamese) => "Ứng dụng AI".into(),
+            (Str::CleanerCategoryXcodeJunk, Language::English) => "Xcode Junk".into(),
+            (Str::CleanerCategoryXcodeJunk, Language::Vietnamese) => "Rác Xcode".into(),
+            (Str::CleanerCategoryHomebrewCache, Language::English) => "Homebrew Cache".into(),
+            (Str::CleanerCategoryHomebrewCache, Language::Vietnamese) => {
+                "Bộ đệm Homebrew".into()
+            }
+            (Str::CleanerCategoryNodeToolingCache, Language::English) => {
+                "Node Tooling Cache".into()
+            }
+            (Str::CleanerCategoryNodeToolingCache, Language::Vietnamese) => {
+                "Bộ đệm công cụ Node".into()
+            }
+            (Str::CleanerCategoryDockerCache, Language::English) => "Docker Cache".into(),
+            (Str::CleanerCategoryDockerCache, Language::Vietnamese) => "Bộ đệm Docker".into(),
+            (Str::CleanerCategoryUniversalBinaries, Language::English) => {
+                "Universal Binaries".into()
+            }
+            (Str::CleanerCategoryUniversalBinaries, Language::Vietnamese) => {
+                "Universal Binary".into()
+            }
+            (Str::CleanerCategoryLanguageFiles, Language::English) => "Language Files".into(),
+            (Str::CleanerCategoryLanguageFiles, Language::Vietnamese) => {
+                "Tệp ngôn ngữ".into()
+            }
 
             (Str::JsonPlaceholder, Language::English) => {
                 "Paste JSON here, then click Format.".into()

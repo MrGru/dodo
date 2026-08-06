@@ -9,6 +9,7 @@ use gpui_component::{ActiveTheme, Collapsible, StyledExt as _, h_flex, v_flex};
 
 use crate::api_explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
+use crate::cleaner::CleanerView;
 use crate::database::DatabaseView;
 use crate::docker::{DockerPage, DockerView};
 use crate::encoder_decoder::{EncoderDecoder, Format};
@@ -42,16 +43,18 @@ enum View {
     JsonFormatter,
     EncoderDecoder,
     ApiExplorer,
+    Cleaner,
     Docker,
     Database,
 }
 
 impl View {
     /// Every tool, in sidebar order.
-    const ALL: [View; 5] = [
+    const ALL: [View; 6] = [
         View::JsonFormatter,
         View::EncoderDecoder,
         View::ApiExplorer,
+        View::Cleaner,
         View::Docker,
         View::Database,
     ];
@@ -64,6 +67,7 @@ impl View {
             View::JsonFormatter => Str::JsonFormatterTitle,
             View::EncoderDecoder => Str::EncoderDecoderTitle,
             View::ApiExplorer => Str::ApiExplorerTitle,
+            View::Cleaner => Str::CleanerTitle,
             View::Docker => Str::Docker,
             View::Database => Str::DatabaseTitle,
         }
@@ -74,6 +78,7 @@ impl View {
             View::JsonFormatter => AppIcon::Json,
             View::EncoderDecoder => AppIcon::Binary,
             View::ApiExplorer => AppIcon::Globe,
+            View::Cleaner => AppIcon::Cleaner,
             View::Docker => AppIcon::Container,
             View::Database => AppIcon::Database,
         }
@@ -349,6 +354,7 @@ pub struct Layout {
     json_formatter: Entity<JsonFormatter>,
     encoder_decoder: Entity<EncoderDecoder>,
     api_explorer: Entity<ApiExplorer>,
+    cleaner: Entity<CleanerView>,
     docker: Entity<DockerView>,
     database: Entity<DatabaseView>,
 }
@@ -378,6 +384,7 @@ impl Layout {
             json_formatter: cx.new(|cx| JsonFormatter::new(window, cx)),
             encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
             api_explorer: cx.new(|cx| ApiExplorer::new(window, cx)),
+            cleaner: cx.new(|cx| CleanerView::new(window, cx)),
             docker: cx.new(|cx| DockerView::new(window, cx)),
             database: cx.new(|cx| DatabaseView::new(window, cx)),
         }
@@ -657,6 +664,7 @@ impl Render for Layout {
                                             this.child(self.encoder_decoder.clone())
                                         }
                                         View::ApiExplorer => this.child(self.api_explorer.clone()),
+                                        View::Cleaner => this.child(self.cleaner.clone()),
                                         View::Docker => this.child(self.docker.clone()),
                                         View::Database => this.child(self.database.clone()),
                                     }),
@@ -713,6 +721,7 @@ mod tests {
                 View::JsonFormatter,
                 View::EncoderDecoder,
                 View::ApiExplorer,
+                View::Cleaner,
                 View::Docker,
                 View::Database,
             ]
@@ -720,7 +729,7 @@ mod tests {
         // One row per tool: Docker and Database are each a single entry, not a
         // group of children — an icon-collapsed sidebar renders no children at
         // all, which is what made Docker's four pages unreachable.
-        assert_eq!(View::ALL.len(), 5);
+        assert_eq!(View::ALL.len(), 6);
     }
 
     #[test]
@@ -890,6 +899,7 @@ mod tests {
             View::JsonFormatter,
             View::EncoderDecoder,
             View::ApiExplorer,
+            View::Cleaner,
             View::Database,
         ] {
             for page in DockerPage::ALL {
