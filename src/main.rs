@@ -24,6 +24,7 @@ mod i18n_lint;
 mod json_formatter;
 mod layout;
 mod paths;
+mod quick_nav;
 mod settings;
 mod updater;
 mod window_icon;

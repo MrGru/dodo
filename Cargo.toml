@@ -90,6 +90,15 @@ base64 = "0.22.1"
 percent-encoding = "2.3.2"
 nucleo-matcher = "0.3"
 unicode-normalization = "0.1"
+# Quick navigation's user-editable detector patterns. **This adds no crate to
+# the graph**: `gpui` and `gpui-component` already depend on `regex 1`, so this
+# only promotes an existing transitive dependency to a direct one. It is also
+# the only regex engine here with no backtracking — matching is linear in the
+# input — which is what makes it safe to run an untrusted, user-typed pattern
+# from a key handler. `default-features = false` off the `perf` and `unicode`
+# extras would only rebuild it a second way; the versions must resolve to one
+# package, so the features stay at the default the other two already select.
+regex = "1"
 # The Docker Engine API client behind the Docker module. Default features
 # already carry `hyperlocal` (the local unix-socket connector) and pointedly do
 # NOT enable `ssl`/`rustls` — the local socket needs no TLS, so this keeps the
