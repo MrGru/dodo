@@ -148,6 +148,16 @@ impl Session {
         Self::read(cx, |document| document.appearance.border_radius)
     }
 
+    /// The tool that was open, by [`crate::layout::View`] code. An unknown code
+    /// is the caller's to fall back on.
+    pub fn active_tool(cx: &App) -> Option<String> {
+        Self::read(cx, |document| document.workspace.active_tool.clone())
+    }
+
+    pub fn sidebar_collapsed(cx: &App) -> Option<bool> {
+        Self::read(cx, |document| document.workspace.sidebar_collapsed)
+    }
+
     /// What went wrong with `session.json`, if anything.
     pub fn store_error(cx: &App) -> Option<Str> {
         cx.try_global::<Session>()
@@ -190,6 +200,18 @@ impl Session {
     pub fn set_border_radius(radius: f32, cx: &mut App) {
         Self::edit(cx, |document| {
             document.appearance.border_radius = Some(radius)
+        });
+    }
+
+    pub fn set_active_tool(code: &'static str, cx: &mut App) {
+        Self::edit(cx, |document| {
+            document.workspace.active_tool = Some(code.to_owned());
+        });
+    }
+
+    pub fn set_sidebar_collapsed(collapsed: bool, cx: &mut App) {
+        Self::edit(cx, |document| {
+            document.workspace.sidebar_collapsed = Some(collapsed);
         });
     }
 
@@ -661,5 +683,38 @@ mod tests {
             }),
         );
         assert!(cx.update(|cx| Session::window_bounds(cx)).is_none());
+    }
+
+    #[gpui::test]
+    fn the_open_tool_reaches_the_store(cx: &mut TestAppContext) {
+        let store = install(cx, Ok(SessionDocument::new()));
+
+        cx.update(|cx| {
+            Session::set_active_tool("docker", cx);
+            Session::set_sidebar_collapsed(false, cx);
+        });
+        settle(cx);
+
+        let workspace = store.load().expect("loads").workspace;
+        assert_eq!(workspace.active_tool.as_deref(), Some("docker"));
+        assert_eq!(workspace.sidebar_collapsed, Some(false));
+    }
+
+    /// Clicking the tool already open is the common case, and it must not cost
+    /// a write. `layout::View::from_code` is where an unknown code is turned
+    /// back into a tool; that fallback is tested there.
+    #[gpui::test]
+    fn re_selecting_the_open_tool_writes_nothing(cx: &mut TestAppContext) {
+        let store = install(cx, Ok(SessionDocument::new()));
+
+        cx.update(|cx| Session::set_active_tool("docker", cx));
+        settle(cx);
+        assert_eq!(store.writes(), 1);
+
+        for _ in 0..5 {
+            cx.update(|cx| Session::set_active_tool("docker", cx));
+            settle(cx);
+        }
+        assert_eq!(store.writes(), 1, "an unchanged document is not a change");
     }
 }

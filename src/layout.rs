@@ -30,8 +30,15 @@ use crate::updater;
 /// unreachable.
 ///
 /// Adding a tool means: a variant here, a row in [`View::ALL`], an arm in
-/// [`View::title`]/[`View::icon`], a field on [`Layout`] holding the view
-/// entity, and an arm in the main-pane `match` of [`Layout::render`].
+/// [`View::title`]/[`View::icon`]/[`View::code`], a field on [`Layout`] holding
+/// the view entity, and an arm in the main-pane `match` of [`Layout::render`].
+///
+/// [`View::code`] is what `session.json` stores, so it is the one of those that
+/// is a **compatibility surface**: a code that has shipped may not be reused
+/// for a different tool, and renaming a variant should keep its code unless
+/// losing everyone's restored tool is the intent. A code this build does not
+/// know falls back to the default rather than failing to start — see
+/// [`View::from_code`].
 ///
 /// **If the new tool can also accept a pasted value**, quick navigation costs
 /// three more small things and nothing else: a `Detector` variant with its arm
@@ -50,6 +57,10 @@ enum View {
 }
 
 impl View {
+    /// The tool dodo opens on when nothing has been saved, and the one an
+    /// unrecognised saved code falls back to.
+    const DEFAULT: View = View::JsonFormatter;
+
     /// Every tool, in sidebar order.
     const ALL: [View; 6] = [
         View::JsonFormatter,
@@ -83,6 +94,32 @@ impl View {
             View::Docker => AppIcon::Container,
             View::Database => AppIcon::Database,
         }
+    }
+
+    /// The tool's stable identifier in `session.json`.
+    ///
+    /// Never a localized title and never the variant name: a title changes with
+    /// the language and a variant name changes with a refactor, and this has to
+    /// survive both. See the type's own doc for what that costs.
+    fn code(self) -> &'static str {
+        match self {
+            View::JsonFormatter => "json-formatter",
+            View::EncoderDecoder => "encoder-decoder",
+            View::ApiExplorer => "api-explorer",
+            View::Cleaner => "cleaner",
+            View::Docker => "docker",
+            View::Database => "database",
+        }
+    }
+
+    /// The tool a saved code names, or the default.
+    ///
+    /// **Anything unrecognised is the default**, deliberately and silently: a
+    /// `session.json` written by a dodo with a seventh tool, or one naming a
+    /// tool since removed, must open the app rather than refuse to.
+    fn from_code(code: Option<&str>) -> View {
+        code.and_then(|code| View::ALL.into_iter().find(|view| view.code() == code))
+            .unwrap_or(View::DEFAULT)
     }
 }
 
@@ -149,8 +186,8 @@ pub fn window_min_size() -> Size<Pixels> {
 /// * The toggle always wins and hands ownership back to the user: after a
 ///   manual press the sidebar stays exactly as left until the next crossing.
 ///
-/// The window's own geometry is persisted (see [`crate::session`]); none of
-/// this is, yet.
+/// The `collapsed` flag **is** persisted, in `session.json`; the other two are
+/// not, and must not be — see [`SidebarState::restored`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct SidebarState {
     collapsed: bool,
@@ -167,10 +204,29 @@ struct SidebarState {
 }
 
 impl SidebarState {
-    /// How dodo opens: on the icon rail, by choice rather than by width.
+    /// How dodo opens with nothing saved: on the icon rail, by choice rather
+    /// than by width.
     const fn new() -> Self {
         Self {
             collapsed: true,
+            collapsed_by_width: false,
+            narrow: None,
+        }
+    }
+
+    /// How dodo opens with a saved sidebar.
+    ///
+    /// **Only `collapsed` is restored, and the other two fields are reset**,
+    /// which is the whole subtlety here. `collapsed_by_width` says "the width
+    /// rule did this, so the width rule may undo it", and that is a claim about
+    /// a window size from the *last* run — restoring it would let the first
+    /// widening past the breakpoint expand a sidebar the user had collapsed by
+    /// hand. `narrow` stays `None` so the first width this run sees is recorded
+    /// rather than treated as a crossing, exactly as on a fresh start; the
+    /// restored state is then whatever the user left, at any window size.
+    const fn restored(collapsed: bool) -> Self {
+        Self {
+            collapsed,
             collapsed_by_width: false,
             narrow: None,
         }
@@ -365,25 +421,43 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// dodo opens on the **icon rail**, not the labelled sidebar: the tools are
-    /// six fixed entries a user learns once, and the pane they are choosing
-    /// between is the whole point of the window, so 240px of permanent chrome
-    /// is a poor default. The toggle in the pane header is unchanged, and every
-    /// collapsed icon carries its title as a tooltip, which is what keeps the
-    /// rail readable to someone who has not learned it yet.
+    /// With nothing saved, dodo opens on the **icon rail**, not the labelled
+    /// sidebar: the tools are six fixed entries a user learns once, and the
+    /// pane they are choosing between is the whole point of the window, so
+    /// 240px of permanent chrome is a poor default. The toggle in the pane
+    /// header is unchanged, and every collapsed icon carries its title as a
+    /// tooltip, which is what keeps the rail readable to someone who has not
+    /// learned it yet.
     ///
-    /// That choice is not yet persisted; the window's geometry now is, through
-    /// the bounds observer below. See [`crate::session`].
+    /// **Both that and the open tool are restored from `session.json`** when
+    /// there is one — the captain asked for session restoration on 2026-08-06,
+    /// which is also what settles the sidebar question the sidebar round left
+    /// open as being above that worker. See [`crate::session`].
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // dodo opens in normal mode, so the pane takes focus straight away. See
         // [`Layout::focus`] for why that has to be someone's rather than nobody's.
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
 
+        let active = View::from_code(Session::active_tool(cx).as_deref());
+        let sidebar = match Session::sidebar_collapsed(cx) {
+            Some(collapsed) => SidebarState::restored(collapsed),
+            None => SidebarState::new(),
+        };
+
+        let docker = cx.new(|cx| DockerView::new(window, cx));
+        // What [`Layout::activate`] would have done, done by hand because there
+        // is no `self` to call it on yet: opening straight onto Docker has to
+        // start its polling, or the restored session shows an empty list until
+        // the user clicks something else and back.
+        if active == View::Docker {
+            docker.update(cx, |docker, cx| docker.activate(cx));
+        }
+
         Self {
             collapsible: SidebarCollapsible::Icon,
-            sidebar: SidebarState::new(),
-            active: View::JsonFormatter,
+            sidebar,
+            active,
             focus,
             // Every window move and resize, coalesced into a save by
             // `Session::set_window` — see `session`'s module doc for why that
@@ -396,7 +470,7 @@ impl Layout {
             encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
             api_explorer: cx.new(|cx| ApiExplorer::new(window, cx)),
             cleaner: cx.new(|cx| CleanerView::new(window, cx)),
-            docker: cx.new(|cx| DockerView::new(window, cx)),
+            docker,
             database: cx.new(|cx| DatabaseView::new(window, cx)),
         }
     }
@@ -412,6 +486,9 @@ impl Layout {
             View::Docker => docker.activate(cx),
             _ => docker.set_section_active(false, cx),
         });
+        // Re-selecting the tool already open writes nothing: `Session::edit`
+        // drops a change that leaves the document as it was.
+        Session::set_active_tool(view.code(), cx);
         cx.notify();
     }
 
@@ -637,6 +714,11 @@ impl Render for Layout {
                                     .ghost()
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.sidebar = this.sidebar.toggle();
+                                        // The user's own choice, and the only
+                                        // one worth remembering: a collapse the
+                                        // *width* caused is this window's
+                                        // business, not the next launch's.
+                                        Session::set_sidebar_collapsed(this.sidebar.collapsed, cx);
                                         cx.notify();
                                     })),
                             )
@@ -741,6 +823,88 @@ mod tests {
         // group of children — an icon-collapsed sidebar renders no children at
         // all, which is what made Docker's four pages unreachable.
         assert_eq!(View::ALL.len(), 6);
+    }
+
+    /// Every tool's `session.json` code is stable, unique, and reads as an
+    /// identifier rather than a title. It is a compatibility surface: changing
+    /// one silently sends everyone who had that tool open back to the default.
+    #[test]
+    fn every_tool_has_its_own_stable_code() {
+        let codes: Vec<&str> = View::ALL.iter().map(|view| view.code()).collect();
+
+        assert_eq!(
+            codes,
+            [
+                "json-formatter",
+                "encoder-decoder",
+                "api-explorer",
+                "cleaner",
+                "docker",
+                "database",
+            ]
+        );
+
+        let mut unique = codes.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), codes.len(), "two tools share a code");
+    }
+
+    #[test]
+    fn a_saved_code_comes_back_as_the_tool_that_wrote_it() {
+        for view in View::ALL {
+            assert_eq!(View::from_code(Some(view.code())), view);
+        }
+    }
+
+    /// The requirement that keeps a renamed or removed tool from being a failure
+    /// to start: anything unrecognised is the default tool.
+    #[test]
+    fn an_unknown_or_absent_code_falls_back_to_the_default_tool() {
+        for code in [
+            None,
+            Some(""),
+            Some("graphql-explorer"),
+            Some("JsonFormatter"),
+            Some("json_formatter"),
+            Some("JSON Formatter"),
+        ] {
+            assert_eq!(
+                View::from_code(code),
+                View::DEFAULT,
+                "{code:?} must not stop dodo opening",
+            );
+        }
+        assert_eq!(View::DEFAULT, View::JsonFormatter);
+    }
+
+    /// The sidebar's restored flag is the user's own choice and nothing else.
+    /// Restoring `collapsed_by_width` would let the first widening past the
+    /// breakpoint expand a sidebar the user had collapsed by hand — using a
+    /// window size from the *previous* run to justify it.
+    #[test]
+    fn a_restored_sidebar_carries_only_the_users_own_choice() {
+        for collapsed in [true, false] {
+            let restored = SidebarState::restored(collapsed);
+            assert_eq!(restored.collapsed, collapsed);
+            assert!(!restored.collapsed_by_width);
+            assert!(restored.narrow.is_none());
+
+            // …so the first width this run sees is recorded, not acted on.
+            assert_eq!(restored.resize(px(WIDE)).collapsed, collapsed);
+            assert_eq!(restored.resize(px(NARROW)).collapsed, collapsed);
+        }
+    }
+
+    /// A sidebar restored expanded still collapses when the window is dragged
+    /// narrow, and comes back when it is widened — the width rule is unchanged
+    /// by restoration.
+    #[test]
+    fn the_width_rule_still_applies_to_a_restored_sidebar() {
+        let restored = SidebarState::restored(false).resize(px(WIDE));
+        let collapsed = restored.resize(px(NARROW));
+        assert!(collapsed.collapsed && collapsed.collapsed_by_width);
+        assert!(!collapsed.resize(px(WIDE)).collapsed);
     }
 
     #[test]
