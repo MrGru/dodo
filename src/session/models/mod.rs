@@ -1,9 +1,10 @@
-//! Plain data: what `session.json` holds, and how a saved rectangle becomes a
-//! window someone can actually reach.
+//! Plain data: what `session.json` holds, how a saved rectangle becomes a
+//! window someone can actually reach, and which tools the sidebar lists.
 //!
-//! Neither half needs a window to be tested, which is the point — restoring
-//! geometry is the part of this feature that fails, and it fails in ways a
-//! screenshot would not catch.
+//! None of the three needs a window to be tested, which is the point —
+//! restoring geometry and resolving a stored tool list are the parts of session
+//! restoration that fail, and they fail in ways a screenshot would not catch.
 
 pub mod document;
+pub mod features;
 pub mod geometry;

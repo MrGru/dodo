@@ -47,11 +47,29 @@
 //! Also absent, and for a much smaller reason: the Docker rail's page, and the
 //! Database and API Explorer tabs. The captain asked for the current *tool*;
 //! restoring a tool's own inner selection is a separate round.
+//!
+//! # Which tools the sidebar has at all
+//!
+//! [`Workspace::tools`] is the Features settings page, added on 2026-08-06. It
+//! is the one field here whose *meaning* is not obvious from its shape, because
+//! the file may name tools this build does not have and omit ones it does.
+//! [`super::features`] is where that is resolved, and its module doc carries the
+//! four rules — including the one that keeps the sidebar from ever being empty.
 
 use serde::{Deserialize, Serialize};
 
 /// The schema version written into every `session.json`.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// **Bumped to 2 when the sidebar's tool list joined the file.** Adding a field
+/// is exactly the case
+/// [`parse_document`](crate::session::services::session_store::parse_document)'s
+/// refusal exists for: a build that predates [`Workspace::tools`] would read
+/// this file, drop the key it does not know, and write it back pruned on the
+/// first window move — losing the user's tool order to a downgrade. Refusing
+/// costs that build its restored session and nothing else, and the file
+/// survives. Reading *older* files is unaffected: a version-1 file has no
+/// `tools` key, which is the same as never having chosen.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Everything dodo restores when it reopens.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -169,8 +187,9 @@ pub enum WindowMode {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
     /// A tool's stable code — `layout::View::code`. A code this build does not
-    /// know falls back to the default tool rather than failing to start; that
-    /// is `View::from_code`'s job and is tested there.
+    /// know, or one naming a tool the user has since switched off, opens the
+    /// first tool the sidebar *does* list rather than failing to start; that is
+    /// `View::shown`'s job, over [`super::features::Features::active`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_tool: Option<String>,
     /// Whether the sidebar was showing the icon rail. Left unpersisted by the
@@ -178,11 +197,40 @@ pub struct Workspace {
     /// request for session restoration is what settles it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_collapsed: Option<bool>,
+    /// The sidebar's tools in the user's order, each with whether it is shown —
+    /// the Features settings page the captain asked for on 2026-08-06.
+    ///
+    /// `None` is *never chosen*, like every other field here, and resolves to
+    /// every tool in default order with all of them visible. The list is
+    /// **advice, not truth**: it may name a tool this build does not have and
+    /// may omit one it does, and [`super::features::Features::resolve`] is where
+    /// that is dealt with — never at the point of use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ToolRecord>>,
+}
+
+/// One remembered tool. Its position in [`Workspace::tools`] is its sidebar
+/// position; there is no separate index to disagree with it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolRecord {
+    /// A [`crate::layout::View::code`]. The same compatibility surface it is
+    /// everywhere else: a code that has shipped may not be reused for a
+    /// different tool.
+    pub code: String,
+    /// Defaulted to `true` so a hand-written `{"code":"docker"}` reads as a
+    /// visible tool — the file is a list of what the sidebar shows, and an
+    /// entry with no opinion is not a hidden tool.
+    #[serde(default = "shown")]
+    pub enabled: bool,
+}
+
+fn shown() -> bool {
+    true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SCHEMA_VERSION, SessionDocument, WindowMode, WindowRecord};
+    use super::{SCHEMA_VERSION, SessionDocument, ToolRecord, WindowMode, WindowRecord};
 
     #[test]
     fn a_first_run_document_carries_the_version_and_no_choices() {
@@ -199,7 +247,10 @@ mod tests {
     #[test]
     fn an_untouched_document_serializes_to_the_version_alone() {
         let json = serde_json::to_string(&SessionDocument::new()).expect("serializes");
-        assert_eq!(json, r#"{"version":1,"appearance":{},"workspace":{}}"#);
+        assert_eq!(
+            json,
+            format!(r#"{{"version":{SCHEMA_VERSION},"appearance":{{}},"workspace":{{}}}}"#),
+        );
     }
 
     #[test]
@@ -219,10 +270,42 @@ mod tests {
         });
         document.workspace.active_tool = Some("docker".to_owned());
         document.workspace.sidebar_collapsed = Some(false);
+        document.workspace.tools = Some(vec![
+            ToolRecord {
+                code: "docker".to_owned(),
+                enabled: true,
+            },
+            ToolRecord {
+                code: "cleaner".to_owned(),
+                enabled: false,
+            },
+        ]);
 
         let json = serde_json::to_string(&document).expect("serializes");
         let read: SessionDocument = serde_json::from_str(&json).expect("parses");
         assert_eq!(read, document);
+    }
+
+    /// A file from before the Features page has no `tools` key, and that is
+    /// "never chosen" rather than "no tools" — the difference between opening
+    /// on every tool and opening on none.
+    #[test]
+    fn a_file_from_before_the_features_page_has_no_tool_list() {
+        let document: SessionDocument =
+            serde_json::from_str(r#"{"version":1,"workspace":{"active_tool":"docker"}}"#)
+                .expect("parses");
+
+        assert_eq!(document.workspace.tools, None);
+        assert_eq!(document.workspace.active_tool.as_deref(), Some("docker"));
+    }
+
+    /// An entry with no opinion about visibility is a visible tool. The file is
+    /// a list of what the sidebar shows.
+    #[test]
+    fn a_tool_entry_with_no_enabled_flag_is_shown() {
+        let record: ToolRecord = serde_json::from_str(r#"{"code":"docker"}"#).expect("parses");
+        assert_eq!(record.code, "docker");
+        assert!(record.enabled);
     }
 
     /// A file written by a dodo that has never been resized still parses, and

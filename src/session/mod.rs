@@ -7,19 +7,24 @@
 //! it: see *What still resets* below, which is the half of the old design that
 //! was right.
 //!
-//! [`models::document`] is the file, [`models::geometry`] is the only hard part
-//! of it, and [`services::session_store`] is the seam onto disk. This file is
-//! the global that holds the live document and decides when it is written.
+//! [`models::document`] is the file, [`models::geometry`] and
+//! [`models::features`] are the two hard parts of it, and
+//! [`services::session_store`] is the seam onto disk. This file is the global
+//! that holds the live document and decides when it is written.
 //!
 //! # One file, not three
 //!
-//! `session.json` carries the appearance settings, the window rectangle and the
-//! open tool together, and that is a deliberate choice over one file each:
+//! `session.json` carries the appearance settings, the window rectangle, the
+//! open tool and the sidebar's tool list together, and that is a deliberate
+//! choice over one file each:
 //!
-//! - They are **read at the same instant** — all three before the window
+//! - They are **read at the same instant** — all of them before the window
 //!   exists, because the theme has to be applied and the geometry known before
 //!   the first frame. Three files would be three loads to sequence on the path
-//!   that decides how fast dodo opens.
+//!   that decides how fast dodo opens. The tool list joined them for the same
+//!   reason and one more: which tool to open and whether that tool is still
+//!   visible are one question, and answering it from two files that can
+//!   disagree is how a window opens on a tool with no sidebar row.
 //! - They are **written at the same instant**. Picking a theme in the Settings
 //!   dialog and dragging the window are both "the user arranged their session";
 //!   one coalescing timer covers both, where three stores would each need their
@@ -85,7 +90,7 @@ use gpui::{
 };
 
 use crate::i18n::Str;
-use crate::session::models::document::{SessionDocument, WindowMode, WindowRecord};
+use crate::session::models::document::{SessionDocument, ToolRecord, WindowMode, WindowRecord};
 use crate::session::models::geometry;
 use crate::session::services::session_store::{DiskSessionStore, SessionStore, SessionStoreError};
 
@@ -158,6 +163,21 @@ impl Session {
 
     pub fn sidebar_collapsed(cx: &App) -> Option<bool> {
         Self::read(cx, |document| document.workspace.sidebar_collapsed)
+    }
+
+    /// The tool list as the **file** holds it: an order and a visibility flag
+    /// each, or `None` before the user has ever opened the Features page.
+    ///
+    /// Deliberately raw. Turning it into something the sidebar can be built
+    /// from means placing it against the tools this build actually has, and
+    /// that is [`models::features::Features::resolve`]'s job — done once, in
+    /// `Layout`, rather than by every caller in its own way.
+    pub fn tools(cx: &App) -> Option<Vec<ToolRecord>> {
+        Self::read(cx, |document| document.workspace.tools.clone())
+    }
+
+    pub fn set_tools(tools: Vec<ToolRecord>, cx: &mut App) {
+        Self::edit(cx, |document| document.workspace.tools = Some(tools));
     }
 
     /// What went wrong with `session.json`, if anything.
@@ -463,7 +483,7 @@ mod tests {
     use gpui::{Bounds, Pixels, TestAppContext, WindowBounds, point, px, size};
 
     use super::{SAVE_DELAY, Session, flush_on_quit};
-    use crate::session::models::document::{SessionDocument, WindowMode, WindowRecord};
+    use crate::session::models::document::{SessionDocument, ToolRecord, WindowMode, WindowRecord};
     use crate::session::services::session_store::{
         InMemorySessionStore, SessionStore as _, SessionStoreError,
     };
@@ -747,9 +767,52 @@ mod tests {
         assert_eq!(workspace.sidebar_collapsed, Some(false));
     }
 
+    /// The Features page's two changes reach the file, in order and with each
+    /// tool's own flag. `models::features` argues the rules; this is the wiring
+    /// above them.
+    #[gpui::test]
+    fn the_tool_list_reaches_the_store(cx: &mut TestAppContext) {
+        let store = install(cx, Ok(SessionDocument::new()));
+
+        cx.update(|cx| {
+            Session::set_tools(
+                vec![
+                    ToolRecord {
+                        code: "docker".to_owned(),
+                        enabled: true,
+                    },
+                    ToolRecord {
+                        code: "cleaner".to_owned(),
+                        enabled: false,
+                    },
+                ],
+                cx,
+            )
+        });
+        settle(cx);
+
+        let tools = store
+            .load()
+            .expect("loads")
+            .workspace
+            .tools
+            .expect("a list");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].code, "docker");
+        assert!(!tools[1].enabled);
+    }
+
+    /// Before the Features page has ever been opened there is nothing stored,
+    /// and that is what `Features::resolve` reads as "every tool, in order".
+    #[gpui::test]
+    fn an_untouched_session_has_no_tool_list(cx: &mut TestAppContext) {
+        install(cx, Ok(SessionDocument::new()));
+        assert_eq!(cx.update(|cx| Session::tools(cx)), None);
+    }
+
     /// Clicking the tool already open is the common case, and it must not cost
-    /// a write. `layout::View::from_code` is where an unknown code is turned
-    /// back into a tool; that fallback is tested there.
+    /// a write. `layout::View::shown` is where an unknown or switched-off code
+    /// is turned back into a tool; that fallback is tested there.
     #[gpui::test]
     fn re_selecting_the_open_tool_writes_nothing(cx: &mut TestAppContext) {
         let store = install(cx, Ok(SessionDocument::new()));

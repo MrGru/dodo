@@ -200,7 +200,7 @@ mod tests {
     };
     use crate::i18n::Language;
     use crate::session::models::document::{
-        SCHEMA_VERSION, SessionDocument, WindowMode, WindowRecord,
+        SCHEMA_VERSION, SessionDocument, ToolRecord, WindowMode, WindowRecord,
     };
 
     fn temp_path() -> PathBuf {
@@ -228,6 +228,16 @@ mod tests {
         });
         document.workspace.active_tool = Some("database".to_owned());
         document.workspace.sidebar_collapsed = Some(false);
+        document.workspace.tools = Some(vec![
+            ToolRecord {
+                code: "database".to_owned(),
+                enabled: true,
+            },
+            ToolRecord {
+                code: "docker".to_owned(),
+                enabled: false,
+            },
+        ]);
         document
     }
 
@@ -272,6 +282,25 @@ mod tests {
                 found: u64::from(SCHEMA_VERSION) + 3,
                 understood: SCHEMA_VERSION,
             })
+        );
+    }
+
+    /// The other half of the version rule, and the half a bump could break: a
+    /// file written by an **older** dodo still loads, with the keys it never
+    /// had reading as "never chosen".
+    #[test]
+    fn a_file_from_an_older_dodo_still_loads() {
+        let document = parse_document(
+            br#"{"version":1,"appearance":{"theme":"Ayu Dark"},
+                 "workspace":{"active_tool":"docker","sidebar_collapsed":true}}"#,
+        )
+        .expect("a version-1 file is readable");
+
+        assert_eq!(document.appearance.theme.as_deref(), Some("Ayu Dark"));
+        assert_eq!(document.workspace.active_tool.as_deref(), Some("docker"));
+        assert_eq!(
+            document.workspace.tools, None,
+            "a file that predates the Features page has not chosen a tool list",
         );
     }
 
