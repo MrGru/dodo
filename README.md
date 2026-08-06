@@ -28,6 +28,11 @@ What ships today:
   be generated as cURL, `fetch`, `axios` or `XMLHttpRequest`. OAuth 2.0 is
   labelled in the UI as a later step; scripts deliberately have no network
   access, and collections cannot be reordered by dragging.
+- **Cleaner (macOS first)** - a new safety-first Cleaner tab with section and
+  category navigation, mock incremental scanning, progress updates and
+  cancellation, designed for real macOS scanner and Trash workflows in later
+  phases. On non-macOS platforms it shows a clear "Coming later" message
+  instead of pretending support exists.
 - **Docker** - a Docker/Podman manager talking to the Docker Engine API (honours
   `DOCKER_HOST`, else the local Docker or Podman socket). **Containers**,
   **Images**, **Volumes** and **Networks** are all real list pages with colored
