@@ -1,0 +1,94 @@
+#!/bin/sh
+#
+# dodo pre-push gate: refuse a push that CI would reject.
+#
+# CI runs `fmt` and `clippy` as blocking jobs (see .github/workflows/ci.yml), so
+# this is the local half of a gate whose remote half already exists — the point
+# is to find out in seconds rather than after a round trip.
+#
+# Enable it once per clone:
+#
+#     git config core.hooksPath .githooks
+#
+# Bypass it for a single push:
+#
+#     git push --no-verify
+#
+# Bypassing is legitimate — pushing a WIP branch for a colleague to look at, or
+# a push whose failure you already know about and are about to fix. CI still
+# has the last word.
+
+set -u
+
+# Ordered cheapest-first, so the most common failure (formatting) costs under a
+# second and the expensive steps only run once the cheap ones pass.
+run_step() {
+	label=$1
+	fix=$2
+	shift 2
+
+	printf 'pre-push: %s\n' "$label" >&2
+	if "$@" >&2; then
+		return 0
+	fi
+
+	cat >&2 <<EOF
+
+pre-push: FAILED — $label
+
+  push refused. Fix it with:
+
+      $fix
+
+  Or bypass this check for one push (CI still runs it):
+
+      git push --no-verify
+
+EOF
+	exit 1
+}
+
+# A push that only deletes remote refs uploads no code, so there is nothing to
+# check. git feeds "<local ref> <local sha> <remote ref> <remote sha>" per ref
+# on stdin; a deletion has the all-zero local sha.
+only_deletions=yes
+saw_ref=no
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+	saw_ref=yes
+	case "$local_sha" in
+	*[!0]*) only_deletions=no ;;
+	esac
+done
+
+if [ "$saw_ref" = yes ] && [ "$only_deletions" = yes ]; then
+	printf 'pre-push: ref deletions only, nothing to check.\n' >&2
+	exit 0
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+	cat >&2 <<'EOF'
+pre-push: FAILED — cargo is not on PATH, so this push cannot be verified.
+
+  Install the toolchain (https://rustup.rs), or bypass for one push:
+
+      git push --no-verify
+
+EOF
+	exit 1
+fi
+
+# Deliberately no CARGO_TARGET_DIR override: these must share ./target with
+# ordinary development, or every push would pay for a cold build.
+run_step 'cargo fmt --all --check' \
+	'cargo fmt --all' \
+	cargo fmt --all --check
+
+run_step 'cargo clippy --all-targets --locked -- -D warnings' \
+	'cargo clippy --all-targets --locked --fix    # then fix what is left by hand' \
+	cargo clippy --all-targets --locked -- -D warnings
+
+run_step 'cargo test --locked' \
+	'cargo test --locked    # then fix the failing tests' \
+	cargo test --locked
+
+printf 'pre-push: all checks passed.\n' >&2

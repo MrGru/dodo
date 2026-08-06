@@ -137,10 +137,49 @@ cargo build
 
 This opens a 900x620 centered window mounting the `DodoApp`.
 
+## Pre-push checks
+
+CI runs formatting and clippy as blocking jobs, so a push that fails either is a
+wasted round trip. The repo ships a `pre-push` hook that runs the same checks
+locally and refuses the push if any of them fails. Git does not version
+`.git/hooks`, so enable it once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+That is the whole setup — there is no install script, and the setting is local
+to your clone, so nobody is opted in without doing this. Note that it points git
+at `.githooks` for *all* hooks, so anything you keep in `.git/hooks` stops
+running.
+
+The hook runs, in this order and stopping at the first failure:
+
+```sh
+cargo fmt --all --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+```
+
+**Cost.** Cheapest first, so a formatting slip is caught in well under a second.
+With a warm `./target`, a green run of all three takes roughly **15 seconds**
+after a normal edit. It is much worse when the cache is cold — after
+`cargo clean`, a `Cargo.lock` change, or a toolchain bump, expect **several
+minutes**, because clippy and the test binary both have to build the whole
+dependency graph. The hook deliberately does not set its own `CARGO_TARGET_DIR`:
+sharing `./target` with everyday `cargo build` is what keeps the warm case cheap.
+A push that only deletes remote refs skips the checks entirely, since it uploads
+no code.
+
+**Bypass.** `git push --no-verify` skips the hook for one push. That is a
+supported way to use it — pushing a WIP branch, or a push whose failure you
+already know about. CI still runs the same checks.
+
 ## Project structure
 
 ```
 .
+├── .githooks/          # Tracked git hooks; see "Pre-push checks" above
 ├── Cargo.toml          # Package metadata and dependencies
 ├── build.rs            # Embeds build metadata (and the Windows .ico)
 ├── docs/               # Build optimization and release engineering
