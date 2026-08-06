@@ -6,6 +6,7 @@ pub mod errors;
 pub mod fs;
 pub mod ignore;
 pub mod item;
+pub mod node_tool_provider;
 pub mod permissions;
 pub mod progress;
 pub mod report;
