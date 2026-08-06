@@ -51,11 +51,12 @@ use crate::updater;
 /// the order anything renders in; [`Layout::features`] is.
 ///
 /// **If the new tool can also accept a pasted value**, quick navigation costs
-/// three more small things and nothing else: a `Detector` variant with its arm
-/// in `quick_nav::models::detect`, a `Route` variant, and an arm in
-/// [`Layout::apply_route`] — which is the one place a route meets a `View`.
-/// `quick_nav::models::detect`'s module doc is where the *order* it goes in has
-/// to be argued.
+/// four more small things and nothing else: a `Detector` variant with its arm
+/// in `quick_nav::models::detect`, a `Route` variant with its arm in
+/// `Route::detector`, an arm in [`View::for_detector`], and an arm in
+/// [`Layout::apply_route`] — which is still the one place a route meets a
+/// `View`. `quick_nav::models::detect`'s module doc is where the *order* it goes
+/// in has to be argued, and that order is emphatically not this list's.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum View {
     JsonFormatter,
@@ -1240,6 +1241,30 @@ mod tests {
                 "a cURL command carrying JSON belongs to the API Explorer wherever its row is",
             );
         }
+    }
+
+    /// **Every tool is an ordinary tool here**, with no exception for the one
+    /// still being built. `src/cleaner/` is a legitimate thing to switch off —
+    /// arguably the most likely one — and a special case for it would be a rule
+    /// `session::models::features` does not have and should not gain.
+    #[test]
+    fn every_tool_can_be_switched_off_including_the_unfinished_one() {
+        for view in View::ALL {
+            let mut features = everything();
+            assert!(features.can_toggle(view.code()), "{view:?}");
+            features
+                .set_enabled(view.code(), false)
+                .unwrap_or_else(|_| panic!("{view:?} is not the last of six"));
+
+            assert!(!features.is_enabled(view.code()));
+            assert_eq!(
+                features.all().len(),
+                View::ALL.len(),
+                "it is hidden, not gone"
+            );
+            assert_ne!(View::shown(&features, Some(view.code())), view);
+        }
+        assert!(View::ALL.contains(&View::Cleaner));
     }
 
     /// Trap 7: the Features page can only ever hide a **tool**, and the
