@@ -71,7 +71,7 @@ jobs:
     steps:
       # Full history: `git log` on the tagged commit needs the commit object,
       # and a default shallow checkout of a tag does not always carry it.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -155,7 +155,7 @@ jobs:
     env:
       SOURCE_DATE_EPOCH: ${{ needs.meta.outputs.source_date_epoch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # build.rs reads git for the commit and tag. It falls back to the
           # GITHUB_* variables, but full history keeps `git describe` honest.
@@ -298,7 +298,7 @@ jobs:
       # docs/release.md lists the secrets each one needs.
 
       - name: Upload archives
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dodo-${{ matrix.name }}
           path: |
@@ -336,10 +336,14 @@ jobs:
       # The only place in either workflow that needs write access.
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # `digest-mismatch` defaults to `error` from v8 on — a downloaded archive
+      # whose hash does not match what the server recorded now fails the release
+      # rather than logging a warning. That is the behaviour this job wants: a
+      # corrupted archive must never reach a published Release.
       - name: Download all platform artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
