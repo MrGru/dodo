@@ -204,6 +204,21 @@
     not a runtime Rosetta-translation check — the practical difference is invisible for dodo itself
     (a universal or arch-matched build), but would matter if dodo ever shipped as an Intel-only binary
     running translated on Apple Silicon.
+- **Language Files (Phase 15, analysis-only)** — `macos::scanners::language_files`:
+  - **No mutation exists.** `RemoveLocalization` is declared on `ItemCapability` but never granted;
+    Phase 16 gates actual removal on the same tested backup/rollback/signature-recheck path Universal
+    Binaries needs.
+  - **Primary-subtag matching is a hyphen split, not a full BCP-47 parser.** `"zh-Hans"` vs.
+    `"zh-Hant-TW"` correctly match on `"zh"`, but a locale identifier with an unusual structure this
+    scanner has not been tested against could be missed — the practical effect of a miss is
+    under-protection risk only in the sense that a language would show as an ordinary
+    `ApplicationMutation` candidate instead of `Protected`, and this phase never removes either kind,
+    so nothing is actually at risk yet.
+  - **Preferred-language detection reads `.GlobalPreferences.plist` directly rather than calling
+    `NSLocale.preferredLanguages`.** The file and key are the same source Cocoa's own API reads, but a
+    future macOS version could change the on-disk representation without changing the API — if this
+    scanner's reads ever silently return nothing, the unconditional English-fallback rule still
+    prevents English from being mis-flagged, but other preferred languages could be.
 - Non-macOS support is intentionally unavailable and shown as such in UI.
 
 These limitations are intentional: the implementation now has shared traversal, selection, Finder reveal, and Trash groundwork, but broader categories remain blocked until permission, more scanners, and deeper app-analysis phases are in place.
