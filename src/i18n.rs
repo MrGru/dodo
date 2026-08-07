@@ -1254,6 +1254,11 @@ pub enum Str {
         found: u64,
         understood: u32,
     },
+    CleanerDockerCleanupConfirmTitle,
+    CleanerDockerCleanupConfirmMessage {
+        count: usize,
+        size: String,
+    },
 }
 
 impl Str {
@@ -1696,6 +1701,28 @@ impl Str {
             ) => format!(
                 "cleaner-ignored-items.json là phiên bản {found}; bản dodo này hiểu phiên bản \
                  {understood}. dodo giữ nguyên tệp và không mục nào được đánh dấu giữ lại."
+            )
+            .into(),
+            (Str::CleanerDockerCleanupConfirmTitle, Language::English) => {
+                "Remove selected Docker objects?".into()
+            }
+            (Str::CleanerDockerCleanupConfirmTitle, Language::Vietnamese) => {
+                "Xoá các đối tượng Docker đã chọn?".into()
+            }
+            (
+                Str::CleanerDockerCleanupConfirmMessage { count, size },
+                Language::English,
+            ) => format!(
+                "{count} Docker objects will be removed via the Docker CLI. This does not use \
+                 the Trash and cannot be undone through dodo. Estimated size: {size}."
+            )
+            .into(),
+            (
+                Str::CleanerDockerCleanupConfirmMessage { count, size },
+                Language::Vietnamese,
+            ) => format!(
+                "{count} đối tượng Docker sẽ bị xoá qua Docker CLI. Việc này không dùng Thùng \
+                 rác và không thể hoàn tác qua dodo. Dung lượng ước tính: {size}."
             )
             .into(),
 
@@ -5485,6 +5512,14 @@ mod tests {
                 },
                 &[NUMBER_TEXT, "1"],
             ),
+            plain(Str::CleanerDockerCleanupConfirmTitle),
+            with(
+                Str::CleanerDockerCleanupConfirmMessage {
+                    count: NUMBER,
+                    size: DETAIL.into(),
+                },
+                &[NUMBER_TEXT, DETAIL],
+            ),
         ]
     }
 
@@ -6303,6 +6338,8 @@ mod tests {
             Str::CleanerIgnoreStoreError(_) => 798,
             Str::CleanerIgnoreStoreMissingVersion => 799,
             Str::CleanerIgnoreStoreUnsupportedVersion { .. } => 800,
+            Str::CleanerDockerCleanupConfirmTitle => 801,
+            Str::CleanerDockerCleanupConfirmMessage { .. } => 802,
         }
     }
 

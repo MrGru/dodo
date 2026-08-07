@@ -271,6 +271,54 @@ Current behavior:
   every item that app produced plus one category-level warning — this warns, never blocks, the same
   posture `xcode_junk` established for Xcode.
 
+### Docker Cache scanner
+
+`src/cleaner/macos/scanners/docker_cache.rs` — dangling/unused images, stopped containers, and
+unused volumes/networks, via the `docker` CLI (`Command::new("docker")`, argument vectors, no shell).
+**Deliberately does not reuse `crate::docker::services::DockerEngine`** even though `src/docker/`
+already resolves a daemon connection and lists all four resource types: dodo's "self-contained-module
+invariant" (see `dodo-database-internals`, which dropped a "detect running database containers"
+feature in every design round to avoid exactly this) forbids `src/cleaner/` from gaining a `use
+crate::docker` edge. This scanner is therefore a second, much smaller, independent Docker client —
+line-delimited JSON (`--format '{{json .}}'`) parsed with `serde_json::Value`, no `bollard`, no second
+tokio runtime.
+
+| Object | Detected via | Risk | Selected by default | Cleanup |
+|---|---|---|---|---|
+| Dangling images | `docker image ls`, `Repository`/`Tag` both `<none>` | SafeRecreatable | yes | `docker rmi` |
+| Unused tagged images | `docker image ls`, no container's `Image` field matches | ReviewRecommended | no | `docker rmi` |
+| Stopped containers | `docker ps -a`, `State` is `exited`/`dead` | ReviewRecommended | no | `docker rm` |
+| Unused volumes | `docker volume ls`, no container's `Mounts` names it | UserData | never (`NeverBulkSelect`) | `docker volume rm` |
+| Unused networks | `docker network ls`, not predefined, no container's `Networks` names it | ReviewRecommended | no | `docker network rm` |
+
+Current behavior:
+
+- daemon status is folded into `ScanCompleteness::Partial { reason: UnsupportedEnvironment }` with a
+  `ScanWarning` the moment the *first* command (`docker ps -a`) fails — missing binary and unreachable
+  daemon are not distinguished, both just mean "Docker unavailable" and the category returns empty
+  rather than failing the whole Smart Care scan;
+- "in use" for images/volumes/networks is derived from `docker ps -a`'s own `Image`/`Mounts`/
+  `Networks` columns, not a second `inspect` call per container — cheap, and matches the ticket's
+  "avoid duplicate directory-size calculations"-style conservatism applied to process calls instead;
+- `ItemCapability::MoveToTrash` is never granted; every item instead gets
+  `ItemCapability::RunExternalCleanup`, and `CleanableItem::path` is a synthetic `docker://<kind>/<id>`
+  string — display and `CopyPath` only, never resolved against the filesystem;
+- cleanup routes through `docker_cache::prune_items`, not `cleanup::cleanup_items` —
+  `views::cleaner_view::run_cleanup` branches on whether every selected item's category is
+  `DockerCache`. `prune_items` calls `docker rmi`/`rm`/`volume rm`/`network rm` with no `--force`, so
+  the daemon itself refuses a still-referenced object — the ticket's "Check references before
+  cleanup", enforced by the engine rather than re-derived from a possibly-stale scan;
+- the confirmation dialog shows dedicated wording (`Str::CleanerDockerCleanupConfirmTitle`/
+  `CleanerDockerCleanupConfirmMessage`) rather than the generic "moved to Trash" text, since nothing
+  here ever touches the Trash;
+- image sizes are parsed back from `docker image ls`'s human-formatted string (`parse_human_size`,
+  decimal units) — approximate by construction, labeled as such; containers, volumes and networks
+  report no size at all (`docker ps -a`/`volume ls`/`network ls` do not include one without `docker
+  system df -v`, out of scope this phase).
+
+See `docs/cleaner/known-limitations.md` for what this phase does not cover (build cache, engine disk
+usage totals, Docker Desktop's own log files, image-usage matching precision).
+
 ### Unimplemented categories
 
 - Categories without a real scanner are surfaced as partial “coming later” results by the state layer.
