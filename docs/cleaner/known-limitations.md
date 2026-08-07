@@ -160,6 +160,35 @@
   - Models, Application support and Chat history are scan-only this phase (never allow-listed for
     cleanup, regardless of what a future UI bug might let a user select) — only Logs and Cache can
     ever be moved to Trash through Cleaner.
+- **Docker Cache (Phase 13)** — `macos::scanners::docker_cache`, via the `docker` CLI:
+  - **Build cache is not reported at all.** The ticket lists it as a distinct engine-object type
+    alongside dangling/unused images, stopped containers, unused networks and volumes; getting its
+    size needs `docker system df -v` (or `docker builder du`), which this phase does not add — only
+    the other four object types are covered. A future pass can add it as its own item group without
+    touching anything this phase ships.
+  - **Docker Desktop's own filesystem-level log files are out of scope.** The ticket asks to
+    "separate filesystem caches from Docker-engine objects"; the only real candidate on macOS is
+    `~/Library/Containers/com.docker.docker/Data/log/`, and this phase does not scan it — none of the
+    conservative-classification work the six filesystem scanners already do (grouping, staleness,
+    selection defaults) has been applied to it, so adding it now would mean guessing at that bar
+    rather than reusing it.
+  - **Image-in-use matching is a string comparison against `docker ps`'s own `Image` column, not an
+    id-exact match.** `docker ps -a`'s `Image` field is whatever reference the container was created
+    with (a tag or an id), matched here against each image's `repository:tag` or a 12-character short
+    id prefix — the same tolerance-for-imprecision the ticket accepts elsewhere ("Do not claim orphan
+    detection is perfectly accurate" applies in spirit here too).
+  - **No engine disk-usage totals** (`docker system df`'s own summary numbers) are shown; every size
+    this scanner reports is derived per-object from `docker image ls`'s human-formatted string.
+  - **Volumes, containers and networks report no size at all** — `docker ps -a`/`volume ls`/`network
+    ls` do not include one without `docker system df -v`, which this phase does not call.
+  - **No timeout on the four `docker` CLI calls.** A wedged daemon would stall the background task
+    running this category's scan until the process returns or the whole scan is cancelled — the same
+    blocking-by-contract posture `src/docker/`'s own `bollard` calls already accept, not a new risk
+    this scanner introduces.
+  - **Does not reuse `crate::docker::services::DockerEngine`, by design, not oversight** — see
+    `docs/cleaner/scanners.md`'s Docker Cache section for why: dodo's self-contained-module invariant
+    forbids `src/cleaner/` from depending on `src/docker/`, so this is an independent, much smaller
+    Docker client (the CLI, not `bollard`) rather than a shared one.
 - Non-macOS support is intentionally unavailable and shown as such in UI.
 
 These limitations are intentional: the implementation now has shared traversal, selection, Finder reveal, and Trash groundwork, but broader categories remain blocked until permission, more scanners, and deeper app-analysis phases are in place.

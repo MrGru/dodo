@@ -23,6 +23,7 @@ use crate::cleaner::core::scanner::CleanerScanner;
 #[cfg(target_os = "macos")]
 use crate::cleaner::macos::applications::review as uninstall_review;
 #[cfg(target_os = "macos")]
+use crate::cleaner::macos::scanners::docker_cache;
 use crate::cleaner::macos::{cleanup, permissions, platform};
 use crate::cleaner::services::ignore_store::{
     DiskOrphanIgnoreStore, OrphanIgnoreStore, OrphanIgnoreStoreError,
@@ -430,20 +431,38 @@ impl CleanerView {
         if selected.is_empty() {
             return;
         }
+        let is_docker = self.state.category() == CleanerCategory::DockerCache;
         let count = selected.len();
         let size = Self::format_bytes(selected.iter().map(|item| item.logical_size).sum());
         let view = cx.entity();
         window.open_alert_dialog(cx, move |alert, _window, cx| {
             let confirm_view = view.clone();
+            let (title, description) = if is_docker {
+                (
+                    t(Str::CleanerDockerCleanupConfirmTitle, cx),
+                    t(
+                        Str::CleanerDockerCleanupConfirmMessage {
+                            count,
+                            size: size.clone(),
+                        },
+                        cx,
+                    ),
+                )
+            } else {
+                (
+                    t(Str::CleanerCleanupConfirmTitle, cx),
+                    t(
+                        Str::CleanerCleanupConfirmMessage {
+                            count,
+                            size: size.clone(),
+                        },
+                        cx,
+                    ),
+                )
+            };
             alert
-                .title(t(Str::CleanerCleanupConfirmTitle, cx))
-                .description(t(
-                    Str::CleanerCleanupConfirmMessage {
-                        count,
-                        size: size.clone(),
-                    },
-                    cx,
-                ))
+                .title(title)
+                .description(description)
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t(Str::CleanerCleanSelected, cx))
@@ -484,13 +503,21 @@ impl CleanerView {
         self.state.begin_cleaning();
         cx.notify();
 
+        let is_docker = items
+            .iter()
+            .all(|item| item.category == CleanerCategory::DockerCache);
+
         self.cleanup_task = Some(cx.spawn(async move |this, cx| {
             let report = cx
                 .background_executor()
                 .spawn(async move {
                     #[cfg(target_os = "macos")]
                     {
-                        cleanup::cleanup_items(&items)
+                        if is_docker {
+                            docker_cache::prune_items(&items)
+                        } else {
+                            cleanup::cleanup_items(&items)
+                        }
                     }
                     #[cfg(not(target_os = "macos"))]
                     {

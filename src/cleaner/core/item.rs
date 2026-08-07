@@ -64,9 +64,27 @@ pub struct LargeFileMetadata {
     pub extension: Option<String>,
 }
 
+/// Which Docker engine object a `CleanerCategory::DockerCache` item names.
+/// See `macos::scanners::docker_cache`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DockerObjectKind {
+    Image,
+    Container,
+    Volume,
+    Network,
+}
+
+/// Attached to every item `macos::scanners::docker_cache::DockerCacheScanner`
+/// produces. `engine_id` is whatever the `docker` CLI identifies the object
+/// by — an image/container id, a volume name, a network id — exactly what
+/// `docker_cache::prune_items` passes back to `docker rmi`/`rm`/`volume
+/// rm`/`network rm`. `CleanableItem::path` for these items is a synthetic
+/// `docker://<kind>/<id>` string for display and `CopyPath` only; it is never
+/// resolved against the filesystem (see `docker_cache`'s module doc comment).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DockerItemMetadata {
-    pub object_type: String,
+    pub kind: DockerObjectKind,
+    pub engine_id: String,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
