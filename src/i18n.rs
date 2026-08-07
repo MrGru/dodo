@@ -1281,6 +1281,15 @@ pub enum Str {
     FeatureMoveUp,
     FeatureMoveDown,
     FeatureLastVisibleTool,
+
+    // The macOS menu bar item. Appended for the same reason as the two blocks
+    // above — `position` is a fixed numbering.
+    //
+    // The **input languages themselves are not here**: their names are endonyms
+    // shown in their own language, so they never enter this mechanism. See
+    // `tray::input_language::InputLanguage::label`.
+    TrayOpenDodo,
+    TrayQuitDodo,
 }
 
 impl Str {
@@ -4483,6 +4492,11 @@ impl Str {
             (Str::FeatureLastVisibleTool, Language::Vietnamese) => {
                 "Thanh bên phải giữ lại ít nhất một công cụ.".into()
             }
+
+            (Str::TrayOpenDodo, Language::English) => "Open Dodo".into(),
+            (Str::TrayOpenDodo, Language::Vietnamese) => "Mở Dodo".into(),
+            (Str::TrayQuitDodo, Language::English) => "Quit Dodo".into(),
+            (Str::TrayQuitDodo, Language::Vietnamese) => "Thoát Dodo".into(),
         }
     }
 }
@@ -5624,6 +5638,9 @@ mod tests {
             plain(Str::FeatureMoveUp),
             plain(Str::FeatureMoveDown),
             plain(Str::FeatureLastVisibleTool),
+            // The macOS menu bar item.
+            plain(Str::TrayOpenDodo),
+            plain(Str::TrayQuitDodo),
         ]
     }
 
@@ -6455,6 +6472,8 @@ mod tests {
             Str::FeatureMoveUp => 811,
             Str::FeatureMoveDown => 812,
             Str::FeatureLastVisibleTool => 813,
+            Str::TrayOpenDodo => 814,
+            Str::TrayQuitDodo => 815,
         }
     }
 

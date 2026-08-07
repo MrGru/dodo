@@ -119,6 +119,21 @@ tokio = { version = "1.53.1", default-features = false, features = ["rt-multi-th
 # CPU delta) inside `docker::services`. Already in the tree transitively via
 # bollard, so it adds no build cost; pure Rust, no TLS.
 futures-util = "0.3.33"
+# The `Send + Sync` sender half that carries macOS menu-bar events out of an
+# AppKit callback and into a GPUI foreground task — see `src/tray/mod.rs`, which
+# is the only module that may name it. `tray-icon`'s event handlers are
+# `Fn + Send + Sync`, so they cannot capture GPUI's `AsyncApp` (its
+# `ForegroundExecutor` is `!Send` by construction); an unbounded mpsc is the
+# seam, and awaiting the receiver in one long-lived task is what makes delivery
+# event-driven rather than polled.
+#
+# **This adds no crate to the graph**, the same argument `regex` above makes:
+# `gpui` already depends on `futures-channel` 0.3 — `AsyncApp` itself uses
+# `futures::channel::oneshot` — so this only promotes an existing transitive
+# dependency to a direct one. Not target-scoped even though only the macOS tray
+# uses it today, because Windows and Linux tray support would use the same seam
+# and a `cfg` here would have to be removed again.
+futures-channel = "0.3"
 # The JavaScript engine behind the API Explorer's scripts (QuickJS-NG, via C).
 # Only `api_explorer::services::script` may name it, the same containment rule
 # `reqwest` and `bollard` follow. Deliberately minimal features: no `loader`
@@ -254,6 +269,29 @@ object = { version = "0.39", default-features = false, features = [
     "read",
     "macho",
 ] }
+# The macOS menu bar item — an `NSStatusItem` plus a `muda` `NSMenu`. Only
+# `src/tray` may name it, the containment rule `reqwest`, `bollard` and
+# `rquickjs` already follow.
+#
+# **This one really does add packages**, five of them: `tray-icon`, `muda`,
+# `crossbeam-channel`, `dpi` and `keyboard-types`. (`once_cell`, `thiserror` and
+# `png` were already in the graph.) It measured at +184,656 bytes on the release
+# binary — see "System tray" in `docs/build-optimization.md` — and the captain
+# accepted that on 2026-08-07 knowing the number, the same way the
+# `sql-highlighting` feature above was accepted.
+#
+# The alternative that was weighed and rejected was calling `NSStatusBar` /
+# `NSStatusItem` through the `objc2` crates directly, which costs zero new
+# packages. It loses on two counts: it is a few hundred lines of `unsafe`
+# responder-chain code that no CI on this project can exercise, and it would
+# have to be written from scratch again for Windows and Linux, which `tray-icon`
+# already implements. `TrayIcon::ns_status_item()` keeps the raw `NSStatusItem`
+# reachable, so nothing is locked away.
+#
+# `default-features = false` drops `libxdo` and `gtk`. Both are Linux-only and
+# therefore inert behind this `cfg` today, but they must be chosen deliberately
+# when Linux support lands rather than inherited by accident.
+tray-icon = { version = "0.24", default-features = false }
 
 # Decodes the embedded 256px PNG into the RGBA buffer GPUI's X11 backend writes
 # into `_NET_WM_ICON` (`WindowOptions::icon`, which is X11-only). Scoped to

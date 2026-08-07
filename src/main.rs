@@ -28,6 +28,8 @@ mod paths;
 mod quick_nav;
 mod session;
 mod settings;
+#[cfg(target_os = "macos")]
+mod tray;
 mod updater;
 mod window_icon;
 
@@ -94,6 +96,15 @@ fn main() {
         // main thread — which this closure is.
         #[cfg(target_os = "macos")]
         window_icon::set_macos_dock_icon();
+        // The menu bar item. Same two requirements as the dock icon above and
+        // met the same way — the `NSApplication` exists and this closure is the
+        // main thread — plus one more that only this needs: gpui calls us from
+        // inside `applicationDidFinishLaunching:`, so `[NSApp run]`'s loop is
+        // already going, which is what `tray-icon` asks for. It opens no window
+        // and cannot fail upward; a tray that does not come up is one line on
+        // stderr.
+        #[cfg(target_os = "macos")]
+        tray::init(cx);
 
         cx.spawn(async move |cx| {
             // `session.json` decides the theme, the font size and the window

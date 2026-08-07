@@ -1,0 +1,30 @@
+<!-- dodo tray mark for the "en" keyboard input language.
+
+     The glyph is a *path*, not <text>, on purpose: a <text> element would make
+     the icon depend on a font being installed on the user's machine and on that
+     font's metrics, and the CJK case would not survive a Linux box with no
+     Japanese font at all. Baked outlines render identically everywhere.
+
+     Provenance, so a future contributor can redo it rather than trace it: the
+     "E" outline was taken from Helvetica-Bold at 15pt with CoreText
+     (CTFontCreatePathForGlyph), flipped into SVG's y-down space, and translated
+     so its bounding box centres on x=27 of the 34x24 viewBox. The dodo itself is
+     assets/icons/dodo.svg scaled to sit in the left half.
+
+     Width is free and height is fixed at 24: tray-icon pins the NSImage to 18pt
+     tall and derives the width from this aspect ratio, so a wider or narrower
+     glyph simply produces a wider or narrower status item with no code change. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="34" height="24" viewBox="0 0 34 24" fill="currentColor">
+  <g transform="translate(0 2.5) scale(.79)">
+    <path d="M11.6 19.4h1.3v2.2h-1.3z"/>
+    <path d="M14.4 19.4h1.3v2.2h-1.3z"/>
+    <path d="M10.3 21h3.4a.85.85 0 0 1 0 1.7h-3.4a.85.85 0 0 1 0-1.7z"/>
+    <path d="M13.2 21h3.4a.85.85 0 0 1 0 1.7h-3.4a.85.85 0 0 1 0-1.7z"/>
+    <path d="M18.3 13.8c1.4-1.7 2.9-2.8 4.3-3.1.4 1.6-.2 3.4-1.6 5z"/>
+    <path d="M7.4 14.6a5.8 5.4 0 1 0 11.6 0 5.8 5.4 0 1 0-11.6 0z"/>
+    <path d="M9 7.8c-.2 2.6 1 4.6 3.1 5.9" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M5.7 5.4a3.2 3.2 0 1 0 6.4 0 3.2 3.2 0 1 0-6.4 0z"/>
+    <path d="M7.3 2.9C4.7 4 2.7 5.6 1.7 7.4c-.5.9.2 1.9 1.2 1.8l4-.5z"/>
+  </g>
+  <path transform="translate(21.7 17.9)" d="M8.66 -4.72L3.41 -4.72L3.41 -1.94L9.39 -1.94L9.39 0L1.21 0L1.21 -10.8L9.13 -10.8L9.13 -8.88L3.41 -8.88L3.41 -6.59L8.66 -6.59Z"/>
+</svg>
