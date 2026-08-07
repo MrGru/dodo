@@ -14,6 +14,8 @@ use crate::cleaner::core::ignore::{IgnoredItemsDocument, path_signature};
 use crate::cleaner::core::item::{CleanableItem, CleanableItemId};
 use crate::cleaner::core::permissions::{MacPermission, PermissionService, PermissionState};
 use crate::cleaner::core::progress::{ProgressSink, ScanProgress};
+#[cfg(not(target_os = "macos"))]
+use crate::cleaner::core::report::CleanupReport;
 use crate::cleaner::core::report::{
     CategoryScanResult, PartialScanReason, ScanCompleteness, ScanWarning,
 };
@@ -24,6 +26,7 @@ use crate::cleaner::core::scanner::CleanerScanner;
 use crate::cleaner::macos::applications::review as uninstall_review;
 #[cfg(target_os = "macos")]
 use crate::cleaner::macos::scanners::docker_cache;
+#[cfg(target_os = "macos")]
 use crate::cleaner::macos::{cleanup, permissions, platform};
 use crate::cleaner::services::ignore_store::{
     DiskOrphanIgnoreStore, OrphanIgnoreStore, OrphanIgnoreStoreError,
