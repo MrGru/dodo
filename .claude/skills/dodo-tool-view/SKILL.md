@@ -27,13 +27,35 @@ never rebuild a view on selection.
    (`Self::Foo => "icons/foo.svg"`). The path is what reaches the asset source; the variant name
    is arbitrary. Watch the existing `Palette => "icons/palatte.svg"` — filename typo, variant
    spelled correctly.
-5. **`src/layout.rs`** — four edits, three of which the compiler will demand:
+5. **`src/layout.rs`** — five edits, four of which the compiler will demand:
    - a `View` variant;
    - bump the arity and contents of `const ALL: [View; N]` (this one is silent if you forget —
-     the menu simply will not list your tool);
+     the menu simply will not list your tool). `ALL` is the **default** order, not the order the
+     sidebar draws: since the Features settings page landed, that is the user's, held by
+     `Layout::features`. Where you insert your tool decides where it appears for someone who has
+     never reordered anything, and — through `Features::resolve` — which existing tool it turns up
+     next to for someone who has;
    - an arm in `View::title` and in `View::icon`;
+   - **an arm in `View::code`**, which is what `session.json` stores so the tool can be reopened
+     on next launch. This one is a **compatibility surface**, not just another match arm: pick a
+     kebab-case identifier, never a title, and never reuse a code that has shipped for a different
+     tool. `View::shown` (over `Features::active`) resolves anything it does not recognise to the
+     first tool the sidebar *does* list, so a removed or renamed tool degrades to "opens on
+     something" rather than failing to start. Changing a shipped code now costs more than it used
+     to: it is also the tool's identity in the user's stored order and on/off list, so everyone who
+     had reordered or hidden it gets it back at its default position, switched on.
    - a `Entity<YourTool>` field on `Layout`, initialised in `Layout::new`, and an arm in the
      main-pane `match self.active` inside `Layout::render`.
+
+   **You do not have to touch the Features settings page.** It is generated from `View::codes()`,
+   so a new tool appears there with a switch and its two move buttons for free — and is switchable
+   off like any other. Nothing needs to opt in, and nothing should try to opt out: a tool that
+   cannot be hidden would be a special case in `session::models::features` and there are none.
+
+   One more thing if the tool needs to *start something* when it becomes active — Docker's polling
+   is the existing case. `Layout::activate` is the normal path, but a restored session opens
+   straight onto the tool with no click, and there is no `self` to call `activate` on inside the
+   constructor. `Layout::new` builds the Docker entity first and tells it by hand; copy that.
 
 6. **`src/i18n.rs`** — `View::title` returns a `Str`, not a string, so the tool needs a `Str`
    variant for its sidebar title and one for every label inside it. Load `dodo-i18n-text` before
@@ -41,13 +63,17 @@ never rebuild a view on selection.
 
 7. **`src/quick_nav/` — only if the tool can accept a pasted value.** Optional, and skipping it
    costs nothing: the tool simply is not a quick-navigation target. If it should be one, it is
-   three small edits and no more — a `Detector` variant with its arm in `models/detect.rs`, a
-   `Route` variant in `models/route.rs`, and an arm in `Layout::apply_route`, which is the one
-   place a route meets a `View`. Two rules there are not negotiable: **where the tool's format
-   already has a real parser, attempting that parser is the detector** (a regex is not an
-   improvement on a tested parser), and **the position you insert into `Detector::ORDER` has to be
-   argued in that module's doc** — the order is most-specific-first and every existing position is
-   forced by an overlap below it.
+   four small edits and no more — a `Detector` variant with its arm in `models/detect.rs`, a
+   `Route` variant in `models/route.rs` with its arm in `Route::detector`, an arm in
+   `View::for_detector`, and an arm in `Layout::apply_route`, which is the one place a route meets
+   a `View`. Three rules there are not negotiable: **where the tool's format already has a real
+   parser, attempting that parser is the detector** (a regex is not an improvement on a tested
+   parser); **the position you insert into `Detector::ORDER` has to be argued in that module's
+   doc** — the order is most-specific-first and every existing position is forced by an overlap
+   below it, and it is emphatically *not* the sidebar's order, which the user can now drag around;
+   and **`View::for_detector` must name the same tool the route lands in**, because
+   `Layout::allowed_detectors` reads it *before* detection to drop the detectors of switched-off
+   tools. Get that wrong and hiding one tool silences another's paste, silently.
 
 `cargo build` catches every step except the `ALL` array. If the tool builds but no sidebar row
 appears, that is the one you missed.
@@ -79,4 +105,8 @@ appears, that is the one you missed.
   `EncoderDecoder::error_banner` (`danger` border, `danger.opacity(0.1)` background). Only the
   JSON formatter also pushes an inline diagnostic, and that needs a `code_editor` input; see
   `gpui-component-recipes`.
+- **The sidebar can be empty of your tool entirely.** Since the Features page, a user may switch it
+  off, so nothing may assume its row exists or that it is reachable — and if it starts something
+  when it becomes active (Docker's polling), that thing must also stop when it stops being the
+  active tool, which `Layout::activate` already handles for every tool.
 - Update `README.md`'s "Tools available today" list; it is the only user-facing inventory.

@@ -109,6 +109,14 @@ pub enum AppIcon {
     Info,
     /// The other half of the password reveal toggle.
     EyeOff,
+
+    /// The drag handle on each row of the Features settings page. Ships as our
+    /// own `icons/grip-vertical.svg`: the library's set has no handle glyph at
+    /// all, and every candidate in it (`ellipsis-vertical`, `menu`) already
+    /// means something else in dodo. Six dots is the conventional mark for
+    /// "this row can be dragged", and it survives being painted as an alpha
+    /// mask because it is nothing but coverage.
+    GripVertical,
 }
 
 impl IconNamed for AppIcon {
@@ -167,6 +175,7 @@ impl IconNamed for AppIcon {
             Self::SortAscending => "icons/sort-ascending.svg",
             Self::Info => "icons/info.svg",
             Self::EyeOff => "icons/eye-off.svg",
+            Self::GripVertical => "icons/grip-vertical.svg",
         }
         .into()
     }

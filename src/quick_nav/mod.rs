@@ -169,12 +169,19 @@ impl QuickNav {
     ///
     /// Returns `None` immediately when the feature is off, so the caller does
     /// not have to remember to ask twice.
-    pub fn detect(text: &str, cx: &App) -> Option<Route> {
+    ///
+    /// `allowed` is the detectors whose tool the sidebar still lists — the
+    /// caller's, because only `Layout` knows which tool each detector answers
+    /// for. A detector left out of it is not tried, so a paste falls through to
+    /// the next one rather than switching a tool back on behind the user; see
+    /// [`detect::detect_among`], which also states why `allowed` cannot reorder
+    /// anything.
+    pub fn detect(text: &str, allowed: &[Detector], cx: &App) -> Option<Route> {
         let state = cx.try_global::<QuickNav>()?;
         if !state.document.enabled {
             return None;
         }
-        detect::detect(text, &state.patterns)
+        detect::detect_among(text, &state.patterns, allowed)
     }
 
     /// Applies one change: edits the document, recompiles the patterns from it,

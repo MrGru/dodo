@@ -6,16 +6,28 @@ use crate::cleaner::core::progress::ScanProgress;
 use crate::cleaner::core::report::{CategoryScanResult, CleanupReport, ScanCompleteness};
 use crate::cleaner::core::selection::selected_by_default_ids;
 
+/// Every state the panel can display. All nine already have a label in
+/// `views::CleanerView`; three of them cannot be reached yet, and each carries
+/// its own reason for that.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CleanerStatus {
     Idle,
+    /// Entered once a scan gates on Full Disk Access — pending with
+    /// `core::permissions`, which has no implementation in round 1.
+    #[allow(dead_code)]
     CheckingPermissions,
     Scanning,
     Cancelling,
     PartiallyCompleted,
     Completed,
+    /// Entered by the destructive cleanup path, which round 1 does not have.
+    #[allow(dead_code)]
     Cleaning,
     CompletedWithFailures,
+    /// Set by [`CleanerState::mark_failed`], for a scan that fails as a whole.
+    /// Round 1 cannot fail as a whole: a scanner error is per-category and
+    /// lands in `CompletedWithFailures` instead.
+    #[allow(dead_code)]
     Failed,
 }
 
@@ -123,6 +135,10 @@ impl CleanerState {
         };
     }
 
+    /// Abandon the run entirely. Uncalled in round 1 for the reason given on
+    /// [`CleanerStatus::Failed`]: the only failures that exist are per-category
+    /// and are reported through `finish_scan(_, had_failures)`.
+    #[allow(dead_code)]
     pub fn mark_failed(&mut self) {
         self.progress = None;
         self.status = CleanerStatus::Failed;

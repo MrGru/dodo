@@ -364,6 +364,34 @@ Constructors: `switch` / `checkbox` (→ `SettingField<bool>`), `input` / `dropd
 (→ `SettingField<f64>`). Use `scrollable_dropdown` for long lists — the plain `dropdown` popup
 does not scroll and pushes options below the fold.
 
+### A `SettingField::input` item must be `.layout(Axis::Vertical)`
+
+An input is the only control in this dialog wide enough to break its own row.
+`fields/string.rs` gives it `w_64` — a **fixed 256px** — in a horizontal row, where `switch` and
+`checkbox` are content-sized, `dropdown` is a content-sized `Button` and `number_input` is `w_32`.
+`SettingItem::render_item` then lays the row out as `h_flex().justify_between().gap_3()` with the
+label column at `flex_1().max_w_3_5()` and the control in a bare `div().id("field")` that **nothing
+shrinks**. So the row needs `256 + 12 + 0.6 * row` to hold both, and dodo's rows are 494px wide:
+at `DIALOG_WIDTH` the input is laid out at x=524.5 with width 256, reaching 780.5px inside a 726px
+panel — outside the card, where it is clipped. That shipped in the Quick navigation page's first
+round and is what `settings::input_item` now prevents; `settings::row_layout` measures both halves
+against a real frame.
+
+Stacked, the control is `w_full` and therefore bounded by the row at every width. The library
+reaches for the same stacked layout by itself — `Settings::render` wraps the page in a
+`container_query` and flips to `Axis::Vertical` at `STACKED_LAYOUT_MAX_WIDTH` — but only once the
+whole panel has dropped to **480px**, which a 760px dialog never does. `render_item` honours a
+per-item `Vertical` and a container-wide `Vertical` overrides a per-item `Horizontal`, so setting
+it per item is safe.
+
+Note the measuring technique, which generalises: `container_query` lays its child out with
+`AvailableSpace::Definite`, so a settings page's widths are real numbers even though a dialog
+cannot be hosted in a GPUI test window on macOS. Render the panel into a `div` of the width the
+dialog would hand it, tag elements with `.debug_selector(|| "…")` and read them back with
+`VisualTestContext::debug_bounds`. Library internals cannot be tagged — stand in for the field
+with `SettingField::render`, which hands your closure the `RenderOptions` (including the resolved
+`layout`) the real field would get.
+
 Four behaviours that surprise people:
 
 - The search box matches an item's **title, description and `keywords` only** — never its page
