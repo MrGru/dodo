@@ -94,7 +94,22 @@ pub fn parse_document(bytes: &[u8]) -> Result<SessionDocument, SessionStoreError
         });
     }
 
-    serde_json::from_value(value).map_err(|err| SessionStoreError::Io(err.to_string()))
+    let mut document: SessionDocument =
+        serde_json::from_value(value).map_err(|err| SessionStoreError::Io(err.to_string()))?;
+
+    // **Upgrade in memory, so the next write carries this build's version.**
+    // Without this the field is whatever the file said, and dodo writes it
+    // straight back — which quietly defeats the refusal above: a key added in
+    // version 3 would be written into a file still labelled version 1, where an
+    // older build is happy to read it, drop the key it does not know, and save
+    // it pruned. That is the exact loss `SCHEMA_VERSION`'s doc says the version
+    // exists to prevent, so the stamp is what makes the claim true.
+    //
+    // The cost is stated there too and is the accepted one: after this write an
+    // older dodo refuses the file whole and opens on its defaults, instead of
+    // silently eating one setting.
+    document.version = SCHEMA_VERSION;
+    Ok(document)
 }
 
 /// The session, as one JSON file under [`data_dir`].
@@ -301,6 +316,30 @@ mod tests {
         assert_eq!(
             document.workspace.tools, None,
             "a file that predates the Features page has not chosen a tool list",
+        );
+        assert_eq!(
+            document.tray.input_language, None,
+            "a file that predates the menu bar item has not chosen an input language",
+        );
+    }
+
+    /// The other side of reading an older file: it comes back **stamped with
+    /// this build's version**, so the first save republishes it as a document
+    /// this schema owns. Without this a newly added key would be written into a
+    /// file an older dodo still believes it understands.
+    #[test]
+    fn an_older_file_is_upgraded_in_memory_so_the_next_write_declares_this_schema() {
+        let document = parse_document(br#"{"version":1,"appearance":{"theme":"Ayu Dark"}}"#)
+            .expect("a version-1 file is readable");
+
+        assert_eq!(
+            document.version, SCHEMA_VERSION,
+            "a document read from an older file must be saved back as this schema"
+        );
+        assert_eq!(
+            document.appearance.theme.as_deref(),
+            Some("Ayu Dark"),
+            "upgrading the version must not disturb anything else"
         );
     }
 
