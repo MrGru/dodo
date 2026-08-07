@@ -109,9 +109,26 @@ pub struct AiAppMetadata {
     pub model_names: Vec<String>,
 }
 
+/// Attached to every item
+/// `macos::scanners::universal_binaries::UniversalBinariesScanner` produces
+/// (Phase 14, analysis-only — nothing yet reads `capabilities` to offer a
+/// `RemoveArchitecture` action).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct UniversalBinaryMetadata {
+    /// Every architecture this bundle's main executable was built for, in
+    /// Mach-O slice order (e.g. `["arm64", "x86_64"]`).
     pub architectures: Vec<String>,
+    /// This machine's own architecture (`"arm64"` or `"x86_64"`), so the UI
+    /// can show which slice a future removal would keep.
+    pub current_architecture: String,
+    /// The combined byte size of every slice that is *not*
+    /// `current_architecture` — an estimate of what a future thinning action
+    /// could reclaim, never actually removed this phase.
+    pub estimated_removable_bytes: u64,
+    /// Whether `codesign --verify` accepted the bundle at scan time. `None`
+    /// when the check itself could not run (`codesign` missing) rather than
+    /// a real signing verdict.
+    pub signed: Option<bool>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]

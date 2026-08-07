@@ -189,6 +189,21 @@
     `docs/cleaner/scanners.md`'s Docker Cache section for why: dodo's self-contained-module invariant
     forbids `src/cleaner/` from depending on `src/docker/`, so this is an independent, much smaller
     Docker client (the CLI, not `bollard`) rather than a shared one.
+- **Universal Binaries (Phase 14, analysis-only)** — `macos::scanners::universal_binaries`:
+  - **Only the app's one main executable is inspected.** Nested frameworks, plugins, XPC services and
+    helper tools inside a bundle can themselves be universal binaries and are not walked — the ticket
+    permits this ("do not enumerate package contents unless required"); a future pass could extend
+    coverage there without changing this phase's shape.
+  - **Signing status is a bare `codesign --verify` exit code**, not entitlement or identity
+    inspection — enough to warn "removing a slice will invalidate this" but not to describe what
+    would break.
+  - **No mutation exists.** `RemoveArchitecture` is declared on `ItemCapability` but never granted;
+    Phase 16 gates actual thinning on a tested backup/rollback/signature-recheck path this phase does
+    not build.
+  - **"Current machine architecture" is the binary's own build target** (`std::env::consts::ARCH`),
+    not a runtime Rosetta-translation check — the practical difference is invisible for dodo itself
+    (a universal or arch-matched build), but would matter if dodo ever shipped as an Intel-only binary
+    running translated on Apple Silicon.
 - Non-macOS support is intentionally unavailable and shown as such in UI.
 
 These limitations are intentional: the implementation now has shared traversal, selection, Finder reveal, and Trash groundwork, but broader categories remain blocked until permission, more scanners, and deeper app-analysis phases are in place.

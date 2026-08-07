@@ -245,6 +245,16 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = [
     "NSURL",
 ] }
 
+# Cleaner's Universal Binaries scanner (Phase 14, analysis-only): reads a
+# Mach-O executable's fat-header architecture list without executing it or
+# shelling out to `lipo`/`file`. `read` is the only capability this needs
+# (no `write`, since this phase never mutates a binary); `macho` narrows the
+# format support to what Cleaner actually inspects.
+object = { version = "0.39", default-features = false, features = [
+    "read",
+    "macho",
+] }
+
 # Decodes the embedded 256px PNG into the RGBA buffer GPUI's X11 backend writes
 # into `_NET_WM_ICON` (`WindowOptions::icon`, which is X11-only). Scoped to
 # Linux because that is the only `cfg` that names the type: `src/main.rs` sets
