@@ -189,4 +189,45 @@ mod tests {
 
         fs::remove_dir_all(&temp).expect("removes temp tree");
     }
+
+    /// The ticket's "Symlink replacement between scan and clean" safety
+    /// test: a scanner sees a real directory, but by the time cleanup
+    /// actually runs — driven entirely by user review time in between, no
+    /// code defect required — something has swapped that path for a symlink
+    /// pointing somewhere sensitive. `validate_path` must catch this because
+    /// it always re-`stat`s at call time; nothing about a stale scan result
+    /// is trusted.
+    #[test]
+    #[cfg(unix)]
+    fn a_directory_replaced_by_a_symlink_after_scanning_is_rejected_at_cleanup_time() {
+        let temp =
+            std::env::temp_dir().join(format!("dodo-cleaner-safety-toctou-{}", std::process::id()));
+        let root = temp.join("Library").join("Caches");
+        let target = root.join("app-cache");
+        fs::create_dir_all(&target).expect("creates the directory a scan would have seen");
+
+        let policy = DeletionPolicy {
+            allowed_roots: vec![AllowedRoot {
+                path: root.clone(),
+                allow_root_itself: false,
+                allowed_categories: vec![CleanerCategory::UserCache],
+            }],
+            protected_paths: vec![],
+        };
+
+        // The scan ran here and reported `target` as an ordinary directory —
+        // `validate_path` agrees at this point.
+        assert!(validate_path(target.as_path(), CleanerCategory::UserCache, &policy).is_ok());
+
+        // Something replaces it with a symlink before cleanup actually runs.
+        fs::remove_dir_all(&target).expect("removes the original directory");
+        std::os::unix::fs::symlink("/tmp", &target).expect("replaces it with a symlink");
+
+        assert!(matches!(
+            validate_path(target.as_path(), CleanerCategory::UserCache, &policy),
+            Err(SafetyError::SymlinkRejected(_))
+        ));
+
+        fs::remove_dir_all(&temp).expect("removes temp tree");
+    }
 }

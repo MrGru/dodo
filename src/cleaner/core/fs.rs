@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -153,6 +153,7 @@ fn scan_every_file(
     let root = ctx.root;
     let mut queue = VecDeque::from([(root.path.clone(), 0usize)]);
     let mut entries = Vec::new();
+    let mut seen_inodes = HashSet::new();
     while let Some((path, depth)) = queue.pop_front() {
         if ctx.cancellation.is_cancelled() {
             return Err(ScanError::Cancelled);
@@ -173,6 +174,13 @@ fn scan_every_file(
             continue;
         }
         if metadata.is_file() {
+            if let Some(identity) = hard_link_identity(&metadata)
+                && !seen_inodes.insert(identity)
+            {
+                // Another path already accounted for this exact inode —
+                // skip counting the same on-disk content twice.
+                continue;
+            }
             *scanned_entries += 1;
             reporter.report(
                 ctx.progress,
@@ -286,6 +294,7 @@ fn measure_path(
     }
 
     let mut stats = TreeStats::default();
+    let mut seen_inodes = HashSet::new();
     let mut queue = VecDeque::from([(path.to_path_buf(), 0usize)]);
     while let Some((current, depth)) = queue.pop_front() {
         if ctx.cancellation.is_cancelled() {
@@ -309,6 +318,11 @@ fn measure_path(
         let modified = metadata.modified().ok();
         stats.modified_at = latest(stats.modified_at, modified);
         if metadata.is_file() {
+            if let Some(identity) = hard_link_identity(&metadata)
+                && !seen_inodes.insert(identity)
+            {
+                continue;
+            }
             stats.scanned_entries += 1;
             stats.logical_size += metadata.len();
         } else if metadata.is_dir() {
@@ -447,6 +461,29 @@ fn device_id(_metadata: &fs::Metadata) -> Option<u64> {
     None
 }
 
+/// `Some((device, inode))` only when the entry actually has more than one
+/// hard link — anything with exactly one link has nothing to dedupe against,
+/// so it never enters `seen_inodes` at all, keeping that set limited to
+/// entries that can actually collide. `None` on a platform (or filesystem)
+/// where this cannot be determined; callers then simply never dedupe that
+/// entry, the same "count once when we can, never guess" posture the rest of
+/// this module uses for [`device_id`].
+#[cfg(unix)]
+fn hard_link_identity(metadata: &fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    if metadata.nlink() > 1 {
+        Some((metadata.dev(), metadata.ino()))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(unix))]
+fn hard_link_identity(_metadata: &fs::Metadata) -> Option<(u64, u64)> {
+    None
+}
+
 struct ProgressReporter {
     category: CleanerCategory,
     last_sent_at: Option<Instant>,
@@ -500,6 +537,8 @@ mod tests {
     use crate::cleaner::core::risk::RiskLevel;
     use crate::cleaner::core::scan_root::{AggregateMode, ScanRoot};
 
+    use super::same_filesystem;
+
     struct RecordingSink(Arc<Mutex<Vec<ScanProgress>>>);
 
     impl ProgressSink for RecordingSink {
@@ -542,5 +581,101 @@ mod tests {
         assert_eq!(result.scanned_entries, 2);
 
         fs::remove_dir_all(&temp).expect("removes temp tree");
+    }
+
+    fn whole_root(path: std::path::PathBuf) -> ScanRoot {
+        ScanRoot {
+            path,
+            max_depth: None,
+            follow_symlinks: false,
+            cross_filesystems: false,
+            include_hidden: true,
+            aggregate_mode: AggregateMode::WholeRoot,
+            permission: None,
+            risk: RiskLevel::SafeRecreatable,
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_hard_linked_file_is_only_counted_once() {
+        let temp =
+            std::env::temp_dir().join(format!("dodo-cleaner-fs-hardlink-{}", std::process::id()));
+        fs::create_dir_all(&temp).expect("creates root");
+        let original = temp.join("original.bin");
+        fs::write(&original, vec![0u8; 100]).expect("writes original");
+        std::fs::hard_link(&original, temp.join("linked.bin")).expect("creates a hard link");
+        // An ordinary, non-linked file must still be counted normally.
+        fs::write(temp.join("unrelated.bin"), vec![0u8; 50]).expect("writes unrelated file");
+
+        let result = scan_root(
+            &whole_root(temp.clone()),
+            CleanerCategory::UserCache,
+            &RecordingSink(Arc::new(Mutex::new(Vec::new()))),
+            &CancellationToken::new(),
+        )
+        .expect("scans");
+
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].logical_size, 150);
+        assert_eq!(result.scanned_entries, 2);
+
+        fs::remove_dir_all(&temp).expect("removes temp tree");
+    }
+
+    #[test]
+    fn unicode_and_space_containing_names_are_scanned_like_any_other() {
+        let temp =
+            std::env::temp_dir().join(format!("dodo-cleaner-fs-unicode-{}", std::process::id()));
+        fs::create_dir_all(&temp).expect("creates root");
+        fs::write(temp.join("café ☕ résumé.txt"), vec![0u8; 12]).expect("writes unicode file");
+
+        let result = scan_root(
+            &whole_root(temp.clone()),
+            CleanerCategory::UserCache,
+            &RecordingSink(Arc::new(Mutex::new(Vec::new()))),
+            &CancellationToken::new(),
+        )
+        .expect("scans a unicode filename without error");
+
+        assert_eq!(result.entries[0].logical_size, 12);
+        fs::remove_dir_all(&temp).expect("removes temp tree");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn newline_containing_names_are_scanned_like_any_other() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let temp =
+            std::env::temp_dir().join(format!("dodo-cleaner-fs-newline-{}", std::process::id()));
+        fs::create_dir_all(&temp).expect("creates root");
+        let name = OsStr::from_bytes(b"weird\nname.txt");
+        fs::write(temp.join(name), vec![0u8; 7]).expect("writes newline-named file");
+
+        let result = scan_root(
+            &whole_root(temp.clone()),
+            CleanerCategory::UserCache,
+            &RecordingSink(Arc::new(Mutex::new(Vec::new()))),
+            &CancellationToken::new(),
+        )
+        .expect("scans a newline-containing filename without error");
+
+        assert_eq!(result.entries[0].logical_size, 7);
+        fs::remove_dir_all(&temp).expect("removes temp tree");
+    }
+
+    #[test]
+    fn same_filesystem_allows_crossing_only_when_explicitly_enabled() {
+        // No device information (as on a platform where `device_id` cannot
+        // determine one) must never block traversal by itself.
+        assert!(same_filesystem(None, Some(1), false));
+        assert!(same_filesystem(Some(1), None, false));
+        // Same device: always fine, regardless of the flag.
+        assert!(same_filesystem(Some(1), Some(1), false));
+        // Different device: blocked unless `cross_filesystems` opts in.
+        assert!(!same_filesystem(Some(1), Some(2), false));
+        assert!(same_filesystem(Some(1), Some(2), true));
     }
 }

@@ -218,9 +218,74 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::cleaner::core::category::CleanerCategory;
+    use crate::cleaner::core::errors::SafetyError;
     use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata};
     use crate::cleaner::core::risk::{RiskLevel, SelectionPolicy};
+    use crate::cleaner::core::safety::validate_path;
     use crate::cleaner::macos::cleanup::policy_for;
+
+    fn sample_item(category: CleanerCategory, path: PathBuf) -> CleanableItem {
+        CleanableItem {
+            id: CleanableItemId(1),
+            category,
+            group: None,
+            display_name: String::new(),
+            path,
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::SafeRecreatable,
+            selection_policy: SelectionPolicy::SelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        }
+    }
+
+    /// The ticket's "Home-directory rejection" and "Application-directory
+    /// rejection" safety tests, run against the *real* policy `policy_for`
+    /// builds (not a synthetic one), so this fails the moment a future edit
+    /// ever drops `/Users/<name>` or `/Applications` from `protected_paths`.
+    #[test]
+    fn the_real_policy_protects_home_and_applications_regardless_of_category() {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .expect("HOME must be set to run this test");
+        let policy = policy_for(&sample_item(CleanerCategory::UserCache, home.clone()));
+
+        assert!(
+            matches!(
+                validate_path(home.as_path(), CleanerCategory::UserCache, &policy),
+                Err(SafetyError::ProtectedPath(_))
+            ),
+            "the home directory itself must never validate for deletion"
+        );
+        assert!(
+            matches!(
+                validate_path(
+                    std::path::Path::new("/Applications"),
+                    CleanerCategory::InstalledApps,
+                    &policy
+                ),
+                Err(SafetyError::ProtectedPath(_))
+            ),
+            "/Applications itself must never validate for deletion, even for the one category \
+             whose allowed roots live inside it"
+        );
+        assert!(
+            matches!(
+                validate_path(
+                    std::path::Path::new("/System"),
+                    CleanerCategory::SystemJunk,
+                    &policy
+                ),
+                Err(SafetyError::ProtectedPath(_))
+            ),
+            "/System must never validate for deletion"
+        );
+    }
 
     #[test]
     fn user_cache_policy_has_explicit_allowed_roots() {
