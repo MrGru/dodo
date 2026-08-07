@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod ai_app_provider;
 pub mod cancellation;
 pub mod category;
 pub mod errors;

@@ -1,3 +1,5 @@
+mod ai_app_providers;
+pub(crate) mod ai_apps;
 pub(crate) mod homebrew_cache;
 mod installed_apps;
 mod large_old_files;
@@ -14,6 +16,7 @@ use std::sync::Arc;
 
 use crate::cleaner::core::scanner::CleanerScanner;
 
+pub use ai_apps::AiAppsScanner;
 pub use homebrew_cache::HomebrewCacheScanner;
 pub use installed_apps::InstalledAppsScanner;
 pub use large_old_files::LargeOldFilesScanner;
@@ -37,5 +40,6 @@ pub fn default_scanners() -> Vec<Arc<dyn CleanerScanner>> {
         Arc::new(XcodeJunkScanner::new()),
         Arc::new(HomebrewCacheScanner::new()),
         Arc::new(NodeToolingCacheScanner::new()),
+        Arc::new(AiAppsScanner::new()),
     ]
 }

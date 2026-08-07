@@ -135,6 +135,31 @@
     Yarn Berry's directory from Yarn Classic's own immediate-children enumeration (and, more
     generally, excludes any immediate child that is also another provider's own location) rather
     than double-reporting the same cache under two provider names.
+- **AI Apps (Phase 12)** — Ollama and LM Studio via one registry (`core::ai_app_provider`), driven by
+  `macos::scanners::ai_apps`:
+  - **Neither app's exact macOS bundle identifier is confidently known.** Both `OLLAMA_BUNDLE_IDS`
+    and `LM_STUDIO_BUNDLE_IDS` (`macos::scanners::ai_app_providers`) list more than one candidate; a
+    wrong guess only means the "app is running" warning never fires for that app — nothing in this
+    phase depends on the check succeeding for correctness, only for a nicer warning.
+  - **LM Studio's exact model directory is not confidently known**, so both plausible candidates
+    (`~/.cache/lm-studio/models` and `~/Library/Application Support/LM Studio/models`) are checked;
+    whichever does not exist on a given machine is simply skipped as a missing root, the same way
+    every other scanner here treats an absent optional root.
+  - **Neither app registers a `TemporaryDownloads` or `ChatHistory` root.** There is no
+    version-stable, confidently-known on-disk convention for either sub-category for either app —
+    the same "report nothing rather than guess at a layout" posture Node Tooling's Nub provider
+    took. The `AiAppRole` variants and their `NeverBulkSelect`/scan-only enforcement exist and are
+    unit-tested with a synthetic provider, so a future session that does know a real path only has
+    to register it.
+  - **Model name extraction is Ollama-only.** `ai_app_providers::collect_ollama_model_names` reads
+    Ollama's manifest tree structure (directory and file *names* only, never a manifest's JSON body
+    or model weights) to populate `AiAppMetadata::model_names`. LM Studio has no equivalent this
+    phase; its `Models` items always carry an empty `model_names`.
+  - **No CLI process call.** Neither `ollama` nor any LM Studio CLI is invoked — filesystem-convention
+    detection only, the same reasoning Node Tooling Cache and Homebrew Cache used.
+  - Models, Application support and Chat history are scan-only this phase (never allow-listed for
+    cleanup, regardless of what a future UI bug might let a user select) — only Logs and Cache can
+    ever be moved to Trash through Cleaner.
 - Non-macOS support is intentionally unavailable and shown as such in UI.
 
 These limitations are intentional: the implementation now has shared traversal, selection, Finder reveal, and Trash groundwork, but broader categories remain blocked until permission, more scanners, and deeper app-analysis phases are in place.

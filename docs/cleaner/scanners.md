@@ -218,6 +218,59 @@ Current behavior:
   filesystem convention for Nub this phase can point at with confidence, unlike nvm/fnm/Volta. See
   `docs/cleaner/known-limitations.md`.
 
+### AI Apps scanner
+
+One `AiAppDefinition` registry (`src/cleaner/core/ai_app_provider.rs` — plain data, no macOS API, no
+GPUI) listing two providers today (`src/cleaner/macos/scanners/ai_app_providers.rs`: Ollama, LM
+Studio), driven by one scanner, `src/cleaner/macos/scanners/ai_apps.rs`. Unlike Node Tooling Cache,
+almost every judgment call is centralized on `AiAppRole` — Logs, Temporary downloads, Cache, Models,
+Application support, Chat history, the six sub-categories the ticket names explicitly — rather than
+decided per provider, because the ticket states these rules once ("Models are user-managed assets and
+never selected by default", "Chat history requires explicit opt-in") and means them to apply
+identically to every current and future provider.
+
+| Role | Risk | Selected by default | Allow-listed for cleanup |
+|---|---|---|---|
+| Logs | SafeRecreatable | yes | yes |
+| Cache | SafeRecreatable | yes | yes |
+| Temporary downloads | SafeRecreatable | no | no (no provider registers one this phase) |
+| Application support | UserData | no | no |
+| Models | UserData | never (`NeverBulkSelect`) | no |
+| Chat history | UserData | never (`NeverBulkSelect`) | no (no provider registers one this phase) |
+
+Roots registered today:
+
+| App | Role | Path |
+|---|---|---|
+| Ollama | Models | `~/.ollama/models` |
+| Ollama | Application support | `~/Library/Application Support/Ollama` |
+| Ollama | Logs | `~/Library/Logs/Ollama` |
+| Ollama | Cache | `~/Library/Caches/Ollama` |
+| LM Studio | Models | `~/.cache/lm-studio/models` and `~/Library/Application Support/LM Studio/models` (both checked; either may be absent) |
+| LM Studio | Application support | `~/Library/Application Support/LM Studio` |
+| LM Studio | Logs | `~/Library/Application Support/LM Studio/logs` |
+| LM Studio | Cache | `~/Library/Caches/LM Studio` |
+
+Current behavior:
+
+- a `Logs`/`Cache` root is scanned with `AggregateMode::ImmediateChildren` (each log file or cache
+  entry is its own item, same reasoning as `xcode_junk`/`homebrew_cache`); every other role is scanned
+  as one `AggregateMode::WholeRoot` item, safe here specifically because those roles never get
+  `ItemCapability::MoveToTrash`, so there is no allow-listed root an item's path could collide with;
+- `ai_apps::cleanup_allowed_roots` reruns the registry and keeps only `AiAppRole::allow_cleanup()`
+  locations (Logs, Cache), so `macos::cleanup::policy_for` can never allow-list Models or Application
+  support even if a future UI bug tried to offer it;
+- for Ollama's `Models` root only, `ai_app_providers::collect_ollama_model_names` walks the manifest
+  tree's directory and file *names* (never a manifest's JSON body or any model weight) to populate
+  `AiAppMetadata::model_names` for display; LM Studio has no confidently-known equivalent convention
+  this phase, so its `Models` items always carry an empty `model_names` — see
+  `docs/cleaner/known-limitations.md`;
+- `scan()` checks once per app whether it is currently running (`platform::is_any_bundle_running`, a
+  read-only `NSRunningApplication` check against a list of *candidate* bundle identifiers, since
+  neither app's exact macOS bundle identifier is confidently known here) and attaches a warning to
+  every item that app produced plus one category-level warning — this warns, never blocks, the same
+  posture `xcode_junk` established for Xcode.
+
 ### Unimplemented categories
 
 - Categories without a real scanner are surfaced as partial “coming later” results by the state layer.
