@@ -47,14 +47,23 @@ fn main() {
         return;
     }
 
-    // dodo opens exactly one window, so closing it must end the process rather
-    // than leave a windowless app in the macOS Dock. `QuitMode::Default` is
-    // `Explicit` on macOS (the AppKit convention) and `LastWindowClosed`
-    // everywhere else; stating `LastWindowClosed` makes every platform behave
-    // the same. GPUI runs the check itself, after the window has been removed
-    // and its close observers have run, which is why nothing here has to quit
-    // from a window callback. Dialogs are in-window layers, not OS windows, so
-    // they never reach this path.
+    // Closing the window ends the process, so dodo never sits windowless in the
+    // macOS Dock with no way back. `QuitMode::Default` is `Explicit` on macOS
+    // (the AppKit convention) and `LastWindowClosed` everywhere else; stating
+    // `LastWindowClosed` makes every platform behave the same. GPUI runs the
+    // check itself, after the window has been removed and its close observers
+    // have run, which is why nothing here has to quit from a window callback.
+    // Dialogs are in-window layers, not OS windows, so they never reach this
+    // path.
+    //
+    // **The macOS menu bar item overrides this at runtime, and deliberately not
+    // here.** Once a status item exists there *is* a way back, so `tray::init`
+    // switches to `QuitMode::Explicit` and closing the window leaves dodo
+    // running behind its menu bar icon. Setting `Explicit` statically instead
+    // would be a trap: a tray that failed to come up would leave a process with
+    // no window, no menu bar and no icon — unquittable except from Activity
+    // Monitor. Deriving the mode from the status item actually existing makes
+    // that state unreachable.
     let app = gpui_platform::application()
         .with_assets(Assets)
         .with_quit_mode(QuitMode::LastWindowClosed);
@@ -96,15 +105,6 @@ fn main() {
         // main thread — which this closure is.
         #[cfg(target_os = "macos")]
         window_icon::set_macos_dock_icon();
-        // The menu bar item. Same two requirements as the dock icon above and
-        // met the same way — the `NSApplication` exists and this closure is the
-        // main thread — plus one more that only this needs: gpui calls us from
-        // inside `applicationDidFinishLaunching:`, so `[NSApp run]`'s loop is
-        // already going, which is what `tray-icon` asks for. It opens no window
-        // and cannot fail upward; a tray that does not come up is one line on
-        // stderr.
-        #[cfg(target_os = "macos")]
-        tray::init(cx);
 
         cx.spawn(async move |cx| {
             // `session.json` decides the theme, the font size and the window
@@ -115,64 +115,88 @@ fn main() {
             // session restoration existed.
             session::load(cx).await;
 
-            let window_options = cx.update(|cx| {
+            cx.update(|cx| {
                 // Theme, font size, border radius and language, in that
                 // order — see `settings::apply_session`.
                 settings::apply_session(cx);
+                // The menu bar item, **after** the session is known and before
+                // the window exists. Two requirements it shares with the dock
+                // icon above — the `NSApplication` exists, and this is the main
+                // thread, which a foreground task still is — plus two of its
+                // own. `[NSApp run]`'s loop is already going, which is what
+                // `tray-icon` asks for; and the remembered keyboard input
+                // language has just been read, so the menu bar opens on the
+                // right glyph instead of drawing English and correcting itself
+                // a frame later. It opens no window and cannot fail upward: a
+                // tray that does not come up is one line on stderr.
+                #[cfg(target_os = "macos")]
+                tray::init(cx);
 
-                WindowOptions {
-                    // The saved rectangle has already been placed against
-                    // the displays that exist now, so an unplugged monitor
-                    // or a changed resolution arrives here as `None` or as
-                    // a corrected rectangle, never as somewhere
-                    // unreachable. `session::models::geometry` is where
-                    // that judgement lives.
-                    window_bounds: Some(
-                        session::Session::window_bounds(cx)
-                            .unwrap_or_else(|| session::default_window_bounds(cx)),
-                    ),
-                    // The monitor the window was on, when it is still attached.
-                    // Paired with the rectangle above rather than optional
-                    // decoration: on macOS every coordinate gpui reports is
-                    // display-*local*, so the rectangle alone cannot say which
-                    // screen it meant. `Session::window_display` has the detail.
-                    display_id: session::Session::window_display(cx),
-                    // Stops a resize drag before the layout has to cope:
-                    // the icon rail plus the main pane at its minimum.
-                    // `layout::window_min_size` derives it, and the scroll
-                    // container in `Layout::render` is what covers the case
-                    // where a platform ignores this. A *restored* window is
-                    // held to the same floor by `geometry::place`, which
-                    // this option cannot do for it — the platform only
-                    // polices dragging.
-                    window_min_size: Some(layout::window_min_size()),
-                    // What a Linux desktop matches `assets/linux/dodo.desktop`
-                    // against to find the icon; inert on macOS and Windows.
-                    // See `window_icon::APP_ID` for why the value is not
-                    // arbitrary.
-                    app_id: Some(window_icon::APP_ID.to_owned()),
-                    // `icon` exists on every platform and is read by
-                    // exactly one — GPUI's X11 backend, which writes it
-                    // into `_NET_WM_ICON`. The `cfg` on the *field* rather
-                    // than a function returning `None` elsewhere is what
-                    // keeps `image` a Linux-only dependency: no other
-                    // target ever names the type. `..Default::default()`
-                    // supplies the `None` they get instead.
-                    #[cfg(target_os = "linux")]
-                    icon: window_icon::x11_icon(),
-                    ..Default::default()
-                }
+                open_main_window(cx).expect("Failed to open window");
             });
-
-            cx.open_window(window_options, |window, cx| {
-                let view = cx.new(|cx| DodoApp::new(window, cx));
-                // This first level on the window, should be a Root.
-                cx.new(|cx| Root::new(view, window, cx))
-            })
-            .expect("Failed to open window");
         })
         .detach();
     });
+}
+
+/// Opens dodo's one window, restored the way the session left it.
+///
+/// **Extracted so the menu bar item's "Open Dodo" can call it too.** A user who
+/// closed the window keeps the process — see `tray::init` — and reopening has to
+/// go through exactly this, or the window comes back ignoring its saved
+/// rectangle, its saved display and the layout's minimum size. A second copy of
+/// these options that drifts from this one is the bug this shape prevents.
+///
+/// Fallible rather than panicking, because the tray's caller must not take the
+/// process down; `main` still treats a failure at launch as fatal.
+fn open_main_window(cx: &mut App) -> Result<WindowHandle<Root>> {
+    let options = window_options(cx);
+    cx.open_window(options, |window, cx| {
+        let view = cx.new(|cx| DodoApp::new(window, cx));
+        // This first level on the window, should be a Root.
+        cx.new(|cx| Root::new(view, window, cx))
+    })
+}
+
+/// Where and how the window opens. Read from the session every time, so a
+/// reopen honours a rectangle the user has moved since launch.
+fn window_options(cx: &mut App) -> WindowOptions {
+    WindowOptions {
+        // The saved rectangle has already been placed against the displays
+        // that exist now, so an unplugged monitor or a changed resolution
+        // arrives here as `None` or as a corrected rectangle, never as
+        // somewhere unreachable. `session::models::geometry` is where that
+        // judgement lives.
+        window_bounds: Some(
+            session::Session::window_bounds(cx)
+                .unwrap_or_else(|| session::default_window_bounds(cx)),
+        ),
+        // The monitor the window was on, when it is still attached. Paired with
+        // the rectangle above rather than optional decoration: on macOS every
+        // coordinate gpui reports is display-*local*, so the rectangle alone
+        // cannot say which screen it meant. `Session::window_display` has the
+        // detail.
+        display_id: session::Session::window_display(cx),
+        // Stops a resize drag before the layout has to cope: the icon rail plus
+        // the main pane at its minimum. `layout::window_min_size` derives it,
+        // and the scroll container in `Layout::render` is what covers the case
+        // where a platform ignores this. A *restored* window is held to the same
+        // floor by `geometry::place`, which this option cannot do for it — the
+        // platform only polices dragging.
+        window_min_size: Some(layout::window_min_size()),
+        // What a Linux desktop matches `assets/linux/dodo.desktop` against to
+        // find the icon; inert on macOS and Windows. See `window_icon::APP_ID`
+        // for why the value is not arbitrary.
+        app_id: Some(window_icon::APP_ID.to_owned()),
+        // `icon` exists on every platform and is read by exactly one — GPUI's
+        // X11 backend, which writes it into `_NET_WM_ICON`. The `cfg` on the
+        // *field* rather than a function returning `None` elsewhere is what
+        // keeps `image` a Linux-only dependency: no other target ever names the
+        // type. `..Default::default()` supplies the `None` they get instead.
+        #[cfg(target_os = "linux")]
+        icon: window_icon::x11_icon(),
+        ..Default::default()
+    }
 }
 
 /// Makes Cmd-W do what the red close button does.
@@ -184,6 +208,15 @@ fn main() {
 /// window exactly as GPUI's own platform close callback does
 /// (`Window::remove_window`), which drops the platform window and lands on the
 /// same quit path.
+///
+/// **Since the menu bar item shipped, that path no longer ends the process.**
+/// `tray::init` moves the quit mode to `QuitMode::Explicit` once the status item
+/// exists, so Cmd-W now *hides* dodo: the window goes, the process and the menu
+/// bar item stay, and **Quit Dodo** in that menu is the way out. The binding
+/// itself is unchanged and still correct — it is the same close the red button
+/// performs — but do not read it as a quit shortcut any more. When the tray
+/// fails to come up the quit mode is never switched, and this closes dodo
+/// exactly as it always did.
 ///
 /// macOS only. Windows and Linux close a single-window app with Alt-F4, and
 /// Ctrl-W is not free there — it is "delete previous word" in a text field.

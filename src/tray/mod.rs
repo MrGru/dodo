@@ -76,10 +76,11 @@ pub mod menu;
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt as _;
-use gpui::{App, BorrowAppContext as _, Global, Task};
+use gpui::{App, BorrowAppContext as _, Global, QuitMode, Task, WeakEntity};
 use tray_icon::menu::MenuEvent;
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
+use crate::layout::Layout;
 use crate::tray::input_language::InputLanguage;
 use crate::tray::menu::{TrayCommand, TrayMenu};
 
@@ -125,6 +126,14 @@ pub struct Tray {
     /// [`i18n::Language`](crate::i18n::Language), which is dodo's interface
     /// language and lives in its own global.
     input_language: InputLanguage,
+    /// The pane, so the Settings row can open the dialog it belongs to.
+    ///
+    /// Published by [`Layout::new`] rather than fetched from here, because the
+    /// window can be closed and rebuilt: every rebuild constructs a new
+    /// `Layout` and re-publishes, so the handle refreshes itself. Weak, and a
+    /// handle that will not upgrade degrades to "just show the window", which
+    /// is the right failure.
+    layout: Option<WeakEntity<Layout>>,
     /// The drain task. Held rather than detached so that delivery stops when
     /// the global is dropped, and so the listener cannot outlive the icon it
     /// speaks for.
@@ -135,19 +144,6 @@ pub struct Tray {
 impl Global for Tray {}
 
 impl Tray {
-    /// The selected keyboard input language, or the default before [`init`] has
-    /// run.
-    ///
-    /// **Not dodo's interface language** — that is `i18n::Language::current`.
-    #[allow(
-        dead_code,
-        reason = "the public read side; the launch restore that uses it is phase 4. Remove the allow when `init` takes a language."
-    )]
-    pub fn input_language(cx: &App) -> InputLanguage {
-        cx.try_global::<Tray>()
-            .map_or_else(InputLanguage::default, |tray| tray.input_language)
-    }
-
     /// Selects `language` for keyboard input: re-checks the menu, swaps the
     /// menu bar mark, and remembers the choice in `session.json`.
     ///
@@ -201,6 +197,32 @@ impl Tray {
     }
 }
 
+/// The input language to open on, given whatever `session.json` had.
+///
+/// Pure, so the rule it encodes is a test rather than something to discover by
+/// hand-editing a file: **nothing here is a reason to refuse to start.** Never
+/// chosen, a code from a later dodo that had a language this build does not,
+/// and a hand-typed mistake all land on the default — the same posture
+/// `View::shown` takes for a stored tool code.
+fn restored_language(stored: Option<String>) -> InputLanguage {
+    stored
+        .as_deref()
+        .and_then(InputLanguage::from_code)
+        .unwrap_or_default()
+}
+
+/// Hands the tray the pane it needs for the Settings row.
+///
+/// Called from [`Layout::new`], which runs once per window — including the
+/// window the tray itself rebuilds — so the handle is refreshed rather than
+/// stale. A no-op when the tray never came up.
+pub fn attach_layout(layout: WeakEntity<Layout>, cx: &mut App) {
+    if cx.try_global::<Tray>().is_none() {
+        return;
+    }
+    cx.update_global::<Tray, _>(|tray, _| tray.layout = Some(layout));
+}
+
 /// One event from either of the two global channels `tray-icon` owns.
 ///
 /// Only menu events carry a command today. Tray events — clicks, enter, leave,
@@ -223,7 +245,7 @@ enum Signal {
 pub fn init(cx: &mut App) {
     let receiver = install_event_handlers();
 
-    let language = InputLanguage::default();
+    let language = restored_language(crate::session::Session::input_language(cx));
     let menu = TrayMenu::new(language, cx);
 
     let mut builder = TrayIconBuilder::new()
@@ -258,8 +280,18 @@ pub fn init(cx: &mut App) {
         icon,
         menu,
         input_language: language,
+        layout: None,
         events,
     });
+
+    // **Only now**, and never statically in `main.rs`. Closing the window stops
+    // ending the process, which is what the captain asked for — but dodo
+    // installs no menu bar, so there is no Cmd-Q, and the tray's Quit becomes
+    // the only way out. Deriving the mode from the status item actually
+    // existing means the one state that would be unquittable — no window, no
+    // menu bar, no tray — cannot be reached: if `build` above had failed, this
+    // line was never run and closing the window still quits.
+    cx.set_quit_mode(QuitMode::Explicit);
     note("menu bar item ready");
 }
 
@@ -298,6 +330,7 @@ async fn drain(mut receiver: UnboundedReceiver<Signal>, cx: &mut gpui::AsyncApp)
         cx.update(|cx| match command {
             TrayCommand::OpenDodo => open_dodo(cx),
             TrayCommand::SelectInputLanguage(language) => Tray::set_input_language(language, cx),
+            TrayCommand::OpenSettings => open_settings(cx),
             TrayCommand::Quit => cx.quit(),
         });
     }
@@ -314,7 +347,34 @@ fn open_dodo(cx: &mut App) {
     cx.activate(true);
     if let Some(window) = cx.windows().first().cloned() {
         let _ = window.update(cx, |_, window, _| window.activate_window());
+        return;
     }
+    // The user closed it and the process stayed. Rebuild through `main`'s own
+    // path so the window comes back with its saved rectangle, its saved display
+    // and the layout's minimum size — never `WindowOptions::default()`.
+    if let Err(error) = crate::open_main_window(cx) {
+        problem(&format!("could not reopen the window: {error}"));
+    }
+}
+
+/// Shows the window, then opens the Settings dialog inside it.
+///
+/// The dialog is an in-window layer, not an OS window, so it needs a window to
+/// live in first — and after a close there may not be one.
+fn open_settings(cx: &mut App) {
+    open_dodo(cx);
+
+    let Some(layout) = cx.try_global::<Tray>().and_then(|tray| tray.layout.clone()) else {
+        // No pane published yet: the window is on screen, which is most of what
+        // was asked for, and the user is one click from Settings themselves.
+        return;
+    };
+    let Some(window) = cx.windows().first().cloned() else {
+        return;
+    };
+    let _ = window.update(cx, |_, window, cx| {
+        crate::settings::open(layout, window, cx);
+    });
 }
 
 #[cfg(test)]
@@ -407,6 +467,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_remembered_input_language_comes_back() {
+        for language in InputLanguage::ALL {
+            assert_eq!(
+                restored_language(Some(language.code().to_owned())),
+                language
+            );
+        }
+    }
+
+    /// Every way the stored value can be useless, and all of them open dodo.
+    #[test]
+    fn an_unusable_stored_code_falls_back_rather_than_failing() {
+        assert_eq!(restored_language(None), InputLanguage::default());
+        assert_eq!(
+            restored_language(Some("ko".to_owned())),
+            InputLanguage::default(),
+            "a language a later dodo added must not stop this one starting"
+        );
+        assert_eq!(
+            restored_language(Some(String::new())),
+            InputLanguage::default()
+        );
     }
 
     /// The persistence half. The tray writes `tray.input_language`; writing

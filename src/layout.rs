@@ -504,6 +504,15 @@ impl Layout {
     /// question the sidebar round left open as being above that worker. See
     /// [`crate::session`].
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // The menu bar item's Settings row opens this pane's dialog, and
+        // `settings::open` needs a handle to the pane. Published here rather
+        // than fetched there because the window can be closed and rebuilt while
+        // the process lives on: every rebuild runs this and refreshes the
+        // handle. A `cfg` for the same reason `main.rs` has one around the dock
+        // icon — the tray module does not exist off macOS.
+        #[cfg(target_os = "macos")]
+        crate::tray::attach_layout(cx.entity().downgrade(), cx);
+
         // dodo opens in normal mode, so the pane takes focus straight away. See
         // [`Layout::focus`] for why that has to be someone's rather than nobody's.
         let focus = cx.focus_handle();
