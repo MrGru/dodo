@@ -35,10 +35,6 @@
 /// what is missing, and `icon::tests::every_input_language_has_an_embedded_asset`
 /// turns a forgotten asset into a failing test rather than a blank menu bar.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-#[allow(
-    dead_code,
-    reason = "phase 2 ships only the English mark; the menu that constructs the other two is phase 3. Remove the allow with that menu."
-)]
 pub enum InputLanguage {
     #[default]
     English,
@@ -48,10 +44,6 @@ pub enum InputLanguage {
 
 impl InputLanguage {
     /// Every input language, in the order the menu lists them.
-    #[allow(
-        dead_code,
-        reason = "read by the tests and by phase 3's menu builder. Remove the allow with that menu."
-    )]
     pub const ALL: [InputLanguage; 3] = [
         InputLanguage::English,
         InputLanguage::Vietnamese,
@@ -80,10 +72,6 @@ impl InputLanguage {
     /// "Tiếng Việt" reads the same to an English user as to a Vietnamese one.
     /// `i18n::Language::label` already applies this rule to the Settings
     /// picker; the two arrived at it independently and share no code.
-    #[allow(
-        dead_code,
-        reason = "the menu row's text, which phase 3 builds. Remove the allow with that menu."
-    )]
     pub fn label(self) -> &'static str {
         match self {
             InputLanguage::English => "English",

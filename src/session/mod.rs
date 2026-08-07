@@ -180,6 +180,27 @@ impl Session {
         Self::edit(cx, |document| document.workspace.tools = Some(tools));
     }
 
+    /// The menu bar item's **keyboard input** language, by
+    /// [`InputLanguage::code`](crate::tray::input_language::InputLanguage::code),
+    /// or `None` before one was ever chosen.
+    ///
+    /// **Not [`Session::language`]**, which is dodo's *interface* language.
+    /// They are two settings under two keys and nothing converts between them;
+    /// [`models::document::Tray`] carries the full warning.
+    #[allow(
+        dead_code,
+        reason = "the read side of a key phase 3 only writes; `tray::init` reads it at launch in phase 4. Remove the allow with that restore."
+    )]
+    pub fn input_language(cx: &App) -> Option<String> {
+        Self::read(cx, |document| document.tray.input_language.clone())
+    }
+
+    pub fn set_input_language(code: &'static str, cx: &mut App) {
+        Self::edit(cx, |document| {
+            document.tray.input_language = Some(code.to_owned());
+        });
+    }
+
     /// What went wrong with `session.json`, if anything.
     pub fn store_error(cx: &App) -> Option<Str> {
         cx.try_global::<Session>()

@@ -69,7 +69,12 @@ use serde::{Deserialize, Serialize};
 /// costs that build its restored session and nothing else, and the file
 /// survives. Reading *older* files is unaffected: a version-1 file has no
 /// `tools` key, which is the same as never having chosen.
-pub const SCHEMA_VERSION: u32 = 2;
+///
+/// **Bumped to 3 when the tray's keyboard input language joined it**, for
+/// exactly the same reason and with exactly the same trade. [`Tray`] is a new
+/// top-level section rather than another [`Appearance`] field, and that is a
+/// decision rather than tidiness — see its own doc.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Everything dodo restores when it reopens.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -86,6 +91,9 @@ pub struct SessionDocument {
     /// Which tool was open, and how the sidebar was showing it.
     #[serde(default)]
     pub workspace: Workspace,
+    /// The menu bar item's own setting. See [`Tray`].
+    #[serde(default)]
+    pub tray: Tray,
 }
 
 fn schema_version() -> u32 {
@@ -100,6 +108,39 @@ impl SessionDocument {
             ..Self::default()
         }
     }
+}
+
+/// The menu bar item's remembered state.
+///
+/// # Why a whole section for one field
+///
+/// Because the field it must **not** be confused with — [`Appearance::language`]
+/// — is a few lines above it, and the JSON is where that confusion would start.
+/// dodo has two language settings:
+///
+/// - `appearance.language` is the **interface** language, changed in the
+///   Settings dialog, and it decides what every `Str` renders as.
+/// - `tray.input_language` is the **keyboard input** language, changed in the
+///   menu bar, and it decides one thing: which glyph the menu bar mark carries.
+///
+/// The captain settled on 2026-08-07 that they never merge — no shared type, no
+/// shared code table, no shared key, and lists that are already different
+/// (the tray has Japanese; the interface does not). Folding this into
+/// [`Appearance`] because both happen to hold a two-letter code would be the
+/// first step back towards the merge, so it gets its own section and the
+/// separation is visible in the file itself.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Tray {
+    /// An
+    /// [`InputLanguage::code`](crate::tray::input_language::InputLanguage::code),
+    /// or `None` before the user has ever picked one. A code this build does
+    /// not know falls back to the default rather than refusing to start.
+    ///
+    /// **Not an [`Appearance::language`].** The two vocabularies overlap in
+    /// spelling today and mean different things; nothing may translate between
+    /// them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_language: Option<String>,
 }
 
 /// The appearance settings, each `None` until the user picks one.
@@ -232,6 +273,26 @@ fn shown() -> bool {
 mod tests {
     use super::{SCHEMA_VERSION, SessionDocument, ToolRecord, WindowMode, WindowRecord};
 
+    /// The two language settings sit in two sections, and the JSON is where
+    /// anyone tidying them together would start. Pinning the shape here means
+    /// a merge has to delete a test rather than pass one.
+    #[test]
+    fn the_two_language_settings_are_separate_keys() {
+        let mut document = SessionDocument::new();
+        document.appearance.language = Some("vi".to_owned());
+        document.tray.input_language = Some("ja".to_owned());
+
+        let json = serde_json::to_string(&document).expect("serializes");
+        assert!(
+            json.contains(r#""appearance":{"language":"vi"}"#),
+            "the interface language must stay in `appearance`:\n{json}"
+        );
+        assert!(
+            json.contains(r#""tray":{"input_language":"ja"}"#),
+            "the keyboard input language must stay in `tray`:\n{json}"
+        );
+    }
+
     #[test]
     fn a_first_run_document_carries_the_version_and_no_choices() {
         let document = SessionDocument::new();
@@ -239,6 +300,7 @@ mod tests {
         assert_eq!(document.appearance, Default::default());
         assert_eq!(document.window, None);
         assert_eq!(document.workspace, Default::default());
+        assert_eq!(document.tray, Default::default());
     }
 
     /// The point of the `Option`s: a document that has chosen nothing writes
@@ -249,7 +311,9 @@ mod tests {
         let json = serde_json::to_string(&SessionDocument::new()).expect("serializes");
         assert_eq!(
             json,
-            format!(r#"{{"version":{SCHEMA_VERSION},"appearance":{{}},"workspace":{{}}}}"#),
+            format!(
+                r#"{{"version":{SCHEMA_VERSION},"appearance":{{}},"workspace":{{}},"tray":{{}}}}"#
+            ),
         );
     }
 
@@ -280,6 +344,7 @@ mod tests {
                 enabled: false,
             },
         ]);
+        document.tray.input_language = Some("ja".to_owned());
 
         let json = serde_json::to_string(&document).expect("serializes");
         let read: SessionDocument = serde_json::from_str(&json).expect("parses");

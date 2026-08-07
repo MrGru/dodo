@@ -1289,6 +1289,7 @@ pub enum Str {
     // shown in their own language, so they never enter this mechanism. See
     // `tray::input_language::InputLanguage::label`.
     TrayOpenDodo,
+    TrayKeyboardInput,
     TrayQuitDodo,
 }
 
@@ -4495,6 +4496,11 @@ impl Str {
 
             (Str::TrayOpenDodo, Language::English) => "Open Dodo".into(),
             (Str::TrayOpenDodo, Language::Vietnamese) => "Mở Dodo".into(),
+            // Deliberately not "Language": in a status menu that word reads as
+            // dodo's *interface* language, which is the Settings dialog's and a
+            // different setting entirely. See `tray::input_language`.
+            (Str::TrayKeyboardInput, Language::English) => "Keyboard Input".into(),
+            (Str::TrayKeyboardInput, Language::Vietnamese) => "Bàn phím nhập".into(),
             (Str::TrayQuitDodo, Language::English) => "Quit Dodo".into(),
             (Str::TrayQuitDodo, Language::Vietnamese) => "Thoát Dodo".into(),
         }
@@ -5640,6 +5646,7 @@ mod tests {
             plain(Str::FeatureLastVisibleTool),
             // The macOS menu bar item.
             plain(Str::TrayOpenDodo),
+            plain(Str::TrayKeyboardInput),
             plain(Str::TrayQuitDodo),
         ]
     }
@@ -6473,7 +6480,8 @@ mod tests {
             Str::FeatureMoveDown => 812,
             Str::FeatureLastVisibleTool => 813,
             Str::TrayOpenDodo => 814,
-            Str::TrayQuitDodo => 815,
+            Str::TrayKeyboardInput => 815,
+            Str::TrayQuitDodo => 816,
         }
     }
 
