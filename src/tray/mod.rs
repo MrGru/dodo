@@ -76,7 +76,7 @@ pub mod menu;
 
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt as _;
-use gpui::{App, BorrowAppContext as _, Global, QuitMode, Task, WeakEntity};
+use gpui::{App, BorrowAppContext as _, Global, QuitMode, Subscription, Task, WeakEntity};
 use tray_icon::menu::MenuEvent;
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
@@ -139,6 +139,14 @@ pub struct Tray {
     /// speaks for.
     #[allow(dead_code, reason = "held for its Drop; nothing reads it")]
     events: Task<()>,
+    /// Keeps the menu's own wording in dodo's **interface** language.
+    ///
+    /// Needed because an `NSMenu` is not a gpui window:
+    /// `i18n::Language::set` repaints every window and cannot reach the menu
+    /// bar, so the tray has to hear about the change itself. Held rather than
+    /// detached, for the same reason as `events`.
+    #[allow(dead_code, reason = "held for its Drop; nothing reads it")]
+    localization: Subscription,
 }
 
 impl Global for Tray {}
@@ -276,12 +284,22 @@ pub fn init(cx: &mut App) {
 
     let events = cx.spawn(async move |cx| drain(receiver, cx).await);
 
+    // **Only the menu's own wording follows this**, never the selected input
+    // language and never the glyph. The three language rows are endonyms and do
+    // not move at all; see `TrayMenu::relabel`.
+    let localization = cx.observe_global::<crate::i18n::Language>(|cx| {
+        if let Some(tray) = cx.try_global::<Tray>() {
+            tray.menu.relabel(cx);
+        }
+    });
+
     cx.set_global(Tray {
         icon,
         menu,
         input_language: language,
         layout: None,
         events,
+        localization,
     });
 
     // **Only now**, and never statically in `main.rs`. Closing the window stops

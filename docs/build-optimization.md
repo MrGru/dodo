@@ -495,6 +495,64 @@ Two costs the round deliberately did **not** pay:
   the part a client running user-typed SQL against an unknown database cannot
   use.
 
+### What the system tray cost
+
+`src/tray/`: the macOS menu bar item, its native menu, the keyboard-input-language
+switcher and its `session.json` key — about 900 lines including tests, three SVG
+marks, and three new `Str` variants in both languages.
+
+| Configuration | Bytes | Δ vs control | Δ % |
+|---|---:|---:|---:|
+| Control — `bbf9e43` | 30,502,496 | — | — |
+| The same tree plus the round | 30,687,120 | **+184,624** | **+0.61%** |
+
+Both are `cargo build --release --locked` on the same machine and the same warm
+`target/`. `SOURCE_DATE_EPOCH` is not pinned here and does not need to be: the
+only wall-clock value `build.rs` embeds is a fixed-width ISO 8601 string, so its
+value can move but its length cannot.
+
+**The control is not this round's parent commit**, and that is deliberate rather
+than stale. The round was measured in isolation on `bbf9e43` and then rebased
+onto the cleaner round that landed alongside it, so these two rows still isolate
+what the tray costs — the same five packages and the same code — without mixing
+in the several MB that arrived from an unrelated direction. Re-measuring against
+the merge base would answer a different question.
+
+**Five new packages, and that is where nearly all of it goes**: `tray-icon`,
+`muda`, `crossbeam-channel`, `dpi` and `keyboard-types`. `once_cell`,
+`thiserror` and `png` were already in the graph, and `futures-channel` — the
+`Send + Sync` seam that carries menu events into a gpui foreground task — is a
+promotion of an existing transitive dependency, so it costs nothing. The
+`objc2-app-kit` feature set widens considerably (`NSStatusBar`, `NSStatusItem`,
+`NSStatusBarButton`, `NSMenu`, `NSMenuItem`, `NSButton`, `NSCell`, `NSControl`,
+`NSView`, `NSEvent`, `NSTrackingArea`, …), but features are additive across a
+graph and a hand-written `NSStatusBar` would need essentially the same list, so
+that part is not attributable to the crate choice.
+
+The captain accepted this on 2026-08-07 knowing the number, the same way
+`sql-highlighting` was accepted. The alternative that was measured against it —
+calling `NSStatusBar`/`NSStatusItem` through the `objc2` crates dodo already
+depends on — costs **zero** new packages, and was rejected anyway on two
+grounds: it is a few hundred lines of `unsafe` responder-chain code that no CI
+on this project can exercise (the release workflow proves a binary runs by
+executing `--version` on a headless runner, which opens no status item), and it
+would have to be written twice more from scratch for Windows and Linux, which
+`tray-icon` already implements. `TrayIcon::ns_status_item()` keeps the raw
+`NSStatusItem` reachable, so nothing is locked away by the choice.
+
+Two costs the round deliberately did **not** pay:
+
+- **No new icon assets in the packaged output, and no PNGs at all.** The three
+  marks are SVGs under `assets/icons/tray/`, which `src/assets.rs`'s existing
+  `icons/**/*.svg` filter already embeds, rasterised at runtime through gpui's
+  own `SvgRenderer`. `scripts/generate-icons.py` is stdlib-only — its own PNG
+  codec and box filter, no PIL, no ImageMagick — so it could not have drawn a
+  glyph even if PNGs had been wanted.
+- **No icon cache.** Rasterising a mark is one SVG parse at 36×36 and happens
+  only when the user picks a different language from the menu. A
+  `HashMap<InputLanguage, Icon>` would be state to keep correct in exchange for
+  time nobody can perceive.
+
 ### Features deliberately not added
 
 - **`production` / `development` / `profiling`.** Nothing in this crate reads

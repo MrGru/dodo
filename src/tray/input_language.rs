@@ -94,10 +94,6 @@ impl InputLanguage {
     /// this one does not have, or a hand-edited file — which the caller turns
     /// into the default rather than a refusal to start. Same shape as
     /// [`View::lookup`](crate::layout::View::lookup).
-    #[allow(
-        dead_code,
-        reason = "the way back from `session.json`, which phase 3 writes and phase 4 reads. Remove the allow when the restore lands."
-    )]
     pub fn from_code(code: &str) -> Option<InputLanguage> {
         InputLanguage::ALL
             .into_iter()
