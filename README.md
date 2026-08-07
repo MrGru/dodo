@@ -64,14 +64,24 @@ What ships today:
   built from it, and a database URI opens the matching saved connection or
   creates one. `Esc` inside a text field leaves it and gets you back to that mode.
   When nothing is recognised confidently, nothing happens. It can be switched off
-  in Settings, where each format's matching pattern can also be edited; those
-  settings are the one thing in that dialog that survives a restart.
+  in Settings, where each format's matching pattern can also be edited. A tool
+  you have switched off in Settings → Features is not a paste target: its
+  detector is skipped entirely, so the text falls through to whatever else can
+  read it rather than reopening a tool you hid.
 
-The sidebar footer holds **Settings** (language, theme, font size, border radius,
-the script-execution policy and quick navigation) and **Check for updates**, an
-in-app updater that downloads a release, verifies its SHA-256, installs it and
-restarts. It can check on its own at startup, but never downloads anything
-without you pressing a button.
+The sidebar footer holds **Settings** and **Check for updates**, an in-app updater
+that downloads a release, verifies its SHA-256, installs it and restarts. It can
+check on its own at startup, but never downloads anything without you pressing a
+button.
+
+Settings covers language, theme, font size, border radius, the script-execution
+policy, quick navigation, and **Features** - which of the tools above the sidebar
+lists, and in what order. Drag a row by its handle or use the arrows to reorder
+it, and switch off the ones you do not use; at least one tool has to stay. Every
+one of these survives a restart except the script-execution policy, which goes
+back to asking about imported scripts at every launch on purpose. So do the
+window's size, position and display, the open tool, and whether the sidebar is
+collapsed.
 
 ## Tech stack
 
@@ -137,10 +147,49 @@ cargo build
 
 This opens a 900x620 centered window mounting the `DodoApp`.
 
+## Pre-push checks
+
+CI runs formatting and clippy as blocking jobs, so a push that fails either is a
+wasted round trip. The repo ships a `pre-push` hook that runs the same checks
+locally and refuses the push if any of them fails. Git does not version
+`.git/hooks`, so enable it once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+That is the whole setup — there is no install script, and the setting is local
+to your clone, so nobody is opted in without doing this. Note that it points git
+at `.githooks` for *all* hooks, so anything you keep in `.git/hooks` stops
+running.
+
+The hook runs, in this order and stopping at the first failure:
+
+```sh
+cargo fmt --all --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+```
+
+**Cost.** Cheapest first, so a formatting slip is caught in well under a second.
+With a warm `./target`, a green run of all three takes roughly **15 seconds**
+after a normal edit. It is much worse when the cache is cold — after
+`cargo clean`, a `Cargo.lock` change, or a toolchain bump, expect **several
+minutes**, because clippy and the test binary both have to build the whole
+dependency graph. The hook deliberately does not set its own `CARGO_TARGET_DIR`:
+sharing `./target` with everyday `cargo build` is what keeps the warm case cheap.
+A push that only deletes remote refs skips the checks entirely, since it uploads
+no code.
+
+**Bypass.** `git push --no-verify` skips the hook for one push. That is a
+supported way to use it — pushing a WIP branch, or a push whose failure you
+already know about. CI still runs the same checks.
+
 ## Project structure
 
 ```
 .
+├── .githooks/          # Tracked git hooks; see "Pre-push checks" above
 ├── Cargo.toml          # Package metadata and dependencies
 ├── build.rs            # Embeds build metadata (and the Windows .ico)
 ├── docs/               # Build optimization and release engineering
@@ -160,6 +209,7 @@ This opens a 900x620 centered window mounting the `DodoApp`.
 │   ├── database/       # Databases     ┘ components, views
 │   ├── updater/        # The in-app updater, same five layers
 │   ├── quick_nav/      # Clipboard detection and the normal-mode key bindings
+│   ├── session/        # session.json: appearance, window, open tool, tool list
 │   ├── app_icon.rs     # AppIcon enum mapping icon names to embedded SVG paths
 │   ├── assets.rs       # rust-embed AssetSource that loads embedded icons
 │   └── window_icon.rs  # Runtime window/Dock icon and the Linux app_id

@@ -4,18 +4,60 @@ description: How dodo's themes, font size, border radius and language switching 
 ---
 
 Two files own all of this: `src/settings.rs` (the dialog and the app-level state it edits) and
-`src/i18n.rs` (localization). Nothing *here* is persisted across restarts — appearance, language
-and Run scripts all reset to their default on launch.
+`src/i18n.rs` (localization).
 
-**One page in the dialog is the exception and is not owned by these two files.** The Quick
-navigation page is built by `settings.rs` but every value on it lives in `src/quick_nav/`, in the
-`QuickNav` global, and is saved to `quick-nav.json` — because its fields hold text the user typed
-(a detector pattern), and a pattern that expired each launch would make the field pointless.
-Copy that arrangement if a new setting needs to survive a restart: a store behind a trait in a
-`services/` module, a versioned document that refuses a higher version, load and save on the
-background executor, and a `SettingField` here whose closures read and write the global. Do **not**
-add persistence to the appearance settings by extending `settings.rs` itself; there is no storage
-there and there is deliberately none.
+**Everything on this page is persisted across restarts except one setting.** Theme, font size,
+border radius and language are saved to `session.json` — the captain asked for session restoration
+on 2026-08-06 — and re-applied by `settings::apply_session`, which `main` calls after
+`session::load` and **before the window opens**, so the first frame is already the user's theme
+rather than a flash of the default. `src/session/mod.rs` is the authority; this skill only owns how
+the settings themselves work.
+
+**The exception is `Run scripts`, and it is deliberate.** `ScriptPolicy` still resets to the
+cautious `Ask for imported` at every launch: it is the gate in front of running code that arrived
+inside someone else's collection file, not a preference about how the app looks, and "I allowed
+this once" is not "allow it every morning". Its approvals *are* persisted, per script, in
+`script-consent.json`. **Do not start persisting it** — that is the captain's call, not an
+implementation detail, and a security default that silently stops resetting is exactly the kind of
+change nobody notices until it matters.
+
+**Two globals back this page, and a new setting has to pick one.** Appearance and language write to
+the `Session` global (`session.json`); the Quick navigation page is built by `settings.rs` but every
+value on it lives in the `QuickNav` global (`quick-nav.json`), which predates session restoration
+and stays where it is. Either way the arrangement is the same and is the one to copy: a store behind
+a trait in a `services/` module, a versioned document that refuses a higher version, load and save
+on the background executor, coalesced writes, and a `SettingField` here whose closures read and
+write the global. Do **not** add storage to `settings.rs` itself; it has none and deliberately keeps
+none.
+
+**The Features page is the one that picks neither, and it is worth knowing why before copying it.**
+Which tools the sidebar lists is `Layout`'s state, because changing it has to move the main pane off
+a tool that has just stopped being listed — so `settings::open` is handed a `WeakEntity<Layout>` and
+the page calls `Layout::set_tool_enabled` / `move_tool`, which persist through `Session` and fix the
+open tool as one act. Three consequences, all of which bite:
+
+- **The handle is weak and must not be read while the page is constructed.** `settings::open` is
+  reached from a click listener that has `Layout` leased; a read there panics at runtime with no
+  compile error. `gpui-component-recipes` has the general form.
+- **A change must `cx.refresh_windows()`.** The control lives in the dialog layer, a different
+  entity, so `cx.notify()` on `Layout` repaints the sidebar and leaves the row the user just pressed
+  showing its old value. `Layout::tool_list_changed` does it; `QuickNav::edit` does the same for the
+  same reason.
+- **A row is built by hand, not by `SettingField`.** A `SettingItem` is a label with a control beside
+  it and no way to reach the row, so it can carry a switch but not a drag handle, a drop target or a
+  position — and the position is the feature. `SettingItem::render` hands over the whole row instead.
+  Reordering is gpui's own drag-and-drop (`on_drag` on the handle, `drag_over` + `on_drop` on the
+  row — the primitives the library's dock tab bar uses) **plus** move-up/move-down buttons, which
+  are the keyboard path a drag has none of. Ship both; the buttons are not a fallback.
+
+**Enter does not press a button in this dialog; Space does.** `Button` is a tab stop and gpui
+synthesizes a click from either key on a focused element, but `Dialog` binds `enter` to
+`ConfirmDialog` in its own key context and the default `on_ok` returns `true`, which closes the
+card. That is true of every control in the Settings dialog and always has been — do not "fix" it
+from inside a page.
+
+The rules themselves are nowhere near `settings.rs`: `session::models::features` is pure and holds
+all of them, including the floor of one visible tool. Put a new rule there, not in the page.
 
 ## Themes
 

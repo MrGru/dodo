@@ -15,8 +15,11 @@ use crate::docker::{DockerPage, DockerView};
 use crate::encoder_decoder::{EncoderDecoder, Format};
 use crate::i18n::{Str, t};
 use crate::json_formatter::JsonFormatter;
+use crate::quick_nav::models::detect::Detector;
 use crate::quick_nav::models::route::Route;
 use crate::quick_nav::{self, LeaveInsertMode, QuickNav, QuickNavigate};
+use crate::session::Session;
+use crate::session::models::features::{FeatureError, Features};
 use crate::settings;
 use crate::updater;
 
@@ -29,17 +32,33 @@ use crate::updater;
 /// unreachable.
 ///
 /// Adding a tool means: a variant here, a row in [`View::ALL`], an arm in
-/// [`View::title`]/[`View::icon`], a field on [`Layout`] holding the view
-/// entity, and an arm in the main-pane `match` of [`Layout::render`].
+/// [`View::title`]/[`View::icon`]/[`View::code`], a field on [`Layout`] holding
+/// the view entity, and an arm in the main-pane `match` of [`Layout::render`].
+///
+/// [`View::code`] is what `session.json` stores, so it is the one of those that
+/// is a **compatibility surface**: a code that has shipped may not be reused
+/// for a different tool, and renaming a variant should keep its code unless
+/// losing everyone's restored tool is the intent. A code this build does not
+/// know opens a tool it does have rather than failing to start — see
+/// [`View::shown`].
+///
+/// **The Features settings page made that code cost one thing more.** A tool's
+/// code is now also its identity in the user's sidebar order and in their
+/// on/off list, so changing one does not merely send whoever had that tool open
+/// back to the default — it drops the tool out of their stored order and puts it
+/// back where `Features::resolve` says a tool this build knows but the file
+/// does not belongs. [`View::ALL`] stays the *default* order, and is no longer
+/// the order anything renders in; [`Layout::features`] is.
 ///
 /// **If the new tool can also accept a pasted value**, quick navigation costs
-/// three more small things and nothing else: a `Detector` variant with its arm
-/// in `quick_nav::models::detect`, a `Route` variant, and an arm in
-/// [`Layout::apply_route`] — which is the one place a route meets a `View`.
-/// `quick_nav::models::detect`'s module doc is where the *order* it goes in has
-/// to be argued.
+/// four more small things and nothing else: a `Detector` variant with its arm
+/// in `quick_nav::models::detect`, a `Route` variant with its arm in
+/// `Route::detector`, an arm in [`View::for_detector`], and an arm in
+/// [`Layout::apply_route`] — which is still the one place a route meets a
+/// `View`. `quick_nav::models::detect`'s module doc is where the *order* it goes
+/// in has to be argued, and that order is emphatically not this list's.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum View {
+pub enum View {
     JsonFormatter,
     EncoderDecoder,
     ApiExplorer,
@@ -49,7 +68,16 @@ enum View {
 }
 
 impl View {
-    /// Every tool, in sidebar order.
+    /// The tool dodo opens on when nothing has been saved, and the one an
+    /// unrecognised saved code falls back to.
+    const DEFAULT: View = View::JsonFormatter;
+
+    /// Every tool, in **default** sidebar order.
+    ///
+    /// No longer the order the sidebar draws: that is the user's, held by
+    /// [`Layout::features`]. This is what a stored order is resolved against —
+    /// the list of what exists, and where a tool the stored order never mentions
+    /// belongs.
     const ALL: [View; 6] = [
         View::JsonFormatter,
         View::EncoderDecoder,
@@ -59,10 +87,17 @@ impl View {
         View::Database,
     ];
 
+    /// Every tool's code, in default sidebar order — what a stored order is
+    /// placed against by
+    /// [`Features::resolve`](crate::session::models::features::Features::resolve).
+    fn codes() -> [&'static str; View::ALL.len()] {
+        View::ALL.map(View::code)
+    }
+
     /// The tool's own name — what the sidebar row reads. The main pane's title
     /// goes through [`pane_title`] instead, because Docker titles itself after
     /// the rail's selected page.
-    fn title(self) -> Str {
+    pub fn title(self) -> Str {
         match self {
             View::JsonFormatter => Str::JsonFormatterTitle,
             View::EncoderDecoder => Str::EncoderDecoderTitle,
@@ -73,7 +108,7 @@ impl View {
         }
     }
 
-    fn icon(self) -> AppIcon {
+    pub fn icon(self) -> AppIcon {
         match self {
             View::JsonFormatter => AppIcon::Json,
             View::EncoderDecoder => AppIcon::Binary,
@@ -81,6 +116,68 @@ impl View {
             View::Cleaner => AppIcon::Cleaner,
             View::Docker => AppIcon::Container,
             View::Database => AppIcon::Database,
+        }
+    }
+
+    /// The tool's stable identifier in `session.json`.
+    ///
+    /// Never a localized title and never the variant name: a title changes with
+    /// the language and a variant name changes with a refactor, and this has to
+    /// survive both. See the type's own doc for what that costs.
+    pub fn code(self) -> &'static str {
+        match self {
+            View::JsonFormatter => "json-formatter",
+            View::EncoderDecoder => "encoder-decoder",
+            View::ApiExplorer => "api-explorer",
+            View::Cleaner => "cleaner",
+            View::Docker => "docker",
+            View::Database => "database",
+        }
+    }
+
+    /// The tool this code names, if this build has one.
+    ///
+    /// The strict half of [`View::shown`], and the way back from a [`Features`]
+    /// entry — whose codes came out of [`View::codes`], so there it is total.
+    pub fn lookup(code: &str) -> Option<View> {
+        View::ALL.into_iter().find(|view| view.code() == code)
+    }
+
+    /// The tool to show, given the one that was asked for.
+    ///
+    /// **The single answer to three questions**: a `session.json` naming a tool
+    /// this build does not have, one naming a tool the user has since switched
+    /// off, and the tool that is open right now being switched off.
+    /// [`Features::active`] decides all three — the asked-for tool if the
+    /// sidebar still lists it, and otherwise the first tool it does list — and
+    /// this only maps the answer back onto a variant.
+    ///
+    /// **Anything unrecognised therefore opens the app rather than refusing
+    /// to**, which is what the `from_code` this replaced existed for.
+    /// [`View::DEFAULT`] is the last resort for a build with no tools at all,
+    /// and is unreachable while [`View::ALL`] is non-empty.
+    fn shown(features: &Features, wanted: Option<&str>) -> View {
+        features
+            .active(wanted)
+            .and_then(View::lookup)
+            .unwrap_or(View::DEFAULT)
+    }
+
+    /// The tool a detected paste belongs to.
+    ///
+    /// **The one mapping from `quick_nav`'s list onto this one**, read twice
+    /// and for two different reasons: [`Layout::apply_route`] uses it to decide
+    /// where a route goes, and [`Layout::allowed_detectors`] uses it *before*
+    /// detection to decide which detectors a switched-off tool has taken out of
+    /// play. Two copies could disagree, and the disagreement would be silent.
+    ///
+    /// Not injective: the Encoder/Decoder answers for both JWT and Base64.
+    fn for_detector(detector: Detector) -> View {
+        match detector {
+            Detector::Curl => View::ApiExplorer,
+            Detector::DatabaseUri => View::Database,
+            Detector::Jwt | Detector::Base64 => View::EncoderDecoder,
+            Detector::Json => View::JsonFormatter,
         }
     }
 }
@@ -148,7 +245,8 @@ pub fn window_min_size() -> Size<Pixels> {
 /// * The toggle always wins and hands ownership back to the user: after a
 ///   manual press the sidebar stays exactly as left until the next crossing.
 ///
-/// None of it is persisted; [`Layout::new`] says why.
+/// The `collapsed` flag **is** persisted, in `session.json`; the other two are
+/// not, and must not be — see [`SidebarState::restored`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct SidebarState {
     collapsed: bool,
@@ -165,10 +263,29 @@ struct SidebarState {
 }
 
 impl SidebarState {
-    /// How dodo opens: on the icon rail, by choice rather than by width.
+    /// How dodo opens with nothing saved: on the icon rail, by choice rather
+    /// than by width.
     const fn new() -> Self {
         Self {
             collapsed: true,
+            collapsed_by_width: false,
+            narrow: None,
+        }
+    }
+
+    /// How dodo opens with a saved sidebar.
+    ///
+    /// **Only `collapsed` is restored, and the other two fields are reset**,
+    /// which is the whole subtlety here. `collapsed_by_width` says "the width
+    /// rule did this, so the width rule may undo it", and that is a claim about
+    /// a window size from the *last* run — restoring it would let the first
+    /// widening past the breakpoint expand a sidebar the user had collapsed by
+    /// hand. `narrow` stays `None` so the first width this run sees is recorded
+    /// rather than treated as a crossing, exactly as on a fresh start; the
+    /// restored state is then whatever the user left, at any window size.
+    const fn restored(collapsed: bool) -> Self {
+        Self {
+            collapsed,
             collapsed_by_width: false,
             narrow: None,
         }
@@ -340,6 +457,16 @@ pub struct Layout {
     collapsible: SidebarCollapsible,
     sidebar: SidebarState,
     active: View,
+    /// Which tools the sidebar lists, and in what order — the Features settings
+    /// page, resolved against this build's [`View::ALL`].
+    ///
+    /// Held here rather than read from the session global at each use, because
+    /// it is the thing `render` walks and because every change to it has to be
+    /// followed by the two side effects a settings dialog cannot perform on its
+    /// own: persisting the new list, and moving the pane off a tool that has
+    /// just stopped being listed. [`Layout::set_tool_enabled`] and
+    /// [`Layout::move_tool`] are the only writers.
+    features: Features,
     /// Where focus rests in **normal mode**, and the reason this pane is
     /// focusable at all.
     ///
@@ -351,6 +478,9 @@ pub struct Layout {
     /// reachable state rather than the absence of one. [`Layout::new`] takes it
     /// at startup and [`Layout::leave_insert_mode`] takes it back.
     focus: FocusHandle,
+    /// Keeps the window-bounds observer alive: a `Subscription` unsubscribes
+    /// when it drops, so this field is the subscription, not bookkeeping.
+    _bounds: Subscription,
     json_formatter: Entity<JsonFormatter>,
     encoder_decoder: Entity<EncoderDecoder>,
     api_explorer: Entity<ApiExplorer>,
@@ -360,32 +490,71 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// dodo opens on the **icon rail**, not the labelled sidebar: the tools are
-    /// five fixed entries a user learns once, and the pane they are choosing
-    /// between is the whole point of the window, so 240px of permanent chrome
-    /// is a poor default. The toggle in the pane header is unchanged, and every
-    /// collapsed icon carries its title as a tooltip, which is what keeps the
-    /// rail readable to someone who has not learned it yet.
+    /// With nothing saved, dodo opens on the **icon rail**, not the labelled
+    /// sidebar: the tools are six fixed entries a user learns once, and the
+    /// pane they are choosing between is the whole point of the window, so
+    /// 240px of permanent chrome is a poor default. The toggle in the pane
+    /// header is unchanged, and every collapsed icon carries its title as a
+    /// tooltip, which is what keeps the rail readable to someone who has not
+    /// learned it yet.
     ///
-    /// The choice is **not persisted**, deliberately: dodo's six saved files are
-    /// listed in `CLAUDE.md`, adding a seventh is a decision of its own, and a
-    /// sidebar that opens the same way every time is at least predictable.
+    /// **That, the open tool and the tool list itself are restored from
+    /// `session.json`** when there is one — the captain asked for session
+    /// restoration on 2026-08-06, which is also what settles the sidebar
+    /// question the sidebar round left open as being above that worker. See
+    /// [`crate::session`].
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // dodo opens in normal mode, so the pane takes focus straight away. See
         // [`Layout::focus`] for why that has to be someone's rather than nobody's.
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
 
+        // The tool list first, because it is what decides whether the
+        // remembered tool is still a tool the sidebar has. A `session.json`
+        // naming a tool that has since been switched off opens on the first
+        // visible one instead of on a tool with no row — see [`View::shown`].
+        let features = Features::resolve(Session::tools(cx).as_deref(), &View::codes());
+        let active = View::shown(&features, Session::active_tool(cx).as_deref());
+
+        let sidebar = match Session::sidebar_collapsed(cx) {
+            Some(collapsed) => SidebarState::restored(collapsed),
+            None => SidebarState::new(),
+        };
+
+        let docker = cx.new(|cx| DockerView::new(window, cx));
+        // What [`Layout::activate`] would have done, done by hand because there
+        // is no `self` to call it on yet: opening straight onto Docker has to
+        // start its polling, or the restored session shows an empty list until
+        // the user clicks something else and back.
+        if active == View::Docker {
+            docker.update(cx, |docker, cx| docker.activate(cx));
+        }
+
         Self {
             collapsible: SidebarCollapsible::Icon,
-            sidebar: SidebarState::new(),
-            active: View::JsonFormatter,
+            sidebar,
+            active,
+            features,
             focus,
+            // Every window move and resize, coalesced into a save by
+            // `Session::set_window` — see `session`'s module doc for why that
+            // matters and how. The `Subscription` has to be held or it
+            // unsubscribes immediately.
+            _bounds: cx.observe_window_bounds(window, |_, window, cx| {
+                // The display's stable UUID, not its `DisplayId`, which is only
+                // an index into this run's display list. `Session::set_window`
+                // says why the rectangle needs it at all.
+                let display = window
+                    .display(cx)
+                    .and_then(|display| display.uuid().ok())
+                    .map(|uuid| uuid.to_string());
+                Session::set_window(window.window_bounds(), display, cx);
+            }),
             json_formatter: cx.new(|cx| JsonFormatter::new(window, cx)),
             encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
             api_explorer: cx.new(|cx| ApiExplorer::new(window, cx)),
             cleaner: cx.new(|cx| CleanerView::new(window, cx)),
-            docker: cx.new(|cx| DockerView::new(window, cx)),
+            docker,
             database: cx.new(|cx| DatabaseView::new(window, cx)),
         }
     }
@@ -401,24 +570,93 @@ impl Layout {
             View::Docker => docker.activate(cx),
             _ => docker.set_section_active(false, cx),
         });
+        // Re-selecting the tool already open writes nothing: `Session::edit`
+        // drops a change that leaves the document as it was.
+        Session::set_active_tool(view.code(), cx);
         cx.notify();
+    }
+
+    /// The sidebar's tools, shown or not, in the user's order. What the
+    /// Features settings page lists.
+    pub fn features(&self) -> &Features {
+        &self.features
+    }
+
+    /// Shows or hides one tool, from the Features settings page.
+    ///
+    /// Returns the refusal when this would empty the sidebar — the page draws
+    /// it. Nothing is written and nothing moves in that case.
+    ///
+    /// **Switching off the tool that is open switches the pane too.** That goes
+    /// through [`Layout::activate`] like a sidebar click, so Docker's polling
+    /// stops and the new tool is the one `session.json` remembers; the main
+    /// pane cannot be left drawing a tool with no row above it.
+    pub fn set_tool_enabled(
+        &mut self,
+        code: &str,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), FeatureError> {
+        self.features.set_enabled(code, enabled)?;
+        self.tool_list_changed(cx);
+        Ok(())
+    }
+
+    /// Moves one tool to `index` — the drop half of a drag reorder.
+    pub fn move_tool(&mut self, code: &str, index: usize, cx: &mut Context<Self>) {
+        if self.features.move_to(code, index) {
+            self.tool_list_changed(cx);
+        }
+    }
+
+    /// Moves one tool by `delta` places — the keyboard half, and what the
+    /// move-up/move-down buttons call.
+    pub fn move_tool_by(&mut self, code: &str, delta: isize, cx: &mut Context<Self>) {
+        if self.features.move_by(code, delta) {
+            self.tool_list_changed(cx);
+        }
+    }
+
+    /// Persists the new tool list and re-checks what the pane is showing.
+    ///
+    /// Re-checking after a *reorder* is not wasted work: the first visible tool
+    /// is what a hidden active tool falls back to, and moving a row changes
+    /// which tool that is.
+    fn tool_list_changed(&mut self, cx: &mut Context<Self>) {
+        Session::set_tools(self.features.record(), cx);
+
+        let shown = View::shown(&self.features, Some(self.active.code()));
+        if shown == self.active {
+            cx.notify();
+        } else {
+            self.activate(shown, cx);
+        }
+
+        // The control that made this change is drawn by the **settings
+        // dialog**, a different entity in a layer this one does not own, so
+        // notifying this pane would repaint the sidebar and leave the row the
+        // user just pressed showing the value it had before. Same reason
+        // `QuickNav::edit` refreshes.
+        cx.refresh_windows();
     }
 
     /// `Cmd+V` / `Ctrl+V` / `p` in normal mode: read the clipboard, work out
     /// what it is, and go there.
     ///
-    /// Nothing happens on three ordinary paths — the feature is off, the
-    /// clipboard holds no text, or nothing was recognised confidently — and in
-    /// each the keystroke is propagated, because a shortcut that silently
-    /// swallows a key it did not use is worse than one that declines it.
+    /// Nothing happens on four ordinary paths — the feature is off, the
+    /// clipboard holds no text, nothing was recognised confidently, or the only
+    /// tool that could have taken it is switched off — and in each the keystroke
+    /// is propagated, because a shortcut that silently swallows a key it did not
+    /// use is worse than one that declines it.
     ///
     /// `quick_nav`'s key context is what guarantees this only runs with no input
     /// focused; there is no mode flag to consult and none to get out of step.
     fn quick_navigate(&mut self, _: &QuickNavigate, window: &mut Window, cx: &mut Context<Self>) {
+        let allowed = Self::allowed_detectors(&self.features);
         let route = cx
             .read_from_clipboard()
             .and_then(|item| item.text())
-            .and_then(|text| QuickNav::detect(&text, cx));
+            .and_then(|text| QuickNav::detect(&text, &allowed, cx));
 
         let Some(route) = route else {
             cx.propagate();
@@ -427,20 +665,46 @@ impl Layout {
         self.apply_route(route, window, cx);
     }
 
+    /// The detectors whose tool the sidebar still lists.
+    ///
+    /// **A switched-off tool is not a paste target.** The user said they only
+    /// want these features; pasting a `curl` with the API Explorer off must not
+    /// bring it back, so the detector is dropped before detection runs and the
+    /// text falls through to whatever else can read it — or nowhere. The
+    /// alternative, re-enabling the tool for the jump, would be the app
+    /// overruling a setting the user had just changed.
+    ///
+    /// The returned order is [`Detector::ORDER`]'s and means nothing:
+    /// `detect_among` treats this as a membership test, precisely so that the
+    /// sidebar's order can never leak into the detection order.
+    fn allowed_detectors(features: &Features) -> Vec<Detector> {
+        Detector::ORDER
+            .into_iter()
+            .filter(|detector| features.is_enabled(View::for_detector(*detector).code()))
+            .collect()
+    }
+
     /// Hands a detected route to the tool that owns it.
     ///
     /// **The one place a `Route` meets a `View`**, which is what keeps adding a
     /// tool to quick navigation from being an edit in three files: the detector
     /// decides *what*, this decides *where*, and neither knows the other's list.
+    ///
+    /// *Where* is [`View::for_detector`] and nothing else — the `match` below
+    /// only carries the payload. They used to be one `match` doing both, which
+    /// was fine until [`Layout::allowed_detectors`] needed the same mapping
+    /// before any route existed; two copies of it could disagree about which
+    /// tool a detector belongs to, and the one that could disagree silently is
+    /// the one deciding whether the detector runs at all.
     fn apply_route(&mut self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
+        self.activate(View::for_detector(route.detector()), cx);
+
         match route {
             Route::Json(text) => {
-                self.activate(View::JsonFormatter, cx);
                 self.json_formatter
                     .update(cx, |view, cx| view.accept_text(text, window, cx));
             }
             Route::Jwt(token) => {
-                self.activate(View::EncoderDecoder, cx);
                 self.encoder_decoder.update(cx, |view, cx| {
                     view.accept_decode(token, Format::Jwt, window, cx)
                 });
@@ -451,17 +715,14 @@ impl Layout {
                 } else {
                     Format::Base64
                 };
-                self.activate(View::EncoderDecoder, cx);
                 self.encoder_decoder
                     .update(cx, |view, cx| view.accept_decode(text, format, window, cx));
             }
             Route::Curl(snapshot) => {
-                self.activate(View::ApiExplorer, cx);
                 self.api_explorer
                     .update(cx, |view, cx| view.accept_curl(*snapshot, window, cx));
             }
             Route::Database(parsed) => {
-                self.activate(View::Database, cx);
                 self.database
                     .update(cx, |view, cx| view.accept_uri(&parsed, cx));
             }
@@ -495,10 +756,19 @@ impl Layout {
         cx.notify();
     }
 
-    /// The sidebar menu: one flat row per tool, no nesting. Nesting is what the
-    /// icon-collapsed sidebar cannot render, so there is none.
-    fn menu(&self, cx: &mut Context<Self>) -> [ToolItem; View::ALL.len()] {
-        View::ALL.map(|view| self.tool_item(view, cx))
+    /// The sidebar menu: one flat row per **visible** tool, in the user's own
+    /// order, no nesting. Nesting is what the icon-collapsed sidebar cannot
+    /// render, so there is none.
+    ///
+    /// A `Vec` rather than the fixed-size array this used to return, because
+    /// the number of rows is now the user's choice. It is never empty:
+    /// `Features` will not let the last tool be switched off.
+    fn menu(&self, cx: &mut Context<Self>) -> Vec<ToolItem> {
+        self.features
+            .visible()
+            .filter_map(View::lookup)
+            .map(|view| self.tool_item(view, cx))
+            .collect()
     }
 
     /// A flat, top-level tool row. Docker is one of these like any other: the
@@ -598,7 +868,15 @@ impl Render for Layout {
                                     icon_collapsed,
                                     cx,
                                 )
-                                .on_click(|_, window, cx| settings::open(window, cx)),
+                                // The dialog's Features page edits this pane's
+                                // tool list, so it is handed a handle to it.
+                                // Weak, and taken here rather than inside the
+                                // closure: `Button::on_click` is given an
+                                // `&mut App`, not a `Context<Self>`.
+                                .on_click({
+                                    let layout = cx.entity().downgrade();
+                                    move |_, window, cx| settings::open(layout.clone(), window, cx)
+                                }),
                             ),
                     ),
             )
@@ -626,6 +904,11 @@ impl Render for Layout {
                                     .ghost()
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.sidebar = this.sidebar.toggle();
+                                        // The user's own choice, and the only
+                                        // one worth remembering: a collapse the
+                                        // *width* caused is this window's
+                                        // business, not the next launch's.
+                                        Session::set_sidebar_collapsed(this.sidebar.collapsed, cx);
                                         cx.notify();
                                     })),
                             )
@@ -683,17 +966,25 @@ mod tests {
     use gpui_component::sidebar::SidebarMenuItem;
 
     use super::{
-        AUTO_COLLAPSE_WIDTH, MAIN_MIN_HEIGHT, MAIN_MIN_WIDTH, PANE_CHROME_HEIGHT,
+        AUTO_COLLAPSE_WIDTH, Layout, MAIN_MIN_HEIGHT, MAIN_MIN_WIDTH, PANE_CHROME_HEIGHT,
         PANE_CHROME_WIDTH, SIDEBAR_RAIL_WIDTH, SIDEBAR_WIDTH, SidebarState, ToolItem, View,
         pane_title, window_min_size,
     };
     use crate::docker::DockerPage;
     use crate::i18n::Str;
+    use crate::quick_nav::models::detect::{Detector, Patterns, detect_among};
+    use crate::session::models::features::Features;
 
     /// A width comfortably on each side of the breakpoint. 1280 and 520 are the
     /// two the layout is reviewed at.
     const WIDE: f32 = 1280.;
     const NARROW: f32 = 520.;
+
+    /// The tool list of someone who has never opened the Features page: every
+    /// tool, in `View::ALL` order, all of them visible.
+    fn everything() -> Features {
+        Features::resolve(None, &View::codes())
+    }
 
     fn title_of(view: View, page: DockerPage) -> Discriminant<Str> {
         discriminant(&pane_title(view, page))
@@ -730,6 +1021,304 @@ mod tests {
         // group of children — an icon-collapsed sidebar renders no children at
         // all, which is what made Docker's four pages unreachable.
         assert_eq!(View::ALL.len(), 6);
+    }
+
+    /// With nothing chosen, the sidebar is exactly what it was before the
+    /// Features page existed: every tool, in `View::ALL` order.
+    #[test]
+    fn an_untouched_feature_list_is_the_sidebar_as_it_always_was() {
+        let visible: Vec<View> = everything().visible().filter_map(View::lookup).collect();
+        assert_eq!(visible, View::ALL);
+    }
+
+    /// The user's order and their on/off choices are what the sidebar draws —
+    /// `View::codes` is only what those choices are resolved against.
+    #[test]
+    fn the_sidebar_draws_the_users_order_and_skips_what_they_hid() {
+        let mut features = everything();
+        features.move_to(View::Docker.code(), 0);
+        features
+            .set_enabled(View::Cleaner.code(), false)
+            .expect("five others remain");
+
+        let visible: Vec<View> = features.visible().filter_map(View::lookup).collect();
+        assert_eq!(
+            visible,
+            [
+                View::Docker,
+                View::JsonFormatter,
+                View::EncoderDecoder,
+                View::ApiExplorer,
+                View::Database,
+            ]
+        );
+    }
+
+    /// Every tool's `session.json` code is stable, unique, and reads as an
+    /// identifier rather than a title. It is a compatibility surface: changing
+    /// one silently sends everyone who had that tool open back to the default.
+    #[test]
+    fn every_tool_has_its_own_stable_code() {
+        let codes: Vec<&str> = View::ALL.iter().map(|view| view.code()).collect();
+
+        assert_eq!(
+            codes,
+            [
+                "json-formatter",
+                "encoder-decoder",
+                "api-explorer",
+                "cleaner",
+                "docker",
+                "database",
+            ]
+        );
+
+        let mut unique = codes.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), codes.len(), "two tools share a code");
+    }
+
+    #[test]
+    fn a_saved_code_comes_back_as_the_tool_that_wrote_it() {
+        for view in View::ALL {
+            assert_eq!(View::lookup(view.code()), Some(view));
+            assert_eq!(View::shown(&everything(), Some(view.code())), view);
+        }
+    }
+
+    /// The requirement that keeps a renamed or removed tool from being a failure
+    /// to start: anything unrecognised opens the first tool the sidebar lists.
+    #[test]
+    fn an_unknown_or_absent_code_falls_back_to_the_first_visible_tool() {
+        for code in [
+            None,
+            Some(""),
+            Some("graphql-explorer"),
+            Some("JsonFormatter"),
+            Some("json_formatter"),
+            Some("JSON Formatter"),
+        ] {
+            assert_eq!(
+                View::shown(&everything(), code),
+                View::DEFAULT,
+                "{code:?} must not stop dodo opening",
+            );
+            assert!(code.and_then(View::lookup).is_none());
+        }
+        assert_eq!(View::DEFAULT, View::JsonFormatter);
+    }
+
+    /// Trap 2, at the seam `session::models::features` cannot reach: a
+    /// remembered tool the user has since switched off opens the first tool
+    /// they *did* leave visible, not a pane with no sidebar row above it.
+    #[test]
+    fn a_remembered_tool_that_is_now_hidden_opens_the_first_visible_one() {
+        let mut features = everything();
+        features
+            .set_enabled(View::JsonFormatter.code(), false)
+            .expect("five others remain");
+
+        assert_eq!(
+            View::shown(&features, Some(View::JsonFormatter.code())),
+            View::EncoderDecoder,
+        );
+    }
+
+    /// …and it follows the user's own order, not `View::ALL`'s.
+    #[test]
+    fn the_fallback_follows_the_users_own_sidebar_order() {
+        let mut features = everything();
+        features.move_to(View::Database.code(), 0);
+        features
+            .set_enabled(View::Docker.code(), false)
+            .expect("five others remain");
+
+        assert_eq!(View::shown(&features, None), View::Database);
+        assert_eq!(
+            View::shown(&features, Some(View::Docker.code())),
+            View::Database,
+        );
+    }
+
+    // ---- quick navigation meets the tool list ------------------------------
+
+    /// The mapping both `apply_route` and `allowed_detectors` read. If a
+    /// detector ever answered for a different tool than the route it produces
+    /// lands in, switching that tool off would silence the wrong detector.
+    #[test]
+    fn every_detector_names_the_tool_its_route_lands_in() {
+        for (detector, view) in [
+            (Detector::Curl, View::ApiExplorer),
+            (Detector::DatabaseUri, View::Database),
+            (Detector::Jwt, View::EncoderDecoder),
+            (Detector::Json, View::JsonFormatter),
+            (Detector::Base64, View::EncoderDecoder),
+        ] {
+            assert_eq!(View::for_detector(detector), view);
+        }
+    }
+
+    /// Trap 4, and the captain's own example: pasting a `curl` with the API
+    /// Explorer switched off. The detector is not tried at all, so the text
+    /// falls through to the next one that can read it — here the JSON body —
+    /// and the API Explorer is **not** switched back on to receive it.
+    #[test]
+    fn a_switched_off_tool_is_not_a_paste_target() {
+        let text = "curl -X POST https://api.example.com/v1/orders \
+                    -H 'Content-Type: application/json' -d '{\"item\":\"widget\"}'";
+        let patterns = Patterns::default();
+
+        let mut features = everything();
+        assert_eq!(
+            detect_among(text, &patterns, &Layout::allowed_detectors(&features))
+                .map(|route| route.detector()),
+            Some(Detector::Curl),
+        );
+
+        features
+            .set_enabled(View::ApiExplorer.code(), false)
+            .expect("five others remain");
+        let allowed = Layout::allowed_detectors(&features);
+
+        assert!(!allowed.contains(&Detector::Curl));
+        assert_eq!(
+            detect_among(text, &patterns, &allowed).map(|route| route.detector()),
+            None,
+            "the whole command is not JSON, so nothing else claims it either",
+        );
+
+        // …and the body on its own still reaches the formatter, which is what
+        // "falls through to the next detector" looks like when there is one.
+        assert_eq!(
+            detect_among("{\"item\":\"widget\"}", &patterns, &allowed)
+                .map(|route| route.detector()),
+            Some(Detector::Json),
+        );
+    }
+
+    /// Switching off the Encoder/Decoder takes **both** of its detectors out of
+    /// play, because `for_detector` is not injective.
+    #[test]
+    fn switching_off_one_tool_can_silence_two_detectors() {
+        let mut features = everything();
+        features
+            .set_enabled(View::EncoderDecoder.code(), false)
+            .expect("five others remain");
+
+        let allowed = Layout::allowed_detectors(&features);
+        assert!(!allowed.contains(&Detector::Jwt));
+        assert!(!allowed.contains(&Detector::Base64));
+        assert!(allowed.contains(&Detector::Json));
+    }
+
+    /// Trap 5: the sidebar's order is a preference and detection's is a
+    /// correctness property. Dragging the Encoder/Decoder above everything —
+    /// or below it — must not change what a pasted token or a pasted `curl`
+    /// does.
+    #[test]
+    fn the_sidebar_order_never_becomes_the_detection_order() {
+        const JWT: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.c2ln";
+        let curl = "curl -X POST https://api.example.com -d '{\"a\":1}'";
+        let patterns = Patterns::default();
+
+        // Every tool, walked into every position: the Encoder/Decoder first,
+        // then last, then back where it started.
+        for at in [0, View::ALL.len() - 1, 1] {
+            let mut features = everything();
+            features.move_to(View::EncoderDecoder.code(), at);
+            features.move_to(View::ApiExplorer.code(), View::ALL.len() - 1);
+            let allowed = Layout::allowed_detectors(&features);
+
+            assert_eq!(
+                detect_among(JWT, &patterns, &allowed).map(|route| route.detector()),
+                Some(Detector::Jwt),
+                "a JWT is Base64, and only the detection order keeps it out of the decoder",
+            );
+            assert_eq!(
+                detect_among(curl, &patterns, &allowed).map(|route| route.detector()),
+                Some(Detector::Curl),
+                "a cURL command carrying JSON belongs to the API Explorer wherever its row is",
+            );
+        }
+    }
+
+    /// **Every tool is an ordinary tool here**, with no exception for the one
+    /// still being built. `src/cleaner/` is a legitimate thing to switch off —
+    /// arguably the most likely one — and a special case for it would be a rule
+    /// `session::models::features` does not have and should not gain.
+    #[test]
+    fn every_tool_can_be_switched_off_including_the_unfinished_one() {
+        for view in View::ALL {
+            let mut features = everything();
+            assert!(features.can_toggle(view.code()), "{view:?}");
+            features
+                .set_enabled(view.code(), false)
+                .unwrap_or_else(|_| panic!("{view:?} is not the last of six"));
+
+            assert!(!features.is_enabled(view.code()));
+            assert_eq!(
+                features.all().len(),
+                View::ALL.len(),
+                "it is hidden, not gone"
+            );
+            assert_ne!(View::shown(&features, Some(view.code())), view);
+        }
+        assert!(View::ALL.contains(&View::Cleaner));
+    }
+
+    /// Trap 7: the Features page can only ever hide a **tool**, and the
+    /// Settings and Check-for-updates buttons are not tools — they are footer
+    /// buttons drawn beside the menu, not rows in it. If either ever became a
+    /// `View`, this fails and someone has to think about how a user gets their
+    /// tools back.
+    #[test]
+    fn settings_is_not_a_tool_and_so_cannot_be_switched_off() {
+        let codes = View::codes();
+        for reserved in ["settings", "check-for-updates"] {
+            assert!(
+                !codes.contains(&reserved),
+                "`{reserved}` is a sidebar footer button; making it a tool would let \
+                 the Features page hide the only way back to itself",
+            );
+        }
+
+        let source = include_str!("layout.rs");
+        let footer = item_source(source, "fn render(&mut self, window: &mut Window");
+        assert!(
+            footer.contains("\"open-settings\""),
+            "the Settings button has left the sidebar footer; the Features page \
+             assumes it is always reachable",
+        );
+    }
+
+    /// The sidebar's restored flag is the user's own choice and nothing else.
+    /// Restoring `collapsed_by_width` would let the first widening past the
+    /// breakpoint expand a sidebar the user had collapsed by hand — using a
+    /// window size from the *previous* run to justify it.
+    #[test]
+    fn a_restored_sidebar_carries_only_the_users_own_choice() {
+        for collapsed in [true, false] {
+            let restored = SidebarState::restored(collapsed);
+            assert_eq!(restored.collapsed, collapsed);
+            assert!(!restored.collapsed_by_width);
+            assert!(restored.narrow.is_none());
+
+            // …so the first width this run sees is recorded, not acted on.
+            assert_eq!(restored.resize(px(WIDE)).collapsed, collapsed);
+            assert_eq!(restored.resize(px(NARROW)).collapsed, collapsed);
+        }
+    }
+
+    /// A sidebar restored expanded still collapses when the window is dragged
+    /// narrow, and comes back when it is widened — the width rule is unchanged
+    /// by restoration.
+    #[test]
+    fn the_width_rule_still_applies_to_a_restored_sidebar() {
+        let restored = SidebarState::restored(false).resize(px(WIDE));
+        let collapsed = restored.resize(px(NARROW));
+        assert!(collapsed.collapsed && collapsed.collapsed_by_width);
+        assert!(!collapsed.resize(px(WIDE)).collapsed);
     }
 
     #[test]

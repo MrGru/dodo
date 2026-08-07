@@ -2,7 +2,7 @@
 
 `dodo` is a Rust desktop app: a single window with a collapsible sidebar, where each sidebar
 entry swaps the main pane to a self-contained developer tool (JSON formatter, Encoder/Decoder,
-API Explorer, Docker, Database Explorer) plus, in the sidebar footer, a Settings dialog and a
+API Explorer, Docker, Database Explorer, Cleaner) plus, in the sidebar footer, a Settings dialog and a
 **Check for updates** dialog. It is built on GPUI (Zed's UI framework) and the `gpui-component`
 widget library, both pulled from git and pinned only by `Cargo.lock`. See `README.md` for the
 user-facing description and `Cargo.toml` for exact dependency sources.
@@ -43,7 +43,15 @@ comments are the authority on its split and what shipped when; the matching skil
 the non-obvious parts of each are written down — load it before changing anything in one of these
 three modules rather than inferring the design from the files cold.
 
-**dodo persists eight things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
+**`src/cleaner/` is the same shape but started unfinished, and rounds have been landing since.**
+Its `mod.rs` doc comment is the authority on what has shipped; do not assume it is still round 1
+without checking. `core/` still carries `#[allow(dead_code)]` on items ahead of what constructs
+them — **those are pending work, not dead code to delete** — but the allow comes off as each
+producer lands: `core::safety` now has a real `validate_path` and a moved-to-trash cleanup path
+(`macos::cleanup::cleanup_items`), so its allow is already gone. `core::permissions` is still the
+one whole-module allow marking an area that does not exist at all yet.
+
+**dodo persists nine things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
 behind a trait so the state layer never learns where they live: `collections.json`
 (`api_explorer::services::collection_store`), `environments.json` (`services::variable_store`),
 `script-consent.json` (`services::consent_store`, the imported scripts the user has approved),
@@ -51,18 +59,57 @@ behind a trait so the state layer never learns where they live: `collections.jso
 (`database::services::connection_store`, which also holds database passwords in plain text — see
 `dodo-database-internals`), `query-data.json` (`database::services::query_store`, saved queries
 plus bounded query history, with query text intentionally stored as plain text), `quick-nav.json`
-(`quick_nav::services::config_store`) and `cleaner-ignored-items.json`
+(`quick_nav::services::config_store`), `cleaner-ignored-items.json`
 (`cleaner::services::ignore_store`, the orphan-detection candidates the user has marked "Keep",
 keyed by absolute path string rather than a `CleanableItemId` since that id is a session-local
-hash with no promise of surviving a restart). The
-`dodo-theming-settings` skill's "nothing is persisted across restarts" is therefore scoped to
-appearance/language settings only — including the **Run scripts** setting, which is a
-`ScriptPolicy` global and deliberately starts
-each launch at the cautious `Ask for imported`. `updater.json` and `quick-nav.json` are the two
-exceptions, for the same reason in both cases: a setting that holds *what the user typed or
-decided about a specific thing* cannot expire each launch without becoming a lie — `skipped_version`
-for the updater, an edited detector pattern for quick navigation. Persistence and initial load run
-on the background executor, never the UI thread.
+hash with no promise of surviving a restart) and `session.json`
+(`session::services::session_store`). Persistence and initial load run on the background executor,
+never the UI thread.
+
+**`session.json` is what makes "nothing is persisted across restarts" obsolete**, and any doc still
+saying it — including the `dodo-theming-settings` skill — is stale rather than describing a
+decision. The captain asked for session restoration on 2026-08-06, and `src/session/mod.rs` is the
+authority: theme, font size, border radius, language, the window's rectangle **and mode**, the open
+tool, the sidebar's collapsed state, and **which tools the sidebar lists at all and in what order**.
+The other eight files persist something `session.json` does not attempt: *what the user typed or
+decided about one specific thing* — an approved script, a saved query, a cleaner path marked
+"Keep", a skipped update version, an edited quick-nav pattern — which cannot expire each launch
+without becoming a lie. **The one exception is `Run scripts`**, a `ScriptPolicy`
+global that still starts each launch at the cautious `Ask for imported` — it is the gate in front of
+running code that arrived inside someone else's collection file, not a preference, and its approvals
+are persisted per script in `script-consent.json` instead. Do not quietly start persisting it; that
+is the captain's call.
+
+Two things about that file that are decisions rather than details. **Every field is an `Option` and
+absent means *never chosen*** — writing `"Default Light"` into a fresh file merely because that was
+on screen would freeze system-appearance following for everyone who never opened the dialog. And
+**restoring window geometry opts out of gpui's own placement care**: `Window::new` only cascades and
+clamps in `default_bounds`, the branch it takes when `window_bounds` is `None`, so a supplied
+rectangle goes to the platform unexamined. `session::models::geometry` is the replacement — clamp to
+a display that still exists, honour `layout::window_min_size`, centre on the preferred display when
+the saved one is gone — and it is a pure function so all of it is tested without a frame. It is
+paired with a saved display **UUID**, because on macOS the rectangle alone cannot say which monitor
+it meant: every coordinate the pinned gpui reports there is display-*local* (`MacDisplay::bounds`
+returns `(0, 0)` for every display). `models::document::WindowRecord` names the four functions that
+prove it. Do not "simplify" that pairing away.
+
+**The Features settings page is why `View::ALL` is no longer the sidebar's order.** The captain
+asked on 2026-08-06 for per-tool on/off plus drag reordering, persisted; `session::models::features`
+is the authority and is pure, so every rule is a unit test rather than something found by looking at
+the app. Four of them matter outside that file: a stored entry naming a tool this build lacks is
+**dropped** and a tool the file never names comes back **beside its default neighbour**, enabled;
+**at least one tool always stays visible**, enforced in the model and drawn as a disabled switch with
+the reason beside it; the tool on screen is always a listed one, which is the single function
+`Features::active` answering both "the remembered tool was switched off" and "the open tool was just
+switched off"; and **a switched-off tool is not a quick-navigation route** — `layout` drops its
+detectors before `detect_among` runs, so a pasted `curl` with the API Explorer off falls through
+rather than reopening it. The last one is the trap: `detect_among`'s allowed list is a **membership
+test and never an order**, because `Detector::ORDER` is a correctness property (most specific first)
+and the sidebar's order is a preference. `Layout::features` is the live list, `View::for_detector` is
+the single mapping both `apply_route` and `allowed_detectors` read, and `settings::features_page`
+builds the rows by hand because a `SettingItem` cannot carry a position. Adding the field is also
+what took `session.json` to **schema version 2**; an older build would have read it, dropped the key
+and written it back pruned.
 
 **`src/quick_nav/` is the one feature that is not a tool**: a vim-shaped normal mode where
 `Cmd+V` / `Ctrl+V` / `p` sends the clipboard to whichever tool can read it, and `Esc` leaves a
@@ -147,8 +194,16 @@ Seven things about build and release that catch people:
   measurement depends on.
 - **`fmt` and `clippy` are blocking jobs; keep them green.** Run `cargo fmt --all` and
   `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
-  (34 unformatted files, 12 warnings) is paid off; there is no crate-level `allow`, and the two
-  surviving suppressions are `#[allow]`ed at their definition with the reason inline.
+  (34 unformatted files, 12 warnings) is paid off, and **there is no crate-level `allow`** — every
+  suppression is `#[allow]`ed at the item it applies to (or, where a whole module is the pending
+  unit, as an inner attribute under that module's `//!` docs) with the reason and the condition for
+  removing it written next to it. Copy that shape; never widen an `allow` to quieten a lint.
+  Dead-code warnings in a module under construction are **scaffolding, not defects**: annotate,
+  do not delete. `.githooks/pre-push` runs `fmt`, `clippy` and `cargo test --locked` and refuses
+  the push if any fails; it is opt-in per clone with `git config core.hooksPath .githooks`
+  (see "Pre-push checks" in `README.md` for its cost and the `--no-verify` bypass).
+  Note that `cargo build` alone does **not** prove the tree is green — `src/i18n.rs`'s test module
+  is exhaustive over `Str`, so new strings break `cargo test` while the app still builds.
   `build (windows-x64)` failed on its one real run (a `#[cfg(unix)]`-only bollard connector; fixed
   by the platform split in `docker/services/engine.rs`, not yet confirmed green) and
   `build (macos-x64)` is unverified — those rows are

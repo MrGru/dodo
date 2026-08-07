@@ -1,3 +1,13 @@
+//! The permission contract the macOS scanners will be gated on.
+//!
+//! Every item here is pending: round 1 ships mock scanners that touch nothing,
+//! so nothing checks Full Disk Access yet and no implementation of
+//! [`PermissionService`] exists. The allow is module-wide rather than per item
+//! because the whole module is the unit that is waiting — it comes off with the
+//! first real permission check, and until then nothing in here should be
+//! deleted to quieten the lint.
+#![allow(dead_code)]
+
 use crate::cleaner::core::category::CleanerCategory;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
