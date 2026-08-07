@@ -3,6 +3,7 @@ pub(crate) mod ai_apps;
 pub(crate) mod docker_cache;
 pub(crate) mod homebrew_cache;
 mod installed_apps;
+mod language_files;
 mod large_old_files;
 pub(crate) mod mail_files;
 mod node_tooling;
@@ -22,6 +23,7 @@ pub use ai_apps::AiAppsScanner;
 pub use docker_cache::DockerCacheScanner;
 pub use homebrew_cache::HomebrewCacheScanner;
 pub use installed_apps::InstalledAppsScanner;
+pub use language_files::LanguageFilesScanner;
 pub use large_old_files::LargeOldFilesScanner;
 pub use mail_files::MailFilesScanner;
 pub use node_tooling_cache::NodeToolingCacheScanner;
@@ -47,5 +49,6 @@ pub fn default_scanners() -> Vec<Arc<dyn CleanerScanner>> {
         Arc::new(AiAppsScanner::new()),
         Arc::new(DockerCacheScanner::new()),
         Arc::new(UniversalBinariesScanner::new()),
+        Arc::new(LanguageFilesScanner::new()),
     ]
 }

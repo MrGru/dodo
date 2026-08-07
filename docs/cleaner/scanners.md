@@ -353,6 +353,39 @@ Current behavior:
 - a running app (checked the same way `xcode_junk`/`ai_apps` do, via a bundle-identifier match against
   `NSRunningApplication`) gets an `ItemWarning`, not a skipped scan.
 
+### Language Files scanner (analysis-only)
+
+`src/cleaner/macos/scanners/language_files.rs` — one item per `<App>.app/Contents/Resources/*.lproj`
+localization folder, grouped by app (`CleanableItem::group`). **Analysis only**, the same posture as
+Universal Binaries: no removal exists yet, and `SelectionPolicy::NeverBulkSelect` on every item —
+protected or not — reflects that there is nothing to select *for*.
+
+A `.lproj` is protected (`RiskLevel::Protected`, an `ItemWarning` naming the reason,
+`LanguageMetadata::protection_reason`) rather than omitted, so "show languages per app" stays true even
+for the ones the ticket says must never be removed:
+
+| Reason | Detected via |
+|---|---|
+| `BaseLocalization` | The folder is literally `Base.lproj` |
+| `DevelopmentRegion` | Primary subtag matches the bundle's own `CFBundleDevelopmentRegion` |
+| `PreferredLanguage` | Primary subtag matches an entry in `AppleLanguages` |
+| `EnglishFallback` | Primary subtag is `en`, unconditionally |
+
+Everything else gets `RiskLevel::ApplicationMutation`, the same tier Universal Binaries uses.
+
+Current behavior:
+
+- `AppleLanguages` — this machine's ordered preferred-language list — is read directly from
+  `~/Library/Preferences/.GlobalPreferences.plist` with the `plist` crate (no new dependency, no Cocoa
+  `NSLocale` call); a missing or malformed file falls back to an empty list, which the unconditional
+  English-fallback rule still covers;
+- `applications::bundle::parse_bundle` gained a `development_region` field
+  (`CFBundleDevelopmentRegion`) for this scanner — the one addition to Phase 9's shared bundle parser;
+- primary-subtag matching (`"zh-Hans"` vs. `"zh-Hant-TW"` → match on `"zh"`) is a simple split-on-hyphen
+  comparison, not a full BCP-47 parse — enough for every case this phase needs;
+- a system app's languages are `RiskLevel::Protected` with their own warning, same as
+  `universal_binaries`; a running app gets an `ItemWarning`, not a skipped scan.
+
 ### Unimplemented categories
 
 - Categories without a real scanner are surfaced as partial “coming later” results by the state layer.

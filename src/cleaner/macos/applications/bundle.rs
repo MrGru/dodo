@@ -23,6 +23,11 @@ pub struct ParsedBundle {
     pub modified_at: Option<SystemTime>,
     pub explanation: String,
     pub is_system_app: bool,
+    /// `CFBundleDevelopmentRegion` — the language the bundle's non-localized
+    /// resources are written in. Used by
+    /// `macos::scanners::language_files` to protect the matching `.lproj`
+    /// from ever being presented as a removal candidate.
+    pub development_region: Option<String>,
 }
 
 /// Parses `<path>/Contents/Info.plist`.
@@ -61,6 +66,10 @@ pub fn parse_bundle(path: &Path) -> Result<ParsedBundle, String> {
         .ok()
         .and_then(|metadata| metadata.modified().ok());
     let is_system_app = is_system_app_path(path);
+    let development_region = dict
+        .get("CFBundleDevelopmentRegion")
+        .and_then(Value::as_string)
+        .map(ToOwned::to_owned);
     let explanation = match (&bundle_id, &version) {
         (Some(bundle_id), Some(version)) => format!("{bundle_id} · version {version}"),
         (Some(bundle_id), None) => bundle_id.clone(),
@@ -76,6 +85,7 @@ pub fn parse_bundle(path: &Path) -> Result<ParsedBundle, String> {
         modified_at,
         explanation,
         is_system_app,
+        development_region,
     })
 }
 

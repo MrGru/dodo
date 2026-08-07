@@ -131,9 +131,34 @@ pub struct UniversalBinaryMetadata {
     pub signed: Option<bool>,
 }
 
+/// Attached to every item
+/// `macos::scanners::language_files::LanguageFilesScanner` produces (Phase
+/// 15, analysis-only — nothing yet reads `capabilities` to offer a
+/// `RemoveLocalization` action).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LanguageMetadata {
+    /// The `.lproj` folder's own name minus the extension (e.g. `"en"`,
+    /// `"zh-Hans"`, `"Base"`).
     pub language_code: String,
+    /// Why this specific `.lproj` is protected rather than an ordinary
+    /// removal candidate — `None` for an ordinary, ordinary-risk language.
+    pub protection_reason: Option<LanguageProtectionReason>,
+}
+
+/// Ticket-named reasons a `.lproj` must never be presented as safe to
+/// remove, even before any removal exists. See `LanguageMetadata`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LanguageProtectionReason {
+    /// `Base.lproj` — storyboard/XIB strings with no dedicated translation.
+    BaseLocalization,
+    /// Matches one of `NSGlobalDomain`'s `AppleLanguages`, this machine's
+    /// ordered preferred-language list.
+    PreferredLanguage,
+    /// The bundle's own `CFBundleDevelopmentRegion`.
+    DevelopmentRegion,
+    /// English, kept regardless of the preferred-language list as the
+    /// ticket's own explicit fallback.
+    EnglishFallback,
 }
 
 /// Why an orphan-detection candidate (Phase 10) is considered orphaned, per
