@@ -187,10 +187,6 @@ impl Session {
     /// **Not [`Session::language`]**, which is dodo's *interface* language.
     /// They are two settings under two keys and nothing converts between them;
     /// [`models::document::Tray`] carries the full warning.
-    #[allow(
-        dead_code,
-        reason = "the read side of a key phase 3 only writes; `tray::init` reads it at launch in phase 4. Remove the allow with that restore."
-    )]
     pub fn input_language(cx: &App) -> Option<String> {
         Self::read(cx, |document| document.tray.input_language.clone())
     }

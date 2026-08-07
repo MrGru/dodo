@@ -25,6 +25,8 @@ pub enum TrayCommand {
     OpenDodo,
     /// Pick the keyboard input language the menu bar mark shows.
     SelectInputLanguage(InputLanguage),
+    /// Show the window and open the Settings dialog in it.
+    OpenSettings,
     /// End the process. The **only** way to quit dodo once the tray has taken
     /// the quit mode off `LastWindowClosed` — see [`crate::tray::init`].
     Quit,
@@ -47,6 +49,7 @@ pub struct TrayMenu {
     /// One row per [`InputLanguage`], built by iterating
     /// [`InputLanguage::ALL`]. **Adding a language does not touch this code.**
     languages: Vec<(InputLanguage, CheckMenuItem)>,
+    settings: MenuItem,
     quit: MenuItem,
 }
 
@@ -74,6 +77,7 @@ impl TrayMenu {
             open: MenuItem::new(t(Str::TrayOpenDodo, cx), true, None),
             keyboard_input: Submenu::new(t(Str::TrayKeyboardInput, cx), true),
             languages,
+            settings: MenuItem::new(t(Str::Settings, cx), true, None),
             quit: MenuItem::new(t(Str::TrayQuitDodo, cx), true, None),
         };
         this.assemble();
@@ -93,11 +97,12 @@ impl TrayMenu {
         // Two separators, so the verbs at the ends stay visually apart from the
         // mode selector between them.
         let separator = PredefinedMenuItem::separator();
-        let items: [&dyn tray_icon::menu::IsMenuItem; 5] = [
+        let items: [&dyn tray_icon::menu::IsMenuItem; 6] = [
             &self.open,
             &separator,
             &self.keyboard_input,
             &separator,
+            &self.settings,
             &self.quit,
         ];
         for item in items {
@@ -120,6 +125,9 @@ impl TrayMenu {
     pub fn command_for(&self, id: &MenuId) -> Option<TrayCommand> {
         if id == self.open.id() {
             return Some(TrayCommand::OpenDodo);
+        }
+        if id == self.settings.id() {
+            return Some(TrayCommand::OpenSettings);
         }
         if id == self.quit.id() {
             return Some(TrayCommand::Quit);
@@ -161,6 +169,7 @@ impl TrayMenu {
     pub fn relabel(&self, cx: &gpui::App) {
         self.open.set_text(t(Str::TrayOpenDodo, cx));
         self.keyboard_input.set_text(t(Str::TrayKeyboardInput, cx));
+        self.settings.set_text(t(Str::Settings, cx));
         self.quit.set_text(t(Str::TrayQuitDodo, cx));
     }
 }
