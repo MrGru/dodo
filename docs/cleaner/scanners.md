@@ -319,6 +319,40 @@ Current behavior:
 See `docs/cleaner/known-limitations.md` for what this phase does not cover (build cache, engine disk
 usage totals, Docker Desktop's own log files, image-usage matching precision).
 
+### Universal Binaries scanner (analysis-only)
+
+`src/cleaner/macos/scanners/universal_binaries.rs` — discovers which installed app's *main*
+executable (`Contents/MacOS/<CFBundleExecutable>`) is a universal (fat) Mach-O binary, via the
+`object` crate (`read`, `macho` features only — no `write`, since this phase never mutates a binary).
+**Analysis only**, per the ticket: no removal exists yet, and none is planned until Phase 16 lands a
+tested backup/rollback/signature-recheck path.
+
+Walks the same four standard app roots `InstalledAppsScanner` uses and reuses
+`applications::bundle::parse_bundle` for `Info.plist`. Only the app's one main executable is
+inspected — nested frameworks, plugins and helper tools are not walked (see
+`docs/cleaner/known-limitations.md`). A bundle whose executable reports fewer than two architecture
+slices is not reported at all — this category exists only for genuinely universal binaries.
+
+Current behavior:
+
+- `object::FileKind::parse` identifies fat vs. thin Mach-O from the file's first bytes;
+  `MachOFatFile32`/`MachOFatFile64` then give each slice's exact `Architecture` and byte size —
+  nothing here runs `lipo`, `file`, or the binary itself;
+- `estimated_removable_bytes` (`UniversalBinaryMetadata`) sums every slice that is not this machine's
+  own architecture (`std::env::consts::ARCH`, mapped to Mach-O naming: `aarch64` → `arm64`);
+- signing status comes from `codesign --verify --no-strict`'s exit code alone (`Option<bool>`; `None`
+  only when `codesign` itself could not run) — a coarse verified-or-not signal, not identity or
+  entitlement inspection;
+- a system app (`applications::bundle::is_system_app_path`) gets `RiskLevel::Protected` and an
+  `ItemWarning` explaining Cleaner never mutates one; every other universal binary gets
+  `RiskLevel::ApplicationMutation` and `SelectionPolicy::NeverBulkSelect` — the strongest selection
+  guard in Cleaner, since even after Phase 16 ships, thinning a binary should never be something a
+  bulk "Select safe items" click can reach;
+- items carry only `RevealInFinder`/`CopyPath` — no `RemoveArchitecture` capability yet, since nothing
+  reads it;
+- a running app (checked the same way `xcode_junk`/`ai_apps` do, via a bundle-identifier match against
+  `NSRunningApplication`) gets an `ItemWarning`, not a skipped scan.
+
 ### Unimplemented categories
 
 - Categories without a real scanner are surfaced as partial “coming later” results by the state layer.

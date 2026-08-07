@@ -10,6 +10,7 @@ pub(crate) mod node_tooling_cache;
 mod orphaned_files;
 mod system_junk;
 mod trash_bins;
+mod universal_binaries;
 mod user_cache;
 pub(crate) mod xcode_junk;
 
@@ -27,6 +28,7 @@ pub use node_tooling_cache::NodeToolingCacheScanner;
 pub use orphaned_files::OrphanedFilesScanner;
 pub use system_junk::SystemJunkScanner;
 pub use trash_bins::TrashBinsScanner;
+pub use universal_binaries::UniversalBinariesScanner;
 pub use user_cache::UserCacheScanner;
 pub use xcode_junk::XcodeJunkScanner;
 
@@ -44,5 +46,6 @@ pub fn default_scanners() -> Vec<Arc<dyn CleanerScanner>> {
         Arc::new(NodeToolingCacheScanner::new()),
         Arc::new(AiAppsScanner::new()),
         Arc::new(DockerCacheScanner::new()),
+        Arc::new(UniversalBinariesScanner::new()),
     ]
 }
