@@ -152,6 +152,27 @@ event, so the whole group is re-asserted on every selection. Adding a language i
 plus one `assets/icons/tray/dodo-<code>.svg`; the marks are rasterised through gpui's own
 `SvgRenderer`, so they cost `src/assets.rs` no new filter and add no PNG.
 
+**`src/input_method/` is dodo's own input method, and round 1 of it wires to nothing.** It is
+declared in `main.rs` and called from nowhere — a normalized `KeyEvent`/`EngineAction` vocabulary
+(`core/`) plus a Vietnamese engine speaking Telex and VNI (`languages/vietnamese/`). Later rounds
+add settings, tray wiring, per-application language memory, abbreviations and three native hosts
+(macOS InputMethodKit bundle, Windows TSF DLL, Linux IBus). Its module docs are the authority;
+four things there are decisions rather than details. **`purity_lint.rs` is why it can become its
+own crate later**: nothing under `core/` or `languages/` may import from the rest of dodo or from
+any crate but `unicode-normalization`, checked by reading the sources at test time in the shape of
+`i18n_lint.rs` — because the three OS hosts load into *other people's processes* and must link the
+engine without linking gpui. Never widen its allow-list; pass the value in at the boundary instead.
+**The whole module carries one `#![allow(dead_code)]`** with its removal condition, because "not
+wired yet" is the pending unit here. **`LanguageId` is not a third language type**: it names an
+*engine*, has no `English` variant, is never persisted, and the `tray::InputLanguage` →
+`Option<LanguageId>` mapping belongs to the round that wires it — the purity lint is what keeps
+that mapping outside the state machine. And **the Vietnamese engine is semantic, not string
+rewriting**: a letter is `(base, mark, case)`, the tone belongs to the syllable and its position is
+recomputed at render time, so `toas` + `n` becomes `toán` without anything relocating a mark.
+`InputScheme` is an enum for the same reason — Telex and VNI produce identical `Transform`s and
+share every rule about Vietnamese. Tests: `corpus.rs` holds ~460 real words as *answers* and
+derives both key sequences from them, so tone placement is never fed to the thing being tested.
+
 `data_dir()` lives in `src/paths.rs`, not under `api_explorer/` any more, and it knows all
 three platforms: `~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME` or
 `~/.config`. The macOS path is frozen — changing it orphans every existing installation's saved
