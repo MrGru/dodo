@@ -1,0 +1,536 @@
+//! The syllable being composed, held as meaning rather than as text.
+//!
+//! # `ế` is three facts, not a character
+//!
+//! A [`Letter`] is a base vowel, an optional [`Mark`], and a case; the
+//! [`Tone`] belongs to the [`Syllable`] as a whole. `ế` is therefore *base `e`,
+//! circumflex, acute, lowercase* — never the result of rewriting `e` into `ê`
+//! into `ế`. Everything awkward about Vietnamese input falls out of that:
+//!
+//! - **The tone moves by itself.** Typing `toas` gives `toá`; the `n` that
+//!   follows makes it `toán` because [`tone::placement`] is asked again, not
+//!   because anything searched the string for a mark to relocate.
+//! - **Undo is exact.** A second `s` clears [`Syllable::tone`]; a third `a`
+//!   clears one [`Letter::mark`]. Neither has to find a diacritic in rendered
+//!   text and guess which key put it there.
+//! - **Telex and VNI cannot drift apart.** They disagree about which key means
+//!   *circumflex*; they agree completely about what a circumflex is, because
+//!   the answer is this file and neither of them owns a copy of it.
+//!
+//! Rendering happens once, at the end, in [`super::unicode`].
+//!
+//! # The raw keys, and why they are kept
+//!
+//! [`Syllable::raw`] records the characters that were typed, so that a word
+//! which turns out not to be Vietnamese can be handed back exactly as it was
+//! entered — `where` rather than `ưhere`. See
+//! [`spell_check`](super::VietnameseConfig::spell_check) for when that applies
+//! and [`Syllable::raw_is_trustworthy`] for the one case where it does not.
+//! Nothing else reads it, it never leaves the syllable, and it dies with the
+//! syllable at the next word boundary.
+
+use super::rules;
+use super::tone::{self, TonePlacement};
+use super::unicode;
+
+/// A diacritic that changes which *letter* this is, as opposed to which tone.
+///
+/// Vietnamese treats these as separate letters of the alphabet — `ă` is not an
+/// `a` with an accent, it is its own letter — which is precisely why they are
+/// modelled apart from [`Tone`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mark {
+    /// `â`, `ê`, `ô`.
+    Circumflex,
+    /// `ă`.
+    Breve,
+    /// `ơ`, `ư`.
+    Horn,
+    /// `đ`. The only one that lands on a consonant.
+    Stroke,
+}
+
+/// One of the six Vietnamese tones.
+///
+/// [`Tone::Level`] (*ngang*) is a real tone that happens to be written with no
+/// mark at all, which is why it is a variant rather than `Option::None` — "this
+/// syllable has no tone" and "this syllable has not been given a tone yet" are
+/// the same state in Vietnamese, and pretending otherwise invites an
+/// `Option<Option<Tone>>`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Tone {
+    /// *ngang* — `ma`.
+    #[default]
+    Level,
+    /// *sắc* — `má`.
+    Acute,
+    /// *huyền* — `mà`.
+    Grave,
+    /// *hỏi* — `mả`.
+    HookAbove,
+    /// *ngã* — `mã`.
+    Tilde,
+    /// *nặng* — `mạ`.
+    UnderDot,
+}
+
+/// One letter of a syllable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Letter {
+    /// The undecorated ASCII letter: `a`, `e`, `d`, `n`. Always lowercase —
+    /// case lives in [`Letter::upper`], so every rule in [`super::rules`] and
+    /// [`super::tone`] can be written once instead of twice.
+    pub base: char,
+    pub mark: Option<Mark>,
+    pub upper: bool,
+}
+
+impl Letter {
+    pub fn new(base: char, upper: bool) -> Letter {
+        Letter {
+            base: base.to_ascii_lowercase(),
+            mark: None,
+            upper,
+        }
+    }
+
+    pub fn with_mark(mut self, mark: Option<Mark>) -> Letter {
+        self.mark = mark;
+        self
+    }
+}
+
+/// What applying a mark did.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MarkOutcome {
+    /// The mark landed on a letter.
+    Applied,
+    /// The letter already had that mark, so it was taken off again — the
+    /// second `aa` in `aaa`, the second `w` in `aww`. The caller then types the
+    /// key literally, which is what makes the undo produce `aa` rather than
+    /// `a`.
+    Reverted,
+    /// No letter in this syllable can carry that mark. The key was never a mark
+    /// key here, so it must reach the user as itself.
+    NoTarget,
+}
+
+/// The syllable currently being composed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Syllable {
+    letters: Vec<Letter>,
+    tone: Tone,
+    raw: String,
+    raw_trusted: bool,
+}
+
+impl Default for Syllable {
+    fn default() -> Syllable {
+        Syllable {
+            letters: Vec::new(),
+            tone: Tone::Level,
+            raw: String::new(),
+            raw_trusted: true,
+        }
+    }
+}
+
+impl Syllable {
+    pub fn new() -> Syllable {
+        Syllable::default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.letters.is_empty()
+    }
+
+    pub fn letters(&self) -> &[Letter] {
+        &self.letters
+    }
+
+    pub fn tone(&self) -> Tone {
+        self.tone
+    }
+
+    /// The characters typed into this syllable, in order.
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    /// Whether [`Syllable::raw`] still describes what is on screen.
+    ///
+    /// A backspace removes a rendered letter, which may have taken any number
+    /// of raw keys to produce (`đ` took two; `ế` took three). Reconstructing
+    /// which keys to drop would be guesswork, so the raw record is simply
+    /// abandoned instead — the spell-check fallback stops applying for the rest
+    /// of this syllable, and the rendered text is committed as it stands. That
+    /// is the conservative direction: at worst the user keeps a syllable they
+    /// can see, rather than having it silently swapped for something else.
+    pub fn raw_is_trustworthy(&self) -> bool {
+        self.raw_trusted
+    }
+
+    /// Stop claiming that [`Syllable::raw`] describes the screen.
+    ///
+    /// Called when the user *undoes* a diacritic or a tone — `aww`, `cass`,
+    /// `a11`. An undo is an explicit statement that the literal reading is what
+    /// was wanted, so the rendered text stands from then on and the spell-check
+    /// fallback stops second-guessing it. Without this, `aww` would come back as
+    /// `aww` rather than `aw`, because `aw` is not a Vietnamese syllable and the
+    /// fallback would helpfully undo the undo.
+    pub fn distrust_raw(&mut self) {
+        self.raw_trusted = false;
+    }
+
+    /// Record a key as having been typed into this syllable.
+    ///
+    /// Called for every key the engine consumes, including the ones that turn
+    /// into marks and tones rather than letters.
+    pub fn record_key(&mut self, key: char) {
+        self.raw.push(key);
+    }
+
+    pub fn push_letter(&mut self, base: char, upper: bool) {
+        self.letters.push(Letter::new(base, upper));
+    }
+
+    pub fn push_marked_letter(&mut self, base: char, mark: Option<Mark>, upper: bool) {
+        self.letters.push(Letter::new(base, upper).with_mark(mark));
+    }
+
+    /// Remove the last letter, as a backspace would.
+    ///
+    /// Also drops the tone when the tone was being drawn on that letter, which
+    /// is what makes this match what the user sees: every letter renders as
+    /// exactly one visible character, so removing the last letter removes the
+    /// last visible character. `hoà` backspaces to `ho` (the `à` went);
+    /// `tiếng` backspaces to `tiến` (the `g` went, and the tone was never on
+    /// it).
+    pub fn pop_letter(&mut self, style: TonePlacement) -> bool {
+        let Some(last) = self.letters.len().checked_sub(1) else {
+            return false;
+        };
+        if tone::placement(&self.letters, style) == Some(last) {
+            self.tone = Tone::Level;
+        }
+        self.letters.truncate(last);
+        self.distrust_raw();
+        true
+    }
+
+    pub fn set_tone(&mut self, tone: Tone) {
+        self.tone = tone;
+    }
+
+    pub fn clear_tone(&mut self) {
+        self.tone = Tone::Level;
+    }
+
+    /// Which letter a mark would land on, if any.
+    ///
+    /// The rightmost letter of the **nucleus** that could carry it, so that
+    /// `dduwow` puts the second horn on the `o` rather than back on the `ư`.
+    /// [`Mark::Stroke`] is the exception in every way: it lands on `d`, which
+    /// is a consonant and sits in the initial.
+    pub fn mark_target(&self, mark: Mark) -> Option<usize> {
+        if mark == Mark::Stroke {
+            return match self.letters.first() {
+                Some(letter) if letter.base == 'd' => Some(0),
+                _ => None,
+            };
+        }
+        let nucleus = rules::parts(&self.letters).nucleus;
+        self.letters[nucleus.clone()]
+            .iter()
+            .rposition(|letter| unicode::can_take(letter.base, mark))
+            .map(|at| nucleus.start + at)
+    }
+
+    /// The `u` and `o` of a bare `uo`, at the end of the nucleus.
+    ///
+    /// `ươ` is the most common two-diacritic nucleus in the language —
+    /// `đường`, `người`, `nước`, `được`, `trường` — and both Telex and VNI let
+    /// one key mark the pair, so `uow` and `uo7` give `ươ` rather than `uơ`.
+    /// The pair only counts when neither vowel is already marked, which is what
+    /// keeps `uwow` (`ư` then `ơ`, marked one at a time) working identically.
+    fn bare_uo_pair(&self) -> Option<(usize, usize)> {
+        let nucleus = rules::parts(&self.letters).nucleus;
+        if nucleus.len() < 2 {
+            return None;
+        }
+        let second = nucleus.end - 1;
+        let first = second - 1;
+        let matches = self.letters[first].base == 'u'
+            && self.letters[first].mark.is_none()
+            && self.letters[second].base == 'o'
+            && self.letters[second].mark.is_none();
+        matches.then_some((first, second))
+    }
+
+    /// Put `mark` on the letter that should have it, or take it off again.
+    ///
+    /// The single place either input scheme's diacritic keys end up, which is
+    /// what "Telex and VNI share one semantic engine" means concretely: `aa`,
+    /// `a6`, `w`, `7` and `9` all arrive here as a [`Mark`], and every rule
+    /// about where a mark may live is stated once, below.
+    pub fn apply_mark(&mut self, mark: Mark) -> MarkOutcome {
+        if mark == Mark::Horn
+            && let Some((first, second)) = self.bare_uo_pair()
+        {
+            self.letters[first].mark = Some(Mark::Horn);
+            self.letters[second].mark = Some(Mark::Horn);
+            return MarkOutcome::Applied;
+        }
+
+        let Some(at) = self.mark_target(mark) else {
+            return MarkOutcome::NoTarget;
+        };
+        if self.letters[at].mark == Some(mark) {
+            self.letters[at].mark = None;
+            MarkOutcome::Reverted
+        } else {
+            // A different mark is replaced rather than refused: `oow` is `ô`
+            // corrected to `ơ`, which is a typist changing their mind, not an
+            // error.
+            self.letters[at].mark = Some(mark);
+            MarkOutcome::Applied
+        }
+    }
+
+    /// The syllable as the user should see it, in NFC.
+    pub fn render(&self, style: TonePlacement) -> String {
+        let carrier = if self.tone == Tone::Level {
+            None
+        } else {
+            tone::placement(&self.letters, style)
+        };
+        let mut text = String::with_capacity(self.letters.len() * 3);
+        for (at, letter) in self.letters.iter().enumerate() {
+            let tone = if Some(at) == carrier {
+                self.tone
+            } else {
+                Tone::Level
+            };
+            text.push_str(&unicode::render_letter(
+                letter.base,
+                letter.mark,
+                letter.upper,
+                tone,
+            ));
+        }
+        text
+    }
+
+    /// Whether these letters could be a Vietnamese syllable. See
+    /// [`rules::is_valid_syllable`].
+    pub fn is_valid(&self) -> bool {
+        rules::is_valid_syllable(&self.letters)
+    }
+
+    pub fn clear(&mut self) {
+        self.letters.clear();
+        self.tone = Tone::Level;
+        self.raw.clear();
+        self.raw_trusted = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Letter, Mark, MarkOutcome, Syllable, Tone};
+    use crate::input_method::languages::vietnamese::tone::TonePlacement;
+
+    const MODERN: TonePlacement = TonePlacement::Modern;
+
+    fn make(spelling: &str) -> Syllable {
+        let mut syllable = Syllable::new();
+        for ch in spelling.chars() {
+            syllable.push_letter(ch, ch.is_uppercase());
+            syllable.record_key(ch);
+        }
+        syllable
+    }
+
+    #[test]
+    fn a_new_syllable_is_empty_and_level() {
+        let syllable = Syllable::new();
+        assert!(syllable.is_empty());
+        assert_eq!(syllable.tone(), Tone::Level);
+        assert_eq!(syllable.render(MODERN), "");
+        assert!(!syllable.is_valid());
+        assert!(syllable.raw_is_trustworthy());
+    }
+
+    /// The point of the whole file: the tone is a fact about the syllable, so a
+    /// letter arriving afterwards changes where it is drawn.
+    #[test]
+    fn a_final_consonant_moves_the_tone_without_touching_it() {
+        let mut syllable = make("toa");
+        syllable.set_tone(Tone::Acute);
+        assert_eq!(syllable.render(MODERN), "toá");
+
+        syllable.push_letter('n', false);
+        assert_eq!(syllable.render(MODERN), "toán");
+        assert_eq!(syllable.tone(), Tone::Acute);
+    }
+
+    #[test]
+    fn a_mark_lands_on_the_rightmost_nucleus_letter_that_can_take_it() {
+        let mut syllable = make("tie");
+        assert_eq!(syllable.apply_mark(Mark::Circumflex), MarkOutcome::Applied);
+        assert_eq!(syllable.render(MODERN), "tiê");
+
+        // The horn goes on the `o`, not back on the `ư`.
+        let mut syllable = make("duo");
+        assert_eq!(syllable.apply_mark(Mark::Horn), MarkOutcome::Applied);
+        assert_eq!(syllable.render(MODERN), "dươ");
+    }
+
+    #[test]
+    fn a_second_application_takes_the_mark_off_again() {
+        let mut syllable = make("ta");
+        assert_eq!(syllable.apply_mark(Mark::Circumflex), MarkOutcome::Applied);
+        assert_eq!(syllable.render(MODERN), "tâ");
+        assert_eq!(syllable.apply_mark(Mark::Circumflex), MarkOutcome::Reverted);
+        assert_eq!(syllable.render(MODERN), "ta");
+    }
+
+    #[test]
+    fn a_mark_no_letter_can_carry_has_no_target() {
+        let mut syllable = make("ti");
+        assert_eq!(syllable.apply_mark(Mark::Circumflex), MarkOutcome::NoTarget);
+        assert_eq!(syllable.apply_mark(Mark::Horn), MarkOutcome::NoTarget);
+        assert_eq!(syllable.apply_mark(Mark::Breve), MarkOutcome::NoTarget);
+        assert_eq!(syllable.render(MODERN), "ti");
+
+        // A stroke needs a `d`, and needs it first.
+        let mut syllable = make("ba");
+        assert_eq!(syllable.apply_mark(Mark::Stroke), MarkOutcome::NoTarget);
+        let mut syllable = make("ad");
+        assert_eq!(syllable.apply_mark(Mark::Stroke), MarkOutcome::NoTarget);
+    }
+
+    #[test]
+    fn a_different_mark_replaces_rather_than_being_refused() {
+        let mut syllable = make("to");
+        assert_eq!(syllable.apply_mark(Mark::Circumflex), MarkOutcome::Applied);
+        assert_eq!(syllable.render(MODERN), "tô");
+        assert_eq!(syllable.apply_mark(Mark::Horn), MarkOutcome::Applied);
+        assert_eq!(syllable.render(MODERN), "tơ");
+    }
+
+    /// `ươ` in one key, because it is the most common two-diacritic nucleus in
+    /// the language.
+    #[test]
+    fn one_horn_marks_a_bare_uo_pair() {
+        let mut syllable = make("duo");
+        assert_eq!(syllable.apply_mark(Mark::Horn), MarkOutcome::Applied);
+        assert_eq!(syllable.render(MODERN), "dươ");
+
+        // Marked one at a time, the pair rule stays out of the way and the
+        // result is identical.
+        let mut syllable = make("du");
+        assert_eq!(syllable.apply_mark(Mark::Horn), MarkOutcome::Applied);
+        syllable.push_letter('o', false);
+        assert_eq!(syllable.apply_mark(Mark::Horn), MarkOutcome::Applied);
+        assert_eq!(syllable.render(MODERN), "dươ");
+    }
+
+    #[test]
+    fn the_stroke_lands_on_an_initial_d_in_either_case() {
+        let mut syllable = make("d");
+        assert_eq!(syllable.apply_mark(Mark::Stroke), MarkOutcome::Applied);
+        assert_eq!(syllable.render(MODERN), "đ");
+        assert_eq!(syllable.apply_mark(Mark::Stroke), MarkOutcome::Reverted);
+        assert_eq!(syllable.render(MODERN), "d");
+
+        let mut syllable = make("D");
+        assert_eq!(syllable.apply_mark(Mark::Stroke), MarkOutcome::Applied);
+        assert_eq!(syllable.render(MODERN), "Đ");
+    }
+
+    /// Backspace removes one visible character, which is the same thing as one
+    /// letter — including when the tone was riding on it.
+    #[test]
+    fn popping_a_letter_matches_what_the_user_sees() {
+        let mut syllable = make("hoa");
+        syllable.set_tone(Tone::Grave);
+        assert_eq!(syllable.render(MODERN), "hoà");
+        assert!(syllable.pop_letter(MODERN));
+        assert_eq!(syllable.render(MODERN), "ho");
+        assert_eq!(syllable.tone(), Tone::Level);
+
+        let mut syllable = make("tie");
+        syllable.apply_mark(Mark::Circumflex);
+        syllable.push_letter('n', false);
+        syllable.push_letter('g', false);
+        syllable.set_tone(Tone::Acute);
+        assert_eq!(syllable.render(MODERN), "tiếng");
+        assert!(syllable.pop_letter(MODERN));
+        assert_eq!(syllable.render(MODERN), "tiến");
+        assert_eq!(syllable.tone(), Tone::Acute);
+    }
+
+    #[test]
+    fn popping_an_empty_syllable_reports_that_it_did_nothing() {
+        let mut syllable = Syllable::new();
+        assert!(!syllable.pop_letter(MODERN));
+        assert!(syllable.is_empty());
+    }
+
+    /// The raw record only claims to describe the screen until a backspace
+    /// makes it a guess.
+    #[test]
+    fn a_backspace_abandons_the_raw_record() {
+        let mut syllable = make("hoa");
+        assert!(syllable.raw_is_trustworthy());
+        assert_eq!(syllable.raw(), "hoa");
+        syllable.pop_letter(MODERN);
+        assert!(!syllable.raw_is_trustworthy());
+    }
+
+    #[test]
+    fn record_key_keeps_the_keys_not_the_letters() {
+        let mut syllable = Syllable::new();
+        for key in "tieengs".chars() {
+            syllable.record_key(key);
+        }
+        assert_eq!(syllable.raw(), "tieengs");
+        // Nothing was rendered: recording a key is not typing it.
+        assert!(syllable.is_empty());
+    }
+
+    #[test]
+    fn clearing_returns_it_to_a_fresh_syllable() {
+        let mut syllable = make("hoa");
+        syllable.set_tone(Tone::Grave);
+        syllable.pop_letter(MODERN);
+        syllable.clear();
+        assert_eq!(syllable, Syllable::new());
+    }
+
+    #[test]
+    fn case_lives_on_the_letter_and_survives_every_mark() {
+        let mut syllable = Syllable::new();
+        for (base, upper) in [('V', true), ('I', true), ('E', true)] {
+            syllable.push_letter(base, upper);
+            assert_eq!(
+                base.to_ascii_lowercase(),
+                syllable.letters().last().unwrap().base
+            );
+            let _ = upper;
+        }
+        syllable.apply_mark(Mark::Circumflex);
+        syllable.push_letter('T', true);
+        syllable.set_tone(Tone::UnderDot);
+        assert_eq!(syllable.render(MODERN), "VIỆT");
+    }
+
+    #[test]
+    fn a_letter_lowercases_its_base_and_remembers_the_case_separately() {
+        let letter = Letter::new('E', true);
+        assert_eq!(letter.base, 'e');
+        assert!(letter.upper);
+        assert_eq!(letter.mark, None);
+    }
+}

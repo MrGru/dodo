@@ -22,6 +22,8 @@ mod i18n;
 /// Guards the rule that `i18n` only enforces halfway; test-only.
 #[cfg(test)]
 mod i18n_lint;
+/// The platform-independent core of dodo's input method; nothing wires it yet.
+mod input_method;
 mod json_formatter;
 mod layout;
 mod paths;
