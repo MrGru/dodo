@@ -12,15 +12,17 @@
 //! `NSRunningApplication` is documented thread-safe for reading its
 //! properties, and the class method used here takes no main-thread marker, so
 //! this is safe to call from the background executor scans run on (see
-//! `docs/cleaner/architecture.md`'s "Concurrency strategy").
+//! `docs/cleaner/architecture.md`'s "Concurrency strategy"). The actual check
+//! now lives in `macos::platform::running_apps::is_any_bundle_running`,
+//! generalized for `macos::scanners::ai_apps`'s Ollama/LM Studio checks; this
+//! function is kept as a named, single-bundle-id wrapper so `xcode_junk`'s
+//! call site stays exactly as readable as before.
 
-use objc2_app_kit::NSRunningApplication;
-use objc2_foundation::NSString;
+use crate::cleaner::macos::platform::running_apps::is_any_bundle_running;
 
 /// Xcode's bundle identifier, stable since Xcode 4.
 const XCODE_BUNDLE_ID: &str = "com.apple.dt.Xcode";
 
 pub fn is_xcode_running() -> bool {
-    let bundle_id = NSString::from_str(XCODE_BUNDLE_ID);
-    !NSRunningApplication::runningApplicationsWithBundleIdentifier(&bundle_id).is_empty()
+    is_any_bundle_running(&[XCODE_BUNDLE_ID])
 }

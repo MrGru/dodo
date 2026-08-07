@@ -10,7 +10,9 @@ use crate::cleaner::core::safety::{
 };
 use crate::cleaner::macos::applications::locations;
 use crate::cleaner::macos::platform::move_to_trash;
-use crate::cleaner::macos::scanners::{homebrew_cache, mail_files, node_tooling_cache, xcode_junk};
+use crate::cleaner::macos::scanners::{
+    ai_apps, homebrew_cache, mail_files, node_tooling_cache, xcode_junk,
+};
 use crate::paths;
 
 pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
@@ -164,6 +166,18 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
                 path: root,
                 allow_root_itself: false,
                 allowed_categories: vec![CleanerCategory::NodeToolingCache],
+            });
+        }
+
+        // AI Apps (Phase 12): only locations `AiAppRole::allow_cleanup`
+        // permits — Logs and Cache — are allow-listed. Models, Application
+        // support and Chat history stay scan-only; see
+        // `macos::scanners::ai_apps` and `docs/cleaner/known-limitations.md`.
+        for root in ai_apps::cleanup_allowed_roots(home.as_path()) {
+            allowed_roots.push(AllowedRoot {
+                path: root,
+                allow_root_itself: false,
+                allowed_categories: vec![CleanerCategory::AiApps],
             });
         }
     }
