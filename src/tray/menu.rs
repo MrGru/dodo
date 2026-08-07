@@ -162,10 +162,6 @@ impl TrayMenu {
     /// the [`InputLanguage`] rows alone: the menu's own wording is dodo's text
     /// and follows the Settings dialog, while the language names are endonyms
     /// and the *selection* is a different setting that this must never move.
-    #[allow(
-        dead_code,
-        reason = "called from the `i18n::Language` observer, which is phase 5. Remove the allow with that subscription."
-    )]
     pub fn relabel(&self, cx: &gpui::App) {
         self.open.set_text(t(Str::TrayOpenDodo, cx));
         self.keyboard_input.set_text(t(Str::TrayKeyboardInput, cx));
