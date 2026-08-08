@@ -22,11 +22,13 @@ mod i18n;
 /// Guards the rule that `i18n` only enforces halfway; test-only.
 #[cfg(test)]
 mod i18n_lint;
-// dodo's input method is not a module here: its platform-independent core is
-// the `dodo-ime-core` crate under `crates/`, because the macOS/Windows/Linux
-// hosts that will drive it load into other processes and must link it without
-// linking gpui. Nothing in this binary wires it yet; the dependency is declared
-// so the workspace resolves as one graph.
+// dodo's end of the input method: installing the macOS bundle and writing the
+// settings it reads. The *engine* is deliberately not here — it is the
+// `dodo-ime-core` crate under `crates/`, because the macOS/Windows/Linux hosts
+// that drive it load into other processes and must link it without linking gpui —
+// and neither is the host, which dodo does not link at all. What this module
+// links is `dodo-ime-ipc`, the contract between the two processes.
+mod input_method;
 mod json_formatter;
 mod layout;
 mod paths;
@@ -103,6 +105,11 @@ fn main() {
         // `session.json`. It reads nothing here — the read is awaited below,
         // because the window cannot be opened until its geometry is known.
         session::init(cx);
+        // Installs the input-method global. It reads `input-method.json` and the
+        // bundle's status file below, not here, and it starts no input method:
+        // macOS launches `Dodo Vietnamese.app` on its own and dodo cannot. Same
+        // post-`gpui_component::init` position as the rest.
+        input_method::init(cx);
         init_close_window_binding(cx);
         // Dock icon for a directly-run macOS binary; a no-op inside a .app and
         // on every other platform. Here rather than earlier because it needs
@@ -119,6 +126,12 @@ fn main() {
             // unreadable one leaves every default exactly as it was before
             // session restoration existed.
             session::load(cx).await;
+            // The input method's settings and whatever the bundle last said about
+            // itself. Awaited here rather than spawned and forgotten so that the
+            // Settings dialog cannot be opened before the answer arrives — but
+            // unlike `session.json` nothing on screen depends on it, so a slow
+            // read costs the window nothing.
+            input_method::load(cx).await;
 
             cx.update(|cx| {
                 // Theme, font size, border radius and language, in that

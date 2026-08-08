@@ -1291,6 +1291,54 @@ pub enum Str {
     TrayOpenDodo,
     TrayKeyboardInput,
     TrayQuitDodo,
+
+    // The macOS input method — installing it, and the settings dodo writes for
+    // it. Appended for the same reason as the blocks above: `position` is a fixed
+    // numbering.
+    //
+    // These are **dodo's** strings, not the bundle's. The input method's own two
+    // user-visible strings — its name and its mode's — are read by *macOS* out of
+    // `InfoPlist.strings` and deliberately do not go through this mechanism; see
+    // `docs/macos-input-method.md` §8.
+    InputMethod,
+    InputMethodDescription,
+    InputMethodInstall,
+    InputMethodReinstall,
+    InputMethodInstalling,
+    InputMethodInstalled,
+    /// "Installed, but macOS would not switch to it (error {0})." The number is
+    /// an `OSStatus`, shown because `-50` is the one a reader can look up.
+    InputMethodInstalledNotActive(i32),
+    InputMethodNoBundle,
+    /// `ditto`'s own message, kept verbatim inside a translated frame.
+    InputMethodCopyFailed(String),
+    /// How many `TISRegisterInputSource` calls were made before giving up.
+    InputMethodNeverAppeared(u32),
+    InputMethodStatus,
+    InputMethodNotInstalled,
+    /// The installed bundle's version, as the bundle itself reported it.
+    InputMethodRunning(String),
+    InputMethodInstalledIdle,
+    InputMethodSettingsPending,
+    InputMethodStorageProblem,
+    InputMethodStoreError(String),
+    InputMethodStoreMissingVersion,
+    InputMethodStoreUnsupportedVersion {
+        found: u64,
+        supported: u32,
+    },
+    InputMethodScheme,
+    InputMethodSchemeDescription,
+    InputMethodTelex,
+    InputMethodVni,
+    InputMethodTonePlacement,
+    InputMethodTonePlacementDescription,
+    InputMethodToneModern,
+    InputMethodToneTraditional,
+    InputMethodSpellCheck,
+    InputMethodSpellCheckDescription,
+    InputMethodBracketShortcuts,
+    InputMethodBracketShortcutsDescription,
 }
 
 impl Str {
@@ -4503,6 +4551,166 @@ impl Str {
             (Str::TrayKeyboardInput, Language::Vietnamese) => "Bàn phím nhập".into(),
             (Str::TrayQuitDodo, Language::English) => "Quit Dodo".into(),
             (Str::TrayQuitDodo, Language::Vietnamese) => "Thoát Dodo".into(),
+
+            (Str::InputMethod, Language::English) => "Input method".into(),
+            (Str::InputMethod, Language::Vietnamese) => "Bộ gõ".into(),
+            (Str::InputMethodDescription, Language::English) => {
+                "Install Dodo's Vietnamese input method to type Vietnamese in any application. \
+                 It keeps working while Dodo is closed."
+                    .into()
+            }
+            (Str::InputMethodDescription, Language::Vietnamese) => {
+                "Cài bộ gõ tiếng Việt của Dodo để gõ tiếng Việt trong mọi ứng dụng. Bộ gõ vẫn \
+                 hoạt động khi Dodo đã đóng."
+                    .into()
+            }
+            (Str::InputMethodInstall, Language::English) => "Install".into(),
+            (Str::InputMethodInstall, Language::Vietnamese) => "Cài đặt".into(),
+            (Str::InputMethodReinstall, Language::English) => "Reinstall".into(),
+            (Str::InputMethodReinstall, Language::Vietnamese) => "Cài lại".into(),
+            (Str::InputMethodInstalling, Language::English) => "Installing…".into(),
+            (Str::InputMethodInstalling, Language::Vietnamese) => "Đang cài…".into(),
+            (Str::InputMethodInstalled, Language::English) => {
+                "Installed, and macOS switched to it. Type Vietnamese anywhere.".into()
+            }
+            (Str::InputMethodInstalled, Language::Vietnamese) => {
+                "Đã cài và macOS đã chuyển sang bộ gõ. Gõ tiếng Việt ở mọi nơi.".into()
+            }
+            // The `-50` case, which on some machines is every input source's
+            // answer including Apple's own — see `docs/macos-input-method.md` §5.
+            // So the wording says what to do next rather than what went wrong.
+            (Str::InputMethodInstalledNotActive(status), Language::English) => format!(
+                "Installed, but macOS would not switch to it (error {status}). Turn it on in \
+                 System Settings → Keyboard → Input Sources."
+            )
+            .into(),
+            (Str::InputMethodInstalledNotActive(status), Language::Vietnamese) => format!(
+                "Đã cài, nhưng macOS không chuyển sang bộ gõ (lỗi {status}). Hãy bật trong Cài \
+                 đặt hệ thống → Bàn phím → Nguồn nhập."
+            )
+            .into(),
+            (Str::InputMethodNoBundle, Language::English) => {
+                "This build of Dodo carries no input method to install.".into()
+            }
+            (Str::InputMethodNoBundle, Language::Vietnamese) => {
+                "Bản Dodo này không kèm bộ gõ để cài.".into()
+            }
+            (Str::InputMethodCopyFailed(detail), Language::English) => {
+                format!("The input method could not be copied: {detail}").into()
+            }
+            (Str::InputMethodCopyFailed(detail), Language::Vietnamese) => {
+                format!("Không thể sao chép bộ gõ: {detail}").into()
+            }
+            (Str::InputMethodNeverAppeared(attempts), Language::English) => format!(
+                "macOS accepted the input method but never listed it, after {attempts} attempts."
+            )
+            .into(),
+            (Str::InputMethodNeverAppeared(attempts), Language::Vietnamese) => format!(
+                "macOS đã nhận bộ gõ nhưng không liệt kê nó, sau {attempts} lần thử."
+            )
+            .into(),
+            (Str::InputMethodStatus, Language::English) => "Status".into(),
+            (Str::InputMethodStatus, Language::Vietnamese) => "Trạng thái".into(),
+            (Str::InputMethodNotInstalled, Language::English) => "Not installed.".into(),
+            (Str::InputMethodNotInstalled, Language::Vietnamese) => "Chưa cài.".into(),
+            (Str::InputMethodRunning(version), Language::English) => {
+                format!("Running, version {version}.").into()
+            }
+            (Str::InputMethodRunning(version), Language::Vietnamese) => {
+                format!("Đang chạy, phiên bản {version}.").into()
+            }
+            (Str::InputMethodInstalledIdle, Language::English) => {
+                "Installed. macOS starts it when you switch to it.".into()
+            }
+            (Str::InputMethodInstalledIdle, Language::Vietnamese) => {
+                "Đã cài. macOS sẽ khởi động bộ gõ khi bạn chuyển sang nó.".into()
+            }
+            (Str::InputMethodSettingsPending, Language::English) => {
+                "The input method has not picked these settings up yet.".into()
+            }
+            (Str::InputMethodSettingsPending, Language::Vietnamese) => {
+                "Bộ gõ chưa nhận các thiết lập này.".into()
+            }
+            (Str::InputMethodStorageProblem, Language::English) => "Settings file".into(),
+            (Str::InputMethodStorageProblem, Language::Vietnamese) => "Tệp thiết lập".into(),
+            (Str::InputMethodStoreError(detail), Language::English) => {
+                format!("The input method's settings could not be read or saved: {detail}").into()
+            }
+            (Str::InputMethodStoreError(detail), Language::Vietnamese) => {
+                format!("Không thể đọc hoặc lưu thiết lập bộ gõ: {detail}").into()
+            }
+            (Str::InputMethodStoreMissingVersion, Language::English) => {
+                "The input method's settings file carries no schema version, so it cannot be \
+                 read safely."
+                    .into()
+            }
+            (Str::InputMethodStoreMissingVersion, Language::Vietnamese) => {
+                "Tệp thiết lập bộ gõ không ghi phiên bản lược đồ nên không thể đọc an toàn.".into()
+            }
+            (
+                Str::InputMethodStoreUnsupportedVersion { found, supported },
+                Language::English,
+            ) => format!(
+                "The input method's settings file uses schema {found}; this build of dodo reads \
+                 {supported}. Update dodo rather than risk misreading it."
+            )
+            .into(),
+            (
+                Str::InputMethodStoreUnsupportedVersion { found, supported },
+                Language::Vietnamese,
+            ) => format!(
+                "Tệp thiết lập bộ gõ dùng lược đồ {found}; bản dodo này chỉ đọc {supported}. Hãy \
+                 cập nhật dodo thay vì đọc sai tệp."
+            )
+            .into(),
+            (Str::InputMethodScheme, Language::English) => "Input scheme".into(),
+            (Str::InputMethodScheme, Language::Vietnamese) => "Kiểu gõ".into(),
+            (Str::InputMethodSchemeDescription, Language::English) => {
+                "Telex marks tones with letters (aa, ow, s, f); VNI marks them with digits \
+                 (a6, o7, 1, 2)."
+                    .into()
+            }
+            (Str::InputMethodSchemeDescription, Language::Vietnamese) => {
+                "Telex bỏ dấu bằng chữ (aa, ow, s, f); VNI bỏ dấu bằng số (a6, o7, 1, 2).".into()
+            }
+            (Str::InputMethodTelex, _) => "Telex".into(),
+            (Str::InputMethodVni, _) => "VNI".into(),
+            (Str::InputMethodTonePlacement, Language::English) => "Tone mark placement".into(),
+            (Str::InputMethodTonePlacement, Language::Vietnamese) => "Vị trí dấu thanh".into(),
+            (Str::InputMethodTonePlacementDescription, Language::English) => {
+                "Modern puts the mark on the main vowel (hoà); traditional puts it on the first \
+                 (hòa)."
+                    .into()
+            }
+            (Str::InputMethodTonePlacementDescription, Language::Vietnamese) => {
+                "Kiểu mới đặt dấu trên nguyên âm chính (hoà); kiểu cũ đặt trên nguyên âm đầu \
+                 (hòa)."
+                    .into()
+            }
+            (Str::InputMethodToneModern, Language::English) => "Modern".into(),
+            (Str::InputMethodToneModern, Language::Vietnamese) => "Kiểu mới".into(),
+            (Str::InputMethodToneTraditional, Language::English) => "Traditional".into(),
+            (Str::InputMethodToneTraditional, Language::Vietnamese) => "Kiểu cũ".into(),
+            (Str::InputMethodSpellCheck, Language::English) => "Spell check".into(),
+            (Str::InputMethodSpellCheck, Language::Vietnamese) => "Kiểm tra chính tả".into(),
+            (Str::InputMethodSpellCheckDescription, Language::English) => {
+                "Hand back the keys as typed when the result is not a Vietnamese syllable, so \
+                 English words survive."
+                    .into()
+            }
+            (Str::InputMethodSpellCheckDescription, Language::Vietnamese) => {
+                "Trả lại đúng các ký tự đã gõ khi kết quả không phải âm tiết tiếng Việt, để từ \
+                 tiếng Anh không bị đổi."
+                    .into()
+            }
+            (Str::InputMethodBracketShortcuts, Language::English) => "Bracket shortcuts".into(),
+            (Str::InputMethodBracketShortcuts, Language::Vietnamese) => "Phím ngoặc".into(),
+            (Str::InputMethodBracketShortcutsDescription, Language::English) => {
+                "In Telex, [ and ] type ơ and ư — the only way to type uơ (thuở, huơ).".into()
+            }
+            (Str::InputMethodBracketShortcutsDescription, Language::Vietnamese) => {
+                "Trong Telex, [ và ] gõ ơ và ư — cách duy nhất để gõ uơ (thuở, huơ).".into()
+            }
         }
     }
 }
@@ -5648,6 +5856,49 @@ mod tests {
             plain(Str::TrayOpenDodo),
             plain(Str::TrayKeyboardInput),
             plain(Str::TrayQuitDodo),
+            // The macOS input method.
+            plain(Str::InputMethod),
+            plain(Str::InputMethodDescription),
+            plain(Str::InputMethodInstall),
+            plain(Str::InputMethodReinstall),
+            plain(Str::InputMethodInstalling),
+            plain(Str::InputMethodInstalled),
+            with(
+                Str::InputMethodInstalledNotActive(NUMBER as i32),
+                &[NUMBER_TEXT],
+            ),
+            plain(Str::InputMethodNoBundle),
+            with(Str::InputMethodCopyFailed(DETAIL.into()), &[DETAIL]),
+            with(Str::InputMethodNeverAppeared(NUMBER as u32), &[NUMBER_TEXT]),
+            plain(Str::InputMethodStatus),
+            plain(Str::InputMethodNotInstalled),
+            with(Str::InputMethodRunning(DETAIL.into()), &[DETAIL]),
+            plain(Str::InputMethodInstalledIdle),
+            plain(Str::InputMethodSettingsPending),
+            plain(Str::InputMethodStorageProblem),
+            with(Str::InputMethodStoreError(DETAIL.into()), &[DETAIL]),
+            plain(Str::InputMethodStoreMissingVersion),
+            with(
+                Str::InputMethodStoreUnsupportedVersion {
+                    found: NUMBER as u64,
+                    supported: 7,
+                },
+                &[NUMBER_TEXT, "7"],
+            ),
+            plain(Str::InputMethodScheme),
+            plain(Str::InputMethodSchemeDescription),
+            // The two scheme names are the same word in both languages, like
+            // every other term of art in dodo.
+            term(Str::InputMethodTelex),
+            term(Str::InputMethodVni),
+            plain(Str::InputMethodTonePlacement),
+            plain(Str::InputMethodTonePlacementDescription),
+            plain(Str::InputMethodToneModern),
+            plain(Str::InputMethodToneTraditional),
+            plain(Str::InputMethodSpellCheck),
+            plain(Str::InputMethodSpellCheckDescription),
+            plain(Str::InputMethodBracketShortcuts),
+            plain(Str::InputMethodBracketShortcutsDescription),
         ]
     }
 
@@ -6482,6 +6733,37 @@ mod tests {
             Str::TrayOpenDodo => 814,
             Str::TrayKeyboardInput => 815,
             Str::TrayQuitDodo => 816,
+            Str::InputMethod => 817,
+            Str::InputMethodDescription => 818,
+            Str::InputMethodInstall => 819,
+            Str::InputMethodReinstall => 820,
+            Str::InputMethodInstalling => 821,
+            Str::InputMethodInstalled => 822,
+            Str::InputMethodInstalledNotActive(_) => 823,
+            Str::InputMethodNoBundle => 824,
+            Str::InputMethodCopyFailed(_) => 825,
+            Str::InputMethodNeverAppeared(_) => 826,
+            Str::InputMethodStatus => 827,
+            Str::InputMethodNotInstalled => 828,
+            Str::InputMethodRunning(_) => 829,
+            Str::InputMethodInstalledIdle => 830,
+            Str::InputMethodSettingsPending => 831,
+            Str::InputMethodStorageProblem => 832,
+            Str::InputMethodStoreError(_) => 833,
+            Str::InputMethodStoreMissingVersion => 834,
+            Str::InputMethodStoreUnsupportedVersion { .. } => 835,
+            Str::InputMethodScheme => 836,
+            Str::InputMethodSchemeDescription => 837,
+            Str::InputMethodTelex => 838,
+            Str::InputMethodVni => 839,
+            Str::InputMethodTonePlacement => 840,
+            Str::InputMethodTonePlacementDescription => 841,
+            Str::InputMethodToneModern => 842,
+            Str::InputMethodToneTraditional => 843,
+            Str::InputMethodSpellCheck => 844,
+            Str::InputMethodSpellCheckDescription => 845,
+            Str::InputMethodBracketShortcuts => 846,
+            Str::InputMethodBracketShortcutsDescription => 847,
         }
     }
 
