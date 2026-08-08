@@ -23,7 +23,7 @@
 //! Every Vietnamese letter does have a precomposed NFC form, so each call here
 //! returns exactly one `char` in practice — but nothing downstream assumes it.
 //! Lengths are counted in graphemes
-//! ([`grapheme_count`](crate::input_method::core::grapheme_count)), so a
+//! ([`grapheme_count`](crate::core::grapheme_count)), so a
 //! hypothetical combination with no precomposed form would still measure as one
 //! visible character.
 
@@ -106,8 +106,8 @@ pub fn nfc(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{base_with_mark, can_take, combining, nfc, render_letter};
-    use crate::input_method::core::grapheme_count;
-    use crate::input_method::languages::vietnamese::syllable::{Mark, Tone};
+    use crate::core::grapheme_count;
+    use crate::languages::vietnamese::syllable::{Mark, Tone};
 
     const TONES: [Tone; 6] = [
         Tone::Level,

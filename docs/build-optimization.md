@@ -390,7 +390,9 @@ compiler was handed the same input twice.
 
 Two secondary confirmations, since "it is a separate crate" is the whole claim:
 `cargo metadata --no-deps` at the repo root lists `dodo` as the only package and
-one workspace member, and reverting the `exclude` key did not cause cargo to
+one workspace member (as of that round — the repo gained a `[workspace]` with a
+second member, `crates/dodo-ime-core`, on 2026-08-08; `update-manifest` is still
+not one of them), and reverting the `exclude` key did not cause cargo to
 rebuild at all — `exclude` is packaging metadata and not part of the build
 fingerprint.
 

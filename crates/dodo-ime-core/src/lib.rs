@@ -1,13 +1,24 @@
 //! Typing a language the physical keyboard does not have — dodo's own input
 //! method, as pure logic.
 //!
-//! Round 1 ships the part that has nothing to do with any operating system: a
-//! normalized key/action vocabulary ([`core`]) and one language engine
+//! This crate ships the part that has nothing to do with any operating system:
+//! a normalized key/action vocabulary ([`core`]) and one language engine
 //! ([`languages::vietnamese`]) that speaks it. Later rounds add settings, tray
 //! wiring, per-application language memory, abbreviations, and three native
 //! hosts — a macOS InputMethodKit bundle, a Windows TSF DLL, an IBus engine on
 //! Linux. **Nothing here touches the OS, the UI, the tray or settings**, and
 //! [`purity_lint`] is a test that keeps it that way.
+//!
+//! # Why this is a crate and not a module of dodo
+//!
+//! It was a module — `src/input_method/` — for exactly one round. The macOS
+//! investigation settled that the input method has to be a **separate `.app`
+//! bundle** that macOS launches, and Windows and Linux load their hosts into
+//! *other people's processes*. All three link this code; none of them may link
+//! gpui, tree-sitter, bollard or reqwest. A module of the `dodo` binary crate
+//! cannot be linked by anything, so the boundary that `purity_lint` had been
+//! asserting on paper is now the crate graph. dodo depends on this crate; this
+//! crate depends on `unicode-normalization` and nothing else.
 //!
 //! # The shape of it
 //!
@@ -46,20 +57,16 @@
 //! swallowing it. See [`languages::vietnamese::VietnameseEngine::process_key`]
 //! for where that rule actually lives.
 
-// The whole module is round 1 of a long feature: nothing in dodo calls it yet,
-// because the caller is the tray/settings wiring and the three OS hosts that
-// later rounds add. Every item here is exercised by this module's own tests, so
-// "dead" means *not yet wired*, not *unreachable* — the repo's rule for a module
-// under construction (AGENTS.md: "annotate, do not delete"). Remove this the
-// round something outside `input_method` constructs an engine; the compiler will
-// then name anything that really did go unused.
-#![allow(dead_code)]
+// The module-wide `#![allow(dead_code)]` this file carried as `src/input_method/
+// mod.rs` is gone, and its removal condition was never met — the crate boundary
+// simply made it unnecessary. Everything here is `pub` in a library, so it is
+// reachable by definition and nothing is dead; a genuinely unused private helper
+// will now be reported rather than hidden.
 
 pub mod core;
 pub mod languages;
 
-/// Guards the rule that makes this module extractable into its own crate;
-/// test-only.
+/// Guards the rule that makes the OS hosts linkable; test-only.
 #[cfg(test)]
 mod purity_lint;
 
@@ -67,16 +74,12 @@ mod purity_lint;
 #[cfg(test)]
 mod testing;
 
-// The module's public face, for the tray/settings wiring and the OS hosts that
-// later rounds add. Nothing outside `input_method` imports it yet, which is the
-// same "not wired" state the `dead_code` allow above covers; both come off
-// together.
-#[allow(unused_imports)]
+// The crate's public face, for the tray/settings wiring and the OS hosts that
+// later rounds add.
 pub use self::core::{
     Candidate, CandidateList, Composition, EngineAction, EngineResult, Key, KeyEvent,
     LanguageEngine, LanguageId, Modifiers,
 };
-#[allow(unused_imports)]
 pub use self::languages::vietnamese::{
     InputScheme, OutputMode, TonePlacement, VietnameseConfig, VietnameseEngine,
 };

@@ -4,7 +4,7 @@
 //! real substitution at this seam: each is a genuinely different algorithm
 //! behind an identical host protocol, and a host must be able to hold whichever
 //! one the user selected without knowing which. Nothing *else* in
-//! `input_method` is a trait — the Telex/VNI split inside Vietnamese is an
+//! this crate is a trait — the Telex/VNI split inside Vietnamese is an
 //! enum, because those two share a state machine rather than replacing one.
 //!
 //! # Can this API carry Korean, Japanese and Chinese?
@@ -129,7 +129,7 @@ impl EngineResult {
 ///   invalidated from outside (the user clicked elsewhere, the application
 ///   cleared the field).
 /// - Neither may keep any record of what was typed once it has returned. See
-///   the module docs on [`crate::input_method`].
+///   the module docs on [`crate`].
 pub trait LanguageEngine {
     /// Which engine this is. Not a user-facing setting — see [`LanguageId`].
     fn language(&self) -> LanguageId;
@@ -150,7 +150,7 @@ pub trait LanguageEngine {
 #[cfg(test)]
 mod tests {
     use super::{EngineAction, EngineResult};
-    use crate::input_method::core::{Candidate, CandidateList};
+    use crate::core::{Candidate, CandidateList};
 
     #[test]
     fn handled_is_derived_from_the_actions() {

@@ -338,7 +338,7 @@ impl Syllable {
 #[cfg(test)]
 mod tests {
     use super::{Letter, Mark, MarkOutcome, Syllable, Tone};
-    use crate::input_method::languages::vietnamese::tone::TonePlacement;
+    use crate::languages::vietnamese::tone::TonePlacement;
 
     const MODERN: TonePlacement = TonePlacement::Modern;
 

@@ -22,7 +22,7 @@
 //! expansion, which is a later round and will read committed text rather than
 //! widening the composition.
 
-use crate::input_method::core::{Key, KeyEvent};
+use crate::core::{Key, KeyEvent};
 
 /// Whether a key is one a syllable can be built from at all.
 ///
@@ -59,7 +59,7 @@ pub fn is_command(event: &KeyEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{breaks_composition, is_command, is_syllable_letter};
-    use crate::input_method::core::{Key, KeyEvent, Modifiers};
+    use crate::core::{Key, KeyEvent, Modifiers};
 
     #[test]
     fn only_ascii_letters_build_a_syllable() {

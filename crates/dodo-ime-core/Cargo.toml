@@ -1,0 +1,14 @@
+[package]
+name = "dodo-ime-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "dodo's input-method engine: a normalized key/action vocabulary and the Vietnamese engine that speaks it, with no operating system, UI or dodo dependency."
+
+# This crate exists to be linked by code that must not link gpui: a macOS
+# InputMethodKit `.app`, a Windows TSF DLL, an IBus engine on Linux. That is why
+# the dependency list below is one crate long and why `src/purity_lint.rs` reads
+# the sources at test time — see its docs for what `Cargo.toml` alone cannot say.
+[dependencies]
+# The one thing NFC cannot be done correctly without.
+unicode-normalization = "0.1"

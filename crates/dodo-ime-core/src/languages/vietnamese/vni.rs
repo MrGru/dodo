@@ -84,8 +84,8 @@ fn mark_if_it_lands(syllable: &Syllable, mark: Mark, literal: char) -> Option<Tr
 #[cfg(test)]
 mod tests {
     use super::interpret;
-    use crate::input_method::languages::vietnamese::Transform;
-    use crate::input_method::languages::vietnamese::syllable::{Mark, Syllable, Tone};
+    use crate::languages::vietnamese::Transform;
+    use crate::languages::vietnamese::syllable::{Mark, Syllable, Tone};
 
     fn syllable(spelling: &str) -> Syllable {
         let mut syllable = Syllable::new();

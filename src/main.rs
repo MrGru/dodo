@@ -22,8 +22,11 @@ mod i18n;
 /// Guards the rule that `i18n` only enforces halfway; test-only.
 #[cfg(test)]
 mod i18n_lint;
-/// The platform-independent core of dodo's input method; nothing wires it yet.
-mod input_method;
+// dodo's input method is not a module here: its platform-independent core is
+// the `dodo-ime-core` crate under `crates/`, because the macOS/Windows/Linux
+// hosts that will drive it load into other processes and must link it without
+// linking gpui. Nothing in this binary wires it yet; the dependency is declared
+// so the workspace resolves as one graph.
 mod json_formatter;
 mod layout;
 mod paths;

@@ -1,47 +1,63 @@
-//! A source-level guard that `input_method` depends on nothing but `std`.
+//! A source-level guard that this crate depends on nothing but `std` and
+//! `unicode-normalization`.
 //!
 //! # Why this exists
 //!
-//! **So the module can be lifted into its own crate without being untangled
-//! first.** Later rounds build three native hosts — a macOS InputMethodKit
-//! bundle, a Windows TSF DLL, an IBus engine — and every one of them is a
-//! *separate process* loaded into somebody else's application. They must link
-//! the engine; they must not link gpui, or `rust-embed`, or bollard, or dodo's
-//! settings. An input method that dragged a UI framework into every text field
-//! on the machine would be unacceptable even if it worked.
+//! Three native hosts are coming — a macOS InputMethodKit `.app`, a Windows TSF
+//! DLL, an IBus engine — and every one of them is a *separate process* loaded
+//! into somebody else's application. They must link this engine; they must not
+//! link gpui, or `rust-embed`, or bollard, or dodo's settings. An input method
+//! that dragged a UI framework into every text field on the machine would be
+//! unacceptable even if it worked.
 //!
-//! Nothing enforces that today, because today the module is compiled as part of
-//! dodo and a single `use crate::i18n::Str` would compile perfectly well. It
-//! would also be invisible until the day someone tries to extract the crate and
-//! finds a year of accumulated coupling. So the rule is checked from the first
-//! commit, when it costs nothing to keep.
+//! **That boundary is now a real crate boundary, not an aspirational one.** This
+//! code was `src/input_method/` for one round, compiled into the `dodo` binary,
+//! where a single `use crate::i18n::Str` would have compiled perfectly well and
+//! nothing but this file would have objected. It is its own crate now, so the
+//! compiler objects first: `crate::` reaches only into this crate, and `use
+//! gpui::…` fails to resolve because `Cargo.toml` does not name it.
+//!
+//! # What `Cargo.toml` cannot say, and this still can
+//!
+//! Two things, which is why the file survived the extraction rather than being
+//! deleted with the problem it was written for:
+//!
+//! - **A dependency is one line.** Adding `gpui = …` to this crate's manifest
+//!   compiles; nothing warns. The allow-list below turns that one line into a
+//!   failing test, so growing this crate's dependency list is a decision someone
+//!   makes on purpose rather than a change that slips through review. The rule
+//!   holds for any crate, including ones nobody thought to forbid by name —
+//!   [`ALLOWED_ROOTS`] is an allow-list, not a block-list.
+//! - **Sideways is the workspace's shape, not cargo's.** `crates/` will hold the
+//!   hosts, and the engine must never depend on one of *them* either. `dodo::`
+//!   and any future sibling are caught by the same allow-list.
+//!
+//! [`tests::the_scan_covers_every_file`] is the third: it proves the check
+//! actually reads every file, which no manifest can.
 //!
 //! # What is allowed
 //!
 //! - `std` — the whole point is that this is plain Rust.
-//! - `super` and `self` — relative paths within the module.
-//! - `crate::input_method::…` — absolute paths *within the module*. Extraction
-//!   rewrites this prefix to `crate::` and nothing else.
-//! - `unicode_normalization` — the single external crate, already a dodo
-//!   dependency, and the one thing NFC cannot be done correctly without. See
-//!   [`unicode`](crate::input_method::languages::vietnamese::unicode).
+//! - `crate`, `super`, `self` — paths within this crate.
+//! - `unicode_normalization` — the single external crate, and the one thing NFC
+//!   cannot be done correctly without. See
+//!   [`unicode`](crate::languages::vietnamese::unicode).
 //!
 //! Everything else fails, and the failure message says which file and which
 //! line.
 //!
 //! # How it decides
 //!
-//! By reading the source, like [`i18n_lint`](crate::i18n_lint) — the module
-//! this is modelled on. It looks at the root segment of every `use`, at
-//! `extern crate`, and at a short list of names that would be a violation even
-//! without a `use` (a fully-qualified `gpui::px(…)` needs no import). It is a
-//! guard, not a proof: a macro could still smuggle a path in. Nothing here uses
-//! one.
+//! By reading the source, like dodo's own `i18n_lint` — the module this is
+//! modelled on. It looks at the root segment of every `use`, at `extern crate`,
+//! and at a short list of names that would be a violation even without a `use`
+//! (a fully-qualified `gpui::px(…)` needs no import). It is a guard, not a
+//! proof: a macro could still smuggle a path in. Nothing here uses one.
 
-/// Every source file of the module, embedded so the check needs no working
+/// Every source file of the crate, embedded so the check needs no working
 /// directory. [`tests::the_scan_covers_every_file`] keeps the list complete.
 const SOURCES: [(&str, &str); 18] = [
-    ("mod.rs", include_str!("mod.rs")),
+    ("lib.rs", include_str!("lib.rs")),
     ("testing.rs", include_str!("testing.rs")),
     ("core/mod.rs", include_str!("core/mod.rs")),
     ("core/action.rs", include_str!("core/action.rs")),
@@ -85,40 +101,39 @@ const SOURCES: [(&str, &str); 18] = [
     ),
 ];
 
-/// Files that are part of the module but not of the shipped engine, so they are
+/// Files that are part of the crate but not of the shipped engine, so they are
 /// listed for completeness and skipped by the import check.
 ///
 /// Two files qualify, and both are entirely `#[cfg(test)]`: the word corpus and
 /// the engine's behaviour tables. Every other file's tests *are* scanned — a
-/// test module is still code in the crate, and an import it drags in is one the
-/// extracted crate would have to carry.
+/// test module is still code in the crate, and an import it drags in is one a
+/// `dev-dependency` would have to carry, which the OS hosts would then have to
+/// keep out of their own builds.
 const TEST_ONLY: [&str; 2] = [
     "languages/vietnamese/corpus.rs",
     "languages/vietnamese/tests.rs",
 ];
 
-/// The root segment of a path that may be imported.
-const ALLOWED_ROOTS: [&str; 4] = ["std", "super", "self", "unicode_normalization"];
-
-/// The only `crate::` prefix allowed: the module's own path.
-const OWN_PATH: &str = "crate::input_method";
+/// The root segment of a path that may be imported. An allow-list, so a crate
+/// nobody thought to forbid is forbidden anyway.
+///
+/// `crate`, `super` and `self` are all *within* this crate now — they were the
+/// module-relative forms before the extraction, and the `crate::input_method::…`
+/// prefix the old version had to special-case is simply gone.
+const ALLOWED_ROOTS: [&str; 5] = ["std", "crate", "super", "self", "unicode_normalization"];
 
 /// Names that are a violation wherever they appear, `use` or not — a
 /// fully-qualified `gpui::px(1.)` imports nothing.
 ///
 /// Not exhaustive and not trying to be: every one of these is caught by the
 /// `use` check as well. They are here to catch the fully-qualified spelling,
-/// which is the one shape that would otherwise slip past.
-const FORBIDDEN_NAMES: [&str; 12] = [
+/// which is the one shape that would otherwise slip past. `dodo::` is the
+/// sideways case: the workspace is where a sibling crate could be reached for.
+const FORBIDDEN_NAMES: [&str; 7] = [
     "gpui::",
     "gpui_component",
-    "crate::i18n",
-    "crate::session",
-    "crate::tray",
-    "crate::layout",
-    "crate::settings",
-    "crate::assets",
-    "crate::paths",
+    "dodo::",
+    "dodo_ime_",
     "serde::",
     "bollard",
     "rust_embed",
@@ -160,10 +175,7 @@ fn findings_in(path: &str, source: &str) -> Vec<String> {
 
         if let Some(imported) = imported_path(line) {
             let root = root_of(imported);
-            let allowed = ALLOWED_ROOTS.contains(&root)
-                || imported.starts_with(OWN_PATH)
-                || (root == "crate" && imported.starts_with(OWN_PATH));
-            if !allowed {
+            if !ALLOWED_ROOTS.contains(&root) {
                 findings.push(format!("{path}:{number} — `use {imported};`"));
             }
         }
@@ -178,7 +190,7 @@ fn findings_in(path: &str, source: &str) -> Vec<String> {
     findings
 }
 
-/// Every import violation in the module.
+/// Every import violation in the crate.
 fn findings() -> Vec<String> {
     SOURCES
         .iter()
@@ -192,16 +204,17 @@ mod tests {
 
     /// The guard itself.
     ///
-    /// A failure here means `input_method` has grown a dependency on the rest of
-    /// dodo or on a crate it is not allowed. The fix is never to widen
-    /// `ALLOWED_ROOTS`: pass the value in from the caller instead, at the
-    /// boundary where the OS host or the settings layer already is.
+    /// A failure here means this crate has grown a dependency — on a sibling in
+    /// the workspace, or on a crate somebody just added to `Cargo.toml`. The fix
+    /// is never to widen `ALLOWED_ROOTS`: pass the value in from the caller
+    /// instead, at the boundary where the OS host or the settings layer already
+    /// is.
     #[test]
     fn the_engine_depends_on_nothing_but_std() {
         let findings = findings();
         assert!(
             findings.is_empty(),
-            "{} forbidden dependency reference(s) in `input_method`:\n  {}",
+            "{} forbidden dependency reference(s) in `dodo-ime-core`:\n  {}",
             findings.len(),
             findings.join("\n  ")
         );
@@ -212,11 +225,11 @@ mod tests {
     /// otherwise be exempt from the whole check.
     #[test]
     fn the_scan_covers_every_file() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/input_method");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut found: Vec<String> = Vec::new();
         let mut stack = vec![root.clone()];
         while let Some(directory) = stack.pop() {
-            for entry in std::fs::read_dir(&directory).expect("input_method is readable") {
+            for entry in std::fs::read_dir(&directory).expect("the crate source is readable") {
                 let path = entry.expect("a readable directory entry").path();
                 if path.is_dir() {
                     stack.push(path);
@@ -244,7 +257,7 @@ mod tests {
 
         assert_eq!(
             found, listed,
-            "the file list in `purity_lint` no longer matches src/input_method"
+            "the file list in `purity_lint` no longer matches the crate's src/"
         );
     }
 
@@ -261,7 +274,7 @@ mod tests {
         // line before it ever gets here.
         assert_eq!(imported_path("// use gpui::*;"), None);
 
-        assert_eq!(root_of("crate::input_method::core"), "crate");
+        assert_eq!(root_of("crate::core"), "crate");
         assert_eq!(root_of("::std::fmt"), "std");
         assert_eq!(root_of("super::super::core"), "super");
     }
@@ -273,9 +286,10 @@ mod tests {
         let cases = [
             "use gpui::*;",
             "use gpui_component::Icon;",
-            "use crate::i18n::Str;",
-            "use crate::tray::InputLanguage;",
-            "use crate::session::models::document::Document;",
+            // Sideways: a sibling crate in the workspace, which `Cargo.toml`
+            // would happily accept as one added line.
+            "use dodo::i18n::Str;",
+            "use dodo_ime_macos::Host;",
             "use serde::Serialize;",
             "use regex::Regex;",
             "use std::collections::HashMap;\nextern crate alloc;",
@@ -296,7 +310,7 @@ mod tests {
             "use std::ops::Range;",
             "use super::syllable::Syllable;",
             "use super::super::core::KeyEvent;",
-            "use crate::input_method::core::{EngineAction, KeyEvent};",
+            "use crate::core::{EngineAction, KeyEvent};",
             "use unicode_normalization::UnicodeNormalization;",
             "use unicode_normalization::char::is_combining_mark;",
             "//! mentions crate::i18n and gpui:: in prose",

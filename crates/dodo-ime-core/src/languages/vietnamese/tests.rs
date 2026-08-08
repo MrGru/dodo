@@ -7,11 +7,9 @@
 
 use super::corpus;
 use super::{InputScheme, OutputMode, TonePlacement, VietnameseConfig, VietnameseEngine};
-use crate::input_method::core::{
-    EngineAction, Key, KeyEvent, LanguageEngine, LanguageId, Modifiers,
-};
-use crate::input_method::languages::vietnamese::unicode::nfc;
-use crate::input_method::testing::{Host, press, type_keys, type_keys_uncommitted};
+use crate::core::{EngineAction, Key, KeyEvent, LanguageEngine, LanguageId, Modifiers};
+use crate::languages::vietnamese::unicode::nfc;
+use crate::testing::{Host, press, type_keys, type_keys_uncommitted};
 
 fn engine() -> VietnameseEngine {
     VietnameseEngine::default()
@@ -480,10 +478,7 @@ fn reset_throws_the_composition_away_without_inserting_it() {
     assert!(engine.composition().is_empty());
 
     // And a reset with nothing in flight asks the host for nothing at all.
-    assert_eq!(
-        engine.reset(),
-        crate::input_method::core::EngineResult::ignored()
-    );
+    assert_eq!(engine.reset(), crate::core::EngineResult::ignored());
 }
 
 #[test]

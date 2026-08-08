@@ -113,7 +113,7 @@ pub fn placement_in(letters: &[Letter], parts: &Parts, style: TonePlacement) -> 
 #[cfg(test)]
 mod tests {
     use super::{TonePlacement, placement};
-    use crate::input_method::languages::vietnamese::syllable::{Letter, Mark};
+    use crate::languages::vietnamese::syllable::{Letter, Mark};
 
     fn letters(spelling: &str) -> Vec<Letter> {
         spelling
