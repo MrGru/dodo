@@ -1,0 +1,17 @@
+[package]
+name = "dodo-ime-ipc"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Everything Dodo.app and dodo's input-method bundle must agree on: the names macOS looks the bundle up by, the two files they exchange, and the notification that says a file changed."
+
+[dependencies]
+# The engine, for its configuration types alone. This crate holds the *serde*
+# mirror of `VietnameseConfig` rather than deriving on it, because
+# `dodo-ime-core` forbids serde by test — see its `purity_lint`.
+dodo-ime-core = { path = "../dodo-ime-core" }
+
+# The two files are JSON, versioned the way `environments.json` is. Both
+# processes parse with the same code so a schema can only be read one way.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

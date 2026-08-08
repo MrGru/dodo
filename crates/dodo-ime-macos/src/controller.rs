@@ -42,7 +42,7 @@ use objc2_input_method_kit::{IMKInputController, IMKServer, IMKStateSetting};
 
 use crate::client::Client;
 use crate::session::{Response, Session};
-use crate::{DEFAULT_CONFIG, keymap};
+use crate::{ipc, keymap};
 
 /// `NSEventMaskKeyDown`.
 ///
@@ -61,8 +61,10 @@ pub struct Ivars {
 
 impl Default for Ivars {
     fn default() -> Ivars {
+        // Whatever dodo's settings say *now*. A controller created after a
+        // settings change must not start on the value the process launched with.
         Ivars {
-            session: RefCell::new(Session::new(DEFAULT_CONFIG)),
+            session: RefCell::new(Session::new(ipc::config())),
         }
     }
 }
@@ -153,7 +155,23 @@ impl DodoInputController {
         action: impl FnOnce(&mut Session) -> Response,
     ) -> bool {
         let response = match self.ivars().session.try_borrow_mut() {
-            Ok(mut session) => action(&mut session),
+            Ok(mut session) => {
+                // A settings change may have landed since this session last ran.
+                // Applying it *here* rather than in the notification callback is
+                // what makes it safe: `Session::reconfigure` commits whatever is
+                // in flight under the rules it was typed with, and only a
+                // controller method has a client to commit it to.
+                let mut ops = session.reconfigure(ipc::config()).ops;
+                let response = action(&mut session);
+                ops.extend(response.ops);
+                // `handled` is the *action's* answer and never the
+                // reconfiguration's: the commit a settings change forces is
+                // text to insert, not a claim on this keystroke.
+                Response {
+                    ops,
+                    handled: response.handled,
+                }
+            }
             // Re-entered while the session was already borrowed. Doing nothing
             // and handing the key back is the only safe answer; panicking here
             // would take the user's application down with it.

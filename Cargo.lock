@@ -1610,6 +1610,7 @@ dependencies = [
  "base64",
  "bollard",
  "dodo-ime-core",
+ "dodo-ime-ipc",
  "futures-channel",
  "futures-util",
  "gpui",
@@ -1653,12 +1654,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dodo-ime-ipc"
+version = "0.1.0"
+dependencies = [
+ "dodo-ime-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dodo-ime-macos"
 version = "0.1.0"
 dependencies = [
  "dodo-ime-core",
+ "dodo-ime-ipc",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "objc2-input-method-kit",
 ]

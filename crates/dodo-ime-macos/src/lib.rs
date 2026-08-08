@@ -44,10 +44,13 @@
 //! # Two rules this crate is written around
 //!
 //! **No typing history, ever.** An input method sees every password and every
-//! private message its user writes. Nothing here writes a file, opens a socket,
-//! or prints a composition — there is no `println!` of user text on any path,
-//! including the error paths, and the only state that outlives a keystroke is
-//! the syllable currently being composed. macOS says "stop holding that" with
+//! private message its user writes. Nothing here opens a socket or prints a
+//! composition — there is no `println!` of user text on any path, including the
+//! error paths — and it writes exactly **one** file, which may carry nothing
+//! about what was typed (see [`ipc`], and `dodo_ime_ipc::status` for the whole
+//! constraint and the test that pins it). The only state that outlives a
+//! keystroke is the syllable currently being composed. macOS says "stop holding
+//! that" with
 //! `commitComposition:` and `deactivateServer:`, and
 //! [`Session::commit`](session::Session::commit) /
 //! [`Session::deactivate`](session::Session::deactivate) honour both.
@@ -58,19 +61,40 @@
 //! engine that claims a key but asks for nothing to be done hands it back
 //! anyway, because a key that produces neither text nor an edit has been lost.
 //!
+//! # Settings arrive as a file, and that is the one exception to "writes nothing"
+//!
+//! [`ipc`] is the bundle's half of `dodo_ime_ipc`: it reads dodo's
+//! `input-method.json` at launch and whenever dodo says it changed, and it writes
+//! `input-method-status.json` — the one file this process creates. The privacy
+//! rule above is unchanged and constrains that file absolutely: nothing the user
+//! typed may appear in it, and it is written on start and on a settings change,
+//! never on a keystroke. `dodo_ime_ipc::status`'s docs carry the whole
+//! constraint, with a test pinning the key set.
+//!
+//! [`DEFAULT_CONFIG`] is no longer what the bundle types with — it is what the
+//! bundle *falls back to*, when there is no settings file, when the file was
+//! written by a newer dodo, or when the environment names no home directory.
+//!
 //! # What this round does not do
 //!
-//! No IPC with `Dodo.app`, no settings, no tray wiring, no per-application
-//! language memory, no install action. The engine runs on compiled-in defaults
-//! ([`DEFAULT_CONFIG`]). `docs/macos-input-method.md` is the authority on
-//! building, installing and enabling it by hand, and on what the next round
-//! owes.
+//! No tray wiring, no per-application language memory, no menu-bar icon, no
+//! signing, and nothing in the release. `docs/macos-input-method.md` is the
+//! authority on building, installing and enabling it by hand, and on what the
+//! next round owes.
 
-pub mod bundle;
+pub mod ipc;
 pub mod keymap;
 pub mod ops;
 pub mod session;
 pub mod text;
+
+/// The names macOS looks this bundle up by.
+///
+/// They live in `dodo-ime-ipc` because **dodo's installer needs the same four
+/// strings** and cannot link this crate — see that crate's docs. Re-exported
+/// here because this is the crate whose `Info.plist` carries them, and the
+/// script check that proves the two agree is still their test.
+pub use dodo_ime_ipc::bundle;
 
 #[cfg(target_os = "macos")]
 pub mod client;

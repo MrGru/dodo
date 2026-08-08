@@ -38,6 +38,12 @@ fn main() {
     // Must happen before IMKServer exists.
     let _ = DodoInputController::class();
 
+    // Adopt dodo's settings and start listening for changes. Before the run
+    // loop, because the observer is delivered on the run loop of the thread that
+    // registered it — and before the first controller exists, because a
+    // controller reads the configuration when it is created.
+    dodo_ime_macos::ipc::start();
+
     let bundle = NSBundle::mainBundle();
     let bundle_identifier = bundle.bundleIdentifier();
     // Read back rather than repeated: `scripts/macos-input-method-bundle.sh`
