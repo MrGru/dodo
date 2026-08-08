@@ -34,6 +34,23 @@
 //! layout: neither file contains a rule about Vietnamese, so neither can drift
 //! from the other.
 //!
+//! # Case belongs to the letter, not to the key that decorated it
+//!
+//! A modifier key decides *which* diacritic; the letter it lands on decides the
+//! case. `Aa`, `aA` and `AA` are three ways of putting a circumflex on an `a`
+//! that was already typed, so they give `Â`, `â`, `Â` — shift is how a typist
+//! reaches `S` for *sắc* in a caps-locked word, not a statement about the
+//! vowel underneath. [`Transform::Mark`] and [`Transform::Tone`] therefore
+//! carry no case at all, only the literal to type if the transform turns out
+//! not to apply, and VNI gets the rule for free because a digit has no case to
+//! leak.
+//!
+//! The exceptions are the three places a modifier key *is* a letter rather than
+//! modifying one, where its own shift is the only case available: Telex's bare
+//! `w` (`W` types `Ư`), the bracket shortcuts (`{` and `}` type `Ơ` and `Ư`),
+//! and the literal a repeated modifier falls back to (`cAsS` ends `cAS`).
+//! Both halves are tabulated in this module's `tests`.
+//!
 //! # Fail safe, and what that costs
 //!
 //! Every path that cannot do the Vietnamese thing does the *literal* thing. A

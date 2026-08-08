@@ -80,6 +80,7 @@ fn the_doubled_vowels_and_the_w_marks() {
             ("uw", "ư"),
             ("dd", "đ"),
             ("w", "ư"),
+            ("W", "Ư"),
             ("uow", "ươ"),
             ("uwow", "ươ"),
         ],
@@ -343,6 +344,164 @@ fn capitalization_survives_every_transform() {
         ],
         vni,
     );
+}
+
+/// # The rule
+///
+/// **A modifier key decides which diacritic; the letter it lands on decides
+/// the case.** `Aa`, `aA` and `AA` are three ways of typing a circumflex onto
+/// an `a` that was already typed uppercase, lowercase, uppercase — so they give
+/// `Â`, `â`, `Â`. Shift is how a typist reaches `S` for *sắc* on a caps-locked
+/// word; it is not an opinion about the letter underneath, and Vietnamese has
+/// no convention in which it could be one. VNI is the same rule stated more
+/// obviously, because a digit has no case at all to leak.
+///
+/// The three exceptions all have the same shape: **when the modifier key
+/// becomes a letter itself, its own case is the only case there is.** Telex's
+/// bare `w` types `ư` outright, so `W` types `Ư`; the bracket shortcuts type
+/// `ơ`/`ư` and `{`/`}` type `Ơ`/`Ư`; and a repeated modifier that undoes itself
+/// types its own key, so `cAsS` ends `cAS`. Those are covered below too, next
+/// to the rule they look like a violation of.
+#[test]
+fn a_modifier_keys_own_case_never_reaches_the_letter_it_marks() {
+    check(
+        &[
+            // The doubled vowels: the first `a` is the letter, the second is
+            // only a circumflex.
+            ("aa", "â"),
+            ("aA", "â"),
+            ("Aa", "Â"),
+            ("AA", "Â"),
+            ("ee", "ê"),
+            ("eE", "ê"),
+            ("Ee", "Ê"),
+            ("EE", "Ê"),
+            ("oo", "ô"),
+            ("oO", "ô"),
+            ("Oo", "Ô"),
+            ("OO", "Ô"),
+            // `w` landing on a vowel is a breve or a horn, never a letter.
+            ("aw", "ă"),
+            ("aW", "ă"),
+            ("Aw", "Ă"),
+            ("AW", "Ă"),
+            ("ow", "ơ"),
+            ("oW", "ơ"),
+            ("Ow", "Ơ"),
+            ("OW", "Ơ"),
+            ("uw", "ư"),
+            ("uW", "ư"),
+            ("Uw", "Ư"),
+            ("UW", "Ư"),
+            // `dd`: the stroke belongs to the leading `d`, whichever `d` was
+            // shifted.
+            ("dd", "đ"),
+            ("dD", "đ"),
+            ("Dd", "Đ"),
+            ("DD", "Đ"),
+            // One horn key marking a bare `uo` pair keeps each vowel's own
+            // case, rather than levelling them.
+            ("uow", "ươ"),
+            ("uOw", "ưƠ"),
+            ("Uow", "Ươ"),
+            ("UOW", "ƯƠ"),
+            // And a tone key, which lands on a vowel chosen by position.
+            ("mas", "má"),
+            ("maS", "má"),
+            ("Mas", "Má"),
+            ("mAs", "mÁ"),
+            ("MAS", "MÁ"),
+        ],
+        telex,
+    );
+
+    // Mixed case inside one syllable is where a leaked modifier case would
+    // show: every letter below keeps exactly the case it was typed with.
+    check(
+        &[
+            ("tiEEngs", "tiẾng"),
+            ("tIeengS", "tIếng"),
+            ("nguyEEnx", "nguyỄn"),
+            ("NGUYeenX", "NGUYễn"),
+            ("duOwngf", "dưỜng"),
+            ("dUowngf", "dƯờng"),
+            ("DuOwNgF", "DưỜNg"),
+            ("chuOOis", "chuỐi"),
+            ("hOaf", "hOà"),
+            ("nGOAIF", "nGOÀI"),
+        ],
+        telex,
+    );
+
+    // A digit carries no case, so VNI can only ever report the letter's own.
+    check(
+        &[
+            ("a6", "â"),
+            ("A6", "Â"),
+            ("e6", "ê"),
+            ("E6", "Ê"),
+            ("o6", "ô"),
+            ("O6", "Ô"),
+            ("a8", "ă"),
+            ("A8", "Ă"),
+            ("o7", "ơ"),
+            ("O7", "Ơ"),
+            ("u7", "ư"),
+            ("U7", "Ư"),
+            ("d9", "đ"),
+            ("D9", "Đ"),
+            ("d9I", "đI"),
+            ("D9i", "Đi"),
+            ("uo7", "ươ"),
+            ("uO7", "ưƠ"),
+            ("Uo7", "Ươ"),
+            ("u7O7", "ưƠ"),
+            ("tiE6ng1", "tiẾng"),
+            ("TIe6NG1", "TIếNG"),
+            ("nguyE6n4", "nguyỄn"),
+            ("D9U7O7NG2", "ĐƯỜNG"),
+            ("mA1", "mÁ"),
+            ("Ma1", "Má"),
+        ],
+        vni,
+    );
+}
+
+/// The three places a modifier key really does decide a case — because in each
+/// of them it is not modifying anything, it is the letter.
+#[test]
+fn a_modifier_that_becomes_a_letter_carries_its_own_case() {
+    check(
+        &[
+            // `w` with no vowel to decorate types `ư` outright.
+            ("w", "ư"),
+            ("W", "Ư"),
+            ("Tw", "Tư"),
+            ("tW", "tƯ"),
+            ("TW", "TƯ"),
+            // The bracket shortcuts, where shift is the whole difference.
+            ("]", "ư"),
+            ("}", "Ư"),
+            ("T]", "Tư"),
+            ("T}", "TƯ"),
+            ("HU[", "HUơ"),
+            ("HU{", "HUƠ"),
+            ("THU[R", "THUở"),
+            ("THU{R", "THUỞ"),
+            // An undo types the key that undid it, in the case it was typed.
+            ("caSs", "cas"),
+            ("cAsS", "cAS"),
+            ("aWw", "aw"),
+            ("AwW", "AW"),
+            ("dDd", "dd"),
+            ("DdD", "DD"),
+            ("Caaa", "Caa"),
+            ("CAAA", "CAA"),
+        ],
+        telex,
+    );
+    // VNI's undo types a digit, which ends the syllable rather than joining it.
+    check(&[("A66", "A6"), ("D99", "D9"), ("U77", "U7")], vni);
 }
 
 // ---------------------------------------------- boundaries and other keys
