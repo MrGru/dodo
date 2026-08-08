@@ -45,6 +45,25 @@
 //! `docker::init`, `tray::init`, `quick_nav::init` and `session::init`. A refused
 //! settings file shows a row on the settings page and leaves the defaults in
 //! place; a failed install shows why.
+//!
+//! # Why this module is compiled on every platform, and allows dead code on two
+//!
+//! `src/tray` is `#[cfg(target_os = "macos")]` at its `mod` line. This one is not,
+//! deliberately: three of its four submodules — [`models::install`],
+//! [`services::store`] and [`services::installer`]'s driver — contain no macOS at
+//! all, and having the Linux and Windows `cargo check` rows type-check them is
+//! worth more than the alternative. A non-portable path join or an `unwrap` on a
+//! platform-specific assumption in the settings store is exactly the sort of thing
+//! those rows exist to catch.
+//!
+//! The cost is that on those two platforms **nothing calls any of it**, because the
+//! only caller is `settings::input_method_page`, which is macOS-only — there is no
+//! Windows or Linux input method to install yet. So the compiler correctly reports
+//! every item here as dead, and the `allow` below is conditional on exactly that:
+//! on macOS, where `clippy -D warnings` and the test suite run, dead-code checking
+//! is untouched. It comes off when a Windows TSF or Linux IBus host gives these
+//! callers.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 pub mod models;
 pub mod services;

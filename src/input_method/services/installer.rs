@@ -46,7 +46,7 @@ use std::path::Path;
 
 use crate::input_method::models::install::{
     InstallFailure, InstallOutcome, InstallPlan, InstallReport, InstallStep, REGISTER_ATTEMPTS,
-    selectable_source,
+    REGISTER_RETRY_DELAY, selectable_source,
 };
 
 /// Which bundle to install and where to put it, or why there is nothing to do.
@@ -98,8 +98,10 @@ pub trait InstallOps {
     /// Kill any input-method process still serving the old bundle.
     fn restart(&self);
 
-    /// Wait before the next registration attempt.
-    fn wait(&self);
+    /// Wait before the next registration attempt. **How long** is the driver's
+    /// decision, not the implementation's — see
+    /// [`REGISTER_RETRY_DELAY`](crate::input_method::models::install::REGISTER_RETRY_DELAY).
+    fn wait(&self, delay: std::time::Duration);
 }
 
 /// Copy, register until visible, enable the mode, select the mode, kill the old
@@ -136,7 +138,7 @@ pub fn install(plan: &InstallPlan, ops: &dyn InstallOps) -> InstallReport {
         if register_attempts >= REGISTER_ATTEMPTS {
             break false;
         }
-        ops.wait();
+        ops.wait(REGISTER_RETRY_DELAY);
     };
 
     if !visible {
@@ -312,8 +314,10 @@ impl InstallOps for SystemOps {
             .output();
     }
 
-    fn wait(&self) {
-        std::thread::sleep(crate::input_method::models::install::REGISTER_RETRY_DELAY);
+    fn wait(&self, delay: std::time::Duration) {
+        // On the background executor, which is what keeps the seconds §2 warns
+        // about off the UI thread.
+        std::thread::sleep(delay);
     }
 }
 
@@ -322,7 +326,7 @@ mod tests {
     use super::{InstallOps, install};
     use crate::input_method::models::install::{
         InstallFailure, InstallOutcome, InstallPlan, InstallStep, REGISTER_ATTEMPTS,
-        parent_input_method, selectable_source,
+        REGISTER_RETRY_DELAY, parent_input_method, selectable_source,
     };
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
@@ -339,7 +343,7 @@ mod tests {
         Enable(String),
         Select(String),
         Restart,
-        Wait,
+        Wait(std::time::Duration),
     }
 
     /// A machine that does whatever the test says.
@@ -413,8 +417,8 @@ mod tests {
             self.calls.borrow_mut().push(Call::Restart);
         }
 
-        fn wait(&self) {
-            self.calls.borrow_mut().push(Call::Wait);
+        fn wait(&self, delay: std::time::Duration) {
+            self.calls.borrow_mut().push(Call::Wait(delay));
         }
     }
 
@@ -470,8 +474,17 @@ mod tests {
         assert_eq!(report.register_attempts, 3);
 
         let calls = fake.calls();
-        let waits = calls.iter().filter(|call| **call == Call::Wait).count();
-        assert_eq!(waits, 2, "one wait between each pair of attempts");
+        let waits: Vec<_> = calls
+            .iter()
+            .filter(|call| matches!(call, Call::Wait(_)))
+            .collect();
+        assert_eq!(waits.len(), 2, "one wait between each pair of attempts");
+        assert!(
+            waits
+                .iter()
+                .all(|call| **call == Call::Wait(REGISTER_RETRY_DELAY)),
+            "the delay is the driver's policy, not the implementation's: {waits:?}"
+        );
         assert_eq!(
             calls.first(),
             Some(&Call::Copy {

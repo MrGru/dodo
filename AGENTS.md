@@ -253,6 +253,13 @@ copies a bundle's contents into `dir`**, so the destination must name the bundle
 correction to what `docs/macos-input-method.md` §2 used to say. `dodo_ime_ipc::paths::support_dir`
 duplicates one line of `src/paths.rs` on purpose — the bundle has no `build_info` — and
 `paths::tests::the_input_method_agrees_about_the_data_directory` is what keeps the two one answer.
+Unlike `src/tray`, the module is **not** `#[cfg(target_os = "macos")]` at its `mod` line — three of
+its four submodules contain no macOS at all and the Linux and Windows `cargo check` rows are worth
+having type-check them — so it carries a `#![cfg_attr(not(target_os = "macos"), allow(dead_code))]`
+instead, because on those platforms its only caller (the macOS-only settings page) does not exist.
+macOS, where `clippy -D warnings` and the tests run, keeps full dead-code checking. Its ~31 new
+`Str` variants are unused on those two platforms for the same reason the tray's three already are;
+that noise is inherited, not new.
 
 `data_dir()` lives in `src/paths.rs`, not under `api_explorer/` any more, and it knows all
 three platforms: `~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME` or
