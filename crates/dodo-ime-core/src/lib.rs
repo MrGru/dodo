@@ -36,6 +36,24 @@
 //! [`core::LanguageEngine`] — which exists because Korean, Japanese and Chinese
 //! are a genuine future substitution at that seam, and nothing else is.
 //!
+//! # Typing at it, today, with nothing installed
+//!
+//! No OS host exists yet, so nothing on the machine can route a keystroke here.
+//! `examples/telex.rs` is the way in — it performs the actions the engine
+//! returns against a `String`, which is all an OS host really does:
+//!
+//! ```text
+//! cargo run -p dodo-ime-core --example telex                    # interactive
+//! cargo run -p dodo-ime-core --example telex -- --keys tieengs   # → tiếng
+//! cargo run -p dodo-ime-core --example telex -- --keys w -v      # + the actions
+//! ```
+//!
+//! `--scheme vni`, `--tones traditional`, `--output direct` and
+//! `--no-spell-check` reach the rest of [`VietnameseConfig`]; `--help` lists
+//! them. It is an `examples/` target, so it is compiled only when asked for and
+//! costs the shipped binary nothing; its header comment is the authority on the
+//! rest, including why it reads lines rather than raw keystrokes.
+//!
 //! # No typing history. Ever.
 //!
 //! An input method sees every password, every private message and every
