@@ -644,9 +644,15 @@ the bare archive.
 By `tools/update-manifest`, a standalone crate. It is **not** part of dodo:
 `exclude = ["tools/*"]` in the root `Cargo.toml` keeps it out of the package, it
 has its own `Cargo.lock` and four dependencies (`serde`, `serde_json`, `sha2`,
-`semver`), and `cargo metadata` on the repo root lists exactly one package. It
-costs the shipped binary **zero bytes** and the app's test and clippy runs zero
-time.
+`semver`), and it is named in `workspace.exclude` as well, so it stays outside
+the workspace that `crates/dodo-ime-core` joined. It costs the shipped binary
+**zero bytes** and the app's test and clippy runs zero time.
+
+`cargo metadata --no-deps` at the repo root listed exactly one package when that
+was written; it lists two now — `dodo` and `dodo-ime-core` — and still not
+`update-manifest`. The difference is the point: dodo *links* the engine crate and
+does not link the generator, so the engine shares dodo's `Cargo.lock` and the
+generator keeps its own. See the `[workspace]` comment in the root `Cargo.toml`.
 
 The publish job runs it *before* creating the release:
 

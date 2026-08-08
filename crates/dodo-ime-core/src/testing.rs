@@ -120,8 +120,8 @@ pub fn press(engine: &mut dyn LanguageEngine, host: &mut Host, key: super::core:
 #[cfg(test)]
 mod tests {
     use super::{Host, type_keys};
-    use crate::input_method::core::EngineAction;
-    use crate::input_method::languages::vietnamese::VietnameseEngine;
+    use crate::core::EngineAction;
+    use crate::languages::vietnamese::VietnameseEngine;
 
     #[test]
     fn the_host_performs_actions_in_order() {

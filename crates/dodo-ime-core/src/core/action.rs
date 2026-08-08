@@ -17,7 +17,7 @@
 //! which is [`EngineAction::ReplaceBeforeCursor`] and
 //! [`EngineAction::DeleteBackward`]. Both are real paths through the Vietnamese
 //! engine, selected by
-//! [`OutputMode`](crate::input_method::languages::vietnamese::OutputMode) — see
+//! [`OutputMode`](crate::languages::vietnamese::OutputMode) — see
 //! its docs for the trade.
 //!
 //! # Spans are graphemes

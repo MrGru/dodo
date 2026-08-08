@@ -1609,6 +1609,7 @@ dependencies = [
  "anyhow",
  "base64",
  "bollard",
+ "dodo-ime-core",
  "futures-channel",
  "futures-util",
  "gpui",
@@ -1642,6 +1643,13 @@ dependencies = [
  "unicode-normalization",
  "windows-sys 0.61.2",
  "winresource",
+]
+
+[[package]]
+name = "dodo-ime-core"
+version = "0.1.0"
+dependencies = [
+ "unicode-normalization",
 ]
 
 [[package]]

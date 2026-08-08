@@ -11,7 +11,7 @@
 //! [`InputScheme`] is an enum with two arms rather than a trait, because Telex
 //! and VNI are two spellings of the same transforms — not two implementations
 //! of anything. The only trait in sight is
-//! [`LanguageEngine`](crate::input_method::core::LanguageEngine), implemented
+//! [`LanguageEngine`](crate::core::LanguageEngine), implemented
 //! once, at the bottom of this file.
 //!
 //! Reading the code in that order — [`telex`], then [`syllable`], then [`tone`]
@@ -62,7 +62,7 @@ pub mod word_boundary;
 #[cfg(test)]
 mod corpus;
 
-use crate::input_method::core::{
+use crate::core::{
     Composition, EngineAction, EngineResult, Key, KeyEvent, LanguageEngine, LanguageId,
     grapheme_count,
 };
@@ -205,7 +205,7 @@ enum Applied {
 ///
 /// Holds one syllable at a time. Everything before the current syllable has
 /// already been committed and is gone from here — see the privacy note on
-/// [`crate::input_method`].
+/// [`crate`].
 #[derive(Clone, Debug)]
 pub struct VietnameseEngine {
     config: VietnameseConfig,

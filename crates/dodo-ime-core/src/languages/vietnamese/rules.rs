@@ -170,7 +170,7 @@ pub fn is_valid_syllable(letters: &[Letter]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{FINALS, INITIALS, cluster, is_valid_syllable, is_vowel_base, parts};
-    use crate::input_method::languages::vietnamese::syllable::{Letter, Mark};
+    use crate::languages::vietnamese::syllable::{Letter, Mark};
 
     /// Build letters from a spelling, `^` marking the mark on the letter before
     /// it: `d^` is `đ`, `e^` is `ê`. Enough to state the structural cases

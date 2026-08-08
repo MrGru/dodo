@@ -12,7 +12,7 @@
 //! wires the tray up: `tray::InputLanguage` → `Option<LanguageId>`, where
 //! `English` maps to `None` (no engine; keys pass straight through) and
 //! `Japanese` will map to `None` until a Japanese engine exists. Nothing here
-//! may import `tray`, and [`purity_lint`](crate::input_method::purity_lint)
+//! may import `tray`, and [`purity_lint`](crate::purity_lint)
 //! fails the build if anything tries — which is what keeps that mapping at the
 //! boundary instead of leaking a UI concept into the state machine.
 //!

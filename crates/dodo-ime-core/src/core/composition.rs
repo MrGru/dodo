@@ -11,7 +11,7 @@
 //!
 //! So [`Composition::cursor`] and [`Composition::selection`] are counted in
 //! graphemes, [`grapheme_count`] is the only way this module measures text, and
-//! [`crate::input_method::core::EngineAction::ReplaceBeforeCursor`] states its
+//! [`crate::core::EngineAction::ReplaceBeforeCursor`] states its
 //! span the same way. A host that thinks in UTF-16 code units (Windows) or
 //! `NSRange`s (macOS) converts at its own boundary, where it has the string in
 //! hand.

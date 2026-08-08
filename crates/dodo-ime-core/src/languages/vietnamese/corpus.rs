@@ -670,12 +670,10 @@ fn keys(word: &str, mut spell: impl FnMut(&mut String, &Decomposed) -> Option<ch
 #[cfg(test)]
 mod tests {
     use super::{WORDS, telex_keys, vni_keys};
-    use crate::input_method::core::grapheme_count;
-    use crate::input_method::languages::vietnamese::unicode::nfc;
-    use crate::input_method::languages::vietnamese::{
-        InputScheme, VietnameseConfig, VietnameseEngine,
-    };
-    use crate::input_method::testing::type_keys;
+    use crate::core::grapheme_count;
+    use crate::languages::vietnamese::unicode::nfc;
+    use crate::languages::vietnamese::{InputScheme, VietnameseConfig, VietnameseEngine};
+    use crate::testing::type_keys;
 
     fn engine(scheme: InputScheme) -> VietnameseEngine {
         VietnameseEngine::new(VietnameseConfig {
