@@ -219,7 +219,18 @@ mod tests {
 
     #[test]
     fn a_doubled_vowel_is_a_circumflex() {
-        for (key, spelling) in [('a', "ta"), ('e', "tie"), ('o', "kho")] {
+        for (key, spelling) in [
+            ('a', "ta"),
+            ('e', "tie"),
+            ('o', "kho"),
+            // The doubling is on the base letter, so case matters to neither
+            // half of it: `Aa`, `aA` and `AA` are all circumflexes.
+            ('a', "tA"),
+            ('A', "ta"),
+            ('A', "tA"),
+            ('E', "TIE"),
+            ('O', "KHo"),
+        ] {
             assert_eq!(
                 read(key, spelling),
                 Some(Transform::Mark {
@@ -273,6 +284,44 @@ mod tests {
         }
     }
 
+    /// A `Mark` carries no case, only the literal to type if it turns out not
+    /// to apply — which is the whole reason a shifted modifier key cannot reach
+    /// the letter it marks.
+    #[test]
+    fn a_shifted_modifier_key_is_the_same_mark_on_the_same_letter() {
+        assert_eq!(
+            read('W', "DA"),
+            Some(Transform::Mark {
+                mark: Mark::Breve,
+                literal: 'W'
+            })
+        );
+        for spelling in ["do", "DU"] {
+            assert_eq!(
+                read('W', spelling),
+                Some(Transform::Mark {
+                    mark: Mark::Horn,
+                    literal: 'W'
+                }),
+                "{spelling}"
+            );
+        }
+        assert_eq!(
+            read('D', "d"),
+            Some(Transform::Mark {
+                mark: Mark::Stroke,
+                literal: 'D'
+            })
+        );
+        assert_eq!(
+            read('d', "D"),
+            Some(Transform::Mark {
+                mark: Mark::Stroke,
+                literal: 'd'
+            })
+        );
+    }
+
     /// `tw` and `tuw` both give `tư`.
     #[test]
     fn w_with_no_vowel_to_decorate_types_u_horn() {
@@ -287,14 +336,19 @@ mod tests {
                 "{spelling}"
             );
         }
-        assert_eq!(
-            read('W', "t"),
-            Some(Transform::Letter {
-                base: 'u',
-                mark: Some(Mark::Horn),
-                upper: true
-            })
-        );
+        // And when `w` is the letter, its own shift is the only case there is:
+        // `W` alone is `Ư`.
+        for spelling in ["", "T", "TH", "ti"] {
+            assert_eq!(
+                read('W', spelling),
+                Some(Transform::Letter {
+                    base: 'u',
+                    mark: Some(Mark::Horn),
+                    upper: true
+                }),
+                "{spelling}"
+            );
+        }
     }
 
     #[test]
@@ -381,6 +435,14 @@ mod tests {
             read('{', "TH"),
             Some(Transform::Letter {
                 base: 'o',
+                mark: Some(Mark::Horn),
+                upper: true
+            })
+        );
+        assert_eq!(
+            read('}', "T"),
+            Some(Transform::Letter {
+                base: 'u',
                 mark: Some(Mark::Horn),
                 upper: true
             })

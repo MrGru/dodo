@@ -149,6 +149,25 @@ mod tests {
         );
     }
 
+    /// A digit has no case, so an uppercase syllable reads exactly the same
+    /// way — which is why VNI cannot leak a modifier's case onto a letter even
+    /// in principle.
+    #[test]
+    fn a_diacritic_digit_reads_the_same_over_uppercase_letters() {
+        for (key, mark, spelling) in [
+            ('6', Mark::Circumflex, "TIE"),
+            ('7', Mark::Horn, "DU"),
+            ('8', Mark::Breve, "DA"),
+            ('9', Mark::Stroke, "D"),
+        ] {
+            assert_eq!(
+                read(key, spelling),
+                Some(Transform::Mark { mark, literal: key }),
+                "{spelling}{key}"
+            );
+        }
+    }
+
     /// `iphone 7` types a seven.
     #[test]
     fn a_digit_with_nowhere_to_land_is_a_digit() {
