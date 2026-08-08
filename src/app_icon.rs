@@ -117,6 +117,14 @@ pub enum AppIcon {
     /// "this row can be dragged", and it survives being painted as an alpha
     /// mask because it is nothing but coverage.
     GripVertical,
+
+    /// The Input method tool's sidebar row. Ships as our own
+    /// `icons/keyboard.svg`: neither the library's set nor ours had a keyboard
+    /// at all, and the two glyphs that were reached for instead each say
+    /// something else — `globe` is the API Explorer's row, and `key` is a
+    /// database constraint. A keyboard is what the thing *is*, so it survives
+    /// being read at 16px on the collapsed rail with no label beside it.
+    Keyboard,
 }
 
 impl IconNamed for AppIcon {
@@ -176,6 +184,7 @@ impl IconNamed for AppIcon {
             Self::Info => "icons/info.svg",
             Self::EyeOff => "icons/eye-off.svg",
             Self::GripVertical => "icons/grip-vertical.svg",
+            Self::Keyboard => "icons/keyboard.svg",
         }
         .into()
     }
