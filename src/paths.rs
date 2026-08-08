@@ -221,6 +221,25 @@ mod tests {
         );
     }
 
+    /// The input-method bundle resolves this directory itself, in
+    /// `dodo_ime_ipc::paths::support_dir`, because it has no `build_info` to
+    /// classify a platform from and no reason to know what `%APPDATA%` is. That
+    /// makes two spellings of a frozen path in two crates, and **this is the test
+    /// that keeps them one answer**: without it, a change here would silently
+    /// leave the input method reading settings dodo no longer writes.
+    ///
+    /// It lives on dodo's side rather than the contract crate's because only dodo
+    /// can see both functions.
+    #[test]
+    fn the_input_method_agrees_about_the_data_directory() {
+        let home = PathBuf::from("/Users/someone");
+        assert_eq!(
+            resolve(HostOs::MacOs, &env_of(&[("HOME", "/Users/someone")])),
+            dodo_ime_ipc::paths::support_dir(&home),
+            "dodo and its input method must look in the same directory"
+        );
+    }
+
     /// The expectations below join rather than spell the path out, because
     /// `PathBuf::join` uses the *host's* separator: run on this Mac, the
     /// Windows branch produces `C:\Users\someone\AppData\Roaming/dodo`. That is

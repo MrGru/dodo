@@ -1299,7 +1299,7 @@ pub enum Str {
     // These are **dodo's** strings, not the bundle's. The input method's own two
     // user-visible strings — its name and its mode's — are read by *macOS* out of
     // `InfoPlist.strings` and deliberately do not go through this mechanism; see
-    // `docs/macos-input-method.md` §8.
+    // `docs/macos-input-method.md` §10.
     InputMethod,
     InputMethodDescription,
     InputMethodInstall,

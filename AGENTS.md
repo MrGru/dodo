@@ -51,7 +51,8 @@ producer lands: `core::safety` now has a real `validate_path` and a moved-to-tra
 (`macos::cleanup::cleanup_items`), so its allow is already gone. `core::permissions` is still the
 one whole-module allow marking an area that does not exist at all yet.
 
-**dodo persists nine things across restarts**, all under `data_dir()` (`src/paths.rs`) and each
+**dodo persists ten things across restarts, and reads an eleventh another process writes**, all
+under `data_dir()` (`src/paths.rs`) and each
 behind a trait so the state layer never learns where they live: `collections.json`
 (`api_explorer::services::collection_store`), `environments.json` (`services::variable_store`),
 `script-consent.json` (`services::consent_store`, the imported scripts the user has approved),
@@ -62,17 +63,20 @@ plus bounded query history, with query text intentionally stored as plain text),
 (`quick_nav::services::config_store`), `cleaner-ignored-items.json`
 (`cleaner::services::ignore_store`, the orphan-detection candidates the user has marked "Keep",
 keyed by absolute path string rather than a `CleanableItemId` since that id is a session-local
-hash with no promise of surviving a restart) and `session.json`
+hash with no promise of surviving a restart), `session.json`
 (`session::services::session_store`) — which now also carries the tray's keyboard input language
-under its own `tray` section, deliberately **not** beside `appearance.language`. Persistence and
-initial load run on the background executor, never the UI thread.
+under its own `tray` section, deliberately **not** beside `appearance.language` — and
+`input-method.json` (`input_method::services::store`, the macOS input method's engine settings).
+The eleventh is `input-method-status.json`, which **dodo only reads**: the input-method process
+writes it, and `dodo-ime-ipc`'s single-writer rule is why dodo has no method that could. Persistence
+and initial load run on the background executor, never the UI thread.
 
 **`session.json` is what makes "nothing is persisted across restarts" obsolete**, and any doc still
 saying it — including the `dodo-theming-settings` skill — is stale rather than describing a
 decision. The captain asked for session restoration on 2026-08-06, and `src/session/mod.rs` is the
 authority: theme, font size, border radius, language, the window's rectangle **and mode**, the open
 tool, the sidebar's collapsed state, and **which tools the sidebar lists at all and in what order**.
-The other eight files persist something `session.json` does not attempt: *what the user typed or
+The other nine files persist something `session.json` does not attempt: *what the user typed or
 decided about one specific thing* — an approved script, a saved query, a cleaner path marked
 "Keep", a skipped update version, an edited quick-nav pattern — which cannot expire each launch
 without becoming a lie. **The one exception is `Run scripts`**, a `ScriptPolicy`
@@ -153,10 +157,10 @@ plus one `assets/icons/tray/dodo-<code>.svg`; the marks are rasterised through g
 `SvgRenderer`, so they cost `src/assets.rs` no new filter and add no PNG.
 
 **`crates/dodo-ime-core/` is dodo's own input method, and it is a crate, not a module.** dodo
-depends on it and calls it from nowhere yet — a normalized `KeyEvent`/`EngineAction` vocabulary
-(`core/`) plus a Vietnamese engine speaking Telex and VNI (`languages/vietnamese/`). Later rounds
-add settings, tray wiring, per-application language memory, abbreviations and three native hosts
-(macOS InputMethodKit bundle, Windows TSF DLL, Linux IBus). Its crate docs are the authority;
+depends on it and names only its configuration types — a normalized `KeyEvent`/`EngineAction`
+vocabulary (`core/`) plus a Vietnamese engine speaking Telex and VNI (`languages/vietnamese/`);
+no keystroke is ever processed in the dodo process. Later rounds add tray wiring, per-application
+language memory, abbreviations and two more native hosts (Windows TSF DLL, Linux IBus). Its crate docs are the authority;
 four things there are decisions rather than details. **It is a crate because the OS hosts are
 separate processes**: the macOS host has to be its own `.app` bundle that the system launches — it
 cannot be the dodo process — and Windows and Linux load theirs into other people's applications;
@@ -193,8 +197,9 @@ strings are bare literals rather than `i18n::Str`.
 **`crates/dodo-ime-macos/` is the first of those three hosts**: an InputMethodKit `.app` that
 macOS launches, links the engine, and types with **no dependency on `Dodo.app` running** — dodo
 does not link it and cannot start it. `docs/macos-input-method.md` is the authority on building,
-installing and enabling it by hand, on what was and was not verified, and on what the next round
-owes (install action, IPC, settings, tray, release wiring — none of them exist). Four things there
+installing and enabling it by hand, on what dodo's own install action does (§7), on the two files
+the two processes exchange (§8), on what was and was not verified (§5), and on what the next round
+owes (§9: release wiring, the tray mark, a menu-bar icon, signing). Four things there
 are decisions rather than details. **`CFBundleIdentifier` must contain `.inputmethod.` as an
 infix**, not merely end in it: `io.github.mrgru.dodo.inputmethod` never appears in the
 input-source list and `…inputmethod.Dodo` does, with `TISRegisterInputSource` returning `0` and
@@ -202,7 +207,8 @@ logging nothing either way — `src/bundle.rs` holds every identifier plus the e
 that measured it, and the investigation report had this as an unverified READ note. **The bundle
 nests at `dodo.app/Contents/Helpers/`**, never `Contents/Library/InputMethods/`, because only the
 former is a directory `codesign` discovers as nested code (`docs/macos-signing.md` §7.2) — macOS
-itself never looks inside `dodo.app`, so that copy exists purely for a future install action.
+itself never looks inside `dodo.app`, so that copy exists purely for the install action to copy
+out.
 **Everything that could get Vietnamese wrong is pure and tested without a frame** — `keymap`,
 `text`, `ops`, `session` — while `client.rs` and `controller.rs` decide nothing; that split is
 what lets `tests/controller.rs` (`harness = false`, because the class is `MainThreadOnly` and
@@ -213,6 +219,40 @@ HIToolbox, not in InputMethodKit, so `objc2-input-method-kit` does not and will 
 `NSNotFound` there is `NSIntegerMax`, not `NSUIntegerMax`, and `NSRange`s are UTF-16 while the
 engine counts graphemes, which `text.rs` converts through the engine's own walk so the two
 definitions cannot drift.
+
+**`crates/dodo-ime-ipc/` is a crate because neither process can reach the other's code**, and it is
+the third member of the workspace. dodo links it; the bundle links it; it holds the only three
+things they must agree on — the four identifiers macOS looks the bundle up by (moved here out of
+`dodo-ime-macos`, which re-exports them as `crate::bundle`), the two single-writer JSON files, and
+the distributed-notification name. The alternative was two copies of one schema kept in step by
+nothing, and a drifted field name there does not fail to compile: it reads as absent, so the user's
+setting silently has no effect. `dodo-ime-core` cannot hold it — its `purity_lint` forbids `serde::`
+by test — and dodo must not link `dodo-ime-macos`, which would drag InputMethodKit into a UI
+application for four string constants. Three things there are decisions. **One writer per file, and
+no locking**: dodo owns `input-method.json`, the bundle owns `input-method-status.json`, every write
+is temp-file-then-`rename`, and neither side has a method that could write the other's. **The
+version rule matters more here than anywhere else in dodo** — a months-old bundle reading a new
+dodo's settings file is ordinary, not exotic, so both parsers refuse a `"version"` above their own
+and the bundle then types with `DEFAULT_CONFIG` and reports revision `0`, which is exactly how dodo
+knows to say "not picked up yet". And **the status file is the one file the bundle writes**, which
+contradicts the older "writes no file" claim in `dodo-ime-macos`'s own docs and is corrected there:
+nothing the user typed may ever appear in it, it is written on start and on a settings change and
+never on a keystroke, and a test pins its key set so adding a field is deliberate.
+
+**`src/input_method/` is dodo's end of it, and `services/tis.rs` carries a crash worth knowing
+about.** The install action is a Settings page (macOS-only, last in the dialog) whose button copies
+the nested bundle out with `ditto`, registers until the source is *visible* rather than trusting the
+`0` that `TISRegisterInputSource` returns, enables and selects **the mode, never the parent**, and
+`pkill -x`es the old process last. `models/install.rs` holds all of that as tested data and
+`services/installer.rs` is a driver over an `InstallOps` trait, which is what makes the three
+silent-on-a-real-Mac defects unit tests. Two measured facts to keep: **two concurrent
+`TISCreateInputSourceList` calls abort the process** (`SIGABRT` inside HIToolbox — found by
+`cargo test`'s own parallelism), so `tis` takes a process-wide lock *and* `SystemOps` performs all
+four TIS calls on the main queue, where AppKit's own TIS calls already are; and **`ditto src dir/`
+copies a bundle's contents into `dir`**, so the destination must name the bundle, which is a
+correction to what `docs/macos-input-method.md` §2 used to say. `dodo_ime_ipc::paths::support_dir`
+duplicates one line of `src/paths.rs` on purpose — the bundle has no `build_info` — and
+`paths::tests::the_input_method_agrees_about_the_data_directory` is what keeps the two one answer.
 
 `data_dir()` lives in `src/paths.rs`, not under `api_explorer/` any more, and it knows all
 three platforms: `~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME` or
@@ -233,7 +273,8 @@ version is higher rather than half-reading it. Copy that pattern for any new fil
 `docs/build-optimization.md` (release profile, the measured before/after size table, linker
 findings, the dependency report, startup review), `docs/release.md` (CI, the release workflow,
 packaging, verification, the application icon, the in-app updater), `docs/macos-signing.md` and
-`docs/macos-input-method.md` (building, installing and enabling the input-method bundle by hand).
+`docs/macos-input-method.md` (building the input-method bundle, installing it by hand or from
+dodo's own Settings page, and the two files the two processes exchange).
 The rest is `Cargo.toml`'s `[profile.*]` comments, `build.rs`, `scripts/` and `.github/`.
 
 **dodo is unsigned on every platform, and `docs/macos-signing.md` is the authority on changing
@@ -304,7 +345,8 @@ Eight things about build and release that catch people:
   `[target.'cfg(target_os = "macos")'.dependencies]` table — a plain `[dependencies]` entry would
   make the Linux and Windows `cargo check` rows build AppKit bindings. And `workspace.exclude`
   matches **paths, not globs** — `tools/*` there excludes nothing, which is why it is spelled out.
-  `cargo metadata --no-deps` at the root now lists three packages, not one.
+  `cargo metadata --no-deps` at the root now lists four packages, not one — the fourth being
+`crates/dodo-ime-ipc`, which is a member for the same reason and named in `default-members` too.
 
 - **Two of the four `cargo check` targets cannot be run from this Mac at all.**
   Linux and Windows both die in `aws-lc-sys`'s C build script (no cross C toolchain, no
