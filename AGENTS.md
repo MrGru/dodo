@@ -177,6 +177,12 @@ recomputed at render time, so `toas` + `n` becomes `toán` without anything relo
 `InputScheme` is an enum for the same reason — Telex and VNI produce identical `Transform`s and
 share every rule about Vietnamese. Tests: `corpus.rs` holds ~460 real words as *answers* and
 derives both key sequences from them, so tone placement is never fed to the thing being tested.
+**To actually type at it before any OS host exists**, run
+`cargo run -p dodo-ime-core --example telex` (interactive) or
+`… --example telex -- --keys tieengs` (one-shot, `--verbose` for the per-key `EngineAction`s).
+It is an `examples/` target, never a `[[bin]]`, so it ships in nothing; its own header comment is
+the authority on why it is line-based (raw per-keystroke input costs a dependency) and why its
+strings are bare literals rather than `i18n::Str`.
 
 `data_dir()` lives in `src/paths.rs`, not under `api_explorer/` any more, and it knows all
 three platforms: `~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME` or
