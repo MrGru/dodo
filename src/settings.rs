@@ -690,9 +690,13 @@ fn pages(layout: &WeakEntity<Layout>, highlight: Option<Setting>, cx: &App) -> V
 /// answer.
 #[cfg(target_os = "macos")]
 fn input_method_page(cx: &App) -> SettingPage {
-    use crate::input_method::{InputMethod, Install};
+    use crate::input_method::InputMethod;
 
     let title = t(Str::InputMethod, cx);
+
+    // Note what this page does *not* do: nothing here is disabled while an install
+    // is running. The four settings controls write a file and post a notification,
+    // neither of which the install touches, and the button disables itself.
 
     let mut group = SettingGroup::new()
         .title(title.clone())
@@ -760,11 +764,6 @@ fn input_method_page(cx: &App) -> SettingPage {
             .keywords([title.clone()]),
         );
     }
-
-    // `Install::Running` is not a state the user can leave, so the whole page
-    // stays live rather than being disabled — every other control writes a file
-    // and posts a notification, neither of which the install touches.
-    _ = Install::Idle;
 
     SettingPage::new(title)
         // The globe is what macOS itself puts on the key that switches input
