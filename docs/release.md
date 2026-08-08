@@ -959,7 +959,11 @@ on the `publish` job rather than workflow-wide.
 
 The secrets below are for the future-readiness items in the next section. None
 of them is referenced by any workflow yet; adding one is what turns the
-corresponding commented-out step on.
+corresponding commented-out step on. For the macOS rows,
+[docs/macos-signing.md](macos-signing.md) says where each value comes from, how
+to produce it (a `.p12` becomes `MACOS_CERTIFICATE` through `base64 -i`), and
+which three further names are needed if notarisation uses an App Store Connect
+API key instead of an app-specific password.
 
 | Secret | For | Notes |
 |---|---|---|
@@ -978,13 +982,21 @@ corresponding commented-out step on.
 
 Structured for, not implemented. Each entry says where the change goes.
 
-**macOS code signing and notarisation.** `scripts/macos-app-bundle.sh` ends
-with the exact `codesign` / `notarytool` / `stapler` sequence, in order, as a
-comment. The workflow step slots into `release.yml` between packaging and
-upload, guarded on `secrets.MACOS_CERTIFICATE != ''` so the workflow keeps
-working while the secret is absent. Until then archives are unsigned and
-Gatekeeper quarantines them; the generated release notes tell users to run
-`xattr -dr com.apple.quarantine`.
+**macOS code signing and notarisation.** [docs/macos-signing.md](macos-signing.md)
+is the authority and is written for the moment the decision is taken: what the
+repo owner must personally buy and create, the secrets by exact name and how to
+produce each value, the entitlements (dodo needs none, and neither will the
+input-method bundle), the ordering constraints, and what breaks. In summary:
+`scripts/macos-app-bundle.sh` ends with the `codesign` / `notarytool` /
+`stapler` sequence as a comment, and that is where it happens — **inside**
+packaging, before `scripts/package.sh` tars the bundle and checksums it, not
+"between packaging and upload" as this section used to say (the published
+SHA-256 is computed from that archive). The `release.yml` guard cannot read
+`secrets` in an `if:`; it reads an `env:` set from the secret at job level.
+Until then archives are unsigned and Gatekeeper quarantines them; the generated
+release notes tell users to run `xattr -dr com.apple.quarantine`. Signing is a
+user-experience purchase — an unsigned dodo, and an unsigned input method, both
+run today.
 
 **Windows code signing.** Same shape, in `scripts/package.ps1` — sign the
 `.exe` *before* zipping it.

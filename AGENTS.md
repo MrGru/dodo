@@ -193,11 +193,25 @@ nothing else. `environments.json`, `script-consent.json`, `updater.json`, `conne
 version is higher rather than half-reading it. Copy that pattern for any new file; do not copy
 `collections.json`'s.
 
-**Build and release engineering lives in `docs/`**, and those two files are the authority for it:
+**Build and release engineering lives in `docs/`**, and those three files are the authority for it:
 `docs/build-optimization.md` (release profile, the measured before/after size table, linker
-findings, the dependency report, startup review) and `docs/release.md` (CI, the release workflow,
-packaging, verification, the application icon, the in-app updater, future signing/notarisation). The rest
-is `Cargo.toml`'s `[profile.*]` comments, `build.rs`, `scripts/` and `.github/`.
+findings, the dependency report, startup review), `docs/release.md` (CI, the release workflow,
+packaging, verification, the application icon, the in-app updater) and `docs/macos-signing.md`.
+The rest is `Cargo.toml`'s `[profile.*]` comments, `build.rs`, `scripts/` and `.github/`.
+
+**dodo is unsigned on every platform, and `docs/macos-signing.md` is the authority on changing
+that** — written on 2026-08-08 as a *procurement* document, because the captain decided signing
+waits but must stay reachable. It is the answer to "what must the repo owner personally buy or
+create" (Apple Developer Program, US$99/yr; a Developer ID Application certificate, max five per
+account, Account Holder role only; one notarisation credential), the secrets by exact name, the
+entitlements — **dodo needs none, and neither will the input-method bundle** — and the ordering.
+Three things there are corrections to plans that were recorded wrongly and would have cost a
+release each. Signing happens **inside** `scripts/package.sh` / `macos-app-bundle.sh`, before the
+tar, because the published SHA-256 and `update.json` entry are computed from that archive. A
+workflow `if:` **cannot read `secrets`** — it reads an `env:` set from one at job level. And
+`codesign --deep` is deprecated for *signing* (still correct for verifying): nested bundles are
+signed inside-out, one call each. Signing is a user-experience purchase, not an enablement one —
+an unsigned dodo and an unsigned input method both run today.
 
 **The application icon is a committed pipeline, not a file someone dropped in.** `assets/branding/`
 holds the original artwork and the 1024 RGBA master; `python3 scripts/generate-icons.py` derives
@@ -314,7 +328,7 @@ touches a module never pays for its internals. This table is the single index; t
 | `dodo-api-explorer-internals` | Touching anything under `src/api_explorer/` — the send pipeline, scripting/sandbox, consent gating, codegen/curl, collections, or tab/column layout. |
 | `dodo-docker-internals` | Touching anything under `src/docker/` — engine discovery, the four list pages, polling, the detail dialog, or a "Coming soon" placeholder. |
 | `dodo-database-internals` | Touching anything under `src/database/` — the connection tree, query execution, the `Driver` trait, or result-grid layout. |
-| `dodo-build-release-internals` | Touching `src/updater/`, `.github/workflows/`, `Cargo.toml`'s dependencies, `docs/release.md`, `docs/build-optimization.md`, `scripts/generate-icons.py`, `tools/update-manifest/`, `deny.toml`, or `THIRD-PARTY-NOTICES.md`; preparing or debugging a release. |
+| `dodo-build-release-internals` | Touching `src/updater/`, `.github/workflows/`, `Cargo.toml`'s dependencies, `docs/release.md`, `docs/macos-signing.md`, `docs/build-optimization.md`, `scripts/generate-icons.py`, `tools/update-manifest/`, `deny.toml`, or `THIRD-PARTY-NOTICES.md`; preparing or debugging a release. |
 | `gpui-component-recipes` | Writing or editing any `render` / `new` that builds a gpui-component widget (input, code editor, diagnostics, select, dialog, settings panel, sidebar, button, icon); a widget call will not compile; a widget builds but nothing appears on screen; or a code editor draws uncoloured text. |
 | `dodo-tool-view` | Adding, renaming, reordering or removing a sidebar tool; a new sidebar entry does not appear or renders blank. |
 | `dodo-i18n-text` | Writing or changing **any** text a user reads — a label, title, placeholder, description, error, dropdown option; or an `i18n` / `i18n_lint` test fails. |

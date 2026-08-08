@@ -283,19 +283,30 @@ jobs:
 
       # --- future: signing ---------------------------------------------------
       #
-      # Not implemented — no certificates exist for this project. The hooks go
-      # exactly here, between packaging and upload, guarded so the workflow
-      # keeps working while the secrets are absent:
+      # Not implemented — no certificates exist for this project.
+      # docs/macos-signing.md is the authority: what has to be bought, the
+      # secrets by name, the entitlements (none), and the ordering. Two things
+      # about the hook that were recorded wrongly here until they were checked:
       #
-      #   - name: Sign (macOS)
-      #     if: runner.os == 'macOS' && secrets.MACOS_CERTIFICATE != ''
-      #     run: scripts/macos-app-bundle.sh ...   # see that file's footer
+      #   * It does NOT go between packaging and upload. By then the .tar.gz and
+      #     its .sha256 already exist and contain the unsigned bundle. Signing,
+      #     notarising and stapling all happen inside scripts/package.sh and
+      #     scripts/macos-app-bundle.sh, before the tar. The step added here is
+      #     only the keychain setup that has to precede them.
       #
-      #   - name: Sign (Windows)
-      #     if: runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE != ''
-      #     run: signtool sign ...                 # see scripts/package.ps1
+      #   * The guard cannot read `secrets` directly. The `secrets` context is
+      #     not available in `jobs.<id>.if` or `jobs.<id>.steps.if`; it IS
+      #     available in `env:`, and `env` IS available in `steps.if`. So:
       #
-      # docs/release.md lists the secrets each one needs.
+      #       env:                                  # job level
+      #         MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      #       steps:
+      #         - name: Set up signing keychain (macOS)
+      #           if: runner.os == 'macOS' && env.MACOS_CERTIFICATE != ''
+      #           run: ...                          # docs/macos-signing.md §2.1
+      #
+      # Windows is the same shape in scripts/package.ps1: sign the .exe before
+      # zipping it, for the same reason the macOS hook sits before the tar.
 
       - name: Upload archives
         uses: actions/upload-artifact@v7
