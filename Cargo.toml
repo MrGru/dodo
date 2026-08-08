@@ -316,6 +316,35 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = [
     "NSURL",
 ] }
 
+# Carbon's Text Input Sources API takes and returns CoreFoundation types, and the
+# input-method installer in `src/input_method/services/tis.rs` is the only place
+# in dodo that calls it. The four `TIS…` functions themselves are hand-declared
+# there — they live in HIToolbox, which objc2 generates no crate for — but every
+# type they take comes from here, so the only unchecked part of that boundary is
+# four signatures. Also the distributed notification that tells the installed
+# bundle its settings changed (`CFNotificationCenter`), which is preferred over
+# `NSDistributedNotificationCenter` because its observer is a plain function
+# pointer rather than a selector or a block.
+#
+# **Not a new package**: `objc2-app-kit` above already depends on it, so this adds
+# nothing to `Cargo.lock` beyond the five type modules these features switch on.
+# `dispatch_sync` on the main queue, for the Text Input Sources calls in
+# `src/input_method/services/installer.rs` and nothing else. Two concurrent
+# `TISCreateInputSourceList` calls abort the process — measured, with the crash
+# frames, in `src/input_method/services/tis.rs` — and AppKit makes its own TIS
+# calls on the main thread, so the only way to serialise against those is to join
+# them. **Not a new package**: `gpui_macos` already depends on this exact version.
+dispatch2 = "0.3.1"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CFArray",
+    "CFBase",
+    "CFDictionary",
+    "CFNotificationCenter",
+    "CFString",
+    "CFURL",
+] }
+
 # Cleaner's Universal Binaries scanner (Phase 14, analysis-only): reads a
 # Mach-O executable's fat-header architecture list without executing it or
 # shelling out to `lipo`/`file`. `read` is the only capability this needs
