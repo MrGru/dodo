@@ -3,6 +3,7 @@
 # Builds an unsigned dodo.app bundle around an already-built macOS binary.
 #
 #   scripts/macos-app-bundle.sh --binary <path> [--version <v>] [--out <dir>]
+#                               [--input-method <path-to-.app>]
 #
 # Layout produced (the minimum macOS accepts for a GUI app):
 #
@@ -11,6 +12,7 @@
 #   dodo.app/Contents/Resources/dodo.icns
 #   dodo.app/Contents/Resources/LICENSE
 #   dodo.app/Contents/Resources/THIRD-PARTY-NOTICES.md
+#   dodo.app/Contents/Helpers/Dodo Vietnamese.app     (only with --input-method)
 #
 # Signing and notarisation are deliberately NOT done here — see the block at
 # the bottom of this file and docs/macos-signing.md, which is the authority on
@@ -24,6 +26,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 binary=""
 version=""
 out_dir="$repo_root/dist"
+input_method=""
 
 die() {
     printf 'macos-app-bundle.sh: %s\n' "$1" >&2
@@ -35,7 +38,8 @@ while [ $# -gt 0 ]; do
         --binary) binary="${2:?--binary needs a value}"; shift 2 ;;
         --version) version="${2:?--version needs a value}"; shift 2 ;;
         --out) out_dir="${2:?--out needs a value}"; shift 2 ;;
-        -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --input-method) input_method="${2:?--input-method needs a value}"; shift 2 ;;
+        -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
 done
@@ -123,6 +127,36 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# The macOS input method, carried inside dodo.app so one archive ships both.
+#
+# Contents/Helpers/ is not a free choice and not the location the investigation
+# first proposed. docs/macos-signing.md §7.2 is the authority: `codesign`
+# discovers nested code in a fixed set of directories, Contents/Library/
+# InputMethods is NOT among them, and a bundle placed there is sealed as an
+# opaque *resource* rather than as code — which notarisation rejects and
+# `--verify --deep --strict` does not even look inside. Contents/Helpers IS on
+# that list and is semantically exactly right.
+#
+# macOS never looks in here: an input method is found in ~/Library/Input Methods
+# or /Library/Input Methods and nowhere else. This copy is dodo's own filing, so
+# that a later round's install action has something to copy out.
+#
+# `ditto` rather than `cp -R`: it preserves extended attributes and ACLs, and it
+# is the documented way to move a bundle that is (or will be) signed.
+if [ -n "$input_method" ]; then
+    [ -d "$input_method" ] || die "no such input-method bundle: $input_method"
+    ime_name="$(basename "$input_method")"
+    mkdir -p "$app/Contents/Helpers"
+    ditto "$input_method" "$app/Contents/Helpers/$ime_name"
+    printf 'nested %s\n' "$app/Contents/Helpers/$ime_name"
+else
+    # Not an error: dodo.app is complete without it, and nothing in the app can
+    # install it yet. scripts/macos-input-method-bundle.sh builds one, and
+    # docs/macos-input-method.md says what the next round has to add before this
+    # is worth wiring into scripts/package.sh and the release workflow.
+    printf 'no input method nested (pass --input-method to include one)\n'
+fi
 
 printf 'built %s\n' "$app"
 

@@ -184,6 +184,30 @@ It is an `examples/` target, never a `[[bin]]`, so it ships in nothing; its own 
 the authority on why it is line-based (raw per-keystroke input costs a dependency) and why its
 strings are bare literals rather than `i18n::Str`.
 
+**`crates/dodo-ime-macos/` is the first of those three hosts**: an InputMethodKit `.app` that
+macOS launches, links the engine, and types with **no dependency on `Dodo.app` running** — dodo
+does not link it and cannot start it. `docs/macos-input-method.md` is the authority on building,
+installing and enabling it by hand, on what was and was not verified, and on what the next round
+owes (install action, IPC, settings, tray, release wiring — none of them exist). Four things there
+are decisions rather than details. **`CFBundleIdentifier` must contain `.inputmethod.` as an
+infix**, not merely end in it: `io.github.mrgru.dodo.inputmethod` never appears in the
+input-source list and `…inputmethod.Dodo` does, with `TISRegisterInputSource` returning `0` and
+logging nothing either way — `src/bundle.rs` holds every identifier plus the eight-bundle table
+that measured it, and the investigation report had this as an unverified READ note. **The bundle
+nests at `dodo.app/Contents/Helpers/`**, never `Contents/Library/InputMethods/`, because only the
+former is a directory `codesign` discovers as nested code (`docs/macos-signing.md` §7.2) — macOS
+itself never looks inside `dodo.app`, so that copy exists purely for a future install action.
+**Everything that could get Vietnamese wrong is pure and tested without a frame** — `keymap`,
+`text`, `ops`, `session` — while `client.rs` and `controller.rs` decide nothing; that split is
+what lets `tests/controller.rs` (`harness = false`, because the class is `MainThreadOnly` and
+libtest spawns threads) drive the real class against a mock client and catch the one failure no
+unit test can, a mistyped selector, which compiles and silently registers a method nobody calls.
+And **`IMKTextInput` is hand-written `msg_send!` by necessity**: it is declared in Carbon's
+HIToolbox, not in InputMethodKit, so `objc2-input-method-kit` does not and will not bind it —
+`NSNotFound` there is `NSIntegerMax`, not `NSUIntegerMax`, and `NSRange`s are UTF-16 while the
+engine counts graphemes, which `text.rs` converts through the engine's own walk so the two
+definitions cannot drift.
+
 `data_dir()` lives in `src/paths.rs`, not under `api_explorer/` any more, and it knows all
 three platforms: `~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME` or
 `~/.config`. The macOS path is frozen — changing it orphans every existing installation's saved
@@ -199,10 +223,11 @@ nothing else. `environments.json`, `script-consent.json`, `updater.json`, `conne
 version is higher rather than half-reading it. Copy that pattern for any new file; do not copy
 `collections.json`'s.
 
-**Build and release engineering lives in `docs/`**, and those three files are the authority for it:
+**Build and release engineering lives in `docs/`**, and those four files are the authority for it:
 `docs/build-optimization.md` (release profile, the measured before/after size table, linker
 findings, the dependency report, startup review), `docs/release.md` (CI, the release workflow,
-packaging, verification, the application icon, the in-app updater) and `docs/macos-signing.md`.
+packaging, verification, the application icon, the in-app updater), `docs/macos-signing.md` and
+`docs/macos-input-method.md` (building, installing and enabling the input-method bundle by hand).
 The rest is `Cargo.toml`'s `[profile.*]` comments, `build.rs`, `scripts/` and `.github/`.
 
 **dodo is unsigned on every platform, and `docs/macos-signing.md` is the authority on changing
@@ -262,10 +287,18 @@ Eight things about build and release that catch people:
   dodo **links** the crate. A linked crate is a workspace member so there is one `Cargo.lock` and
   one `--locked`; a second lockfile for a linked crate would be a second, silently divergent
   resolution of shared dependencies. A crate the release workflow merely *runs* stays standalone
-  and excluded. `default-members = [".", "crates/dodo-ime-core"]` is load-bearing: without it a
-  bare `cargo test` / `cargo clippy --all-targets` would silently stop covering the member. And
-  `workspace.exclude` matches **paths, not globs** — `tools/*` there excludes nothing, which is why
-  it is spelled out. `cargo metadata --no-deps` at the root now lists two packages, not one.
+  and excluded. **`crates/dodo-ime-macos/` is the case the rule did not anticipate** and settles it
+  the same way: dodo does not link the macOS input-method host at all, but the host links
+  *`dodo-ime-core`*, which dodo does — so a second lockfile would resolve the engine independently
+  and "the engine the tests prove" and "the engine the shipped bundle types with" would be two
+  resolutions nothing compares. `default-members = [".", "crates/dodo-ime-core",
+  "crates/dodo-ime-macos"]` is load-bearing: without it a bare `cargo test` / `cargo clippy
+  --all-targets` would silently stop covering a member. Naming the macOS host there is safe on
+  every platform only because its Objective-C dependencies sit under a
+  `[target.'cfg(target_os = "macos")'.dependencies]` table — a plain `[dependencies]` entry would
+  make the Linux and Windows `cargo check` rows build AppKit bindings. And `workspace.exclude`
+  matches **paths, not globs** — `tools/*` there excludes nothing, which is why it is spelled out.
+  `cargo metadata --no-deps` at the root now lists three packages, not one.
 
 - **Two of the four `cargo check` targets cannot be run from this Mac at all.**
   Linux and Windows both die in `aws-lc-sys`'s C build script (no cross C toolchain, no

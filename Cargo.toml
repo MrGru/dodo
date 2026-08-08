@@ -1,17 +1,24 @@
-# `crates/` holds code dodo *links*, which is what separates it from `tools/`.
+# `crates/` holds code that shares this lockfile, which is what separates it
+# from `tools/`.
 #
-# There is exactly one member today — `dodo-ime-core`, the input-method engine —
-# and it is a workspace member rather than a standalone crate like
-# `tools/update-manifest` for a reason worth writing down: `tools/update-manifest`
-# is a program the release workflow runs, so it can carry its own `Cargo.lock`
-# and be resolved on its own. `crates/dodo-ime-core` is linked *into* dodo, so a
-# second lockfile would be a second, silently divergent resolution of a shared
-# dependency. One workspace, one `Cargo.lock`, one `--locked`.
+# There are two members. `crates/dodo-ime-core` is the input-method engine,
+# linked *into* dodo. `crates/dodo-ime-macos` is the macOS InputMethodKit host —
+# a separate `.app` bundle that macOS launches, so dodo does not link it at all,
+# but it links the *engine*, and that is what settles the question:
+# `tools/update-manifest` can carry its own `Cargo.lock` because nothing else
+# resolves what it resolves, whereas a second lockfile here would resolve
+# `dodo-ime-core` and `unicode-normalization` independently — so the engine
+# dodo's tests prove and the engine the shipped bundle types with would be two
+# different resolutions that nothing compares. One workspace, one `Cargo.lock`,
+# one `--locked`.
 #
-# `default-members` names both, so a bare `cargo test` / `cargo clippy
-# --all-targets` at the root covers the engine's tests too. Without it cargo
-# would default to the root package alone and the engine's ~200 tests would stop
-# running the day they moved out of `src/`.
+# `default-members` names all three, so a bare `cargo test` / `cargo clippy
+# --all-targets` at the root covers the engine's tests and the macOS host's too.
+# Without it cargo would default to the root package alone and the engine's ~200
+# tests would stop running the day they moved out of `src/`. The macOS host is
+# safe to name here on every platform because its Objective-C dependencies are
+# declared under a `cfg(target_os = "macos")` target table, so a Linux or Windows
+# `cargo check` builds its pure half and resolves no AppKit.
 #
 # `exclude` names `tools/update-manifest` again at the workspace level: without
 # it, building that crate through `--manifest-path` fails with "current package
@@ -21,7 +28,7 @@
 # nothing.
 [workspace]
 members = ["crates/*"]
-default-members = [".", "crates/dodo-ime-core"]
+default-members = [".", "crates/dodo-ime-core", "crates/dodo-ime-macos"]
 exclude = ["tools/update-manifest"]
 
 [package]
