@@ -13,8 +13,9 @@
 #   dodo.app/Contents/Resources/THIRD-PARTY-NOTICES.md
 #
 # Signing and notarisation are deliberately NOT done here — see the block at
-# the bottom of this file and "Future readiness" in docs/release.md. This
-# script exists so that turning them on later is an edit in one place.
+# the bottom of this file and docs/macos-signing.md, which is the authority on
+# what has to be bought, created and configured first. This script exists so
+# that turning them on later is an edit in one place.
 
 set -euo pipefail
 
@@ -127,21 +128,41 @@ printf 'built %s\n' "$app"
 
 # --- Future: signing and notarisation --------------------------------------
 #
-# Everything below is intentionally not implemented; it needs secrets this
-# repository does not have. The order matters, so it is recorded here rather
-# than rediscovered:
+# Everything below is intentionally not implemented; it needs an Apple Developer
+# Program membership and certificates this repository does not have.
+# `docs/macos-signing.md` is the authority — what to buy, which secrets, which
+# entitlements (none), and what breaks. The order is recorded here too, because
+# this is the file that would carry it:
 #
 #   1. Import the Developer ID Application certificate into a temporary
-#      keychain (secrets: MACOS_CERTIFICATE, MACOS_CERTIFICATE_PWD).
-#   2. codesign --deep --force --options runtime --timestamp \
-#          --sign "Developer ID Application: ..." "$app"
-#      `--options runtime` (hardened runtime) is required for notarisation.
-#   3. Zip the bundle with `ditto -c -k --keepParent` — notarytool rejects a
-#      plain tar.gz — and submit:
-#      xcrun notarytool submit --wait --apple-id ... --team-id ... --password ...
+#      keychain (secrets: MACOS_CERTIFICATE, MACOS_CERTIFICATE_PWD). The step
+#      everyone forgets is `security set-key-partition-list`; without it
+#      codesign blocks on a dialog no runner can click.
+#   2. Sign INSIDE-OUT, one codesign call per bundle, deepest first. Once the
+#      input method is nested (docs/macos-signing.md §7.2 — it goes in
+#      Contents/Helpers/, which is a directory codesign treats as nested code):
+#
+#        codesign --force --options runtime --timestamp \
+#            --sign "$TEAM_ID" "$app/Contents/Helpers/Dodo Vietnamese.app"
+#        codesign --force --options runtime --timestamp --sign "$TEAM_ID" "$app"
+#
+#      NOT `--deep`: it is deprecated for signing as of macOS 13.0, and it
+#      applies every signing option to every nested item, which is almost never
+#      wanted. `--options runtime` (hardened runtime) and `--timestamp` are both
+#      required for notarisation. No `--entitlements`: dodo needs none.
+#   3. Zip the bundle with `ditto -c -k --keepParent` into a TEMPORARY file —
+#      notarytool takes a zip/dmg/pkg, never a tar.gz — and submit:
+#      xcrun notarytool submit --wait ...   (credentials: docs/macos-signing.md §2)
 #   4. xcrun stapler staple "$app", so the ticket travels with the download.
+#      Nothing may re-sign the bundle after this; that invalidates the ticket.
 #   5. Verify: codesign --verify --deep --strict --verbose=2 "$app"
 #              spctl --assess --type execute "$app"
+#              xcrun stapler validate "$app"
+#      (`--deep` IS still correct for verification.)
+#
+# All five happen HERE, before package.sh tars the bundle and checksums it —
+# the published SHA-256 and update.json entry are computed from that archive,
+# so anything done to dodo.app afterwards is invisible to the release.
 #
 # Until then the archive is unsigned and Gatekeeper will quarantine it; the
 # release notes tell users to clear that themselves (docs/release.md).
