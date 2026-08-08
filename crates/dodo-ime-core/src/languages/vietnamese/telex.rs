@@ -8,7 +8,7 @@
 //! |---|---|
 //! | `aa` `ee` `oo` | circumflex — `â` `ê` `ô` |
 //! | `aw` `ow` `uw` | breve on `a`, horn on `o`/`u` — `ă` `ơ` `ư` |
-//! | `dd` | stroke — `đ` |
+//! | `dd` | stroke — `đ` (on the syllable's initial `d`, so `did` is `đi` too) |
 //! | `s` `f` `r` `x` `j` | sắc, huyền, hỏi, ngã, nặng |
 //! | `z` | remove the tone |
 //! | `[` `]` | `ơ` and `ư` outright — see below |
@@ -102,7 +102,7 @@ pub fn interpret(key: char, syllable: &Syllable, bracket_shortcuts: bool) -> Opt
     if lower == 'w' {
         return Some(horn_or_breve(syllable, key, upper));
     }
-    if lower == 'd' && doubles_into_stroke(syllable) {
+    if lower == 'd' && strokes_the_initial_d(syllable) {
         return Some(Transform::Mark {
             mark: Mark::Stroke,
             literal: key,
@@ -158,10 +158,18 @@ fn horn_or_breve(syllable: &Syllable, literal: char, upper: bool) -> Transform {
     }
 }
 
-/// `dd` is a stroke only at the very start of a syllable, so `add` stays `add`
-/// and `ddi` becomes `đi`.
-fn doubles_into_stroke(syllable: &Syllable) -> bool {
-    matches!(syllable.letters(), [only] if only.base == 'd')
+/// The stroke key marks the syllable's **initial** `d`, wherever in the word it
+/// is typed — `ddi` and `did` both give `đi`, and `add` stays `add` because its
+/// first letter is an `a`.
+///
+/// This asks [`Syllable::mark_target`] rather than looking at the letters
+/// itself, so the position rule is stated once and both schemes obey it: `9` in
+/// VNI has always reached back this way. The test is deliberately *not* "and it
+/// is not already stroked" — a second stroke key is a
+/// [`Reverted`](super::syllable::MarkOutcome::Reverted) mark, which is how every
+/// other modifier here undoes itself (`noww` types `now`, `didd` types `did`).
+fn strokes_the_initial_d(syllable: &Syllable) -> bool {
+    syllable.mark_target(Mark::Stroke).is_some()
 }
 
 /// `aa`, `ee`, `oo` — the doubled vowel, where the second one is a circumflex.
@@ -351,24 +359,33 @@ mod tests {
         }
     }
 
+    /// The stroke asks about the syllable's **first** letter, not about how
+    /// many letters there are — so it reaches back over what has been typed
+    /// since, exactly as `w` and the tone keys do.
     #[test]
-    fn dd_is_a_stroke_only_at_the_start_of_a_syllable() {
-        assert_eq!(
-            read('d', "d"),
-            Some(Transform::Mark {
-                mark: Mark::Stroke,
-                literal: 'd'
-            })
-        );
-        // `add` is a word, not `ađ`.
-        assert_eq!(
-            read('d', "ad"),
-            Some(Transform::Letter {
-                base: 'd',
-                mark: None,
-                upper: false
-            })
-        );
+    fn the_stroke_key_marks_the_syllables_initial_d_from_anywhere_in_the_word() {
+        for spelling in ["d", "di", "die", "dươn", "D", "dI"] {
+            assert_eq!(
+                read('d', spelling),
+                Some(Transform::Mark {
+                    mark: Mark::Stroke,
+                    literal: 'd'
+                }),
+                "{spelling}d"
+            );
+        }
+        // `add` is a word, not `ađ`: the `d` is not the initial letter.
+        for spelling in ["ad", "sd", "ADD", "and"] {
+            assert_eq!(
+                read('d', spelling),
+                Some(Transform::Letter {
+                    base: 'd',
+                    mark: None,
+                    upper: false
+                }),
+                "{spelling}d"
+            );
+        }
         assert_eq!(
             read('d', ""),
             Some(Transform::Letter {
