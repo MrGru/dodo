@@ -88,6 +88,64 @@ fn the_doubled_vowels_and_the_w_marks() {
     );
 }
 
+/// The stroke reaches back over the rest of the word, like every other
+/// modifier here — `did` is `đi`, not `did`.
+///
+/// It was once the only modifier that demanded adjacency, which made `ddi`
+/// work and `did` type three literal letters. What the rule actually says is
+/// *the syllable's **initial** letter is a `d`*, which is why `add` is still
+/// `add`, and why VNI's `9` — asking the same shared question — never had the
+/// defect.
+#[test]
+fn the_stroke_reaches_back_to_the_syllables_initial_d() {
+    check(
+        &[
+            ("did", "đi"),
+            ("ddi", "đi"),
+            // A second stroke key undoes the first and types itself, which is
+            // the shared repeated-modifier rule, not a stroke rule.
+            ("didd", "did"),
+            // Not the initial letter, so not a stroke.
+            ("add", "add"),
+            // Case follows the letter that was typed, never the modifier's.
+            ("Did", "Đi"),
+            ("DID", "ĐI"),
+            ("dId", "đI"),
+            ("DIDD", "DID"),
+            // The real words this exists for, typed the natural way round.
+            ("dungd", "đung"),
+            ("dawngd", "đăng"),
+            ("duwowngfd", "đường"),
+        ],
+        telex,
+    );
+}
+
+/// The cost of the rule above, stated rather than hidden: a Latin word whose
+/// keys spell a *valid* Vietnamese syllable is composed, because the
+/// word-boundary restore in [`super::rules`] only rescues syllables that are
+/// invalid. `đô` is perfectly good Vietnamese, so `dodo` stays `đô` through the
+/// space that ends it.
+///
+/// This is what Telex does — Unikey behaves identically — and it is not new
+/// with the stroke: `dis` has always typed `dí`. Words that do *not* spell a
+/// Vietnamese syllable are restored as typed, which covers most of them.
+#[test]
+fn a_latin_word_that_spells_a_valid_syllable_is_still_composed() {
+    check(
+        &[
+            ("dodo", "đô"),
+            ("dodo ", "đô "),
+            ("dad ", "đa "),
+            // Restored, because the keys do not spell a Vietnamese syllable.
+            ("didnt ", "didnt "),
+            ("dodgy ", "dodgy "),
+            ("odd ", "odd "),
+        ],
+        telex,
+    );
+}
+
 #[test]
 fn the_vni_digits_do_the_same_things() {
     check(
@@ -101,6 +159,26 @@ fn the_vni_digits_do_the_same_things() {
             ("d9", "đ"),
             ("uo7", "ươ"),
             ("u7o7", "ươ"),
+        ],
+        vni,
+    );
+}
+
+/// VNI's `9` has always asked the shared "which letter takes a stroke"
+/// question, so it reached back from anywhere in the word before Telex did.
+/// Kept as its own table so the two schemes cannot drift apart again.
+#[test]
+fn the_vni_stroke_also_reaches_back_to_the_initial_d() {
+    check(
+        &[
+            ("di9", "đi"),
+            ("d9i", "đi"),
+            ("di9nh", "đinh"),
+            ("du9ng", "đung"),
+            // Not the initial letter: the digit has nowhere to land and is
+            // typed as a digit.
+            ("ad9", "ad9"),
+            ("a9", "a9"),
         ],
         vni,
     );
