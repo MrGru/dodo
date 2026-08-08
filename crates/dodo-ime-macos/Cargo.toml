@@ -19,6 +19,11 @@ path = "src/main.rs"
 # is the reason this crate is a workspace member rather than a standalone crate
 # with its own lockfile — see the module docs in `src/lib.rs`.
 dodo-ime-core = { path = "../dodo-ime-core" }
+# The contract with `Dodo.app`: the identifiers macOS looks this bundle up by
+# (re-exported as `crate::bundle`), the two JSON files the two processes
+# exchange, and the notification name. Pure, and on every platform for the same
+# reason the engine is — everything about the *files* is testable off macOS.
+dodo-ime-ipc = { path = "../dodo-ime-ipc" }
 
 # Every Objective-C binding is macOS-only *in the manifest*, not merely behind a
 # `#[cfg]` in the source. A plain `[dependencies]` entry would make a Linux or
@@ -47,6 +52,20 @@ objc2-app-kit = { version = "0.3.2", features = [
 # this crate and cannot be: it is declared in Carbon's HIToolbox, not in
 # InputMethodKit. `src/client.rs` is the hand-written façade for it.
 objc2-input-method-kit = "0.3.2"
+
+# `CFNotificationCenterAddObserver`, for the one distributed notification dodo
+# posts when it has written the settings file. Not a new package — it is already
+# `objc2-app-kit`'s own dependency — and it is preferred over
+# `NSDistributedNotificationCenter` because its observer is a plain `extern "C"`
+# function pointer: no Objective-C class to define and no `block2`. See
+# `src/ipc.rs`.
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CFBase",
+    "CFDictionary",
+    "CFNotificationCenter",
+    "CFString",
+] }
 
 # `objc2`'s `exception` feature, for the boundary test alone: it turns an
 # Objective-C exception into a `Result` so a failure prints what was raised

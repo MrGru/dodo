@@ -134,6 +134,35 @@ impl Session {
         Response::unhandled()
     }
 
+    /// Adopt a configuration, if it is not the one already in force.
+    ///
+    /// Called at the top of every controller method, because dodo can change the
+    /// settings at any moment and macOS creates controllers whenever it likes —
+    /// see [`ipc`](crate::ipc) for why the configuration is process-wide and this
+    /// state is not.
+    ///
+    /// Two things it must not do, and does not:
+    ///
+    /// - **Reinterpret keys typed under the old rules.** The engine's
+    ///   `set_config` commits what is in flight first, and the resulting actions
+    ///   are returned here so the caller performs them. Switching Telex→VNI
+    ///   mid-syllable finishes the syllable as Telex, which is the only answer
+    ///   that does not silently rewrite what the user already saw.
+    /// - **Claim the keystroke.** [`Response::handled`] is false: this produces
+    ///   text to insert, not a decision about the key that happens to have
+    ///   arrived at the same time.
+    pub fn reconfigure(&mut self, config: VietnameseConfig) -> Response {
+        if self.engine.config() == config {
+            return Response::unhandled();
+        }
+        let result = self.engine.set_config(config);
+        let ops = translate(&result.actions, &mut self.pending);
+        Response {
+            ops,
+            handled: false,
+        }
+    }
+
     /// Drop every trace of what was being composed, asking the client for
     /// nothing.
     fn forget(&mut self) {
@@ -152,7 +181,7 @@ mod tests {
     use super::{ClientOp, Response, Session};
     use crate::DEFAULT_CONFIG;
     use crate::keymap::key_event;
-    use dodo_ime_core::{Key, KeyEvent};
+    use dodo_ime_core::{InputScheme, Key, KeyEvent, TonePlacement, VietnameseConfig};
 
     /// A pretend client, so a key sequence can be asserted on as text.
     ///
@@ -339,6 +368,64 @@ mod tests {
         // keystroke — which is what this test is actually about, and every
         // character above is still accounted for on screen.
         assert_eq!(client.visible(), "Xin chào, đô v1.0! nhện ");
+    }
+
+    /// The settings-change path, and the reason it lives at the top of a
+    /// controller method: nothing happens until there is a client to commit to.
+    #[test]
+    fn a_settings_change_finishes_the_syllable_under_the_old_rules() {
+        let mut session = session();
+        let (mut client, _) = type_keys(&mut session, "tieengs");
+        assert_eq!(client.marked, "tiếng");
+
+        // Telex → VNI, mid-syllable. The keys already typed were Telex keys, so
+        // the syllable is finished as Telex rather than reinterpreted.
+        let vni = VietnameseConfig {
+            scheme: InputScheme::Vni,
+            ..DEFAULT_CONFIG
+        };
+        let response = session.reconfigure(vni);
+        assert!(
+            !response.handled,
+            "a reconfiguration claims no keystroke of its own"
+        );
+        client.perform(&response.ops, None);
+        assert_eq!(client.document, "tiếng");
+        assert_eq!(client.marked, "");
+
+        // And the next syllable is typed under the new scheme: in VNI `ê` is
+        // `e6` and the acute tone is `1`, where Telex spells them `ee` and `s`.
+        let (client, _) = type_keys(&mut session, "tie6ng1");
+        assert_eq!(client.marked, "tiếng");
+    }
+
+    #[test]
+    fn reconfiguring_to_the_configuration_already_in_force_does_nothing() {
+        let mut session = session();
+        let (mut client, _) = type_keys(&mut session, "tieengs");
+
+        let response = session.reconfigure(DEFAULT_CONFIG);
+        assert_eq!(response, Response::unhandled());
+        client.perform(&response.ops, None);
+        assert_eq!(client.marked, "tiếng", "the composition is untouched");
+        assert_eq!(client.document, "");
+    }
+
+    /// The ordinary case: settings change while nothing is composed.
+    #[test]
+    fn a_settings_change_with_nothing_composed_asks_the_client_for_nothing() {
+        let mut session = session();
+        let response = session.reconfigure(VietnameseConfig {
+            tone_placement: TonePlacement::Traditional,
+            ..DEFAULT_CONFIG
+        });
+        assert_eq!(response, Response::unhandled());
+
+        let (client, _) = type_keys(&mut session, "hoaf");
+        assert_eq!(
+            client.marked, "hòa",
+            "the traditional placement is in force"
+        );
     }
 
     /// `handled` is derived, and the derivation is what stops a keystroke from

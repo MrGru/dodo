@@ -1,10 +1,16 @@
 # `crates/` holds code that shares this lockfile, which is what separates it
 # from `tools/`.
 #
-# There are two members. `crates/dodo-ime-core` is the input-method engine,
-# linked *into* dodo. `crates/dodo-ime-macos` is the macOS InputMethodKit host —
+# There are three members. `crates/dodo-ime-core` is the input-method engine,
+# linked *into* dodo. `crates/dodo-ime-ipc` is everything the two *processes*
+# must agree on — the identifiers macOS looks the bundle up by, the two JSON
+# files they exchange, the notification between them — and is linked into both,
+# which is exactly why it is a crate: neither process can reach the other's code,
+# so the alternative was two copies of one schema kept in step by nothing.
+# `crates/dodo-ime-macos` is the macOS InputMethodKit host —
 # a separate `.app` bundle that macOS launches, so dodo does not link it at all,
-# but it links the *engine*, and that is what settles the question:
+# but it links the *engine* and the contract, and that is what settles the
+# question:
 # `tools/update-manifest` can carry its own `Cargo.lock` because nothing else
 # resolves what it resolves, whereas a second lockfile here would resolve
 # `dodo-ime-core` and `unicode-normalization` independently — so the engine
@@ -12,7 +18,7 @@
 # different resolutions that nothing compares. One workspace, one `Cargo.lock`,
 # one `--locked`.
 #
-# `default-members` names all three, so a bare `cargo test` / `cargo clippy
+# `default-members` names all four, so a bare `cargo test` / `cargo clippy
 # --all-targets` at the root covers the engine's tests and the macOS host's too.
 # Without it cargo would default to the root package alone and the engine's ~200
 # tests would stop running the day they moved out of `src/`. The macOS host is
@@ -28,7 +34,12 @@
 # nothing.
 [workspace]
 members = ["crates/*"]
-default-members = [".", "crates/dodo-ime-core", "crates/dodo-ime-macos"]
+default-members = [
+    ".",
+    "crates/dodo-ime-core",
+    "crates/dodo-ime-ipc",
+    "crates/dodo-ime-macos",
+]
 exclude = ["tools/update-manifest"]
 
 [package]
@@ -87,9 +98,17 @@ sql-highlighting = ["gpui-component/tree-sitter", "gpui-component/tree-sitter-sq
 
 [dependencies]
 # dodo's input-method engine, kept out of this crate so the three OS hosts can
-# link it without linking everything below. Not called from anywhere yet — the
-# tray/settings wiring is a later round; see `crates/dodo-ime-core/src/lib.rs`.
+# link it without linking everything below. dodo names its configuration types
+# in the Input method settings page and nothing else; the engine itself only ever
+# runs inside a host process. See `crates/dodo-ime-core/src/lib.rs`.
 dodo-ime-core = { path = "crates/dodo-ime-core" }
+# The contract with the macOS input-method bundle: the identifiers macOS looks it
+# up by, the two JSON files the two processes exchange, the notification between
+# them. dodo links this and **not** `dodo-ime-macos` — linking the host would
+# drag InputMethodKit into a UI application for four string constants, and the
+# host must never link gpui. `src/input_method/` is the only module that names
+# it. See that crate's docs for why the schema cannot live in either process.
+dodo-ime-ipc = { path = "crates/dodo-ime-ipc" }
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
 # `tree-sitter` (JSON), `tree-sitter-html` and `tree-sitter-yaml` are what make
