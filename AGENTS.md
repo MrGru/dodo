@@ -175,7 +175,13 @@ that mapping outside the state machine. And **the Vietnamese engine is semantic,
 rewriting**: a letter is `(base, mark, case)`, the tone belongs to the syllable and its position is
 recomputed at render time, so `toas` + `n` becomes `toán` without anything relocating a mark.
 `InputScheme` is an enum for the same reason — Telex and VNI produce identical `Transform`s and
-share every rule about Vietnamese. Tests: `corpus.rs` holds ~460 real words as *answers* and
+share every rule about Vietnamese. **Every modifier reaches back over the current syllable**, the
+stroke included since 2026-08-08 (`did` is `đi`, `add` is still `add` because the rule is about the
+*initial* letter); a scheme file that decides position itself rather than asking
+`Syllable::mark_target` is how that one was wrong for a round. The price is stated in
+`vietnamese::tests`: a Latin word whose keys spell a **valid** Vietnamese syllable is composed and
+stays composed, because `rules`' word-boundary restore only rescues invalid ones — so `dodo` types
+`đô`, which is what Unikey does too and is not a bug to fix. Tests: `corpus.rs` holds ~460 real words as *answers* and
 derives both key sequences from them, so tone placement is never fed to the thing being tested.
 **To actually type at it before any OS host exists**, run
 `cargo run -p dodo-ime-core --example telex` (interactive) or
