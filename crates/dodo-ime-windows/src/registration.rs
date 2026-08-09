@@ -48,7 +48,7 @@ impl IClassFactory_Impl for Factory {
         if iid.is_null() || object.is_null() {
             return Err(Error::from(E_INVALIDARG));
         }
-        let service: windows::Win32::UI::TextServices::ITfTextInputProcessor =
+        let service: windows::Win32::UI::TextServices::ITfTextInputProcessorEx =
             TextService::new().into();
         unsafe { service.query(iid, object).ok() }
     }

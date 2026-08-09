@@ -23,7 +23,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::TextServices::{
     ITfComposition, ITfCompositionSink, ITfContext, ITfContextComposition, ITfEditSession,
     ITfEditSession_Impl, ITfKeyEventSink, ITfKeyEventSink_Impl, ITfKeystrokeMgr,
-    ITfTextInputProcessor, ITfTextInputProcessor_Impl, ITfThreadMgr, TF_CONTEXT_EDIT_CONTEXT_FLAGS,
+    ITfTextInputProcessor, ITfTextInputProcessor_Impl, ITfTextInputProcessorEx,
+    ITfTextInputProcessorEx_Impl, ITfThreadMgr, TF_CONTEXT_EDIT_CONTEXT_FLAGS,
     TF_DEFAULT_SELECTION, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION, TS_SD_READONLY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
@@ -33,7 +34,7 @@ use crate::keymap;
 
 /// A TSF processor remains in one COM apartment. `RefCell` expresses that and
 /// avoids pretending the per-context composition may cross threads safely.
-#[implement(ITfTextInputProcessor, ITfKeyEventSink)]
+#[implement(ITfTextInputProcessorEx, ITfKeyEventSink)]
 pub struct TextService {
     state: RefCell<State>,
 }
@@ -239,6 +240,17 @@ impl ITfTextInputProcessor_Impl for TextService {
         }
         *state = State::default();
         Ok(())
+    }
+}
+
+impl ITfTextInputProcessorEx_Impl for TextService {
+    fn ActivateEx(
+        &self,
+        manager: Option<&ITfThreadMgr>,
+        client_id: u32,
+        _flags: u32,
+    ) -> Result<()> {
+        ITfTextInputProcessor_Impl::Activate(self, manager, client_id)
     }
 }
 
