@@ -48,7 +48,7 @@ use std::sync::RwLock;
 
 use dodo_ime_core::{LanguageId, VietnameseConfig};
 use dodo_ime_ipc::paths;
-use dodo_ime_ipc::settings::{SETTINGS_FILE, SettingsDocument};
+use dodo_ime_ipc::settings::{Backend, SETTINGS_FILE, SettingsDocument};
 use dodo_ime_ipc::status::{STATUS_FILE, StatusDocument};
 
 use crate::DEFAULT_CONFIG;
@@ -62,6 +62,7 @@ const BUNDLE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// What this process is currently typing with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Live {
+    pub backend: Backend,
     pub language: LanguageId,
     pub config: VietnameseConfig,
     /// The settings revision this came from. `0` means the compiled-in
@@ -71,6 +72,7 @@ pub struct Live {
 
 impl Live {
     const DEFAULT: Live = Live {
+        backend: Backend::Native,
         language: LanguageId::English,
         config: DEFAULT_CONFIG,
         revision: 0,
@@ -92,9 +94,21 @@ pub fn config() -> VietnameseConfig {
         .unwrap_or(DEFAULT_CONFIG)
 }
 
-/// The language the input method is using right now.
+/// The language the native input method is using right now.
+///
+/// Event Tap is another host, so this bundle must pass every key through when it
+/// owns the selection. The schema version makes an old bundle refuse that
+/// selection rather than compose beside the tap.
 pub fn language() -> LanguageId {
-    LIVE.read().map(|live| live.language).unwrap_or_default()
+    LIVE.read()
+        .map(|live| {
+            if live.backend == Backend::Native {
+                live.language
+            } else {
+                LanguageId::English
+            }
+        })
+        .unwrap_or_default()
 }
 
 /// The settings revision in force, for the status file.
@@ -111,6 +125,7 @@ pub fn revision() -> u64 {
 pub fn adopt_from(dir: &Path) -> Live {
     let (document, _refused) = SettingsDocument::read_or_default(&dir.join(SETTINGS_FILE));
     let live = Live {
+        backend: document.backend,
         language: document.language,
         config: document.vietnamese.to_config(),
         // A refused file reports revision 0, because `read_or_default` hands
@@ -242,7 +257,7 @@ mod tests {
     use crate::{DEFAULT_CONFIG, Session};
     use dodo_ime_core::{InputScheme, KeyEvent, LanguageId, TonePlacement};
     use dodo_ime_ipc::settings::{
-        SETTINGS_FILE, Scheme, SettingsDocument, Tone, VietnameseSettings,
+        Backend, SETTINGS_FILE, Scheme, SettingsDocument, Tone, VietnameseSettings,
     };
     use dodo_ime_ipc::status::{STATUS_FILE, StatusDocument};
 
@@ -294,6 +309,7 @@ mod tests {
         let dir = scratch("absent");
 
         let live = adopt_from(&dir);
+        assert_eq!(live.backend, Backend::Native);
         assert_eq!(live.language, LanguageId::English);
         assert_eq!(live.config, DEFAULT_CONFIG);
         assert_eq!(live.revision, 0);
@@ -319,6 +335,7 @@ mod tests {
         document.write(&dir.join(SETTINGS_FILE)).unwrap();
 
         let live = adopt_from(&dir);
+        assert_eq!(live.backend, Backend::Native);
         assert_eq!(live.language, LanguageId::Vietnamese);
         assert_eq!(language(), LanguageId::Vietnamese);
         assert_eq!(live.config.scheme, InputScheme::Vni);
@@ -371,12 +388,39 @@ mod tests {
     }
 
     #[test]
+    fn event_tap_selection_leaves_the_native_host_passive() {
+        let _held = Held::take();
+        let dir = scratch("event-tap");
+        let document = SettingsDocument::next_with_backend(
+            &SettingsDocument::default(),
+            Backend::EventTap,
+            LanguageId::Vietnamese,
+            VietnameseSettings::default(),
+        );
+        document.write(&dir.join(SETTINGS_FILE)).unwrap();
+
+        let live = adopt_from(&dir);
+        assert_eq!(live.backend, Backend::EventTap);
+        assert_eq!(live.language, LanguageId::Vietnamese);
+        assert_eq!(language(), LanguageId::English);
+        assert!(
+            !Session::new(language(), config())
+                .key(&KeyEvent::character('d'))
+                .handled,
+            "the native host must not transform beside Event Tap"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_status_file_names_this_build_and_the_revision_in_force() {
         let _held = Held::take();
         let dir = scratch("status");
 
         SettingsDocument {
             version: dodo_ime_ipc::settings::SETTINGS_SCHEMA_VERSION,
+            backend: Backend::Native,
             language: LanguageId::Vietnamese,
             revision: 12,
             vietnamese: VietnameseSettings::default(),

@@ -21,9 +21,10 @@
 //!   the engine's own spelling of exactly this idea, written one round before
 //!   there was a file to put it in.
 //! - **A place to decide what is *not* a setting.** [`OutputMode`] is not in
-//!   this document. macOS always has a marked-text channel, so the host always
-//!   composes; making it configurable would expose a control whose only working
-//!   value is the default. [`VietnameseSettings::to_config`] supplies it.
+//!   this document. Native Input Method always composes; Event Tap has no
+//!   marked-text client and selects direct output in its own host code. Making
+//!   that transport detail configurable would expose controls with no choice.
+//!   [`VietnameseSettings::to_config`] supplies the native default.
 
 use dodo_ime_core::{InputScheme, LanguageId, OutputMode, TonePlacement, VietnameseConfig};
 use serde::{Deserialize, Serialize};
@@ -40,10 +41,11 @@ pub const SETTINGS_FILE: &str = "input-method.json";
 /// defaults until it is updated. So a bump is for a change that would be
 /// actively misread, and an added field with a `#[serde(default)]` is not one.
 ///
-/// Version 2 adds the selected input language. A version-1 bundle would ignore
-/// it and keep composing Vietnamese, so accepting that file would be a silent
-/// misread rather than compatible evolution.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 2;
+/// Version 2 adds the selected input language. Version 3 adds the backend. An
+/// older bundle would ignore Event Tap and still compose, so accepting it could
+/// put two transformers in one input path. Refusal falls back to English, which
+/// passes keys through until the bundle is updated.
+pub const SETTINGS_SCHEMA_VERSION: u32 = 3;
 
 /// How a key sequence becomes Vietnamese, as this file spells it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +125,36 @@ impl Tone {
     }
 }
 
+/// Which macOS host owns Vietnamese transformation.
+///
+/// The spelling is a compatibility boundary: an old native bundle must refuse
+/// a document that selects Event Tap, not silently keep composing beside it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Backend {
+    /// The InputMethodKit bundle macOS launches independently of dodo.
+    #[default]
+    Native,
+    /// dodo's Accessibility-gated CGEventTap, active only while dodo runs.
+    EventTap,
+}
+
+impl Backend {
+    pub const ALL: [Backend; 2] = [Backend::Native, Backend::EventTap];
+
+    /// Stable persisted identifier, never a localized label.
+    pub fn code(self) -> &'static str {
+        match self {
+            Backend::Native => "native",
+            Backend::EventTap => "event-tap",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Backend> {
+        Self::ALL.into_iter().find(|backend| backend.code() == code)
+    }
+}
+
 /// The Vietnamese engine's settings, as a file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -155,7 +187,8 @@ impl VietnameseSettings {
     /// The engine configuration these settings mean.
     ///
     /// [`OutputMode::Composition`] is supplied here rather than read from the
-    /// file: see the module docs for why it is not a setting.
+    /// file: Native Input Method needs it, while Event Tap overrides it locally.
+    /// See the module docs for why it is not a setting.
     pub fn to_config(self) -> VietnameseConfig {
         VietnameseConfig {
             scheme: self.scheme.to_engine(),
@@ -174,6 +207,9 @@ impl VietnameseSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsDocument {
     pub version: u32,
+    /// The host that is allowed to transform input.
+    #[serde(default)]
+    pub backend: Backend,
     /// The keyboard input language selected from dodo's menu bar.
     ///
     /// The custom serde adapter keeps `dodo-ime-core` free of serde while
@@ -199,6 +235,7 @@ impl Default for SettingsDocument {
     fn default() -> SettingsDocument {
         SettingsDocument {
             version: SETTINGS_SCHEMA_VERSION,
+            backend: Backend::default(),
             language: LanguageId::default(),
             revision: 0,
             vietnamese: VietnameseSettings::default(),
@@ -217,8 +254,19 @@ impl SettingsDocument {
         language: LanguageId,
         vietnamese: VietnameseSettings,
     ) -> SettingsDocument {
+        Self::next_with_backend(previous, previous.backend, language, vietnamese)
+    }
+
+    /// Like [`next`](Self::next), with an explicitly selected host.
+    pub fn next_with_backend(
+        previous: &SettingsDocument,
+        backend: Backend,
+        language: LanguageId,
+        vietnamese: VietnameseSettings,
+    ) -> SettingsDocument {
         SettingsDocument {
             version: SETTINGS_SCHEMA_VERSION,
+            backend,
             language,
             revision: previous.revision.saturating_add(1),
             vietnamese,
@@ -281,7 +329,9 @@ mod language {
 
 #[cfg(test)]
 mod tests {
-    use super::{SETTINGS_SCHEMA_VERSION, Scheme, SettingsDocument, Tone, VietnameseSettings};
+    use super::{
+        Backend, SETTINGS_SCHEMA_VERSION, Scheme, SettingsDocument, Tone, VietnameseSettings,
+    };
     use crate::document::IpcError;
     use dodo_ime_core::{InputScheme, LanguageId, OutputMode, TonePlacement, VietnameseConfig};
 
@@ -290,6 +340,7 @@ mod tests {
         let document = SettingsDocument::default();
         assert_eq!(document.version, SETTINGS_SCHEMA_VERSION);
         assert_eq!(document.revision, 0);
+        assert_eq!(document.backend, Backend::Native);
         assert_eq!(document.language, LanguageId::English);
         assert_eq!(document.vietnamese.scheme, Scheme::Telex);
         assert_eq!(document.vietnamese.tone_placement, Tone::Modern);
@@ -343,6 +394,8 @@ mod tests {
         assert_eq!(Scheme::Vni.code(), "vni");
         assert_eq!(Tone::Modern.code(), "modern");
         assert_eq!(Tone::Traditional.code(), "traditional");
+        assert_eq!(Backend::Native.code(), "native");
+        assert_eq!(Backend::EventTap.code(), "event-tap");
 
         let json = serde_json::to_string(&VietnameseSettings {
             scheme: Scheme::Vni,
@@ -377,6 +430,10 @@ mod tests {
         }
         assert_eq!(Scheme::from_code("viqr"), None);
         assert_eq!(Tone::from_code(""), None);
+        for backend in Backend::ALL {
+            assert_eq!(Backend::from_code(backend.code()), Some(backend));
+        }
+        assert_eq!(Backend::from_code("keyboard-kit"), None);
     }
 
     #[test]
@@ -391,6 +448,7 @@ mod tests {
             SettingsDocument::next(&second, LanguageId::Japanese, VietnameseSettings::default());
         assert_eq!((second.revision, third.revision), (1, 2));
         assert_eq!(third.version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(third.backend, Backend::Native);
     }
 
     /// A version-1 document had no language. It remains readable and adopts
@@ -401,10 +459,18 @@ mod tests {
         let document =
             SettingsDocument::parse(br#"{"version":1,"vietnamese":{"scheme":"vni"}}"#).unwrap();
         assert_eq!(document.language, LanguageId::English);
+        assert_eq!(document.backend, Backend::Native);
         assert_eq!(document.vietnamese.scheme, Scheme::Vni);
         assert_eq!(document.vietnamese.tone_placement, Tone::Modern);
         assert!(document.vietnamese.spell_check);
         assert_eq!(document.revision, 0);
+    }
+
+    #[test]
+    fn version_two_files_keep_native_as_the_safe_default() {
+        let document = SettingsDocument::parse(br#"{"version":2,"language":"vi"}"#).unwrap();
+        assert_eq!(document.backend, Backend::Native);
+        assert_eq!(document.language, LanguageId::Vietnamese);
     }
 
     #[test]
@@ -415,6 +481,7 @@ mod tests {
             VietnameseSettings::default(),
         );
         let json = serde_json::to_string(&document).unwrap();
+        assert!(json.contains(r#""backend":"native""#));
         assert!(json.contains(r#""language":"vi""#));
         assert_eq!(SettingsDocument::parse(json.as_bytes()).unwrap(), document);
         assert!(SettingsDocument::parse(br#"{"version":2,"language":"ko"}"#).is_err());
@@ -479,8 +546,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("input-method.json");
 
-        let document = SettingsDocument::next(
+        let document = SettingsDocument::next_with_backend(
             &SettingsDocument::default(),
+            Backend::EventTap,
             LanguageId::Vietnamese,
             VietnameseSettings {
                 scheme: Scheme::Vni,
@@ -491,6 +559,7 @@ mod tests {
         );
         document.write(&path).unwrap();
         assert_eq!(SettingsDocument::read(&path).unwrap(), Some(document));
+        assert_eq!(document.backend, Backend::EventTap);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
