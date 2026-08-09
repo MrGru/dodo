@@ -20,8 +20,8 @@ use objc2_core_graphics::{
 
 use crate::input_method::models::direct_output::OutputPlan;
 use crate::input_method::models::event_tap::{
-    DirectComposer, EventTapStatus, Handling, TapEvent, handling, is_synthetic_event,
-    synthetic_event_tag,
+    DirectComposer, EventTapStatus, Handling, TapEvent, handling, invalidates_composer,
+    is_synthetic_event, synthetic_event_tag,
 };
 
 const DELETE_KEY_CODE: u16 = 0x33;
@@ -65,7 +65,7 @@ impl EventTap {
         let mode = common_modes().ok_or(StartError::NoRunLoop)?;
         let mut state = Box::new(State::new(config));
         let user_info = (&mut *state as *mut State).cast();
-        let mask = (1_u64 << CGEventType::KeyDown.0) | (1_u64 << CGEventType::KeyUp.0);
+        let mask = event_mask();
         // SAFETY: `callback` matches CoreGraphics' declared callback type, and
         // `state` is held by the returned EventTap until its port is invalidated.
         let tap = unsafe {
@@ -136,6 +136,8 @@ struct State {
     /// Key-up events matching a replaced physical key-down. A bitset avoids a
     /// callback-path allocation while preserving real down/up pairs.
     suppressed_key_ups: Cell<u128>,
+    /// The last focused target reported by CoreGraphics on a physical key.
+    target_process: Cell<Option<u32>>,
     /// A borrowed tap pointer, valid while [`EventTap`] retains it.
     tap: Cell<Option<NonNull<CFMachPort>>>,
     status: Cell<EventTapStatus>,
@@ -147,6 +149,7 @@ impl State {
             composer: RefCell::new(DirectComposer::new(config)),
             synthetic_tag: synthetic_event_tag(std::process::id()),
             suppressed_key_ups: Cell::new(0),
+            target_process: Cell::new(None),
             tap: Cell::new(None),
             status: Cell::new(EventTapStatus::Running),
         }
@@ -155,6 +158,26 @@ impl State {
     fn reset(&self) {
         if let Ok(mut composer) = self.composer.try_borrow_mut() {
             composer.reset();
+        }
+    }
+
+    fn reset_if_target_changed(&self, target: Option<u32>) -> bool {
+        let Some(target) = target else {
+            return false;
+        };
+        let changed = self
+            .target_process
+            .replace(Some(target))
+            .is_some_and(|previous| previous != target);
+        if changed {
+            self.reset();
+        }
+        changed
+    }
+
+    fn reset_after_pass_through(&self, event: TapEvent) {
+        if invalidates_composer(event) {
+            self.reset();
         }
     }
 
@@ -214,6 +237,41 @@ impl State {
     }
 }
 
+/// Keys plus the only pointer events that can move the focused caret.
+///
+/// Mouse movement and scrolling are deliberately absent: they cannot prove a
+/// caret change and would put avoidable traffic on the callback path.
+fn event_mask() -> u64 {
+    [
+        CGEventType::KeyDown,
+        CGEventType::KeyUp,
+        CGEventType::LeftMouseDown,
+        CGEventType::RightMouseDown,
+        CGEventType::OtherMouseDown,
+    ]
+    .into_iter()
+    .fold(0, |mask, event| mask | (1_u64 << event.0))
+}
+
+fn classify_tap_event(event_type: CGEventType, autorepeat: bool) -> TapEvent {
+    match event_type {
+        CGEventType::KeyDown => TapEvent::KeyDown { autorepeat },
+        CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown => {
+            TapEvent::MouseDown
+        }
+        _ => TapEvent::Other,
+    }
+}
+
+fn target_process(event: &CGEvent) -> Option<u32> {
+    u32::try_from(CGEvent::integer_value_field(
+        Some(event),
+        CGEventField::EventTargetUnixProcessID,
+    ))
+    .ok()
+    .filter(|process| *process != 0)
+}
+
 fn common_modes() -> Option<&'static CFRunLoopMode> {
     // SAFETY: CoreFoundation exports this immutable process-lifetime constant.
     unsafe { kCFRunLoopCommonModes }
@@ -263,6 +321,9 @@ unsafe extern "C-unwind" fn callback(
         return event_ptr;
     }
 
+    if event_type == CGEventType::KeyDown {
+        state.reset_if_target_changed(target_process(event));
+    }
     let tap_event = if event_type == CGEventType::TapDisabledByTimeout
         || event_type == CGEventType::TapDisabledByUserInput
     {
@@ -271,27 +332,24 @@ unsafe extern "C-unwind" fn callback(
         TapEvent::KeyUp {
             suppress: state.take_suppressed_key_up(event),
         }
-    } else if event_type == CGEventType::KeyDown {
-        TapEvent::KeyDown {
-            autorepeat: CGEvent::integer_value_field(
-                Some(event),
-                CGEventField::KeyboardEventAutorepeat,
-            ) != 0,
-        }
     } else {
-        TapEvent::Other
+        classify_tap_event(
+            event_type,
+            CGEvent::integer_value_field(Some(event), CGEventField::KeyboardEventAutorepeat) != 0,
+        )
     };
 
     let secure_input = matches!(tap_event, TapEvent::KeyDown { .. }) && secure_input_enabled();
     match handling(tap_event, secure_input) {
         Handling::PassThrough => {
-            if matches!(tap_event, TapEvent::KeyDown { .. } | TapEvent::Other) {
-                state.reset();
-            }
+            state.reset_after_pass_through(tap_event);
             event_ptr
         }
         Handling::Suppress => null_mut(),
         Handling::RecoverTap => {
+            // A disabled tap leaves the cursor and focus unknown, so no
+            // committed-word snapshot can safely survive recovery.
+            state.reset();
             // One enable per explicit CoreGraphics notification; no timer or
             // retry loop can spin while the system keeps the tap disabled.
             state.recover();
@@ -496,8 +554,82 @@ unsafe extern "C" {
 
 #[cfg(test)]
 mod tests {
-    use super::{key_event, single_character};
-    use dodo_ime_core::{Key, Modifiers};
+    use super::{State, classify_tap_event, event_mask, key_event, single_character};
+    use dodo_ime_core::{Key, KeyEvent, Modifiers, VietnameseConfig};
+
+    fn press(state: &State, document: &mut String, event: KeyEvent) {
+        let plan = state.composer.borrow_mut().process(event);
+        *document = dodo_ime_core::core::truncate_graphemes(document, plan.delete_before);
+        if let Some(insert) = plan.insert {
+            document.push_str(&insert);
+        }
+        if plan.pass_through {
+            if event.key == Key::Backspace {
+                *document = dodo_ime_core::core::truncate_graphemes(document, 1);
+            } else if let Some(key) = event.typed() {
+                document.push(key);
+            }
+        }
+    }
+
+    #[test]
+    fn mouse_down_mask_and_classification_reset_a_reopenable_word() {
+        let mask = event_mask();
+        for event in [
+            objc2_core_graphics::CGEventType::KeyDown,
+            objc2_core_graphics::CGEventType::KeyUp,
+            objc2_core_graphics::CGEventType::LeftMouseDown,
+            objc2_core_graphics::CGEventType::RightMouseDown,
+            objc2_core_graphics::CGEventType::OtherMouseDown,
+        ] {
+            assert_ne!(mask & (1_u64 << event.0), 0, "{event:?}");
+        }
+        for event in [
+            objc2_core_graphics::CGEventType::MouseMoved,
+            objc2_core_graphics::CGEventType::ScrollWheel,
+        ] {
+            assert_eq!(mask & (1_u64 << event.0), 0, "{event:?}");
+        }
+
+        let state = State::new(VietnameseConfig::default());
+        let mut document = String::new();
+        for key in "ddee ".chars() {
+            press(&state, &mut document, KeyEvent::character(key));
+        }
+        for event in [
+            objc2_core_graphics::CGEventType::LeftMouseDown,
+            objc2_core_graphics::CGEventType::RightMouseDown,
+            objc2_core_graphics::CGEventType::OtherMouseDown,
+        ] {
+            assert_eq!(
+                classify_tap_event(event, false),
+                crate::input_method::models::event_tap::TapEvent::MouseDown,
+            );
+        }
+        state.reset_after_pass_through(classify_tap_event(
+            objc2_core_graphics::CGEventType::LeftMouseDown,
+            false,
+        ));
+        press(&state, &mut document, KeyEvent::special(Key::Backspace));
+        press(&state, &mut document, KeyEvent::character('f'));
+        assert_eq!(document, "đêf");
+    }
+
+    #[test]
+    fn target_process_change_resets_a_reopenable_word() {
+        let state = State::new(VietnameseConfig::default());
+        assert!(!state.reset_if_target_changed(Some(1)));
+        assert!(!state.reset_if_target_changed(Some(1)));
+
+        let mut document = String::new();
+        for key in "ddee ".chars() {
+            press(&state, &mut document, KeyEvent::character(key));
+        }
+        assert!(state.reset_if_target_changed(Some(2)));
+        press(&state, &mut document, KeyEvent::special(Key::Backspace));
+        press(&state, &mut document, KeyEvent::character('f'));
+        assert_eq!(document, "đêf");
+    }
 
     #[test]
     fn key_decoding_keeps_precomposed_scalars_and_rejects_combining_input() {

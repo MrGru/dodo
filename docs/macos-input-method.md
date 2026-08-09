@@ -145,9 +145,12 @@ Event Tap drives the existing `dodo-ime-core` Vietnamese engine in direct
 output mode. The trade-off is deliberate: unlike Native Input Method it cannot
 show marked text, so only the smallest cursor-safe changed tail enters the
 focused application and its undo history. It retains the raw characters of the
-current uncommitted word in memory only, recomputes that word after a physical
-edit, and drops it at a boundary; it never writes, logs, sends, or exposes keys
-or words.
+current uncommitted word and, after a plain space or proven pass-through
+punctuation, one bounded in-memory snapshot until every contiguous separator is
+physically deleted. It then recomputes through the normal engine rules; any
+navigation, shortcut, mouse click, focus/secure-input change, tap recovery,
+configuration change or new text drops the snapshot. It never writes, logs, sends, or exposes
+keys or words.
 
 Every Dodo-generated `CGEvent` has a process-unique
 `kCGEventSourceUserData` marker. The callback passes a marked event through

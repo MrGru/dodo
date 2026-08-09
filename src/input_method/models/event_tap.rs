@@ -2,9 +2,10 @@
 //!
 //! The CoreGraphics callback is deliberately thin: it asks these rules whether
 //! to pass, process, or re-enable, then performs the platform call. The
-//! [`DirectComposer`] owns only the current uncommitted Telex word, so it can
-//! recompute that word after a physical edit without looking into the focused
-//! application. Nothing here touches Accessibility, files, locks, or GPUI.
+//! [`DirectComposer`] owns the current Telex word plus one just-committed word
+//! while known separators still leave the end cursor provable, so it can
+//! recompute after a physical edit without reading the focused application.
+//! Nothing here touches Accessibility, files, locks, or GPUI.
 
 use dodo_ime_core::core::{grapheme_count, grapheme_prefix, truncate_graphemes};
 use dodo_ime_core::{
@@ -16,6 +17,8 @@ use dodo_ime_ipc::settings::Backend;
 pub use crate::input_method::models::direct_output::OutputPlan;
 
 const MAX_RAW_KEYS: usize = 32;
+// Bound a separator run as well as the retained raw word on the callback path.
+const MAX_REOPEN_SEPARATORS: usize = 32;
 const BACKSPACE_SEARCH_TAIL: usize = 8;
 const SYNTHETIC_TAG_NAMESPACE: u32 = 0xd0d0_e7a0;
 
@@ -75,8 +78,14 @@ pub(crate) fn is_synthetic_event(user_data: i64, tag: i64) -> bool {
 /// The event facts the callback needs before it touches composition state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TapEvent {
-    KeyDown { autorepeat: bool },
-    KeyUp { suppress: bool },
+    KeyDown {
+        autorepeat: bool,
+    },
+    KeyUp {
+        suppress: bool,
+    },
+    /// Any physical mouse-down can move the focus or caret.
+    MouseDown,
     TapDisabled,
     Other,
 }
@@ -99,10 +108,32 @@ pub fn handling(event: TapEvent, secure_input: bool) -> Handling {
     match event {
         TapEvent::TapDisabled => Handling::RecoverTap,
         TapEvent::KeyUp { suppress: true } => Handling::Suppress,
-        TapEvent::KeyUp { suppress: false } | TapEvent::Other => Handling::PassThrough,
+        TapEvent::KeyUp { suppress: false } | TapEvent::MouseDown | TapEvent::Other => {
+            Handling::PassThrough
+        }
         TapEvent::KeyDown { autorepeat } if !secure_input => Handling::ProcessKey { autorepeat },
         TapEvent::KeyDown { .. } => Handling::PassThrough,
     }
+}
+
+/// Passed-through events that leave the end cursor or focused target unknown.
+pub fn invalidates_composer(event: TapEvent) -> bool {
+    matches!(
+        event,
+        TapEvent::KeyDown { .. } | TapEvent::MouseDown | TapEvent::Other
+    )
+}
+
+/// One just-committed word that a run of known separators may still reopen.
+///
+/// The raw keys and config are enough to reconstruct the engine through its
+/// normal rules; `rendered` remains the document truth that the next plan
+/// replaces. This is deliberately one bounded snapshot, not document history.
+struct ReopenableWord {
+    config: VietnameseConfig,
+    raw: Vec<char>,
+    rendered: String,
+    separators: usize,
 }
 
 /// Current-word intent and rendering for direct output.
@@ -115,6 +146,7 @@ pub(crate) struct DirectComposer {
     engine: VietnameseEngine,
     raw: Vec<char>,
     rendered: String,
+    reopenable: Option<ReopenableWord>,
 }
 
 impl DirectComposer {
@@ -125,6 +157,7 @@ impl DirectComposer {
             config,
             raw: Vec::with_capacity(MAX_RAW_KEYS),
             rendered: String::with_capacity(MAX_RAW_KEYS * 3),
+            reopenable: None,
         }
     }
 
@@ -148,6 +181,13 @@ impl DirectComposer {
         if event.key == Key::Backspace {
             return self.backspace();
         }
+
+        let separator = is_reopen_separator(&event);
+        if self.reopenable.is_some() && !separator {
+            // A key after the boundary means the cursor is no longer provably
+            // beside the old word, even when that key ultimately passes through.
+            self.reopenable = None;
+        }
         if self.raw.len() == MAX_RAW_KEYS {
             return self.commit_before_passing();
         }
@@ -155,6 +195,14 @@ impl DirectComposer {
             return plan;
         }
 
+        let reopen = (separator && !self.raw.is_empty() && !self.rendered.is_empty()).then(|| {
+            ReopenableWord {
+                config: self.config,
+                raw: self.raw.clone(),
+                rendered: self.rendered.clone(),
+                separators: 1,
+            }
+        });
         let result = self.engine.process_key(&event);
         let passes_through = result.actions.iter().any(EngineAction::passes_through);
         if !passes_through
@@ -187,14 +235,33 @@ impl DirectComposer {
         self.rendered = next;
 
         if passes_through {
+            if let Some(mut word) = reopen {
+                word.rendered = self.rendered.clone();
+                self.reopenable = Some(word);
+            } else if separator {
+                if self
+                    .reopenable
+                    .as_ref()
+                    .is_some_and(|word| word.separators == MAX_REOPEN_SEPARATORS)
+                {
+                    self.reopenable = None;
+                } else if let Some(word) = &mut self.reopenable {
+                    word.separators += 1;
+                }
+            }
             self.reset_engine();
             self.rendered.clear();
-        } else if let Some(key) = event.typed() {
-            self.raw.push(key);
         } else {
-            // A direct engine can only keep composing after a printable key.
-            self.forget();
-            plan.pass_through = true;
+            if separator {
+                self.reopenable = None;
+            }
+            if let Some(key) = event.typed() {
+                self.raw.push(key);
+            } else {
+                // A direct engine can only keep composing after a printable key.
+                self.forget();
+                plan.pass_through = true;
+            }
         }
         if !plan.transforms() && !plan.pass_through {
             // The callback must never consume a key without producing output.
@@ -240,6 +307,22 @@ impl DirectComposer {
     /// intent needed to describe the remaining current word. No synthetic
     /// Backspace is ever part of this plan.
     fn backspace(&mut self) -> OutputPlan {
+        if let Some(separators) = self.reopenable.as_ref().map(|word| word.separators) {
+            if separators == 1 {
+                self.reopen();
+            } else if separators > 1 {
+                if let Some(word) = &mut self.reopenable {
+                    word.separators -= 1;
+                }
+            } else {
+                self.reopenable = None;
+            }
+            return OutputPlan {
+                pass_through: true,
+                ..OutputPlan::default()
+            };
+        }
+
         if self.raw.is_empty() || self.rendered.is_empty() {
             self.forget();
             return OutputPlan {
@@ -351,7 +434,30 @@ impl DirectComposer {
         Some(engine)
     }
 
+    fn reopen(&mut self) {
+        let Some(word) = self.reopenable.take() else {
+            return;
+        };
+        let mut engine = VietnameseEngine::new(word.config);
+        for key in &word.raw {
+            if engine
+                .process_key(&KeyEvent::character(*key))
+                .actions
+                .iter()
+                .any(EngineAction::passes_through)
+            {
+                self.forget();
+                return;
+            }
+        }
+        self.config = word.config;
+        self.engine = engine;
+        self.raw = word.raw;
+        self.rendered = word.rendered;
+    }
+
     fn forget(&mut self) {
+        self.reopenable = None;
         self.reset_engine();
         self.rendered.clear();
     }
@@ -360,6 +466,15 @@ impl DirectComposer {
         self.engine = VietnameseEngine::new(self.config);
         self.raw.clear();
     }
+}
+
+fn is_reopen_separator(event: &KeyEvent) -> bool {
+    event.modifiers == dodo_ime_core::Modifiers::NONE
+        && (event.key == Key::Space
+            || matches!(event.key, Key::Character)
+                && event
+                    .text
+                    .is_some_and(|character| character.is_ascii_punctuation()))
 }
 
 fn direct_config(mut config: VietnameseConfig) -> VietnameseConfig {
@@ -406,7 +521,7 @@ mod tests {
 
     use super::{
         DirectComposer, EventTapStatus, Handling, OutputPlan, TapEvent, desired_status, handling,
-        is_synthetic_event, synthetic_event_tag,
+        invalidates_composer, is_synthetic_event, synthetic_event_tag,
     };
     use dodo_ime_core::{
         Key, KeyEvent, LanguageEngine as _, Modifiers, OutputMode, VietnameseConfig,
@@ -424,20 +539,52 @@ mod tests {
         }
     }
 
-    fn type_at_end_cursor(keys: &str) -> String {
-        let mut composer = composer();
-        let mut document = String::new();
-        for key in keys.chars() {
-            let plan = composer.process(KeyEvent::character(key));
-            document = dodo_ime_core::core::truncate_graphemes(&document, plan.delete_before);
-            if let Some(insert) = plan.insert {
-                document.push_str(&insert);
-            }
-            if plan.pass_through {
-                document.push(key);
+    /// A deterministic end-cursor document: every plan is applied before its
+    /// physical pass-through event, exactly as the callback stages it.
+    struct EndCursorHarness {
+        composer: DirectComposer,
+        document: String,
+        synthetic_events: usize,
+    }
+
+    impl EndCursorHarness {
+        fn new() -> EndCursorHarness {
+            EndCursorHarness {
+                composer: composer(),
+                document: String::new(),
+                synthetic_events: 0,
             }
         }
-        document
+
+        fn press(&mut self, event: KeyEvent) -> OutputPlan {
+            let plan = self.composer.process(event);
+            self.document =
+                dodo_ime_core::core::truncate_graphemes(&self.document, plan.delete_before);
+            if let Some(insert) = &plan.insert {
+                self.document.push_str(insert);
+            }
+            self.synthetic_events += macos_event_count(&plan);
+            if plan.pass_through {
+                if event.key == Key::Backspace {
+                    self.document = dodo_ime_core::core::truncate_graphemes(&self.document, 1);
+                } else if let Some(key) = event.typed() {
+                    self.document.push(key);
+                }
+            }
+            plan
+        }
+
+        fn type_keys(&mut self, keys: &str) {
+            for key in keys.chars() {
+                self.press(KeyEvent::character(key));
+            }
+        }
+    }
+
+    fn type_at_end_cursor(keys: &str) -> String {
+        let mut harness = EndCursorHarness::new();
+        harness.type_keys(keys);
+        harness.document
     }
 
     /// One Unicode replacement is one synthetic down/up pair, while every
@@ -530,6 +677,8 @@ mod tests {
             handling(TapEvent::KeyUp { suppress: false }, false),
             Handling::PassThrough
         );
+        assert_eq!(handling(TapEvent::MouseDown, false), Handling::PassThrough);
+        assert!(invalidates_composer(TapEvent::MouseDown));
         assert_eq!(handling(TapEvent::TapDisabled, false), Handling::RecoverTap);
     }
 
@@ -594,18 +743,103 @@ mod tests {
     }
 
     #[test]
+    fn separator_backspace_reopens_only_the_immediately_preceding_word() {
+        let mut first = EndCursorHarness::new();
+        first.type_keys("ddee ");
+        let backspace = first.press(KeyEvent::special(Key::Backspace));
+        assert!(backspace.pass_through);
+        assert!(!backspace.transforms());
+        assert_eq!(macos_event_count(&backspace), 0);
+        first.type_keys("f");
+        assert_eq!(first.document, "đề");
+
+        let mut second = EndCursorHarness::new();
+        second.type_keys("dde ");
+        second.press(KeyEvent::special(Key::Backspace));
+        second.type_keys("e");
+        assert_eq!(second.document, "đê");
+
+        // The uninterrupted paths use the same replayed Telex rules.
+        assert_eq!(type_at_end_cursor("ddeef"), "đề");
+        assert_eq!(type_at_end_cursor("ddee"), "đê");
+
+        let mut spaces = EndCursorHarness::new();
+        spaces.type_keys("ddee  ");
+        spaces.press(KeyEvent::special(Key::Backspace));
+        assert_eq!(spaces.document, "đê ");
+        spaces.press(KeyEvent::special(Key::Backspace));
+        spaces.type_keys("f");
+        assert_eq!(spaces.document, "đề");
+
+        let mut punctuation = EndCursorHarness::new();
+        punctuation.type_keys("ddee,");
+        punctuation.press(KeyEvent::special(Key::Backspace));
+        punctuation.type_keys("f");
+        assert_eq!(punctuation.document, "đề");
+    }
+
+    #[test]
+    fn separator_snapshots_are_discarded_by_unsafe_events() {
+        let mut extra_text = EndCursorHarness::new();
+        extra_text.type_keys("ddee x");
+        extra_text.press(KeyEvent::special(Key::Backspace));
+        extra_text.type_keys("f");
+        assert_eq!(extra_text.document, "đê f");
+
+        let mut navigation = EndCursorHarness::new();
+        navigation.type_keys("ddee ");
+        navigation.press(KeyEvent::special(Key::ArrowLeft));
+        navigation.press(KeyEvent::special(Key::Backspace));
+        navigation.type_keys("f");
+        assert_eq!(navigation.document, "đêf");
+
+        let mut shortcut = EndCursorHarness::new();
+        shortcut.type_keys("ddee ");
+        shortcut.press(KeyEvent::character('s').with_modifiers(Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        }));
+        shortcut.press(KeyEvent::special(Key::Backspace));
+        shortcut.type_keys("f");
+        assert_eq!(shortcut.document, "đêf");
+
+        let mut secure_transition = EndCursorHarness::new();
+        secure_transition.type_keys("ddee ");
+        // Secure input, focus changes, tap recovery and config changes route
+        // through this same callback reset boundary before passing their event.
+        assert!(invalidates_composer(TapEvent::MouseDown));
+        secure_transition.composer.reset();
+        secure_transition.press(KeyEvent::special(Key::Backspace));
+        secure_transition.type_keys("f");
+        assert_eq!(secure_transition.document, "đêf");
+    }
+
+    #[test]
+    fn separator_backspace_autorepeats_and_empty_state_stay_physical() {
+        let mut repeated = EndCursorHarness::new();
+        repeated.type_keys("ddee  ");
+        for expected in ["đê ", "đê", "đ"] {
+            let plan = repeated.press(KeyEvent::special(Key::Backspace));
+            assert!(plan.pass_through);
+            assert_eq!(macos_event_count(&plan), 0);
+            assert_eq!(repeated.document, expected);
+        }
+
+        let mut empty = EndCursorHarness::new();
+        let plan = empty.press(KeyEvent::special(Key::Backspace));
+        assert!(plan.pass_through);
+        assert_eq!(empty.synthetic_events, 0);
+        assert_eq!(empty.document, "");
+    }
+
+    #[test]
     fn complete_word_replay_converges_across_modifier_order() {
         assert_eq!(type_at_end_cursor("hoiw"), "hơi");
         assert_eq!(type_at_end_cursor("hoiư"), "hơi");
         assert_eq!(type_at_end_cursor("tư"), "tư");
         assert_eq!(type_at_end_cursor("hư"), "hư");
-
-        let mut first = composer();
-        type_keys(&mut first, "thienej");
-        let mut second = composer();
-        type_keys(&mut second, "thieenj");
-        assert_eq!(first.rendered(), "thiện");
-        assert_eq!(first.rendered(), second.rendered());
+        assert_eq!(type_at_end_cursor("thienej"), "thiện");
+        assert_eq!(type_at_end_cursor("thieenj"), "thiện");
     }
 
     #[test]
@@ -670,6 +904,34 @@ mod tests {
         }
         let minimal_elapsed = minimal_started.elapsed();
 
+        let first_reopen_started = Instant::now();
+        let mut first_reopen_events = 0;
+        for _ in 0..ROUNDS {
+            let mut composer = composer();
+            for key in ['d', 'd', 'e', 'e', ' '] {
+                first_reopen_events +=
+                    macos_event_count(&composer.process(KeyEvent::character(key)));
+            }
+            first_reopen_events +=
+                macos_event_count(&composer.process(KeyEvent::special(Key::Backspace)));
+            first_reopen_events += macos_event_count(&composer.process(KeyEvent::character('f')));
+        }
+        let first_reopen_elapsed = first_reopen_started.elapsed();
+
+        let second_reopen_started = Instant::now();
+        let mut second_reopen_events = 0;
+        for _ in 0..ROUNDS {
+            let mut composer = composer();
+            for key in ['d', 'd', 'e', ' '] {
+                second_reopen_events +=
+                    macos_event_count(&composer.process(KeyEvent::character(key)));
+            }
+            second_reopen_events +=
+                macos_event_count(&composer.process(KeyEvent::special(Key::Backspace)));
+            second_reopen_events += macos_event_count(&composer.process(KeyEvent::character('e')));
+        }
+        let second_reopen_elapsed = second_reopen_started.elapsed();
+
         // `ế` needs its base, circumflex and tone sources removed together,
         // exercising the largest normal physical-Backspace replay.
         let mut legacy_backspaces = Vec::with_capacity(ROUNDS);
@@ -708,7 +970,9 @@ mod tests {
         let minimal_backspace_elapsed = minimal_backspace_started.elapsed();
 
         eprintln!(
-            "Event Tap pure planner: legacy {legacy_events} staged events in {legacy_elapsed:?}; minimal {minimal_events} staged events in {minimal_elapsed:?}; worst Backspace legacy {legacy_backspace_events} staged events in {legacy_backspace_elapsed:?}, minimal {minimal_backspace_events} in {minimal_backspace_elapsed:?}"
+            "Event Tap pure planner: legacy {legacy_events} staged events in {legacy_elapsed:?}; minimal {minimal_events} staged events in {minimal_elapsed:?}; separator reopen đê + Backspace + f {first_reopen_events} events in {first_reopen_elapsed:?} ({:?}/sequence); đe + Backspace + e {second_reopen_events} events in {second_reopen_elapsed:?} ({:?}/sequence); worst Backspace legacy {legacy_backspace_events} staged events in {legacy_backspace_elapsed:?}, minimal {minimal_backspace_events} in {minimal_backspace_elapsed:?}",
+            first_reopen_elapsed / ROUNDS as u32,
+            second_reopen_elapsed / ROUNDS as u32,
         );
     }
 }
