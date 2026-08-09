@@ -3,8 +3,9 @@
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 
+use dodo_ime_core::LanguageId;
+
 use crate::i18n::{Str, t};
-use crate::tray::input_language::InputLanguage;
 
 /// Logs a failed append and carries on.
 ///
@@ -24,7 +25,7 @@ pub enum TrayCommand {
     /// Show the window, building one if the user has closed it.
     OpenDodo,
     /// Pick the keyboard input language the menu bar mark shows.
-    SelectInputLanguage(InputLanguage),
+    SelectInputLanguage(LanguageId),
     /// Show the window and open the Settings dialog in it.
     OpenSettings,
     /// End the process. The **only** way to quit dodo once the tray has taken
@@ -46,9 +47,8 @@ pub struct TrayMenu {
     /// entirely. macOS's own term, "Input Source", is also avoided — it names
     /// the system-wide input source, which dodo does not change.
     keyboard_input: Submenu,
-    /// One row per [`InputLanguage`], built by iterating
-    /// [`InputLanguage::ALL`]. **Adding a language does not touch this code.**
-    languages: Vec<(InputLanguage, CheckMenuItem)>,
+    /// One row per [`LanguageId`], built by iterating `ALL`.
+    languages: Vec<(LanguageId, CheckMenuItem)>,
     settings: MenuItem,
     quit: MenuItem,
 }
@@ -59,15 +59,15 @@ impl TrayMenu {
     /// Must run on the main thread: `muda::Menu::new` *panics* off it rather
     /// than returning an error. Every caller is inside `App::run`'s callback or
     /// a foreground task, so that is structural — see [`crate::tray::init`].
-    pub fn new(selected: InputLanguage, cx: &gpui::App) -> TrayMenu {
-        let languages = InputLanguage::ALL
+    pub fn new(selected: LanguageId, cx: &gpui::App) -> TrayMenu {
+        let languages = LanguageId::ALL
             .into_iter()
             .map(|language| {
                 (
                     language,
                     // The label is the language's endonym and is deliberately
-                    // not a `Str` — see `InputLanguage::label`.
-                    CheckMenuItem::new(language.label(), true, language == selected, None),
+                    // not a `Str`.
+                    CheckMenuItem::new(label(language), true, language == selected, None),
                 )
             })
             .collect::<Vec<_>>();
@@ -119,9 +119,8 @@ impl TrayMenu {
     /// as a [`TrayCommand`] or as `None`; the drain task in [`crate::tray`]
     /// matches on the result and nothing else inspects ids.
     ///
-    /// The language arm is a lookup over [`InputLanguage::ALL`] rather than a
-    /// per-language branch, which is what keeps adding a language down to one
-    /// variant and one asset.
+    /// The language arm is a lookup over [`LanguageId::ALL`] rather than a
+    /// per-language branch.
     pub fn command_for(&self, id: &MenuId) -> Option<TrayCommand> {
         if id == self.open.id() {
             return Some(TrayCommand::OpenDodo);
@@ -150,7 +149,7 @@ impl TrayMenu {
     ///
     /// This runs even when the selection did not change, which is why
     /// [`crate::tray::Tray::set_input_language`]'s early return is *after* it.
-    pub fn check_only(&self, selected: InputLanguage) {
+    pub fn check_only(&self, selected: LanguageId) {
         for (language, item) in &self.languages {
             item.set_checked(*language == selected);
         }
@@ -158,14 +157,20 @@ impl TrayMenu {
 
     /// Re-reads every translated label.
     ///
-    /// Called when the **interface** language changes. It deliberately leaves
-    /// the [`InputLanguage`] rows alone: the menu's own wording is dodo's text
-    /// and follows the Settings dialog, while the language names are endonyms
-    /// and the *selection* is a different setting that this must never move.
+    /// Called when the interface language changes. It leaves the
+    /// [`LanguageId`] rows alone because their labels are endonyms.
     pub fn relabel(&self, cx: &gpui::App) {
         self.open.set_text(t(Str::TrayOpenDodo, cx));
         self.keyboard_input.set_text(t(Str::TrayKeyboardInput, cx));
         self.settings.set_text(t(Str::Settings, cx));
         self.quit.set_text(t(Str::TrayQuitDodo, cx));
+    }
+}
+
+fn label(language: LanguageId) -> &'static str {
+    match language {
+        LanguageId::English => "English",
+        LanguageId::Vietnamese => "Tiếng Việt",
+        LanguageId::Japanese => "日本語",
     }
 }

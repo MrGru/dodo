@@ -25,7 +25,7 @@
 //!   composes; making it configurable would expose a control whose only working
 //!   value is the default. [`VietnameseSettings::to_config`] supplies it.
 
-use dodo_ime_core::{InputScheme, OutputMode, TonePlacement, VietnameseConfig};
+use dodo_ime_core::{InputScheme, LanguageId, OutputMode, TonePlacement, VietnameseConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::document::{IpcError, parse_versioned, read_versioned, write_atomic};
@@ -39,7 +39,11 @@ pub const SETTINGS_FILE: &str = "input-method.json";
 /// version 1 refuses a version 2 file outright and types with its compiled-in
 /// defaults until it is updated. So a bump is for a change that would be
 /// actively misread, and an added field with a `#[serde(default)]` is not one.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
+///
+/// Version 2 adds the selected input language. A version-1 bundle would ignore
+/// it and keep composing Vietnamese, so accepting that file would be a silent
+/// misread rather than compatible evolution.
+pub const SETTINGS_SCHEMA_VERSION: u32 = 2;
 
 /// How a key sequence becomes Vietnamese, as this file spells it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +174,12 @@ impl VietnameseSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsDocument {
     pub version: u32,
+    /// The keyboard input language selected from dodo's menu bar.
+    ///
+    /// The custom serde adapter keeps `dodo-ime-core` free of serde while
+    /// preserving `LanguageId` as the one identity on both sides of IPC.
+    #[serde(default, with = "language")]
+    pub language: LanguageId,
     /// Bumped by dodo on every write.
     ///
     /// The bundle echoes the revision it has applied into
@@ -189,6 +199,7 @@ impl Default for SettingsDocument {
     fn default() -> SettingsDocument {
         SettingsDocument {
             version: SETTINGS_SCHEMA_VERSION,
+            language: LanguageId::default(),
             revision: 0,
             vietnamese: VietnameseSettings::default(),
         }
@@ -201,9 +212,14 @@ impl SettingsDocument {
     /// dodo calls this rather than setting `revision` by hand, so that "every
     /// write bumps the revision" is one function with one test instead of a rule
     /// each caller has to remember.
-    pub fn next(previous: &SettingsDocument, vietnamese: VietnameseSettings) -> SettingsDocument {
+    pub fn next(
+        previous: &SettingsDocument,
+        language: LanguageId,
+        vietnamese: VietnameseSettings,
+    ) -> SettingsDocument {
         SettingsDocument {
             version: SETTINGS_SCHEMA_VERSION,
+            language,
             revision: previous.revision.saturating_add(1),
             vietnamese,
         }
@@ -242,17 +258,39 @@ impl SettingsDocument {
     }
 }
 
+mod language {
+    use dodo_ime_core::LanguageId;
+    use serde::{Deserialize as _, Deserializer, Serializer, de::Error as _};
+
+    pub fn serialize<S>(language: &LanguageId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(language.code())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<LanguageId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let code = String::deserialize(deserializer)?;
+        LanguageId::from_code(&code)
+            .ok_or_else(|| D::Error::custom(format!("unknown input language: {code}")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SETTINGS_SCHEMA_VERSION, Scheme, SettingsDocument, Tone, VietnameseSettings};
     use crate::document::IpcError;
-    use dodo_ime_core::{InputScheme, OutputMode, TonePlacement, VietnameseConfig};
+    use dodo_ime_core::{InputScheme, LanguageId, OutputMode, TonePlacement, VietnameseConfig};
 
     #[test]
     fn a_fresh_document_carries_the_current_version_and_unikeys_defaults() {
         let document = SettingsDocument::default();
         assert_eq!(document.version, SETTINGS_SCHEMA_VERSION);
         assert_eq!(document.revision, 0);
+        assert_eq!(document.language, LanguageId::English);
         assert_eq!(document.vietnamese.scheme, Scheme::Telex);
         assert_eq!(document.vietnamese.tone_placement, Tone::Modern);
         assert!(document.vietnamese.spell_check);
@@ -344,21 +382,42 @@ mod tests {
     #[test]
     fn each_write_bumps_the_revision() {
         let first = SettingsDocument::default();
-        let second = SettingsDocument::next(&first, VietnameseSettings::default());
-        let third = SettingsDocument::next(&second, VietnameseSettings::default());
+        let second = SettingsDocument::next(
+            &first,
+            LanguageId::Vietnamese,
+            VietnameseSettings::default(),
+        );
+        let third =
+            SettingsDocument::next(&second, LanguageId::Japanese, VietnameseSettings::default());
         assert_eq!((second.revision, third.revision), (1, 2));
         assert_eq!(third.version, SETTINGS_SCHEMA_VERSION);
     }
 
-    /// A file written by a hand or an older build, carrying only what it knew.
+    /// A version-1 document had no language. It remains readable and adopts
+    /// the established English menu default rather than guessing from its
+    /// Vietnamese engine settings.
     #[test]
-    fn a_partial_file_fills_the_rest_in_from_the_defaults() {
+    fn a_legacy_file_fills_the_language_in_from_the_default() {
         let document =
             SettingsDocument::parse(br#"{"version":1,"vietnamese":{"scheme":"vni"}}"#).unwrap();
+        assert_eq!(document.language, LanguageId::English);
         assert_eq!(document.vietnamese.scheme, Scheme::Vni);
         assert_eq!(document.vietnamese.tone_placement, Tone::Modern);
         assert!(document.vietnamese.spell_check);
         assert_eq!(document.revision, 0);
+    }
+
+    #[test]
+    fn the_selected_language_survives_ipc_and_unknown_values_are_refused() {
+        let document = SettingsDocument::next(
+            &SettingsDocument::default(),
+            LanguageId::Vietnamese,
+            VietnameseSettings::default(),
+        );
+        let json = serde_json::to_string(&document).unwrap();
+        assert!(json.contains(r#""language":"vi""#));
+        assert_eq!(SettingsDocument::parse(json.as_bytes()).unwrap(), document);
+        assert!(SettingsDocument::parse(br#"{"version":2,"language":"ko"}"#).is_err());
     }
 
     #[test]
@@ -380,8 +439,10 @@ mod tests {
     /// silent misread the version rule exists to prevent.
     #[test]
     fn an_unknown_scheme_is_refused() {
-        let error = SettingsDocument::parse(br#"{"version":1,"vietnamese":{"scheme":"viqr"}}"#)
-            .unwrap_err();
+        let error = SettingsDocument::parse(
+            br#"{"version":2,"language":"en","vietnamese":{"scheme":"viqr"}}"#,
+        )
+        .unwrap_err();
         assert!(matches!(error, IpcError::Io { .. }), "{error:?}");
     }
 
@@ -420,6 +481,7 @@ mod tests {
 
         let document = SettingsDocument::next(
             &SettingsDocument::default(),
+            LanguageId::Vietnamese,
             VietnameseSettings {
                 scheme: Scheme::Vni,
                 tone_placement: Tone::Traditional,

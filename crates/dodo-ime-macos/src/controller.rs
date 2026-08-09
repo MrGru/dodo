@@ -64,7 +64,7 @@ impl Default for Ivars {
         // Whatever dodo's settings say *now*. A controller created after a
         // settings change must not start on the value the process launched with.
         Ivars {
-            session: RefCell::new(Session::new(ipc::config())),
+            session: RefCell::new(Session::new(ipc::language(), ipc::config())),
         }
     }
 }
@@ -161,7 +161,7 @@ impl DodoInputController {
                 // what makes it safe: `Session::reconfigure` commits whatever is
                 // in flight under the rules it was typed with, and only a
                 // controller method has a client to commit it to.
-                let mut ops = session.reconfigure(ipc::config()).ops;
+                let mut ops = session.reconfigure(ipc::language(), ipc::config()).ops;
                 let response = action(&mut session);
                 ops.extend(response.ops);
                 // `handled` is the *action's* answer and never the

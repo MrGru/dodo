@@ -17,12 +17,10 @@
 //!
 //! # What this module is not
 //!
-//! **It is not the tray's input language.** `src/tray/input_language.rs` stays
-//! presentational and this module does not touch it. `AGENTS.md` is emphatic that
-//! dodo's two *existing* language settings never merge, and the third concept —
-//! "which language is the input method typing in right now" — lives in the
-//! bundle's process and has no answer here yet. Wiring those together is a later
-//! round's decision, not a tidy-up.
+//! **It owns the menu bar's input-language persistence.** The menu bar and the
+//! bundle share `dodo_ime_core::LanguageId`; this module writes that identity to
+//! `input-method.json`, and the bundle reads it. dodo's interface language is
+//! still only a display preference.
 //!
 //! **It does not link the bundle.** dodo depends on `dodo-ime-ipc` and not on
 //! `dodo-ime-macos`: linking the host would pull InputMethodKit into a UI
@@ -71,6 +69,7 @@ pub mod views;
 
 use std::sync::Arc;
 
+use dodo_ime_core::LanguageId;
 use dodo_ime_ipc::document::IpcError;
 use dodo_ime_ipc::settings::{SettingsDocument, VietnameseSettings};
 use dodo_ime_ipc::status::StatusDocument;
@@ -173,20 +172,31 @@ impl InputMethod {
         Some(status.settings_revision >= state.document.revision)
     }
 
+    /// The language the input method should use.
+    pub fn language(cx: &App) -> LanguageId {
+        cx.try_global::<InputMethod>()
+            .map(|state| state.document.language)
+            .unwrap_or_default()
+    }
+
+    pub fn set_language(language: LanguageId, cx: &mut App) {
+        Self::edit(cx, |document| document.language = language);
+    }
+
     pub fn set_scheme(scheme: dodo_ime_ipc::settings::Scheme, cx: &mut App) {
-        Self::edit(cx, |settings| settings.scheme = scheme);
+        Self::edit(cx, |document| document.vietnamese.scheme = scheme);
     }
 
     pub fn set_tone_placement(tone: dodo_ime_ipc::settings::Tone, cx: &mut App) {
-        Self::edit(cx, |settings| settings.tone_placement = tone);
+        Self::edit(cx, |document| document.vietnamese.tone_placement = tone);
     }
 
     pub fn set_spell_check(on: bool, cx: &mut App) {
-        Self::edit(cx, |settings| settings.spell_check = on);
+        Self::edit(cx, |document| document.vietnamese.spell_check = on);
     }
 
     pub fn set_bracket_shortcuts(on: bool, cx: &mut App) {
-        Self::edit(cx, |settings| settings.bracket_shortcuts = on);
+        Self::edit(cx, |document| document.vietnamese.bracket_shortcuts = on);
     }
 
     /// Applies one change, writes the file, and tells the input method.
@@ -208,18 +218,19 @@ impl InputMethod {
     /// pressed keeps drawing its old value until something repaints it. The
     /// settings dialog never needed this because it was rebuilt each time it
     /// opened.
-    fn edit(cx: &mut App, change: impl FnOnce(&mut VietnameseSettings)) {
+    fn edit(cx: &mut App, change: impl FnOnce(&mut SettingsDocument)) {
         if cx.try_global::<InputMethod>().is_none() {
             return;
         }
         cx.update_global::<InputMethod, _>(|state, cx| {
-            let mut vietnamese = state.document.vietnamese;
-            change(&mut vietnamese);
-            if vietnamese == state.document.vietnamese {
+            let mut next = state.document;
+            change(&mut next);
+            if next == state.document {
                 return;
             }
 
-            state.document = SettingsDocument::next(&state.document, vietnamese);
+            state.document =
+                SettingsDocument::next(&state.document, next.language, next.vietnamese);
             let store = state.store.clone();
             let document = state.document;
 
@@ -464,7 +475,7 @@ pub async fn load(cx: &mut AsyncApp) {
 
 #[cfg(test)]
 mod tests {
-    use super::InputMethod;
+    use super::{InputMethod, LanguageId};
     use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallStep};
     use crate::input_method::services::store::{InMemoryInputMethodStore, InputMethodStore};
     use dodo_ime_ipc::settings::{Scheme, SettingsDocument, Tone, VietnameseSettings};
@@ -480,6 +491,7 @@ mod tests {
 
         let first = SettingsDocument::next(
             &state.document,
+            state.document.language,
             VietnameseSettings {
                 scheme: Scheme::Vni,
                 ..VietnameseSettings::default()
@@ -506,7 +518,8 @@ mod tests {
         let mut state = InputMethod::new(store);
 
         state.document = SettingsDocument {
-            version: 1,
+            version: dodo_ime_ipc::settings::SETTINGS_SCHEMA_VERSION,
+            language: LanguageId::Vietnamese,
             revision: 4,
             vietnamese: VietnameseSettings {
                 tone_placement: Tone::Traditional,

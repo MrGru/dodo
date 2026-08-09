@@ -18,11 +18,11 @@
 //! conversion nobody could see the result of.
 
 use anyhow::{Context as _, anyhow};
+use dodo_ime_core::LanguageId;
 use gpui::App;
 use tray_icon::Icon;
 
 use crate::assets::Assets;
-use crate::tray::input_language::InputLanguage;
 
 /// The height, in pixels, every tray mark is rasterised at.
 ///
@@ -45,11 +45,11 @@ const SVG_HEIGHT_UNITS: f32 = 24.;
 /// Costs one SVG parse and one rasterisation, on the calling (main) thread.
 /// That is a few hundred microseconds and happens only when the user picks a
 /// different language from the menu, so there is deliberately no cache: a
-/// `HashMap<InputLanguage, Icon>` would be state to keep correct in exchange
+/// `HashMap<LanguageId, Icon>` would be state to keep correct in exchange
 /// for time nobody can perceive.
-pub fn render(language: InputLanguage, cx: &App) -> anyhow::Result<Icon> {
-    let path = language.asset();
-    let file = Assets::get(&path).with_context(|| format!("no embedded asset at {path}"))?;
+pub fn render(language: LanguageId, cx: &App) -> anyhow::Result<Icon> {
+    let path = asset(language);
+    let file = Assets::get(path).with_context(|| format!("no embedded asset at {path}"))?;
 
     // `render_single_frame` multiplies the scale by `SMOOTH_SVG_SCALE_FACTOR`
     // (2) and by the SVG's own intrinsic size, so this is the scale that lands
@@ -80,6 +80,14 @@ pub fn render(language: InputLanguage, cx: &App) -> anyhow::Result<Icon> {
 /// Pure, so the one interesting property — that the alpha survives byte for
 /// byte and the colour channels do not carry stale premultiplied values — is a
 /// unit test rather than something to squint at in the menu bar.
+fn asset(language: LanguageId) -> &'static str {
+    match language {
+        LanguageId::English => "icons/tray/dodo-en.svg",
+        LanguageId::Vietnamese => "icons/tray/dodo-vi.svg",
+        LanguageId::Japanese => "icons/tray/dodo-ja.svg",
+    }
+}
+
 fn alpha_mask_rgba(bgra: &[u8]) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(bgra.len());
     for pixel in bgra.chunks_exact(4) {
@@ -97,11 +105,11 @@ mod tests {
     /// and dodo drawing an empty status item. Adding a language without adding
     /// its asset should break the build, not the menu bar.
     #[test]
-    fn every_input_language_has_an_embedded_asset() {
-        for language in InputLanguage::ALL {
-            let path = language.asset();
+    fn every_language_has_an_embedded_asset() {
+        for language in LanguageId::ALL {
+            let path = asset(language);
             assert!(
-                Assets::get(&path).is_some(),
+                Assets::get(path).is_some(),
                 "{language:?} names {path}, which is not embedded — is it under \
                  assets/icons/tray/ with an .svg extension?"
             );
@@ -114,8 +122,8 @@ mod tests {
     /// that filter fails in this module rather than at runtime.
     #[test]
     fn the_tray_assets_live_under_the_existing_icon_filter() {
-        for language in InputLanguage::ALL {
-            let path = language.asset();
+        for language in LanguageId::ALL {
+            let path = asset(language);
             assert!(
                 path.starts_with("icons/") && path.ends_with(".svg"),
                 "{path} is outside the embed filter src/assets.rs already has"

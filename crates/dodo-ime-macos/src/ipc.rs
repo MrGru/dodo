@@ -46,7 +46,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-use dodo_ime_core::VietnameseConfig;
+use dodo_ime_core::{LanguageId, VietnameseConfig};
 use dodo_ime_ipc::paths;
 use dodo_ime_ipc::settings::{SETTINGS_FILE, SettingsDocument};
 use dodo_ime_ipc::status::{STATUS_FILE, StatusDocument};
@@ -62,6 +62,7 @@ const BUNDLE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// What this process is currently typing with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Live {
+    pub language: LanguageId,
     pub config: VietnameseConfig,
     /// The settings revision this came from. `0` means the compiled-in
     /// defaults — no file, or a file that was refused.
@@ -70,6 +71,7 @@ pub struct Live {
 
 impl Live {
     const DEFAULT: Live = Live {
+        language: LanguageId::English,
         config: DEFAULT_CONFIG,
         revision: 0,
     };
@@ -90,6 +92,11 @@ pub fn config() -> VietnameseConfig {
         .unwrap_or(DEFAULT_CONFIG)
 }
 
+/// The language the input method is using right now.
+pub fn language() -> LanguageId {
+    LIVE.read().map(|live| live.language).unwrap_or_default()
+}
+
 /// The settings revision in force, for the status file.
 pub fn revision() -> u64 {
     LIVE.read().map(|live| live.revision).unwrap_or(0)
@@ -104,6 +111,7 @@ pub fn revision() -> u64 {
 pub fn adopt_from(dir: &Path) -> Live {
     let (document, _refused) = SettingsDocument::read_or_default(&dir.join(SETTINGS_FILE));
     let live = Live {
+        language: document.language,
         config: document.vietnamese.to_config(),
         // A refused file reports revision 0, because `read_or_default` hands
         // back the defaults: dodo then sees "the bundle is on its defaults" and
@@ -230,9 +238,9 @@ mod observer {
 
 #[cfg(test)]
 mod tests {
-    use super::{BUNDLE_VERSION, LIVE, Live, adopt_from, config, report_into, revision};
-    use crate::DEFAULT_CONFIG;
-    use dodo_ime_core::{InputScheme, TonePlacement};
+    use super::{BUNDLE_VERSION, LIVE, Live, adopt_from, config, language, report_into, revision};
+    use crate::{DEFAULT_CONFIG, Session};
+    use dodo_ime_core::{InputScheme, KeyEvent, LanguageId, TonePlacement};
     use dodo_ime_ipc::settings::{
         SETTINGS_FILE, Scheme, SettingsDocument, Tone, VietnameseSettings,
     };
@@ -286,6 +294,7 @@ mod tests {
         let dir = scratch("absent");
 
         let live = adopt_from(&dir);
+        assert_eq!(live.language, LanguageId::English);
         assert_eq!(live.config, DEFAULT_CONFIG);
         assert_eq!(live.revision, 0);
 
@@ -299,6 +308,7 @@ mod tests {
 
         let document = SettingsDocument::next(
             &SettingsDocument::default(),
+            LanguageId::Vietnamese,
             VietnameseSettings {
                 scheme: Scheme::Vni,
                 tone_placement: Tone::Traditional,
@@ -309,6 +319,8 @@ mod tests {
         document.write(&dir.join(SETTINGS_FILE)).unwrap();
 
         let live = adopt_from(&dir);
+        assert_eq!(live.language, LanguageId::Vietnamese);
+        assert_eq!(language(), LanguageId::Vietnamese);
         assert_eq!(live.config.scheme, InputScheme::Vni);
         assert_eq!(live.config.tone_placement, TonePlacement::Traditional);
         assert!(!live.config.spell_check);
@@ -330,8 +342,30 @@ mod tests {
         std::fs::write(dir.join(SETTINGS_FILE), br#"{"version":99}"#).unwrap();
 
         let live = adopt_from(&dir);
+        assert_eq!(live.language, LanguageId::English);
         assert_eq!(live.config, DEFAULT_CONFIG);
         assert_eq!(live.revision, 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_selected_language_reaches_the_native_session() {
+        let _held = Held::take();
+        let dir = scratch("language");
+        let document = SettingsDocument::next(
+            &SettingsDocument::default(),
+            LanguageId::English,
+            VietnameseSettings::default(),
+        );
+        document.write(&dir.join(SETTINGS_FILE)).unwrap();
+
+        let live = adopt_from(&dir);
+        let mut session = Session::new(live.language, live.config);
+        assert!(
+            !session.key(&KeyEvent::character('d')).handled,
+            "English is passed through instead of entering the Vietnamese engine"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -342,7 +376,8 @@ mod tests {
         let dir = scratch("status");
 
         SettingsDocument {
-            version: 1,
+            version: dodo_ime_ipc::settings::SETTINGS_SCHEMA_VERSION,
+            language: LanguageId::Vietnamese,
             revision: 12,
             vietnamese: VietnameseSettings::default(),
         }

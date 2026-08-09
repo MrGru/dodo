@@ -3,7 +3,7 @@
 //!
 //! macOS only for now. Windows and Linux are *possible* without rewriting
 //! anything above the platform line — `tray-icon` implements both, and
-//! everything in [`input_language`], [`menu`] and [`icon`] is platform-free —
+//! everything in [`menu`] and [`icon`] is platform-free —
 //! but neither is built or tested here, so the whole module sits behind
 //! `#[cfg(target_os = "macos")]` in `main.rs`.
 //!
@@ -15,10 +15,9 @@
 //! presentational, and the smallness is the point: do not reintroduce machinery
 //! to make it look like the original design.
 //!
-//! **It is not dodo's interface language.** [`input_language`] carries that
-//! warning in full; the short version is that `tray::InputLanguage` and
-//! `i18n::Language` are two settings that must never share a type, a code
-//! table, or a `session.json` key.
+//! The selected keyboard language is the same [`dodo_ime_core::LanguageId`]
+//! the native input method reads from `input-method.json`. dodo's interface
+//! language remains a separate display preference.
 //!
 //! # Why this is `src/tray/` and not `src/platform/tray/`
 //!
@@ -71,9 +70,9 @@
 //! dodo.
 
 pub mod icon;
-pub mod input_language;
 pub mod menu;
 
+use dodo_ime_core::LanguageId;
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt as _;
 use gpui::{App, BorrowAppContext as _, Global, QuitMode, Subscription, Task, WeakEntity};
@@ -81,7 +80,6 @@ use tray_icon::menu::MenuEvent;
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
 use crate::layout::Layout;
-use crate::tray::input_language::InputLanguage;
 use crate::tray::menu::{TrayCommand, TrayMenu};
 
 /// A step happened, and it is worth a developer seeing.
@@ -122,10 +120,8 @@ pub struct Tray {
     /// [`Tray::set_input_language`] swaps its image.
     icon: TrayIcon,
     menu: TrayMenu,
-    /// The selected **keyboard input** language. Nothing to do with
-    /// [`i18n::Language`](crate::i18n::Language), which is dodo's interface
-    /// language and lives in its own global.
-    input_language: InputLanguage,
+    /// The selected keyboard input language, shared with `input-method.json`.
+    input_language: LanguageId,
     /// The pane, so the Settings row can open the dialog it belongs to.
     ///
     /// Published by [`Layout::new`] rather than fetched from here, because the
@@ -166,10 +162,9 @@ impl Tray {
     /// `Session::edit` returns early when the change left the document
     /// identical, so re-selecting costs no disk traffic either.
     ///
-    /// **It never touches [`i18n::Language`](crate::i18n::Language).** That is
-    /// dodo's interface language and a different setting; see
-    /// [`input_language`] for the whole rule.
-    pub fn set_input_language(language: InputLanguage, cx: &mut App) {
+    /// The same identity is persisted to `input-method.json`, so the native
+    /// input method adopts the selected language on its next notification.
+    pub fn set_input_language(language: LanguageId, cx: &mut App) {
         let Some(tray) = cx.try_global::<Tray>() else {
             return;
         };
@@ -201,7 +196,7 @@ impl Tray {
         }
 
         cx.update_global::<Tray, _>(|tray, _| tray.input_language = language);
-        crate::session::Session::set_input_language(language.code(), cx);
+        crate::input_method::InputMethod::set_language(language, cx);
     }
 }
 
@@ -212,11 +207,11 @@ impl Tray {
 /// chosen, a code from a later dodo that had a language this build does not,
 /// and a hand-typed mistake all land on the default — the same posture
 /// `View::shown` takes for a stored tool code.
-fn restored_language(stored: Option<String>) -> InputLanguage {
+fn restored_language(stored: Option<String>, fallback: LanguageId) -> LanguageId {
     stored
         .as_deref()
-        .and_then(InputLanguage::from_code)
-        .unwrap_or_default()
+        .and_then(LanguageId::from_code)
+        .unwrap_or(fallback)
 }
 
 /// Hands the tray the pane it needs for the Settings row.
@@ -253,7 +248,13 @@ enum Signal {
 pub fn init(cx: &mut App) {
     let receiver = install_event_handlers();
 
-    let language = restored_language(crate::session::Session::input_language(cx));
+    let language = restored_language(
+        crate::session::Session::legacy_input_language(cx),
+        crate::input_method::InputMethod::language(cx),
+    );
+    // Migrate a pre-IPC tray choice, or make the input-method document match
+    // the selection it already supplied. The latter is an idempotent no-op.
+    crate::input_method::InputMethod::set_language(language, cx);
     let menu = TrayMenu::new(language, cx);
 
     let mut builder = TrayIconBuilder::new()
@@ -398,144 +399,26 @@ fn open_settings(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::i18n::Language;
-
-    /// dodo's source, so this needs no working directory. The same trick
-    /// `crate::i18n_lint` uses, and for the same kind of reason: some rules are
-    /// about what the code *says*, and no type can express them.
-    const TRAY_SOURCES: [(&str, &str); 4] = [
-        ("src/tray/mod.rs", include_str!("mod.rs")),
-        ("src/tray/menu.rs", include_str!("menu.rs")),
-        ("src/tray/icon.rs", include_str!("icon.rs")),
-        (
-            "src/tray/input_language.rs",
-            include_str!("input_language.rs"),
-        ),
-    ];
-
-    /// **The test the captain asked for.** `InputLanguage` and
-    /// [`i18n::Language`](crate::i18n::Language) are two settings — the
-    /// keyboard input language and dodo's interface language — and merging them
-    /// is a tidy-up a future contributor will reach for, because the types look
-    /// alike and two of the three codes match.
-    ///
-    /// The clearest evidence that they are *not* the same vocabulary is that
-    /// they disagree, today, about Japanese: the tray has it and the interface
-    /// does not. If someone adds Japanese to `i18n::Language` this test still
-    /// passes — that is a legitimate, separate decision — but if someone makes
-    /// the two lists *derive* from each other, it cannot keep passing by
-    /// accident.
-    #[test]
-    fn the_two_language_settings_are_different_vocabularies() {
-        assert_eq!(
-            InputLanguage::from_code("ja"),
-            Some(InputLanguage::Japanese),
-            "the tray is supposed to offer Japanese"
-        );
-        // `i18n::Language` derives no `Debug`, so this is an `assert!` rather
-        // than an `assert_eq!` — deriving one on it just for a tray test would
-        // be reaching into the very module this test exists to keep separate.
-        assert!(
-            Language::from_code("ja") == Language::English,
-            "`i18n::Language` does not know \"ja\" and falls back — if that changed, \
-             it was a separate decision about dodo's interface, not a consequence \
-             of the tray having Japanese"
-        );
-
-        // And the two `code` tables are maintained independently: this asserts
-        // they are allowed to differ, not that they must.
-        let interface: Vec<&str> = Language::ALL.iter().map(|l| l.code()).collect();
-        let input: Vec<&str> = InputLanguage::ALL.iter().map(|l| l.code()).collect();
-        assert_ne!(
-            interface, input,
-            "the two lists have become identical — if that is deliberate, they are \
-             still two settings; nothing may make one derive from the other"
-        );
-    }
-
-    /// The other half of the same rule, and the half no type can enforce: there
-    /// must be **no conversion** between the two. A `From`/`Into`/`as_*` bridge
-    /// is how "they are separate" quietly becomes "they are synced".
-    #[test]
-    fn nothing_converts_between_the_two_language_types() {
-        // Assembled rather than written out, because this test scans the file
-        // it lives in: a literal needle here would be its own first finding.
-        let needles = [
-            format!("From<{}>", "Language"),
-            format!("From<{}>", "InputLanguage"),
-            format!("From<crate::i18n::{}>", "Language"),
-        ];
-
-        for (path, source) in TRAY_SOURCES {
-            for (line_number, line) in source.lines().enumerate() {
-                let code = line.trim_start();
-                // Doc comments talk about `i18n::Language` constantly, and must:
-                // the warning is the point. Only real code is checked.
-                if code.starts_with("//") {
-                    continue;
-                }
-                for needle in &needles {
-                    assert!(
-                        !code.contains(needle.as_str()),
-                        "{path}:{} declares a conversion between dodo's interface \
-                         language and the tray's keyboard input language. They are two \
-                         settings and must stay two: {code}",
-                        line_number + 1
-                    );
-                }
-            }
-        }
-    }
 
     #[test]
-    fn a_remembered_input_language_comes_back() {
-        for language in InputLanguage::ALL {
+    fn a_legacy_menu_choice_uses_the_shared_language_identity() {
+        for language in LanguageId::ALL {
             assert_eq!(
-                restored_language(Some(language.code().to_owned())),
+                restored_language(Some(language.code().to_owned()), LanguageId::English),
                 language
             );
         }
     }
 
-    /// Every way the stored value can be useless, and all of them open dodo.
     #[test]
-    fn an_unusable_stored_code_falls_back_rather_than_failing() {
-        assert_eq!(restored_language(None), InputLanguage::default());
+    fn an_unusable_legacy_code_falls_back_to_the_ipc_selection() {
         assert_eq!(
-            restored_language(Some("ko".to_owned())),
-            InputLanguage::default(),
-            "a language a later dodo added must not stop this one starting"
+            restored_language(Some("ko".to_owned()), LanguageId::Japanese),
+            LanguageId::Japanese,
         );
         assert_eq!(
-            restored_language(Some(String::new())),
-            InputLanguage::default()
+            restored_language(None, LanguageId::Vietnamese),
+            LanguageId::Vietnamese,
         );
-    }
-
-    /// The persistence half. The tray writes `tray.input_language`; writing
-    /// `appearance.language` would silently make picking a keyboard language
-    /// change dodo's interface.
-    #[test]
-    fn the_tray_persists_only_its_own_key() {
-        // Assembled for the same reason as the needles above.
-        let interface_setter = format!("set_{}", "language");
-        let tray_setter = format!("set_input_{}", "language");
-
-        let (path, source) = TRAY_SOURCES[0];
-        assert!(
-            source.contains(format!("Session::{tray_setter}").as_str()),
-            "{path} no longer writes the tray's own session key"
-        );
-        for (line_number, line) in source.lines().enumerate() {
-            let code = line.trim_start();
-            if code.starts_with("//") {
-                continue;
-            }
-            assert!(
-                !code.contains(interface_setter.as_str()) || code.contains(tray_setter.as_str()),
-                "{path}:{} writes dodo's interface language from the tray: {code}",
-                line_number + 1
-            );
-        }
     }
 }

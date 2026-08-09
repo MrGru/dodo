@@ -319,7 +319,7 @@ mod tests {
         );
         assert_eq!(
             document.tray.input_language, None,
-            "a file that predates the menu bar item has not chosen an input language",
+            "a file that predates the menu bar item has no legacy language to migrate",
         );
     }
 

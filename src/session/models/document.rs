@@ -70,10 +70,9 @@ use serde::{Deserialize, Serialize};
 /// survives. Reading *older* files is unaffected: a version-1 file has no
 /// `tools` key, which is the same as never having chosen.
 ///
-/// **Bumped to 3 when the tray's keyboard input language joined it**, for
-/// exactly the same reason and with exactly the same trade. [`Tray`] is a new
-/// top-level section rather than another [`Appearance`] field, and that is a
-/// decision rather than tidiness — see its own doc.
+/// **Version 3 carried the tray's keyboard input language.** Current builds
+/// read that field only to migrate it into `input-method.json`; the input
+/// method's own durable settings are now the one source of truth.
 pub const SCHEMA_VERSION: u32 = 3;
 
 /// Everything dodo restores when it reopens.
@@ -110,36 +109,14 @@ impl SessionDocument {
     }
 }
 
-/// The menu bar item's remembered state.
+/// The retired tray setting, retained only to migrate existing sessions.
 ///
-/// # Why a whole section for one field
-///
-/// Because the field it must **not** be confused with — [`Appearance::language`]
-/// — is a few lines above it, and the JSON is where that confusion would start.
-/// dodo has two language settings:
-///
-/// - `appearance.language` is the **interface** language, changed in the
-///   Settings dialog, and it decides what every `Str` renders as.
-/// - `tray.input_language` is the **keyboard input** language, changed in the
-///   menu bar, and it decides one thing: which glyph the menu bar mark carries.
-///
-/// The captain settled on 2026-08-07 that they never merge — no shared type, no
-/// shared code table, no shared key, and lists that are already different
-/// (the tray has Japanese; the interface does not). Folding this into
-/// [`Appearance`] because both happen to hold a two-letter code would be the
-/// first step back towards the merge, so it gets its own section and the
-/// separation is visible in the file itself.
+/// New selections are stored in `input-method.json`, which the native input
+/// method reads. `skip_serializing` removes this legacy value on the next
+/// ordinary session save.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Tray {
-    /// An
-    /// [`InputLanguage::code`](crate::tray::input_language::InputLanguage::code),
-    /// or `None` before the user has ever picked one. A code this build does
-    /// not know falls back to the default rather than refusing to start.
-    ///
-    /// **Not an [`Appearance::language`].** The two vocabularies overlap in
-    /// spelling today and mean different things; nothing may translate between
-    /// them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub input_language: Option<String>,
 }
 
@@ -273,26 +250,6 @@ fn shown() -> bool {
 mod tests {
     use super::{SCHEMA_VERSION, SessionDocument, ToolRecord, WindowMode, WindowRecord};
 
-    /// The two language settings sit in two sections, and the JSON is where
-    /// anyone tidying them together would start. Pinning the shape here means
-    /// a merge has to delete a test rather than pass one.
-    #[test]
-    fn the_two_language_settings_are_separate_keys() {
-        let mut document = SessionDocument::new();
-        document.appearance.language = Some("vi".to_owned());
-        document.tray.input_language = Some("ja".to_owned());
-
-        let json = serde_json::to_string(&document).expect("serializes");
-        assert!(
-            json.contains(r#""appearance":{"language":"vi"}"#),
-            "the interface language must stay in `appearance`:\n{json}"
-        );
-        assert!(
-            json.contains(r#""tray":{"input_language":"ja"}"#),
-            "the keyboard input language must stay in `tray`:\n{json}"
-        );
-    }
-
     #[test]
     fn a_first_run_document_carries_the_version_and_no_choices() {
         let document = SessionDocument::new();
@@ -318,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn a_document_round_trips_every_field() {
+    fn a_document_round_trips_current_fields_and_drops_the_legacy_language() {
         let mut document = SessionDocument::new();
         document.appearance.language = Some("vi".to_owned());
         document.appearance.theme = Some("Ayu Dark".to_owned());
@@ -348,7 +305,12 @@ mod tests {
 
         let json = serde_json::to_string(&document).expect("serializes");
         let read: SessionDocument = serde_json::from_str(&json).expect("parses");
+        document.tray.input_language = None;
         assert_eq!(read, document);
+        assert!(
+            !json.contains("input_language"),
+            "legacy state is not rewritten"
+        );
     }
 
     /// A file from before the Features page has no `tools` key, and that is

@@ -77,10 +77,10 @@
 //!
 //! # What this round does not do
 //!
-//! No tray wiring, no per-application language memory, no menu-bar icon, no
-//! signing, and nothing in the release. `docs/macos-input-method.md` is the
-//! authority on building, installing and enabling it by hand, and on what the
-//! next round owes.
+//! No per-application language memory, no menu-bar icon, no signing, and
+//! nothing in the release. `docs/macos-input-method.md` is the authority on
+//! building, installing and enabling it by hand, and on what the next round
+//! owes.
 
 pub mod ipc;
 pub mod keymap;
@@ -106,8 +106,9 @@ pub use self::session::{Response, Session};
 
 use dodo_ime_core::{InputScheme, OutputMode, TonePlacement, VietnameseConfig};
 
-/// The engine configuration the bundle types with, until a later round gives it
-/// a settings file to read.
+/// The Vietnamese engine configuration used when Vietnamese is selected.
+///
+/// With any other selected language the host passes keys through.
 ///
 /// Telex and modern tone placement are Unikey's defaults, which is what a
 /// Vietnamese typist's fingers already expect. The one field that is a *macOS*

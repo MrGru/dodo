@@ -1,47 +1,44 @@
-//! Which engine, as opposed to which setting.
+//! The language selected for keyboard input.
 //!
-//! # This is not a third language type
-//!
-//! dodo already has two, and the rule that they never merge is enforced by
-//! tests — see [`tray::InputLanguage`](crate::tray::input_language::InputLanguage)
-//! for the full statement. [`LanguageId`] is not a third: it names an **engine
-//! that exists in this build**, and there is deliberately no `English` variant,
-//! because typing English needs no engine at all.
-//!
-//! The relationship is one-way and lives outside this module, in the round that
-//! wires the tray up: `tray::InputLanguage` → `Option<LanguageId>`, where
-//! `English` maps to `None` (no engine; keys pass straight through) and
-//! `Japanese` will map to `None` until a Japanese engine exists. Nothing here
-//! may import `tray`, and [`purity_lint`](crate::purity_lint)
-//! fails the build if anything tries — which is what keeps that mapping at the
-//! boundary instead of leaking a UI concept into the state machine.
-//!
-//! It is **never persisted**. `session.json` stores `tray.input_language`; this
-//! is derived from that at runtime and has no stable code of its own to store.
+//! [`LanguageId`] is the one stable identity shared by dodo's menu bar and its
+//! native input method. It is deliberately plain Rust so the engine remains
+//! independent of either UI or IPC.
 
-/// A language engine this build carries.
+/// A keyboard input language dodo knows about.
 ///
-/// One variant today. Korean, Japanese and Chinese join it when their engines
-/// land, not before — an id for an engine that does not exist would let a host
-/// select nothing.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// Only Vietnamese has an engine today. English and Japanese still name real
+/// selections: the native host passes their keys through until their engines
+/// exist.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum LanguageId {
+    #[default]
+    English,
     Vietnamese,
+    Japanese,
 }
 
 impl LanguageId {
-    /// Every engine in this build.
-    pub const ALL: [LanguageId; 1] = [LanguageId::Vietnamese];
+    /// Every supported selection, in menu order.
+    pub const ALL: [LanguageId; 3] = [
+        LanguageId::English,
+        LanguageId::Vietnamese,
+        LanguageId::Japanese,
+    ];
 
-    /// A short identifier for logs and tests.
-    ///
-    /// Matching `tray::InputLanguage::code`'s spelling for Vietnamese is a
-    /// coincidence of both being the ISO 639-1 code, not a shared vocabulary;
-    /// the two tables are unrelated and must stay that way.
+    /// The stable identifier persisted in the input-method settings file.
     pub fn code(self) -> &'static str {
         match self {
+            LanguageId::English => "en",
             LanguageId::Vietnamese => "vi",
+            LanguageId::Japanese => "ja",
         }
+    }
+
+    /// The language a stored code names, if this build supports it.
+    pub fn from_code(code: &str) -> Option<LanguageId> {
+        LanguageId::ALL
+            .into_iter()
+            .find(|language| language.code() == code)
     }
 }
 
@@ -50,21 +47,20 @@ mod tests {
     use super::LanguageId;
 
     #[test]
-    fn every_engine_has_a_distinct_code() {
-        let mut codes: Vec<_> = LanguageId::ALL.iter().map(|id| id.code()).collect();
+    fn codes_are_distinct_and_round_trip() {
+        let mut codes = Vec::new();
+        for language in LanguageId::ALL {
+            assert_eq!(LanguageId::from_code(language.code()), Some(language));
+            codes.push(language.code());
+        }
         codes.sort_unstable();
         let count = codes.len();
         codes.dedup();
-        assert_eq!(codes.len(), count, "two engines share a code");
+        assert_eq!(codes.len(), count, "two input languages share a code");
     }
 
-    /// The list names engines, not settings. `English` is absent because typing
-    /// English needs no engine; a variant for it would be a second spelling of
-    /// `tray::InputLanguage`, which is the merge this project has already
-    /// refused twice.
     #[test]
-    fn there_is_no_engine_for_english() {
-        assert_eq!(LanguageId::ALL, [LanguageId::Vietnamese]);
-        assert!(!LanguageId::ALL.iter().any(|id| id.code() == "en"));
+    fn english_is_the_default() {
+        assert_eq!(LanguageId::default(), LanguageId::English);
     }
 }

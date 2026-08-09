@@ -180,21 +180,12 @@ impl Session {
         Self::edit(cx, |document| document.workspace.tools = Some(tools));
     }
 
-    /// The menu bar item's **keyboard input** language, by
-    /// [`InputLanguage::code`](crate::tray::input_language::InputLanguage::code),
-    /// or `None` before one was ever chosen.
+    /// A keyboard language saved by a pre-IPC tray build.
     ///
-    /// **Not [`Session::language`]**, which is dodo's *interface* language.
-    /// They are two settings under two keys and nothing converts between them;
-    /// [`models::document::Tray`] carries the full warning.
-    pub fn input_language(cx: &App) -> Option<String> {
+    /// The menu now reads `input-method.json`; this is migration input only and
+    /// is never written by current builds.
+    pub fn legacy_input_language(cx: &App) -> Option<String> {
         Self::read(cx, |document| document.tray.input_language.clone())
-    }
-
-    pub fn set_input_language(code: &'static str, cx: &mut App) {
-        Self::edit(cx, |document| {
-            document.tray.input_language = Some(code.to_owned());
-        });
     }
 
     /// What went wrong with `session.json`, if anything.

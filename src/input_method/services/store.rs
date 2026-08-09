@@ -176,6 +176,7 @@ mod tests {
 
         let document = SettingsDocument::next(
             &SettingsDocument::default(),
+            dodo_ime_core::LanguageId::Vietnamese,
             VietnameseSettings {
                 scheme: Scheme::Vni,
                 tone_placement: Tone::Traditional,
@@ -218,7 +219,14 @@ mod tests {
     #[test]
     fn a_mangled_settings_file_is_reported_with_the_parsers_own_words() {
         let dir = scratch("mangled");
-        std::fs::write(dir.join(SETTINGS_FILE), b"{\"version\":1,").unwrap();
+        std::fs::write(
+            dir.join(SETTINGS_FILE),
+            format!(
+                "{{\"version\":{},",
+                dodo_ime_ipc::settings::SETTINGS_SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
         let store = DiskInputMethodStore::at(dir.clone());
 
         let error = store.load_settings().unwrap_err();
@@ -271,8 +279,11 @@ mod tests {
         assert_eq!(store.load_settings().unwrap(), SettingsDocument::default());
         assert_eq!(store.read_status().unwrap(), None);
 
-        let document =
-            SettingsDocument::next(&SettingsDocument::default(), VietnameseSettings::default());
+        let document = SettingsDocument::next(
+            &SettingsDocument::default(),
+            dodo_ime_core::LanguageId::English,
+            VietnameseSettings::default(),
+        );
         store.persist_settings(&document).unwrap();
         assert_eq!(store.load_settings().unwrap(), document);
 

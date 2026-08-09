@@ -36,7 +36,9 @@
 //! host adds a guard the engine cannot: a claimed key with an empty op list is
 //! handed back. See [`Response::for_ops`].
 
-use dodo_ime_core::{EngineResult, KeyEvent, LanguageEngine, VietnameseConfig, VietnameseEngine};
+use dodo_ime_core::{
+    EngineResult, KeyEvent, LanguageEngine, LanguageId, VietnameseConfig, VietnameseEngine,
+};
 
 use crate::ops::{ClientOp, Pending, translate};
 
@@ -80,14 +82,16 @@ impl Response {
 /// One `IMKInputController`'s worth of state.
 #[derive(Debug)]
 pub struct Session {
-    engine: VietnameseEngine,
+    language: LanguageId,
+    engine: Option<VietnameseEngine>,
     pending: Pending,
 }
 
 impl Session {
-    pub fn new(config: VietnameseConfig) -> Session {
+    pub fn new(language: LanguageId, config: VietnameseConfig) -> Session {
         Session {
-            engine: VietnameseEngine::new(config),
+            language,
+            engine: (language == LanguageId::Vietnamese).then(|| VietnameseEngine::new(config)),
             pending: Pending::new(),
         }
     }
@@ -100,7 +104,10 @@ impl Session {
 
     /// One keystroke.
     pub fn key(&mut self, event: &KeyEvent) -> Response {
-        let result = self.engine.process_key(event);
+        let Some(engine) = &mut self.engine else {
+            return Response::unhandled();
+        };
+        let result = engine.process_key(event);
         self.respond(result)
     }
 
@@ -109,7 +116,10 @@ impl Session {
     /// Always safe to call, including when nothing is composed: the engine
     /// returns no actions and the translation produces none.
     pub fn commit(&mut self) -> Response {
-        let result = self.engine.commit();
+        let Some(engine) = &mut self.engine else {
+            return Response::unhandled();
+        };
+        let result = engine.commit();
         self.respond(result)
     }
 
@@ -151,14 +161,22 @@ impl Session {
     /// - **Claim the keystroke.** [`Response::handled`] is false: this produces
     ///   text to insert, not a decision about the key that happens to have
     ///   arrived at the same time.
-    pub fn reconfigure(&mut self, config: VietnameseConfig) -> Response {
-        if self.engine.config() == config {
+    pub fn reconfigure(&mut self, language: LanguageId, config: VietnameseConfig) -> Response {
+        if self.language == language
+            && self
+                .engine
+                .as_ref()
+                .is_none_or(|engine| engine.config() == config)
+        {
             return Response::unhandled();
         }
-        let result = self.engine.set_config(config);
-        let ops = translate(&result.actions, &mut self.pending);
+
+        let response = self.commit();
+        self.language = language;
+        self.engine = (language == LanguageId::Vietnamese).then(|| VietnameseEngine::new(config));
+        self.pending.clear();
         Response {
-            ops,
+            ops: response.ops,
             handled: false,
         }
     }
@@ -166,7 +184,9 @@ impl Session {
     /// Drop every trace of what was being composed, asking the client for
     /// nothing.
     fn forget(&mut self) {
-        let _ = self.engine.reset();
+        if let Some(engine) = &mut self.engine {
+            let _ = engine.reset();
+        }
         self.pending.clear();
     }
 
@@ -181,7 +201,7 @@ mod tests {
     use super::{ClientOp, Response, Session};
     use crate::DEFAULT_CONFIG;
     use crate::keymap::key_event;
-    use dodo_ime_core::{InputScheme, Key, KeyEvent, TonePlacement, VietnameseConfig};
+    use dodo_ime_core::{InputScheme, Key, KeyEvent, LanguageId, TonePlacement, VietnameseConfig};
 
     /// A pretend client, so a key sequence can be asserted on as text.
     ///
@@ -246,7 +266,14 @@ mod tests {
     }
 
     fn session() -> Session {
-        Session::new(DEFAULT_CONFIG)
+        Session::new(LanguageId::Vietnamese, DEFAULT_CONFIG)
+    }
+
+    #[test]
+    fn a_non_vietnamese_selection_passes_keys_through() {
+        let mut session = Session::new(LanguageId::English, DEFAULT_CONFIG);
+        let response = session.key(&KeyEvent::character('d'));
+        assert_eq!(response, Response::unhandled());
     }
 
     #[test]
@@ -384,7 +411,7 @@ mod tests {
             scheme: InputScheme::Vni,
             ..DEFAULT_CONFIG
         };
-        let response = session.reconfigure(vni);
+        let response = session.reconfigure(LanguageId::Vietnamese, vni);
         assert!(
             !response.handled,
             "a reconfiguration claims no keystroke of its own"
@@ -404,7 +431,7 @@ mod tests {
         let mut session = session();
         let (mut client, _) = type_keys(&mut session, "tieengs");
 
-        let response = session.reconfigure(DEFAULT_CONFIG);
+        let response = session.reconfigure(LanguageId::Vietnamese, DEFAULT_CONFIG);
         assert_eq!(response, Response::unhandled());
         client.perform(&response.ops, None);
         assert_eq!(client.marked, "tiếng", "the composition is untouched");
@@ -415,10 +442,13 @@ mod tests {
     #[test]
     fn a_settings_change_with_nothing_composed_asks_the_client_for_nothing() {
         let mut session = session();
-        let response = session.reconfigure(VietnameseConfig {
-            tone_placement: TonePlacement::Traditional,
-            ..DEFAULT_CONFIG
-        });
+        let response = session.reconfigure(
+            LanguageId::Vietnamese,
+            VietnameseConfig {
+                tone_placement: TonePlacement::Traditional,
+                ..DEFAULT_CONFIG
+            },
+        );
         assert_eq!(response, Response::unhandled());
 
         let (client, _) = type_keys(&mut session, "hoaf");
