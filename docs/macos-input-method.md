@@ -4,9 +4,9 @@
 method that types Vietnamese using `crates/dodo-ime-core`. macOS launches it;
 `Dodo.app` does not, and typing keeps working with dodo closed.
 
-dodo can now **install it** (§7) and **tell it how to type** (§8). What is still
-missing is the release wiring, the tray mark, a menu-bar icon and signing — §9
-lists them. The design rationale lives in the crate's module docs, which are the
+dodo can now **install it** (§7) and **tell it how to type** (§8). The bundle
+is ad-hoc signed for local use; release wiring, the tray mark, a menu-bar icon
+and Developer ID signing/notarisation remain — §9 lists them. The design rationale lives in the crate's module docs, which are the
 authority; this file is how to build, install and enable it by hand, what dodo
 does when it does that for you, and what was and was not verified.
 
@@ -23,9 +23,11 @@ the later measurement — §6 lists the three corrections.
 scripts/macos-input-method-bundle.sh
 ```
 
-That builds `target/release/DodoVietnamese` and assembles
-`dist/Dodo Vietnamese.app`. Pass `--binary` to use one you already have,
-`--out` to put the bundle somewhere else.
+That builds `target/release/DodoVietnamese` and assembles and ad-hoc signs
+`dist/Dodo Vietnamese.app`. A valid signature is required for local use on
+current macOS; the script verifies it with `codesign --verify --deep --strict`
+before reporting success. Pass `--binary` to use one you already have, `--out`
+to put the bundle somewhere else, or `--sign <identity>` for a real identity.
 
 To carry it inside `dodo.app`:
 
@@ -139,7 +141,13 @@ Everything that could get Vietnamese *wrong* is in the pure modules (`keymap`,
 
 ## 5. What was verified, and what was not
 
-**Verified on macOS 26.6 (build 25G72), Apple Silicon:**
+**Verified for the signing fix, in an isolated worktree:** the locally assembled
+bundle is ad-hoc signed and passes `codesign --verify --deep --strict`. This is
+structural signature validation only; it does **not** verify System Settings
+naming, selection, or whether signing changes the historical
+`TISSelectInputSource -50` result. Those remain for the captain to test.
+
+**Previously verified on macOS 26.6 (build 25G72), Apple Silicon:**
 
 - The bundle builds, installs to `~/Library/Input Methods/`, registers, and
   appears in the Text Input Sources database as `enabled=YES`,
@@ -220,7 +228,12 @@ run loop, the events queue and never dispatch, and the result reads exactly like
 "the input method typed nothing". And `TISCreateInputSourceList(NULL, true)`
 returns sources that cannot be handed to `TISSelectInputSource`.
 
-**Also not verified:** Intel macOS, macOS earlier than 26, signing and
+**Not re-verified by signing:** System Settings naming and selection, and
+whether a valid signature changes the historical `TISSelectInputSource -50`
+result. The prior `-50` control remains evidence only about that session, not a
+resolution of selection.
+
+**Also not verified:** Intel macOS, macOS earlier than 26, Developer ID signing,
 notarisation, and any behaviour in Chrome, VS Code or Electron. The
 investigation report's §6 capability matrix — which measured `setMarkedText:` and
 `insertText:` working in all six clients it probed — is the evidence that the
@@ -259,21 +272,24 @@ and nowhere else, so no control is reachable from two places.
 `src/input_method/` is the implementation and its module docs are the authority;
 this is what the button does and why.
 
-The five steps, in this order, are §2's recipe as code —
+The six steps, in this order, are §2's recipe as code —
 `src/input_method/models/install.rs` holds them as data with a test each, and
 `services/installer.rs` is a driver with no judgement in it:
 
-1. **`ditto`** the bundle to `~/Library/Input Methods/Dodo Vietnamese.app`, after
-   removing whatever was there. Naming the bundle in the destination is not
+1. **Verify the source signature** with `codesign --verify --deep --strict`.
+   An invalid bundle is rejected before it can replace an installed one or be
+   registered, and the button reports `codesign`'s detail instead of success.
+2. **`ditto`** the verified bundle to `~/Library/Input Methods/Dodo Vietnamese.app`,
+   after removing whatever was there. Naming the bundle in the destination is not
    optional (§2); removing first is what makes an upgrade *replace* rather than
    merge, since `ditto` never deletes a file the new version dropped.
-2. **`TISRegisterInputSource`, in a loop**, until the mode is visible in
+3. **`TISRegisterInputSource`, in a loop**, until the mode is visible in
    `TISCreateInputSourceList` — up to five attempts, 700ms apart. The return value
    is never consulted, because §2 measured it returning `0` for a bundle that then
    did not exist.
-3. **`TISEnableInputSource` on the mode.**
-4. **`TISSelectInputSource` on the mode.**
-5. **`pkill -x DodoVietnamese`**, last. Replacing the bundle does not restart the
+4. **`TISEnableInputSource` on the mode.**
+5. **`TISSelectInputSource` on the mode.**
+6. **`pkill -x DodoVietnamese`**, last. Replacing the bundle does not restart the
    process serving from it (§2), and `-x` matches the process *name* so it cannot
    catch an unrelated command line that happens to contain the string.
 
@@ -353,9 +369,10 @@ say so.
 - **A menu-bar icon.** `tsInputMethodIconFileKey` is unset, so the input menu
   shows the name with no glyph. It wants a `.pdf` or `.tiff`, which
   `scripts/generate-icons.py` does not produce.
-- **Signing.** `docs/macos-signing.md` is the authority. The bundle needs no
-  entitlements, must be signed with the hardened runtime and the same Team ID as
-  `dodo.app`, and must be signed **before** the outer bundle.
+- **Developer ID signing and notarisation.** Local builders already ad-hoc sign
+  the bundle, and the outer builder signs the nested input method before dodo.app.
+  `docs/macos-signing.md` is the authority for replacing that with a shared Team
+  ID, notarisation and release wiring.
 
 ## 10. Strings
 
