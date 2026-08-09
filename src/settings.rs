@@ -56,6 +56,7 @@ use crate::api_explorer::ScriptPolicy;
 use crate::api_explorer::models::script_consent::ConsentPolicy;
 use crate::app_icon::AppIcon;
 use crate::assets::Assets;
+use crate::dialog_slot::{self, SingleDialog};
 use crate::i18n::{Language, Str, t};
 use crate::layout::{Layout, View};
 use crate::quick_nav::QuickNav;
@@ -155,8 +156,20 @@ pub fn init(cx: &mut App) {
     }
 }
 
+/// The marker that keys this dialog's single slot. See [`crate::dialog_slot`].
+struct SettingsDialog;
+
+impl SingleDialog for SettingsDialog {}
+
 /// Opens the Settings dialog. The dialog is dismissed with Escape, the close
 /// button, or a click on the overlay.
+///
+/// **There is only ever one.** Two things open it — the sidebar footer's button
+/// and the menu bar item's Settings row — and a dialog layer is a stack, so
+/// until [`dialog_slot`](crate::dialog_slot) was put in front of it the two
+/// paths put two identical cards on top of each other. A second request is
+/// dropped rather than served; `on_close` is what gives the slot back, and it
+/// pops nothing itself, so one dismissal stays one dismissal.
 ///
 /// `layout` is the pane the Features page edits, and is the one thing here that
 /// is not a global: which tools the sidebar lists is `Layout`'s state, because
@@ -165,12 +178,17 @@ pub fn init(cx: &mut App) {
 /// reached from a click listener that has `Layout` leased, so a read here would
 /// panic. See `gpui-component-recipes`.
 pub fn open(layout: WeakEntity<Layout>, window: &mut Window, cx: &mut App) {
+    if !dialog_slot::claim::<SettingsDialog>(window, cx) {
+        return;
+    }
+
     let view = cx.new(|cx| SettingsView::new(layout, window, cx));
 
     window.open_dialog(cx, move |dialog, _, cx| {
         dialog
             .title(t(Str::Settings, cx))
             .w(DIALOG_WIDTH)
+            .on_close(|_, _, cx| dialog_slot::release::<SettingsDialog>(cx))
             .child(view.clone())
     });
 }
