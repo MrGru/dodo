@@ -26,7 +26,13 @@ never rebuild a view on selection.
 4. **`src/app_icon.rs`** — add an `AppIcon` variant and its arm in `IconNamed::path`
    (`Self::Foo => "icons/foo.svg"`). The path is what reaches the asset source; the variant name
    is arbitrary. Watch the existing `Palette => "icons/palatte.svg"` — filename typo, variant
-   spelled correctly.
+   spelled correctly. **The glyph has to be the tool's own**, not one already on another row:
+   collapsed to the rail the icon is the entire row, and
+   `layout::tests::no_two_tools_wear_the_same_icon` fails if you borrow one. Borrowing is the easy
+   mistake — the input method drew `Globe`, which is the API Explorer's, until it stopped being a
+   settings page and moved into the sidebar beside it. `scripts/generate-icons.py` is **not**
+   involved: it derives the *application* icon from `assets/branding/`, and `assets/icons/*.svg`
+   are hand-written and committed.
 5. **`src/layout.rs`** — five edits, four of which the compiler will demand:
    - a `View` variant;
    - bump the arity and contents of `const ALL: [View; N]` (this one is silent if you forget —
@@ -46,6 +52,16 @@ never rebuild a view on selection.
      had reordered or hidden it gets it back at its default position, switched on.
    - a `Entity<YourTool>` field on `Layout`, initialised in `Layout::new`, and an arm in the
      main-pane `match self.active` inside `Layout::render`.
+
+   **A tool that only exists on one platform is a `cfg` on every one of those**, and
+   `View::InputMethod` is the worked example — the variant, the field, the initialiser and each
+   `match` arm carry `#[cfg(target_os = "macos")]`, and `const ALL` is written out twice because
+   stable Rust has no attribute on an array element. Do that only when the tool genuinely cannot
+   work elsewhere (it installs an InputMethodKit bundle); a tool that is merely *unfinished* on a
+   platform shows a "Coming later" pane instead, which is what `src/cleaner/` does. Nothing else
+   breaks: `Features::resolve` drops a stored tool the running build does not have and hands it
+   back beside its default neighbour on a build that does, so one `session.json` moves between
+   platforms without losing anything permanently.
 
    **You do not have to touch the Features settings page.** It is generated from `View::codes()`,
    so a new tool appears there with a switch and its two move buttons for free — and is switchable

@@ -26,7 +26,7 @@ use dodo_ime_ipc::status::{STATUS_FILE, StatusDocument};
 use crate::i18n::Str;
 use crate::paths::data_dir;
 
-/// Turns an IPC failure into something the settings page can show.
+/// Turns an IPC failure into something the Input method tool can show.
 ///
 /// The three cases are `environments.json`'s three, because it is the same
 /// version rule — but the *message* is different in one way that matters: here a

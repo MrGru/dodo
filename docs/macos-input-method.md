@@ -188,7 +188,7 @@ input-method files in the real `~/Library/Application Support/dodo`.
   compiled-in defaults and report `settings-revision: 0`, which is the signal dodo
   shows as "the input method has not picked these settings up yet".
 
-**Not verified: dodo's own UI.** The install button, the settings page and the
+**Not verified: dodo's own UI.** The install button, the pane it sits on and the
 notification dodo posts were not exercised through a running dodo — a GUI cannot
 be driven from this environment. What was exercised is the code underneath all
 three: the installer driver against the real system, the store against the real
@@ -250,9 +250,14 @@ Three, all measured while building this:
 
 ## 7. Installing it from dodo
 
-**Settings → Input method → Install.** The page is macOS-only and last in the
-dialog's sidebar. `src/input_method/` is the implementation and its module docs are
-the authority; this is what the button does and why.
+**Sidebar → Input method → Install.** It is a **tool**, not a settings page: the
+sidebar's last row on macOS, drawing a keyboard, and it does not exist on the
+other two platforms because the bundle it installs is an InputMethodKit object.
+The captain asked for that on 2026-08-09, and the move took the whole surface —
+the status line, the install button and the four engine settings are on the pane
+and nowhere else, so no control is reachable from two places.
+`src/input_method/` is the implementation and its module docs are the authority;
+this is what the button does and why.
 
 The five steps, in this order, are §2's recipe as code —
 `src/input_method/models/install.rs` holds them as data with a test each, and

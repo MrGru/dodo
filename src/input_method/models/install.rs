@@ -9,7 +9,7 @@
 //!
 //! `docs/macos-input-method.md` §2 is the authority the tests here encode. Three
 //! things in it are the whole reason this file exists rather than a function in
-//! the settings page:
+//! the view:
 //!
 //! - **`TISRegisterInputSource` returning `0` does not mean the source exists.**
 //!   On a fresh install it can take a few seconds to appear in
@@ -164,7 +164,7 @@ pub enum InstallFailure {
     NeverAppeared { attempts: u32 },
 }
 
-/// What happened, in the terms the settings page reports.
+/// What happened, in the terms the Input method tool reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InstallOutcome {
     /// Copied, registered, visible, enabled and selected. The user is typing
@@ -309,7 +309,7 @@ mod tests {
     }
 
     /// A refused `TISSelectInputSource` still leaves an installed input method,
-    /// and the settings page's message depends on this distinction.
+    /// and the tool's status line depends on this distinction.
     #[test]
     fn a_refusal_to_switch_is_still_an_install() {
         assert!(

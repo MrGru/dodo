@@ -240,7 +240,17 @@ nothing the user typed may ever appear in it, it is written on start and on a se
 never on a keystroke, and a test pins its key set so adding a field is deliberate.
 
 **`src/input_method/` is dodo's end of it, and `services/tis.rs` carries a crash worth knowing
-about.** The install action is a Settings page (macOS-only, last in the dialog) whose button copies
+about.** It is a **tool, not a Settings page** — the captain asked on 2026-08-09 — and the move took
+the whole surface: status, install button and the four engine settings are on the pane and nowhere
+else, so no control is reachable twice. That makes `View::InputMethod` the **first
+platform-conditional tool**, so `View::ALL` is written out twice and every `match` on `View` carries
+a `cfg` arm; the row draws `AppIcon::Keyboard`, deliberately not the globe, which is the API
+Explorer's. The pane holds **no state at all** — `Layout::new` builds it before
+`input_method::load` has read the file, so every control reads the global in `render` and the two
+either/or settings are radio groups rather than dropdowns, whose `SelectState` would be a second
+copy of the setting. `models/status.rs` is the eleven-way status sentence as a pure function, and
+liveness reaches it as an argument because `describes_a_live_process` is a syscall and Unix-only.
+The install button copies
 the nested bundle out with `ditto`, registers until the source is *visible* rather than trusting the
 `0` that `TISRegisterInputSource` returns, enables and selects **the mode, never the parent**, and
 `pkill -x`es the old process last. `models/install.rs` holds all of that as tested data and
@@ -253,10 +263,11 @@ copies a bundle's contents into `dir`**, so the destination must name the bundle
 correction to what `docs/macos-input-method.md` §2 used to say. `dodo_ime_ipc::paths::support_dir`
 duplicates one line of `src/paths.rs` on purpose — the bundle has no `build_info` — and
 `paths::tests::the_input_method_agrees_about_the_data_directory` is what keeps the two one answer.
-Unlike `src/tray`, the module is **not** `#[cfg(target_os = "macos")]` at its `mod` line — three of
-its four submodules contain no macOS at all and the Linux and Windows `cargo check` rows are worth
+Unlike `src/tray`, the module is **not** `#[cfg(target_os = "macos")]` at its `mod` line — most of
+its submodules contain no macOS at all and the Linux and Windows `cargo check` rows are worth
 having type-check them — so it carries a `#![cfg_attr(not(target_os = "macos"), allow(dead_code))]`
-instead, because on those platforms its only caller (the macOS-only settings page) does not exist.
+instead, because on those platforms its only caller (`views/`, and so the sidebar row) does not
+exist.
 macOS, where `clippy -D warnings` and the tests run, keeps full dead-code checking. Its ~31 new
 `Str` variants are unused on those two platforms for the same reason the tray's three already are;
 that noise is inherited, not new.

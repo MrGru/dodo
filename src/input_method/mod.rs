@@ -29,7 +29,7 @@
 //! application for four string constants, and the host must never link gpui.
 //!
 //! **It has no engine.** `dodo-ime-core` is linked, and this module names its
-//! configuration types only so the settings page can offer Telex or VNI. No
+//! configuration types only so the tool's pane can offer Telex or VNI. No
 //! keystroke is ever processed in this process.
 //!
 //! # Where the state is
@@ -43,26 +43,26 @@
 //!
 //! [`init`] returns `()` and nothing here can stop dodo starting, matching
 //! `docker::init`, `tray::init`, `quick_nav::init` and `session::init`. A refused
-//! settings file shows a row on the settings page and leaves the defaults in
+//! settings file shows a banner on the tool's pane and leaves the defaults in
 //! place; a failed install shows why.
 //!
 //! # Why this module is compiled on every platform, and allows dead code on two
 //!
 //! `src/tray` is `#[cfg(target_os = "macos")]` at its `mod` line. This one is not,
-//! deliberately: three of its four submodules — [`models::install`],
-//! [`services::store`] and [`services::installer`]'s driver — contain no macOS at
-//! all, and having the Linux and Windows `cargo check` rows type-check them is
-//! worth more than the alternative. A non-portable path join or an `unwrap` on a
-//! platform-specific assumption in the settings store is exactly the sort of thing
-//! those rows exist to catch.
+//! deliberately: [`models::install`], [`models::status`], [`services::store`] and
+//! [`services::installer`]'s driver contain no macOS at all, and having the Linux
+//! and Windows `cargo check` rows type-check them is worth more than the
+//! alternative. A non-portable path join or an `unwrap` on a platform-specific
+//! assumption in the settings store is exactly the sort of thing those rows exist
+//! to catch.
 //!
 //! The cost is that on those two platforms **nothing calls any of it**, because the
-//! only caller is `settings::input_method_page`, which is macOS-only — there is no
-//! Windows or Linux input method to install yet. So the compiler correctly reports
-//! every item here as dead, and the `allow` below is conditional on exactly that:
-//! on macOS, where `clippy -D warnings` and the test suite run, dead-code checking
-//! is untouched. It comes off when a Windows TSF or Linux IBus host gives these
-//! callers.
+//! only caller is [`views`], which is macOS-only — there is no Windows or Linux
+//! input method to install yet, so `View::InputMethod` is not a sidebar row there
+//! either. So the compiler correctly reports every item here as dead, and the
+//! `allow` below is conditional on exactly that: on macOS, where
+//! `clippy -D warnings` and the test suite run, dead-code checking is untouched. It
+//! comes off when a Windows TSF or Linux IBus host gives these callers.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 pub mod models;
@@ -499,7 +499,7 @@ mod tests {
         assert_eq!(store.load_settings().unwrap().revision, 1);
     }
 
-    /// The three states the settings page's status row distinguishes.
+    /// The three states the tool's status line distinguishes.
     #[test]
     fn applied_is_a_comparison_of_revisions_and_not_of_settings() {
         let store = Arc::new(InMemoryInputMethodStore::default());

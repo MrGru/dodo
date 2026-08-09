@@ -56,6 +56,14 @@ What ships today:
   queries, bounded query history and a catalog search persist per connection.
   Redis is read-only; result columns cannot be sorted, and there is no
   autocomplete.
+- **Input method (macOS only)** - installs dodo's own Vietnamese input method, an
+  InputMethodKit bundle macOS launches on its own and that keeps typing with dodo
+  closed. The pane says whether it is installed and whether it is running,
+  installs or reinstalls it in one press, and carries the engine's four settings:
+  Telex or VNI, modern or traditional tone placement, spell check and bracket
+  shortcuts. Everything a running dodo needs to say about it is here - it is not a
+  Settings page. On Linux and Windows there is no sidebar row at all, because
+  there is no host for those platforms yet.
 - **Quick navigation** - vim-shaped, and works across all of the above. Whenever
   no input is focused, `Cmd+V` / `Ctrl+V` — or just `p` — reads the clipboard,
   works out what the text is, and opens the tool that handles it with the value

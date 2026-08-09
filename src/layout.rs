@@ -540,7 +540,7 @@ pub struct Layout {
 
 impl Layout {
     /// With nothing saved, dodo opens on the **icon rail**, not the labelled
-    /// sidebar: the tools are six fixed entries a user learns once, and the
+    /// sidebar: the tools are a handful of entries a user learns once, and the
     /// pane they are choosing between is the whole point of the window, so
     /// 240px of permanent chrome is a poor default. The toggle in the pane
     /// header is unchanged, and every collapsed icon carries its title as a
