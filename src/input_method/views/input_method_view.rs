@@ -246,8 +246,8 @@ impl InputMethodView {
         }
     }
 
-    /// Event Tap has no install action: its only prerequisite is the system's
-    /// Accessibility grant, which dodo reports but never attempts to change.
+    /// Event Tap has no install action: macOS owns both the request and the
+    /// Accessibility grant, which dodo reports but never changes.
     #[cfg(target_os = "macos")]
     fn event_tap_status_card(cx: &App) -> impl IntoElement {
         h_flex()

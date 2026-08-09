@@ -338,6 +338,7 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
     "CFBase",
     "CFDictionary",
     "CFMachPort",
+    "CFNumber",
     "CFRunLoop",
     "CFNotificationCenter",
     "CFString",

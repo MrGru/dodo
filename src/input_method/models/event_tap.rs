@@ -44,6 +44,15 @@ pub fn desired_status(
     }
 }
 
+/// Whether this eligible, untrusted state may ask macOS to show Dodo.
+///
+/// macOS owns the asynchronous request and the Accessibility list; dodo only
+/// asks once per process, then keeps keys passing through until a later check
+/// observes a grant.
+pub fn should_request_accessibility(status: EventTapStatus, already_requested: bool) -> bool {
+    status == EventTapStatus::NeedsAccessibility && !already_requested
+}
+
 /// The only three event classes Event Tap treats specially.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TapEvent {
@@ -77,7 +86,10 @@ pub fn handling(event: TapEvent, secure_input: bool) -> Handling {
 
 #[cfg(test)]
 mod tests {
-    use super::{EventTapStatus, Handling, OutputPlan, TapEvent, desired_status, handling};
+    use super::{
+        EventTapStatus, Handling, OutputPlan, TapEvent, desired_status, handling,
+        should_request_accessibility,
+    };
     use dodo_ime_core::{EngineAction, LanguageId};
     use dodo_ime_ipc::settings::Backend;
 
@@ -102,17 +114,40 @@ mod tests {
     }
 
     #[test]
-    fn missing_accessibility_never_claims_the_tap_is_running() {
-        assert_eq!(
-            desired_status(
-                Backend::EventTap,
-                LanguageId::Vietnamese,
-                false,
-                false,
-                false
-            ),
-            EventTapStatus::NeedsAccessibility
+    fn accessibility_request_is_once_and_a_returning_user_can_start_the_tap() {
+        let inactive = desired_status(Backend::Native, LanguageId::Vietnamese, false, false, false);
+        assert!(!should_request_accessibility(inactive, false));
+
+        let waiting = desired_status(
+            Backend::EventTap,
+            LanguageId::Vietnamese,
+            true,
+            false,
+            false,
         );
+        assert_eq!(waiting, EventTapStatus::WaitingForNative);
+        assert!(!should_request_accessibility(waiting, false));
+
+        let untrusted = desired_status(
+            Backend::EventTap,
+            LanguageId::Vietnamese,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(untrusted, EventTapStatus::NeedsAccessibility);
+        assert!(should_request_accessibility(untrusted, false));
+        assert!(!should_request_accessibility(untrusted, true));
+
+        let trusted_after_return = desired_status(
+            Backend::EventTap,
+            LanguageId::Vietnamese,
+            false,
+            false,
+            true,
+        );
+        assert_eq!(trusted_after_return, EventTapStatus::Running);
+        assert!(!should_request_accessibility(trusted_after_return, false));
     }
 
     #[test]

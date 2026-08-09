@@ -14,6 +14,8 @@ use crate::database::DatabaseView;
 use crate::docker::{DockerPage, DockerView};
 use crate::encoder_decoder::{EncoderDecoder, Format};
 use crate::i18n::{Str, t};
+#[cfg(target_os = "macos")]
+use crate::input_method::InputMethod;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::input_method::views::InputMethodView;
 use crate::json_formatter::JsonFormatter;
@@ -528,6 +530,9 @@ pub struct Layout {
     /// Keeps the window-bounds observer alive: a `Subscription` unsubscribes
     /// when it drops, so this field is the subscription, not bookkeeping.
     _bounds: Subscription,
+    /// Re-checks macOS Accessibility after Dodo returns from System Settings.
+    #[cfg(target_os = "macos")]
+    _activation: Subscription,
     json_formatter: Entity<JsonFormatter>,
     encoder_decoder: Entity<EncoderDecoder>,
     api_explorer: Entity<ApiExplorer>,
@@ -607,6 +612,12 @@ impl Layout {
                     .and_then(|display| display.uuid().ok())
                     .map(|uuid| uuid.to_string());
                 Session::set_window(window.window_bounds(), display, cx);
+            }),
+            #[cfg(target_os = "macos")]
+            _activation: cx.observe_window_activation(window, |_, window, cx| {
+                if window.is_window_active() {
+                    InputMethod::reconcile_event_tap_after_activation(cx);
+                }
             }),
             json_formatter: cx.new(|cx| JsonFormatter::new(window, cx)),
             encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),

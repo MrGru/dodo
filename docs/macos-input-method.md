@@ -127,9 +127,19 @@ field is a decision someone makes on purpose.
 
 **Sidebar → Input method → Backend → Event Tap.** This is an alternative to,
 not a replacement for, Native Input Method. It runs only while Dodo is open and
-requires Dodo to be allowed in **System Settings → Privacy & Security →
-Accessibility**. Dodo checks `AXIsProcessTrusted` without prompting or changing
-that permission; when absent, the pane says so and every key passes through.
+requires Dodo to be enabled in **System Settings → Privacy & Security →
+Accessibility**. After Dodo has saved the selection and the Native Input Method
+handoff permits Event Tap startup, the first untrusted reconciliation in a Dodo process calls
+`AXIsProcessTrustedWithOptions` with `kAXTrustedCheckOptionPrompt=true`.
+
+macOS owns that asynchronous request and the Accessibility list; Dodo cannot
+and does not change TCC. Enable Dodo there, then return to Dodo: its window
+activation re-checks trust and starts Event Tap without reselecting the backend
+or relaunching. Until then every key passes through. Existing grants are checked
+without prompting, and an untrusted process makes only one request attempt.
+Because TCC grants may be tied to the application's identity, an unsigned or
+ad-hoc-signed build may need to be enabled again after it is replaced; verify
+that behaviour against the packaged build identity.
 
 Event Tap drives the existing `dodo-ime-core` Vietnamese engine in its direct
 output mode. The trade-off is deliberate: unlike Native Input Method it cannot

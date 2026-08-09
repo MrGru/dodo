@@ -70,7 +70,9 @@ use gpui::{App, AsyncApp, BorrowAppContext as _, Global, Task};
 
 use crate::i18n::Str;
 #[cfg(target_os = "macos")]
-use crate::input_method::models::event_tap::{EventTapStatus, desired_status};
+use crate::input_method::models::event_tap::{
+    EventTapStatus, desired_status, should_request_accessibility,
+};
 #[cfg(target_os = "macos")]
 use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallReport};
 #[cfg(target_os = "windows")]
@@ -122,6 +124,10 @@ pub struct InputMethod {
     event_tap: Option<services::event_tap::EventTap>,
     #[cfg(target_os = "macos")]
     event_tap_status: EventTapStatus,
+    /// macOS owns the request UI; prevent repeated request attempts while this
+    /// process remains untrusted.
+    #[cfg(target_os = "macos")]
+    event_tap_accessibility_requested: bool,
     /// Held only while Windows Keyboard Hook owns transformation. Dropping it
     /// calls `UnhookWindowsHookEx` before callback state is released.
     #[cfg(target_os = "windows")]
@@ -153,6 +159,8 @@ impl InputMethod {
             event_tap: None,
             #[cfg(target_os = "macos")]
             event_tap_status: EventTapStatus::Inactive,
+            #[cfg(target_os = "macos")]
+            event_tap_accessibility_requested: false,
             #[cfg(target_os = "windows")]
             keyboard_hook: None,
             #[cfg(target_os = "windows")]
@@ -494,6 +502,16 @@ impl InputMethod {
         }
     }
 
+    /// Re-checks Event Tap after Dodo returns to its active window.
+    ///
+    /// The macOS Accessibility request is asynchronous, so returning from
+    /// System Settings is the narrow lifecycle point that can observe a grant
+    /// and start the already-selected fallback without another save.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn reconcile_event_tap_after_activation(cx: &mut App) {
+        Self::reconcile_event_tap(cx);
+    }
+
     /// Starts only after a live native bundle has adopted Event Tap. A bundle
     /// that is not running cannot transform, and a current bundle that later
     /// launches reads the selection before its first controller exists.
@@ -511,15 +529,17 @@ impl InputMethod {
                 .status
                 .as_ref()
                 .is_some_and(|status| status.settings_revision >= state.document.revision);
-            // Permission is checked only if this reaches `EventTap::start`; the
-            // model still decides exclusive ownership and the native hand-off.
-            match desired_status(
+            // Trust is checked and, once, macOS is asked only if this reaches
+            // `EventTap::start`; the model still decides exclusive ownership
+            // and the native hand-off.
+            let desired = desired_status(
                 state.document.backend,
                 state.document.language,
                 native_live,
                 settings_applied,
-                true,
-            ) {
+                services::event_tap::accessibility_trusted(),
+            );
+            match desired {
                 EventTapStatus::Inactive => {
                     state.event_tap = None;
                     state.event_tap_status = EventTapStatus::Inactive;
@@ -530,9 +550,11 @@ impl InputMethod {
                     state.event_tap_status = EventTapStatus::WaitingForNative;
                     return;
                 }
-                EventTapStatus::NeedsAccessibility
-                | EventTapStatus::Running
-                | EventTapStatus::Failed => {}
+                EventTapStatus::NeedsAccessibility => {
+                    state.event_tap = None;
+                    state.event_tap_status = EventTapStatus::NeedsAccessibility;
+                }
+                EventTapStatus::Running | EventTapStatus::Failed => {}
             }
 
             let config = state.document.vietnamese.to_config();
@@ -542,7 +564,12 @@ impl InputMethod {
                 return;
             }
 
-            match services::event_tap::EventTap::start(config) {
+            let request_accessibility =
+                should_request_accessibility(desired, state.event_tap_accessibility_requested);
+            if request_accessibility {
+                state.event_tap_accessibility_requested = true;
+            }
+            match services::event_tap::EventTap::start(config, request_accessibility) {
                 Ok(tap) => {
                     state.event_tap_status = tap.status();
                     state.event_tap = Some(tap);

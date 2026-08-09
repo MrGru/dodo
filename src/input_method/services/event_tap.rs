@@ -10,7 +10,8 @@ use std::ptr::{NonNull, null_mut};
 
 use dodo_ime_core::{LanguageEngine as _, VietnameseConfig, VietnameseEngine};
 use objc2_core_foundation::{
-    CFMachPort, CFRetained, CFRunLoop, CFRunLoopMode, CFRunLoopSource, kCFRunLoopCommonModes,
+    CFBoolean, CFDictionary, CFMachPort, CFRetained, CFRunLoop, CFRunLoopMode, CFRunLoopSource,
+    CFString, kCFRunLoopCommonModes,
 };
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventTapOptions,
@@ -48,8 +49,14 @@ pub struct EventTap {
 
 impl EventTap {
     /// Creates and enables an editable session event tap.
-    pub fn start(config: VietnameseConfig) -> Result<EventTap, StartError> {
+    pub fn start(
+        config: VietnameseConfig,
+        request_accessibility: bool,
+    ) -> Result<EventTap, StartError> {
         if !accessibility_trusted() {
+            if request_accessibility {
+                request_accessibility_permission();
+            }
             return Err(StartError::AccessibilityDenied);
         }
 
@@ -169,10 +176,23 @@ fn common_modes() -> Option<&'static CFRunLoopMode> {
     unsafe { kCFRunLoopCommonModes }
 }
 
-fn accessibility_trusted() -> bool {
+pub(crate) fn accessibility_trusted() -> bool {
     // SAFETY: `AXIsProcessTrusted` has no arguments and only asks TCC for this
     // process' current Accessibility grant. It never prompts or changes it.
     unsafe { AXIsProcessTrusted() != 0 }
+}
+
+fn request_accessibility_permission() {
+    let Some(prompt_key) = (unsafe { kAXTrustedCheckOptionPrompt }) else {
+        return;
+    };
+    let options = CFDictionary::from_slices(&[prompt_key], &[CFBoolean::new(true)]);
+    // SAFETY: `options` is a live typed CoreFoundation dictionary for the call.
+    // macOS displays any request asynchronously; its return value is the current
+    // trust state and cannot say whether the user will grant permission.
+    unsafe {
+        let _ = AXIsProcessTrustedWithOptions(options.as_opaque());
+    }
 }
 
 fn secure_input_enabled() -> bool {
@@ -402,7 +422,10 @@ fn key_event(text: &str, key_code: u16, flags: CGEventFlags) -> dodo_ime_core::K
 // The safe wrappers above confine them to permission and secure-input checks.
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
+    static kAXTrustedCheckOptionPrompt: Option<&'static CFString>;
+
     fn AXIsProcessTrusted() -> u8;
+    fn AXIsProcessTrustedWithOptions(options: &CFDictionary) -> u8;
 }
 
 #[link(name = "Carbon", kind = "framework")]

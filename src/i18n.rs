@@ -4656,12 +4656,12 @@ impl Str {
             (Str::InputMethod, Language::Vietnamese) => "Bộ gõ".into(),
             (Str::InputMethodDescription, Language::English) => {
                 "Choose Dodo's Vietnamese input method. Native Input Method works after Dodo \
-                 closes; Event Tap needs Accessibility permission and works while Dodo is open."
+                 closes; Event Tap asks macOS for Accessibility permission and works while Dodo is open."
                     .into()
             }
             (Str::InputMethodDescription, Language::Vietnamese) => {
                 "Chọn bộ gõ tiếng Việt của Dodo. Bộ gõ gốc hoạt động khi Dodo đã đóng; Chặn sự \
-                 kiện cần quyền Trợ năng và chỉ hoạt động khi Dodo đang mở."
+                 kiện yêu cầu macOS cấp quyền Trợ năng và chỉ hoạt động khi Dodo đang mở."
                     .into()
             }
             (Str::InputMethodBackend, Language::English) => "Backend".into(),
@@ -4694,11 +4694,11 @@ impl Str {
                 "Đang chờ Bộ gõ gốc áp dụng lựa chọn này.".into()
             }
             (Str::InputMethodEventTapNeedsAccessibility, Language::English) => {
-                "Event Tap needs Accessibility permission. Allow Dodo in System Settings → Privacy & Security → Accessibility."
+                "macOS needs you to enable Dodo in System Settings → Privacy & Security → Accessibility. Keys are passing through unchanged."
                     .into()
             }
             (Str::InputMethodEventTapNeedsAccessibility, Language::Vietnamese) => {
-                "Chặn sự kiện cần quyền Trợ năng. Hãy cho phép Dodo trong Cài đặt hệ thống → Quyền riêng tư và bảo mật → Trợ năng."
+                "macOS cần bạn bật Dodo trong Cài đặt hệ thống → Quyền riêng tư và bảo mật → Trợ năng. Các phím được chuyển qua không thay đổi."
                     .into()
             }
             (Str::InputMethodEventTapRunning, Language::English) => {
