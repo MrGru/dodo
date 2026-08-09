@@ -51,19 +51,24 @@ pub struct WindowsInstallPlan {
 
 /// Candidate artifacts, in shipping then development order.
 ///
-/// The shipping ZIP places the DLL under `input-method` beside `dodo.exe`.
-/// The development path is what `cargo build -p dodo-ime-windows` writes.
+/// The shipping ZIP places the DLL under `input-method` beside `dodo.exe`. A
+/// bare `cargo run` / `cargo run --release` puts both artifacts in its target
+/// profile directory, then the two conventional working-tree paths cover a
+/// launcher whose executable is elsewhere.
 pub fn source_candidates(executable: &Path, working_directory: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(directory) = executable.parent() {
         candidates.push(directory.join(PACKAGE_DIRECTORY).join(DLL_NAME));
+        candidates.push(directory.join(DLL_NAME));
     }
-    candidates.push(
-        working_directory
-            .join("target")
-            .join("debug")
-            .join(DLL_NAME),
-    );
+    for profile in ["debug", "release"] {
+        candidates.push(
+            working_directory
+                .join("target")
+                .join(profile)
+                .join(DLL_NAME),
+        );
+    }
     candidates
 }
 
@@ -98,7 +103,9 @@ mod tests {
                 PathBuf::from(format!(
                     "C:/Program Files/Dodo/{PACKAGE_DIRECTORY}/{DLL_NAME}"
                 )),
+                PathBuf::from(format!("C:/Program Files/Dodo/{DLL_NAME}")),
                 PathBuf::from(format!("C:/repo/target/debug/{DLL_NAME}")),
+                PathBuf::from(format!("C:/repo/target/release/{DLL_NAME}")),
             ]
         );
         assert_eq!(
