@@ -22,7 +22,7 @@ pub use self::candidate::{Candidate, CandidateList};
 // `ReplaceBeforeCursor`; only the test host does today. Remove this the round a
 // real OS host lands.
 #[allow(unused_imports)]
-pub use self::composition::{Composition, grapheme_count, truncate_graphemes};
+pub use self::composition::{Composition, grapheme_count, grapheme_prefix, truncate_graphemes};
 pub use self::engine::{EngineResult, LanguageEngine};
 pub use self::event::{Key, KeyEvent, Modifiers};
 pub use self::language::LanguageId;

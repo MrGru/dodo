@@ -108,7 +108,7 @@ pub fn interpret(key: char, syllable: &Syllable, bracket_shortcuts: bool) -> Opt
             literal: key,
         });
     }
-    if matches!(lower, 'a' | 'e' | 'o') && repeats_last_vowel(syllable, lower) {
+    if matches!(lower, 'a' | 'e' | 'o') && repeats_nucleus_vowel(syllable, lower) {
         return Some(Transform::Mark {
             mark: Mark::Circumflex,
             literal: key,
@@ -134,14 +134,16 @@ fn tone_key(lower: char) -> Option<Tone> {
 }
 
 /// `w` is a breve on `a` and a horn on `o`/`u`, so which mark it is depends on
-/// the vowel it finds. With no vowel to decorate it types `ư`.
+/// the vowel it finds. It asks the syllable's target rather than the last
+/// vowel typed: `hoiw` reaches back over the `i` to make `hơi`.
 fn horn_or_breve(syllable: &Syllable, literal: char, upper: bool) -> Transform {
-    let last_vowel = syllable
-        .letters()
+    let nucleus = rules::parts(syllable.letters()).nucleus;
+    match syllable.letters()[nucleus]
         .iter()
         .rev()
-        .find(|letter| rules::is_vowel_base(letter.base));
-    match last_vowel.map(|letter| letter.base) {
+        .find(|letter| matches!(letter.base, 'a' | 'o' | 'u'))
+        .map(|letter| letter.base)
+    {
         Some('a') => Transform::Mark {
             mark: Mark::Breve,
             literal,
@@ -172,12 +174,15 @@ fn strokes_the_initial_d(syllable: &Syllable) -> bool {
     syllable.mark_target(Mark::Stroke).is_some()
 }
 
-/// `aa`, `ee`, `oo` — the doubled vowel, where the second one is a circumflex.
-///
-/// The test is on the **last letter typed**, not on the nucleus, which is what
-/// keeps `taoa` from turning into `taô`: the two letters have to be adjacent.
-fn repeats_last_vowel(syllable: &Syllable, lower: char) -> bool {
-    matches!(syllable.letters().last(), Some(last) if last.base == lower)
+/// `aa`, `ee`, `oo` — the repeated nucleus vowel, where the later key is a
+/// circumflex. The vowel need not be adjacent: `thienej` and `thieenj` both
+/// mean `thiện`. The current nucleus target keeps unrelated vowels out, so
+/// `taoa` remains plain text rather than marking its `o`.
+fn repeats_nucleus_vowel(syllable: &Syllable, lower: char) -> bool {
+    syllable.is_valid()
+        && syllable
+            .mark_target(Mark::Circumflex)
+            .is_some_and(|at| syllable.letters()[at].base == lower)
 }
 
 #[cfg(test)]
@@ -250,9 +255,9 @@ mod tests {
         }
     }
 
-    /// `taoa` is not `taô`: the doubled letters have to be adjacent.
+    /// The current nucleus decides a repeated vowel, not the nearest key.
     #[test]
-    fn a_vowel_that_does_not_repeat_the_last_letter_is_just_a_letter() {
+    fn a_vowel_outside_the_current_nucleus_is_just_a_letter() {
         assert_eq!(
             read('a', "tao"),
             Some(Transform::Letter {
@@ -267,6 +272,13 @@ mod tests {
                 base: 'e',
                 mark: None,
                 upper: false
+            })
+        );
+        assert_eq!(
+            read('e', "thien"),
+            Some(Transform::Mark {
+                mark: Mark::Circumflex,
+                literal: 'e'
             })
         );
     }
@@ -304,7 +316,7 @@ mod tests {
                 literal: 'W'
             })
         );
-        for spelling in ["do", "DU"] {
+        for spelling in ["do", "DU", "hoi"] {
             assert_eq!(
                 read('W', spelling),
                 Some(Transform::Mark {

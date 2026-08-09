@@ -141,12 +141,22 @@ Because TCC grants may be tied to the application's identity, an unsigned or
 ad-hoc-signed build may need to be enabled again after it is replaced; verify
 that behaviour against the packaged build identity.
 
-Event Tap drives the existing `dodo-ime-core` Vietnamese engine in its direct
+Event Tap drives the existing `dodo-ime-core` Vietnamese engine in direct
 output mode. The trade-off is deliberate: unlike Native Input Method it cannot
-show marked text, so intermediate rewrites enter the focused application and
-its undo history. It never writes, logs, sends, or exposes keystrokes. Tagged
-synthetic output is ignored by the tap itself, so it cannot feed back into the
-engine; secure input is passed through unchanged.
+show marked text, so only the smallest cursor-safe changed tail enters the
+focused application and its undo history. It retains the raw characters of the
+current uncommitted word in memory only, recomputes that word after a physical
+edit, and drops it at a boundary; it never writes, logs, sends, or exposes keys
+or words.
+
+Every Dodo-generated `CGEvent` has a process-unique
+`kCGEventSourceUserData` marker. The callback passes a marked event through
+before decoding it or touching composition state, including generated
+Backspace and Unicode key-up/down pairs, so output cannot feed back into the
+engine. An ordinary physical Backspace is never replaced: it passes through
+once and removes one rendered grapheme from the in-memory word state. Secure
+input is passed through unchanged. Space, punctuation, navigation and shortcuts
+commit the current word if needed, then pass through unchanged.
 
 Only one backend transforms at a time. Selecting Native stops Event Tap before
 writing settings. Selecting Event Tap waits for a live Native Input Method to

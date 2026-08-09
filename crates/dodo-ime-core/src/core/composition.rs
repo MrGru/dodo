@@ -33,6 +33,27 @@ pub fn grapheme_count(text: &str) -> usize {
     text.chars().filter(|c| !is_combining_mark(*c)).count()
 }
 
+/// The first `count` user-visible characters of `text`.
+///
+/// Saturates at the whole string. Like [`truncate_graphemes`], this is the
+/// engine's intentionally small grapheme definition, so direct-output hosts
+/// can compare edits without inventing a second one.
+pub fn grapheme_prefix(text: &str, count: usize) -> &str {
+    if count == 0 {
+        return "";
+    }
+    let mut seen = 0;
+    for (at, character) in text.char_indices() {
+        if !is_combining_mark(character) {
+            if seen == count {
+                return &text[..at];
+            }
+            seen += 1;
+        }
+    }
+    text
+}
+
 /// `text` with its last `count` graphemes removed.
 ///
 /// Saturates rather than panicking: asking to remove more than is there
@@ -132,7 +153,7 @@ impl Composition {
 
 #[cfg(test)]
 mod tests {
-    use super::{Composition, grapheme_count, truncate_graphemes};
+    use super::{Composition, grapheme_count, grapheme_prefix, truncate_graphemes};
 
     /// The property the whole module is built around: a precomposed and a
     /// decomposed `ế` are one visible character either way.
@@ -161,7 +182,15 @@ mod tests {
     }
 
     #[test]
-    fn truncate_removes_visible_characters() {
+    fn prefix_and_truncate_remove_visible_characters() {
+        assert_eq!(grapheme_prefix("tiếng", 0), "");
+        assert_eq!(grapheme_prefix("tiếng", 3), "tiế");
+        assert_eq!(grapheme_prefix("tiếng", 99), "tiếng");
+        assert_eq!(
+            grapheme_prefix("e\u{0302}\u{0301}x", 1),
+            "e\u{0302}\u{0301}"
+        );
+
         assert_eq!(truncate_graphemes("tiếng", 0), "tiếng");
         assert_eq!(truncate_graphemes("tiếng", 1), "tiến");
         assert_eq!(truncate_graphemes("tiếng", 3), "ti");

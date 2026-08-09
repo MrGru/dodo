@@ -1,13 +1,23 @@
-//! Pure policy for the Accessibility-gated Event Tap.
+//! Pure policy and direct-output planning for the Accessibility-gated Event Tap.
 //!
 //! The CoreGraphics callback is deliberately thin: it asks these rules whether
-//! to pass, process, or re-enable, then performs the platform call. Keeping the
-//! policy here proves the security defaults without needing Accessibility access.
+//! to pass, process, or re-enable, then performs the platform call. The
+//! [`DirectComposer`] owns only the current uncommitted Telex word, so it can
+//! recompute that word after a physical edit without looking into the focused
+//! application. Nothing here touches Accessibility, files, locks, or GPUI.
 
-use dodo_ime_core::LanguageId;
+use dodo_ime_core::core::{grapheme_count, grapheme_prefix, truncate_graphemes};
+use dodo_ime_core::{
+    EngineAction, Key, KeyEvent, LanguageEngine as _, LanguageId, OutputMode, VietnameseConfig,
+    VietnameseEngine,
+};
 use dodo_ime_ipc::settings::Backend;
 
 pub use crate::input_method::models::direct_output::OutputPlan;
+
+const MAX_RAW_KEYS: usize = 32;
+const BACKSPACE_SEARCH_TAIL: usize = 8;
+const SYNTHETIC_TAG_NAMESPACE: u32 = 0xd0d0_e7a0;
 
 /// What the pane can honestly say about Event Tap.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -45,18 +55,28 @@ pub fn desired_status(
 }
 
 /// Whether this eligible, untrusted state may ask macOS to show Dodo.
-///
-/// macOS owns the asynchronous request and the Accessibility list; dodo only
-/// asks once per process, then keeps keys passing through until a later check
-/// observes a grant.
 pub fn should_request_accessibility(status: EventTapStatus, already_requested: bool) -> bool {
     status == EventTapStatus::NeedsAccessibility && !already_requested
 }
 
-/// The only three event classes Event Tap treats specially.
+/// A process-local value for `kCGEventSourceUserData`.
+///
+/// The PID makes this different for simultaneously running Dodo processes, and
+/// the namespace keeps it distinct from CoreGraphics' default zero. Users
+/// cannot produce this field through keyboard flags or normal input.
+pub(crate) fn synthetic_event_tag(process_id: u32) -> i64 {
+    ((u64::from(process_id) << 32) | u64::from(SYNTHETIC_TAG_NAMESPACE)) as i64
+}
+
+pub(crate) fn is_synthetic_event(user_data: i64, tag: i64) -> bool {
+    user_data == tag
+}
+
+/// The event facts the callback needs before it touches composition state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TapEvent {
     KeyDown { autorepeat: bool },
+    KeyUp { suppress: bool },
     TapDisabled,
     Other,
 }
@@ -64,11 +84,12 @@ pub enum TapEvent {
 /// What the callback must do with one event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Handling {
-    /// Feed a key down through the existing engine. `autorepeat` is retained by
-    /// the cloned output event; it is never discarded or converted to a new key.
+    /// Feed a physical key down through the direct composer.
     ProcessKey { autorepeat: bool },
     /// Return CoreGraphics' event pointer unchanged.
     PassThrough,
+    /// Consume the matching physical key-up after its key-down was replaced.
+    Suppress,
     /// Re-enable once for CoreGraphics' explicit disabled notification.
     RecoverTap,
 }
@@ -77,81 +98,422 @@ pub enum Handling {
 pub fn handling(event: TapEvent, secure_input: bool) -> Handling {
     match event {
         TapEvent::TapDisabled => Handling::RecoverTap,
-        TapEvent::KeyDown { .. } if !secure_input => Handling::ProcessKey {
-            autorepeat: matches!(event, TapEvent::KeyDown { autorepeat: true }),
-        },
-        TapEvent::KeyDown { .. } | TapEvent::Other => Handling::PassThrough,
+        TapEvent::KeyUp { suppress: true } => Handling::Suppress,
+        TapEvent::KeyUp { suppress: false } | TapEvent::Other => Handling::PassThrough,
+        TapEvent::KeyDown { autorepeat } if !secure_input => Handling::ProcessKey { autorepeat },
+        TapEvent::KeyDown { .. } => Handling::PassThrough,
     }
+}
+
+/// Current-word intent and rendering for direct output.
+///
+/// The engine remains the sole owner of Vietnamese rules. This type retains the
+/// physical characters that built the in-flight word only so a physical
+/// Backspace can remove one rendered grapheme and replay the remaining intent.
+pub(crate) struct DirectComposer {
+    config: VietnameseConfig,
+    engine: VietnameseEngine,
+    raw: Vec<char>,
+    rendered: String,
+}
+
+impl DirectComposer {
+    pub(crate) fn new(config: VietnameseConfig) -> DirectComposer {
+        let config = direct_config(config);
+        DirectComposer {
+            engine: VietnameseEngine::new(config),
+            config,
+            raw: Vec::with_capacity(MAX_RAW_KEYS),
+            rendered: String::with_capacity(MAX_RAW_KEYS * 3),
+        }
+    }
+
+    pub(crate) fn reconfigure(&mut self, config: VietnameseConfig) {
+        self.config = direct_config(config);
+        self.forget();
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.forget();
+    }
+
+    #[cfg(test)]
+    fn rendered(&self) -> &str {
+        &self.rendered
+    }
+
+    /// Plans one physical key down. The caller posts a plan before deciding
+    /// whether to suppress the original event.
+    pub(crate) fn process(&mut self, event: KeyEvent) -> OutputPlan {
+        if event.key == Key::Backspace {
+            return self.backspace();
+        }
+        if self.raw.len() == MAX_RAW_KEYS {
+            return self.commit_before_passing();
+        }
+        if let Some(plan) = self.literal_horn(&event) {
+            return plan;
+        }
+
+        let result = self.engine.process_key(&event);
+        let passes_through = result.actions.iter().any(EngineAction::passes_through);
+        if !passes_through
+            && self.physical_append(&event, self.engine.composition().text())
+            && let Some(key) = event.typed()
+        {
+            // The original event already inserts exactly the next scalar.
+            self.rendered.push(key);
+            self.raw.push(key);
+            return OutputPlan {
+                pass_through: true,
+                ..OutputPlan::default()
+            };
+        }
+
+        let Some(next) = (if passes_through {
+            direct_actions_after(&self.rendered, &result.actions)
+        } else {
+            Some(self.engine.composition().text().to_owned())
+        }) else {
+            self.forget();
+            return OutputPlan {
+                pass_through: true,
+                ..OutputPlan::default()
+            };
+        };
+
+        let mut plan = OutputPlan::minimal(&self.rendered, &next);
+        plan.pass_through = passes_through;
+        self.rendered = next;
+
+        if passes_through {
+            self.reset_engine();
+            self.rendered.clear();
+        } else if let Some(key) = event.typed() {
+            self.raw.push(key);
+        } else {
+            // A direct engine can only keep composing after a printable key.
+            self.forget();
+            plan.pass_through = true;
+        }
+        if !plan.transforms() && !plan.pass_through {
+            // The callback must never consume a key without producing output.
+            self.forget();
+            plan.pass_through = true;
+        }
+        plan
+    }
+
+    /// A literal `ư` can be the old direct-output fallback for a Telex `w`
+    /// that arrived after a later vowel. Accept that reading only when the core
+    /// engine rewrites an internal grapheme while preserving a later one:
+    /// `hoiư` becomes `hơi`, while literal `tư` and `hư` stay literal.
+    fn literal_horn(&mut self, event: &KeyEvent) -> Option<OutputPlan> {
+        if event.key != Key::Character || event.typed() != Some('ư') || !event.modifiers.is_plain()
+        {
+            return None;
+        }
+
+        let mut engine = self.engine.clone();
+        let result = engine.process_key(&KeyEvent::character('w'));
+        if result.actions.iter().any(EngineAction::passes_through) {
+            return None;
+        }
+        let next = engine.composition().text().to_owned();
+        if grapheme_count(&next) != grapheme_count(&self.rendered)
+            || !has_common_trailing_grapheme(&self.rendered, &next)
+        {
+            return None;
+        }
+
+        let plan = OutputPlan::minimal(&self.rendered, &next);
+        if !plan.transforms() {
+            return None;
+        }
+        self.engine = engine;
+        self.raw.push('w');
+        self.rendered = next;
+        Some(plan)
+    }
+
+    /// Let macOS remove one rendered character itself, then replay the raw
+    /// intent needed to describe the remaining current word. No synthetic
+    /// Backspace is ever part of this plan.
+    fn backspace(&mut self) -> OutputPlan {
+        if self.raw.is_empty() || self.rendered.is_empty() {
+            self.forget();
+            return OutputPlan {
+                pass_through: true,
+                ..OutputPlan::default()
+            };
+        }
+
+        let target = truncate_graphemes(&self.rendered, 1);
+        let Some((removed, engine)) = self.removal_for(&target) else {
+            // ponytail: multi-source deletion searches the last eight raw keys;
+            // extend it only if a valid Vietnamese syllable can exceed that reach.
+            self.forget();
+            return OutputPlan {
+                pass_through: true,
+                ..OutputPlan::default()
+            };
+        };
+
+        let mut at = 0;
+        self.raw.retain(|_| {
+            let keep = removed & (1 << at) == 0;
+            at += 1;
+            keep
+        });
+        self.engine = engine;
+        self.rendered = target;
+        OutputPlan {
+            pass_through: true,
+            ..OutputPlan::default()
+        }
+    }
+
+    fn commit_before_passing(&mut self) -> OutputPlan {
+        // ponytail: direct mode tracks at most 32 raw keys; a longer run is
+        // committed and passed through rather than making the tap unbounded.
+        let result = self.engine.commit();
+        let Some(next) = direct_actions_after(&self.rendered, &result.actions) else {
+            self.forget();
+            return OutputPlan {
+                pass_through: true,
+                ..OutputPlan::default()
+            };
+        };
+        let mut plan = OutputPlan::minimal(&self.rendered, &next);
+        plan.pass_through = true;
+        self.rendered = next;
+        self.reset_engine();
+        self.rendered.clear();
+        plan
+    }
+
+    fn physical_append(&self, event: &KeyEvent, next: &str) -> bool {
+        if event.key != Key::Character || !event.modifiers.is_plain() {
+            return false;
+        }
+        let Some(key) = event.typed() else {
+            return false;
+        };
+        let Some(suffix) = next.strip_prefix(&self.rendered) else {
+            return false;
+        };
+        let mut characters = suffix.chars();
+        characters.next() == Some(key) && characters.next().is_none()
+    }
+
+    /// Finds the smallest raw-source removal whose complete replay equals the
+    /// rendered word after one physical Backspace. A single source is ordinary
+    /// (`g` in `tiếng`); a composed scalar may require its base, mark and tone.
+    fn removal_for(&self, target: &str) -> Option<(u32, VietnameseEngine)> {
+        for at in (0..self.raw.len()).rev() {
+            let removed = 1_u32 << at;
+            if let Some(engine) = self.replay_without(removed)
+                && engine.composition().text() == target
+            {
+                return Some((removed, engine));
+            }
+        }
+
+        let tail_start = self.raw.len().saturating_sub(BACKSPACE_SEARCH_TAIL);
+        let tail_len = self.raw.len() - tail_start;
+        for count in 2..=tail_len {
+            for subset in 1_u16..(1_u16 << tail_len) {
+                if subset.count_ones() as usize != count {
+                    continue;
+                }
+                let removed = u32::from(subset) << tail_start;
+                if let Some(engine) = self.replay_without(removed)
+                    && engine.composition().text() == target
+                {
+                    return Some((removed, engine));
+                }
+            }
+        }
+        None
+    }
+
+    fn replay_without(&self, removed: u32) -> Option<VietnameseEngine> {
+        let mut engine = VietnameseEngine::new(self.config);
+        for (at, key) in self.raw.iter().copied().enumerate() {
+            if removed & (1 << at) != 0 {
+                continue;
+            }
+            let result = engine.process_key(&KeyEvent::character(key));
+            if result.actions.iter().any(EngineAction::passes_through) {
+                return None;
+            }
+        }
+        Some(engine)
+    }
+
+    fn forget(&mut self) {
+        self.reset_engine();
+        self.rendered.clear();
+    }
+
+    fn reset_engine(&mut self) {
+        self.engine = VietnameseEngine::new(self.config);
+        self.raw.clear();
+    }
+}
+
+fn direct_config(mut config: VietnameseConfig) -> VietnameseConfig {
+    config.output = OutputMode::Direct;
+    config
+}
+
+fn has_common_trailing_grapheme(before: &str, after: &str) -> bool {
+    let before_count = grapheme_count(before);
+    let after_count = grapheme_count(after);
+    before_count != 0
+        && after_count != 0
+        && before[grapheme_prefix(before, before_count - 1).len()..]
+            == after[grapheme_prefix(after, after_count - 1).len()..]
+}
+
+fn direct_actions_after(before: &str, actions: &[EngineAction]) -> Option<String> {
+    let mut text = before.to_owned();
+    for action in actions {
+        match action {
+            EngineAction::PassThrough => {}
+            EngineAction::InsertText(inserted) => text.push_str(inserted),
+            EngineAction::DeleteBackward(count) => text = truncate_graphemes(&text, *count),
+            EngineAction::ReplaceBeforeCursor {
+                grapheme_count,
+                text: inserted,
+            } => {
+                text = truncate_graphemes(&text, *grapheme_count);
+                text.push_str(inserted);
+            }
+            EngineAction::SetComposition { .. }
+            | EngineAction::CommitComposition
+            | EngineAction::ClearComposition
+            | EngineAction::ShowCandidates
+            | EngineAction::HideCandidates => return None,
+        }
+    }
+    Some(text)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::{
-        EventTapStatus, Handling, OutputPlan, TapEvent, desired_status, handling,
-        should_request_accessibility,
+        DirectComposer, EventTapStatus, Handling, OutputPlan, TapEvent, desired_status, handling,
+        is_synthetic_event, synthetic_event_tag,
     };
-    use dodo_ime_core::{EngineAction, LanguageId};
+    use dodo_ime_core::{
+        Key, KeyEvent, LanguageEngine as _, Modifiers, OutputMode, VietnameseConfig,
+        VietnameseEngine,
+    };
     use dodo_ime_ipc::settings::Backend;
+
+    fn composer() -> DirectComposer {
+        DirectComposer::new(VietnameseConfig::default())
+    }
+
+    fn type_keys(composer: &mut DirectComposer, keys: &str) {
+        for key in keys.chars() {
+            let _ = composer.process(KeyEvent::character(key));
+        }
+    }
+
+    fn type_at_end_cursor(keys: &str) -> String {
+        let mut composer = composer();
+        let mut document = String::new();
+        for key in keys.chars() {
+            let plan = composer.process(KeyEvent::character(key));
+            document = dodo_ime_core::core::truncate_graphemes(&document, plan.delete_before);
+            if let Some(insert) = plan.insert {
+                document.push_str(&insert);
+            }
+            if plan.pass_through {
+                document.push(key);
+            }
+        }
+        document
+    }
+
+    /// One Unicode replacement is one synthetic down/up pair, while every
+    /// deletion needs its own Backspace pair.
+    fn macos_event_count(plan: &OutputPlan) -> usize {
+        plan.delete_before * 2 + usize::from(plan.insert.is_some()) * 2
+    }
 
     #[test]
     fn only_the_selected_backend_can_own_transformation() {
         assert_eq!(
-            desired_status(Backend::Native, LanguageId::Vietnamese, false, false, true),
+            desired_status(
+                Backend::Native,
+                dodo_ime_core::LanguageId::Vietnamese,
+                false,
+                false,
+                true
+            ),
             EventTapStatus::Inactive
         );
         assert_eq!(
-            desired_status(Backend::EventTap, LanguageId::English, false, false, true),
+            desired_status(
+                Backend::EventTap,
+                dodo_ime_core::LanguageId::English,
+                false,
+                false,
+                true
+            ),
             EventTapStatus::Inactive
         );
         assert_eq!(
-            desired_status(Backend::EventTap, LanguageId::Vietnamese, true, false, true),
+            desired_status(
+                Backend::EventTap,
+                dodo_ime_core::LanguageId::Vietnamese,
+                true,
+                false,
+                true,
+            ),
             EventTapStatus::WaitingForNative
-        );
-        assert_eq!(
-            desired_status(Backend::EventTap, LanguageId::Vietnamese, true, true, true),
-            EventTapStatus::Running
         );
     }
 
     #[test]
     fn accessibility_request_is_once_and_a_returning_user_can_start_the_tap() {
-        let inactive = desired_status(Backend::Native, LanguageId::Vietnamese, false, false, false);
-        assert!(!should_request_accessibility(inactive, false));
-
-        let waiting = desired_status(
-            Backend::EventTap,
-            LanguageId::Vietnamese,
-            true,
-            false,
-            false,
-        );
-        assert_eq!(waiting, EventTapStatus::WaitingForNative);
-        assert!(!should_request_accessibility(waiting, false));
-
         let untrusted = desired_status(
             Backend::EventTap,
-            LanguageId::Vietnamese,
+            dodo_ime_core::LanguageId::Vietnamese,
             false,
             false,
             false,
         );
         assert_eq!(untrusted, EventTapStatus::NeedsAccessibility);
-        assert!(should_request_accessibility(untrusted, false));
-        assert!(!should_request_accessibility(untrusted, true));
-
-        let trusted_after_return = desired_status(
-            Backend::EventTap,
-            LanguageId::Vietnamese,
-            false,
-            false,
-            true,
+        assert!(super::should_request_accessibility(untrusted, false));
+        assert!(!super::should_request_accessibility(untrusted, true));
+        assert_eq!(
+            desired_status(
+                Backend::EventTap,
+                dodo_ime_core::LanguageId::Vietnamese,
+                false,
+                false,
+                true,
+            ),
+            EventTapStatus::Running
         );
-        assert_eq!(trusted_after_return, EventTapStatus::Running);
-        assert!(!should_request_accessibility(trusted_after_return, false));
     }
 
     #[test]
-    fn secure_input_and_non_key_events_pass_through_but_repeats_survive() {
+    fn marked_events_pass_without_reentering_composition() {
+        let tag = synthetic_event_tag(123);
+        assert_ne!(tag, synthetic_event_tag(124));
+        assert!(is_synthetic_event(tag, tag));
+        assert!(!is_synthetic_event(0, tag));
+    }
+
+    #[test]
+    fn secure_input_key_up_and_non_key_events_do_not_reach_the_composer() {
         assert_eq!(
             handling(TapEvent::KeyDown { autorepeat: true }, false),
             Handling::ProcessKey { autorepeat: true }
@@ -160,41 +522,193 @@ mod tests {
             handling(TapEvent::KeyDown { autorepeat: false }, true),
             Handling::PassThrough
         );
-        assert_eq!(handling(TapEvent::Other, false), Handling::PassThrough);
-    }
-
-    #[test]
-    fn a_disabled_notification_gets_one_recovery_action_not_a_retry_loop() {
+        assert_eq!(
+            handling(TapEvent::KeyUp { suppress: true }, false),
+            Handling::Suppress
+        );
+        assert_eq!(
+            handling(TapEvent::KeyUp { suppress: false }, false),
+            Handling::PassThrough
+        );
         assert_eq!(handling(TapEvent::TapDisabled, false), Handling::RecoverTap);
     }
 
     #[test]
-    fn direct_engine_actions_become_a_replacement_or_an_unchanged_event() {
-        assert_eq!(
-            OutputPlan::from_actions(&[EngineAction::ReplaceBeforeCursor {
-                grapheme_count: 2,
-                text: "tiếng".into(),
-            }]),
-            Some(OutputPlan {
-                delete_before: 2,
-                insert: Some("tiếng".into()),
-                pass_through: false,
-            })
-        );
-        assert_eq!(
-            OutputPlan::from_actions(&[EngineAction::PassThrough]),
-            Some(OutputPlan {
-                pass_through: true,
-                ..OutputPlan::default()
-            })
-        );
+    fn minimal_rewrites_keep_the_unchanged_suffix_and_batch_unicode() {
+        let mut composer = composer();
+        let ordinary = composer.process(KeyEvent::character('t'));
+        assert!(ordinary.pass_through);
+        assert!(!ordinary.transforms());
+        type_keys(&mut composer, "ie");
+        let circumflex = composer.process(KeyEvent::character('e'));
+        assert_eq!(circumflex.delete_before, 1);
+        assert_eq!(circumflex.insert.as_deref(), Some("ê"));
+        assert!(!circumflex.pass_through);
+        assert_eq!(macos_event_count(&circumflex), 4);
+
+        type_keys(&mut composer, "ng");
+        let tone = composer.process(KeyEvent::character('s'));
+        assert_eq!(tone.delete_before, 3);
+        assert_eq!(tone.insert.as_deref(), Some("ếng"));
+        assert!(!tone.pass_through);
+        assert_eq!(macos_event_count(&tone), 8);
+        assert_eq!(composer.rendered(), "tiếng");
+
+        let decomposed = OutputPlan::minimal("e\u{0302}\u{0301}", "");
+        assert_eq!(decomposed.delete_before, 1);
+        assert_eq!(macos_event_count(&decomposed), 2);
+
+        // The old event-order state `hoiư` is repaired from the complete word.
+        let converged = OutputPlan::minimal("hoiư", "hơi");
+        assert_eq!(converged.delete_before, 3);
+        assert_eq!(converged.insert.as_deref(), Some("ơi"));
+    }
+
+    #[test]
+    fn physical_backspace_passes_once_and_updates_current_word_intent() {
+        let mut current = composer();
+        type_keys(&mut current, "tieengs");
+        assert_eq!(current.rendered(), "tiếng");
+
+        let plan = current.process(KeyEvent::special(Key::Backspace));
+        assert!(plan.pass_through);
+        assert!(!plan.transforms());
+        assert_eq!(macos_event_count(&plan), 0);
+        assert_eq!(current.rendered(), "tiến");
+
+        type_keys(&mut current, "g");
+        assert_eq!(current.rendered(), "tiếng");
+
+        let mut composed_scalar = composer();
+        type_keys(&mut composed_scalar, "ee");
+        assert_eq!(composed_scalar.rendered(), "ê");
+        let plan = composed_scalar.process(KeyEvent::special(Key::Backspace));
+        assert!(plan.pass_through);
+        assert!(!plan.transforms());
+        assert_eq!(composed_scalar.rendered(), "");
         assert!(
-            OutputPlan::from_actions(&[EngineAction::SetComposition {
-                text: "tiếng".into(),
-                cursor: 5,
-                selection: None,
-            }])
-            .is_none()
+            composed_scalar
+                .process(KeyEvent::special(Key::Backspace))
+                .pass_through
+        );
+    }
+
+    #[test]
+    fn complete_word_replay_converges_across_modifier_order() {
+        assert_eq!(type_at_end_cursor("hoiw"), "hơi");
+        assert_eq!(type_at_end_cursor("hoiư"), "hơi");
+        assert_eq!(type_at_end_cursor("tư"), "tư");
+        assert_eq!(type_at_end_cursor("hư"), "hư");
+
+        let mut first = composer();
+        type_keys(&mut first, "thienej");
+        let mut second = composer();
+        type_keys(&mut second, "thieenj");
+        assert_eq!(first.rendered(), "thiện");
+        assert_eq!(first.rendered(), second.rendered());
+    }
+
+    #[test]
+    fn boundaries_and_shortcuts_commit_then_pass_without_synthetic_input() {
+        let mut composer = composer();
+        type_keys(&mut composer, "tieengs");
+        let navigation = composer.process(KeyEvent::special(Key::ArrowLeft));
+        assert!(navigation.pass_through);
+        assert!(!navigation.transforms());
+        assert_eq!(composer.rendered(), "");
+
+        type_keys(&mut composer, "tieengs");
+        let shortcut = composer.process(KeyEvent::character('s').with_modifiers(Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        }));
+        assert!(shortcut.pass_through);
+        assert!(!shortcut.transforms());
+        assert_eq!(composer.rendered(), "");
+
+        let precomposed = composer.process(KeyEvent::character('ư'));
+        assert!(precomposed.pass_through);
+        assert!(!precomposed.transforms());
+        let unknown = composer.process(KeyEvent::special(Key::Other));
+        assert!(unknown.pass_through);
+        assert!(!unknown.transforms());
+    }
+
+    /// Manual release-mode profile. It exercises only the pure planner and the
+    /// number of events its CoreGraphics staging would create; it posts nothing.
+    #[test]
+    #[ignore = "run with --release -- --ignored --nocapture to report planner timings"]
+    fn profile_direct_planner_without_live_input() {
+        const ROUNDS: usize = 50_000;
+        let mut legacy_events = 0;
+        let legacy_started = Instant::now();
+        for _ in 0..ROUNDS {
+            let mut engine = VietnameseEngine::new(VietnameseConfig {
+                output: OutputMode::Direct,
+                ..VietnameseConfig::default()
+            });
+            for key in ['t', 'i', 'e', 'e', 'n', 'g', 's'] {
+                let result = engine.process_key(&KeyEvent::character(key));
+                let plan = OutputPlan::from_actions(&result.actions).expect("direct actions");
+                legacy_events += plan.delete_before * 2 + usize::from(plan.insert.is_some());
+            }
+            let result = engine.process_key(&KeyEvent::special(Key::Backspace));
+            let plan = OutputPlan::from_actions(&result.actions).expect("direct actions");
+            legacy_events += plan.delete_before * 2 + usize::from(plan.insert.is_some());
+        }
+        let legacy_elapsed = legacy_started.elapsed();
+
+        let mut minimal_events = 0;
+        let minimal_started = Instant::now();
+        for _ in 0..ROUNDS {
+            let mut composer = composer();
+            for key in ['t', 'i', 'e', 'e', 'n', 'g', 's'] {
+                minimal_events += macos_event_count(&composer.process(KeyEvent::character(key)));
+            }
+            minimal_events +=
+                macos_event_count(&composer.process(KeyEvent::special(Key::Backspace)));
+        }
+        let minimal_elapsed = minimal_started.elapsed();
+
+        // `ế` needs its base, circumflex and tone sources removed together,
+        // exercising the largest normal physical-Backspace replay.
+        let mut legacy_backspaces = Vec::with_capacity(ROUNDS);
+        let mut minimal_backspaces = Vec::with_capacity(ROUNDS);
+        for _ in 0..ROUNDS {
+            let mut engine = VietnameseEngine::new(VietnameseConfig {
+                output: OutputMode::Direct,
+                ..VietnameseConfig::default()
+            });
+            for key in ['e', 'e', 's'] {
+                let _ = engine.process_key(&KeyEvent::character(key));
+            }
+            legacy_backspaces.push(engine);
+
+            let mut composer = composer();
+            for key in ['e', 'e', 's'] {
+                let _ = composer.process(KeyEvent::character(key));
+            }
+            minimal_backspaces.push(composer);
+        }
+        let legacy_backspace_started = Instant::now();
+        let mut legacy_backspace_events = 0;
+        for engine in &mut legacy_backspaces {
+            let result = engine.process_key(&KeyEvent::special(Key::Backspace));
+            let plan = OutputPlan::from_actions(&result.actions).expect("direct actions");
+            legacy_backspace_events += plan.delete_before * 2 + usize::from(plan.insert.is_some());
+        }
+        let legacy_backspace_elapsed = legacy_backspace_started.elapsed();
+
+        let minimal_backspace_started = Instant::now();
+        let mut minimal_backspace_events = 0;
+        for composer in &mut minimal_backspaces {
+            minimal_backspace_events +=
+                macos_event_count(&composer.process(KeyEvent::special(Key::Backspace)));
+        }
+        let minimal_backspace_elapsed = minimal_backspace_started.elapsed();
+
+        eprintln!(
+            "Event Tap pure planner: legacy {legacy_events} staged events in {legacy_elapsed:?}; minimal {minimal_events} staged events in {minimal_elapsed:?}; worst Backspace legacy {legacy_backspace_events} staged events in {legacy_backspace_elapsed:?}, minimal {minimal_backspace_events} in {minimal_backspace_elapsed:?}"
         );
     }
 }

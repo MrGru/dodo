@@ -61,6 +61,11 @@ fn the_specifications_worked_examples() {
             ("nguyeenx", "nguyễn"),
             ("Nguyeenx", "Nguyễn"),
             ("chuyeen", "chuyên"),
+            // Modifiers search the current nucleus, not merely the last key,
+            // so equivalent Telex spellings converge.
+            ("hoiw", "hơi"),
+            ("thienej", "thiện"),
+            ("thieenj", "thiện"),
         ],
         telex,
     );
