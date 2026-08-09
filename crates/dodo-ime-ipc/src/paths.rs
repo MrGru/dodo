@@ -64,15 +64,15 @@ pub fn support_dir_from_env() -> Option<PathBuf> {
     {
         let appdata = std::env::var_os("APPDATA").map(PathBuf::from);
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        return windows_support_dir(appdata.as_deref(), home.as_deref());
+        windows_support_dir(appdata.as_deref(), home.as_deref())
     }
 
     #[cfg(target_os = "macos")]
     {
-        return std::env::var_os("HOME")
+        std::env::var_os("HOME")
             .map(PathBuf::from)
             .filter(|home| home.is_absolute())
-            .map(|home| support_dir(&home));
+            .map(|home| support_dir(&home))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
