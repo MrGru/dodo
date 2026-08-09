@@ -1312,6 +1312,8 @@ pub enum Str {
     InputMethodNoBundle,
     /// `ditto`'s own message, kept verbatim inside a translated frame.
     InputMethodCopyFailed(String),
+    /// `codesign`'s own message, kept verbatim inside a translated frame.
+    InputMethodInvalidSignature(String),
     /// How many `TISRegisterInputSource` calls were made before giving up.
     InputMethodNeverAppeared(u32),
     InputMethodStatus,
@@ -4601,6 +4603,12 @@ impl Str {
             (Str::InputMethodCopyFailed(detail), Language::Vietnamese) => {
                 format!("Không thể sao chép bộ gõ: {detail}").into()
             }
+            (Str::InputMethodInvalidSignature(detail), Language::English) => {
+                format!("The input method has an invalid code signature: {detail}").into()
+            }
+            (Str::InputMethodInvalidSignature(detail), Language::Vietnamese) => {
+                format!("Bộ gõ có chữ ký mã không hợp lệ: {detail}").into()
+            }
             (Str::InputMethodNeverAppeared(attempts), Language::English) => format!(
                 "macOS accepted the input method but never listed it, after {attempts} attempts."
             )
@@ -5869,6 +5877,7 @@ mod tests {
             ),
             plain(Str::InputMethodNoBundle),
             with(Str::InputMethodCopyFailed(DETAIL.into()), &[DETAIL]),
+            with(Str::InputMethodInvalidSignature(DETAIL.into()), &[DETAIL]),
             with(Str::InputMethodNeverAppeared(NUMBER as u32), &[NUMBER_TEXT]),
             plain(Str::InputMethodStatus),
             plain(Str::InputMethodNotInstalled),
@@ -6742,28 +6751,29 @@ mod tests {
             Str::InputMethodInstalledNotActive(_) => 823,
             Str::InputMethodNoBundle => 824,
             Str::InputMethodCopyFailed(_) => 825,
-            Str::InputMethodNeverAppeared(_) => 826,
-            Str::InputMethodStatus => 827,
-            Str::InputMethodNotInstalled => 828,
-            Str::InputMethodRunning(_) => 829,
-            Str::InputMethodInstalledIdle => 830,
-            Str::InputMethodSettingsPending => 831,
-            Str::InputMethodStorageProblem => 832,
-            Str::InputMethodStoreError(_) => 833,
-            Str::InputMethodStoreMissingVersion => 834,
-            Str::InputMethodStoreUnsupportedVersion { .. } => 835,
-            Str::InputMethodScheme => 836,
-            Str::InputMethodSchemeDescription => 837,
-            Str::InputMethodTelex => 838,
-            Str::InputMethodVni => 839,
-            Str::InputMethodTonePlacement => 840,
-            Str::InputMethodTonePlacementDescription => 841,
-            Str::InputMethodToneModern => 842,
-            Str::InputMethodToneTraditional => 843,
-            Str::InputMethodSpellCheck => 844,
-            Str::InputMethodSpellCheckDescription => 845,
-            Str::InputMethodBracketShortcuts => 846,
-            Str::InputMethodBracketShortcutsDescription => 847,
+            Str::InputMethodInvalidSignature(_) => 826,
+            Str::InputMethodNeverAppeared(_) => 827,
+            Str::InputMethodStatus => 828,
+            Str::InputMethodNotInstalled => 829,
+            Str::InputMethodRunning(_) => 830,
+            Str::InputMethodInstalledIdle => 831,
+            Str::InputMethodSettingsPending => 832,
+            Str::InputMethodStorageProblem => 833,
+            Str::InputMethodStoreError(_) => 834,
+            Str::InputMethodStoreMissingVersion => 835,
+            Str::InputMethodStoreUnsupportedVersion { .. } => 836,
+            Str::InputMethodScheme => 837,
+            Str::InputMethodSchemeDescription => 838,
+            Str::InputMethodTelex => 839,
+            Str::InputMethodVni => 840,
+            Str::InputMethodTonePlacement => 841,
+            Str::InputMethodTonePlacementDescription => 842,
+            Str::InputMethodToneModern => 843,
+            Str::InputMethodToneTraditional => 844,
+            Str::InputMethodSpellCheck => 845,
+            Str::InputMethodSpellCheckDescription => 846,
+            Str::InputMethodBracketShortcuts => 847,
+            Str::InputMethodBracketShortcutsDescription => 848,
         }
     }
 

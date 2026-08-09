@@ -13,6 +13,7 @@
 //! Not mocking for its own sake. Three defects in this sequence are silent on the
 //! machine and obvious to a fake:
 //!
+//! - accepting an invalid bundle and telling the user it installed,
 //! - handing the **parent** identifier to enable or select instead of the mode,
 //! - registering **once** and believing the `0` it returned,
 //! - killing the running bundle **before** enabling, so the relaunched process
@@ -83,6 +84,10 @@ pub trait InstallOps {
     /// Copy the bundle, replacing whatever is at the destination.
     fn copy_bundle(&self, source: &Path, destination: &Path) -> Result<(), String>;
 
+    /// Verify the bundle's code signature with `codesign --verify --deep --strict`.
+    /// Returns an error message on failure, `Ok(())` on success.
+    fn verify_signature(&self, bundle: &Path) -> Result<(), String>;
+
     /// `TISRegisterInputSource`. The returned status is deliberately unused by
     /// the driver — see [`InstallOps::is_visible`].
     fn register(&self, bundle: &Path);
@@ -112,6 +117,15 @@ pub trait InstallOps {
 pub fn install(plan: &InstallPlan, ops: &dyn InstallOps) -> InstallReport {
     let mut steps = Vec::new();
     let source_id = selectable_source();
+
+    steps.push(InstallStep::VerifySignature);
+    if let Err(detail) = ops.verify_signature(&plan.source) {
+        return InstallReport {
+            outcome: InstallOutcome::Failed(InstallFailure::InvalidSignature { detail }),
+            steps,
+            register_attempts: 0,
+        };
+    }
 
     steps.push(InstallStep::Copy);
     if let Err(detail) = ops.copy_bundle(&plan.source, &plan.destination) {
@@ -275,6 +289,24 @@ impl InstallOps for SystemOps {
         })
     }
 
+    fn verify_signature(&self, bundle: &Path) -> Result<(), String> {
+        let output = std::process::Command::new("/usr/bin/codesign")
+            .args(["--verify", "--deep", "--strict", "--verbose=2"])
+            .arg(bundle)
+            .output()
+            .map_err(|err| format!("codesign: {err}"))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        Err(if detail.is_empty() {
+            format!("codesign: {}", output.status)
+        } else {
+            detail
+        })
+    }
+
     fn register(&self, bundle: &Path) {
         // The status is discarded on purpose: it is `0` for a bundle that never
         // appears. `is_visible` is the answer.
@@ -334,6 +366,7 @@ mod tests {
     /// Every call the driver made, in order.
     #[derive(Debug, PartialEq, Eq)]
     enum Call {
+        Verify(PathBuf),
         Copy {
             source: PathBuf,
             destination: PathBuf,
@@ -349,6 +382,7 @@ mod tests {
     /// A machine that does whatever the test says.
     struct Fake {
         calls: RefCell<Vec<Call>>,
+        signature: Result<(), String>,
         copy: Result<(), String>,
         /// How many registration attempts happen before the source appears.
         /// `None` means never.
@@ -362,6 +396,7 @@ mod tests {
         fn ready() -> Fake {
             Fake {
                 calls: RefCell::new(Vec::new()),
+                signature: Ok(()),
                 copy: Ok(()),
                 visible_after: Some(1),
                 registers: RefCell::new(0),
@@ -376,6 +411,13 @@ mod tests {
     }
 
     impl InstallOps for Fake {
+        fn verify_signature(&self, bundle: &Path) -> Result<(), String> {
+            self.calls
+                .borrow_mut()
+                .push(Call::Verify(bundle.to_owned()));
+            self.signature.clone()
+        }
+
         fn copy_bundle(&self, source: &Path, destination: &Path) -> Result<(), String> {
             self.calls.borrow_mut().push(Call::Copy {
                 source: source.to_owned(),
@@ -485,13 +527,26 @@ mod tests {
                 .all(|call| **call == Call::Wait(REGISTER_RETRY_DELAY)),
             "the delay is the driver's policy, not the implementation's: {waits:?}"
         );
+        assert_eq!(calls.first(), Some(&Call::Verify(plan().source)));
+    }
+
+    #[test]
+    fn an_invalid_signature_stops_before_replacing_the_installed_bundle() {
+        let fake = Fake {
+            signature: Err("code object is not signed at all".to_owned()),
+            ..Fake::ready()
+        };
+        let report = install(&plan(), &fake);
+
         assert_eq!(
-            calls.first(),
-            Some(&Call::Copy {
-                source: plan().source,
-                destination: plan().destination
+            report.outcome,
+            InstallOutcome::Failed(InstallFailure::InvalidSignature {
+                detail: "code object is not signed at all".to_owned()
             })
         );
+        assert_eq!(report.steps, vec![InstallStep::VerifySignature]);
+        assert_eq!(report.register_attempts, 0);
+        assert_eq!(*fake.calls(), vec![Call::Verify(plan().source)]);
     }
 
     #[test]
@@ -516,7 +571,14 @@ mod tests {
                 .any(|call| matches!(call, Call::Enable(_) | Call::Select(_))),
             "nothing is enabled when nothing is there"
         );
-        assert_eq!(report.steps, vec![InstallStep::Copy, InstallStep::Register]);
+        assert_eq!(
+            report.steps,
+            vec![
+                InstallStep::VerifySignature,
+                InstallStep::Copy,
+                InstallStep::Register
+            ]
+        );
     }
 
     #[test]
@@ -535,10 +597,13 @@ mod tests {
         );
         assert_eq!(
             *fake.calls(),
-            vec![Call::Copy {
-                source: plan().source,
-                destination: plan().destination
-            }]
+            vec![
+                Call::Verify(plan().source),
+                Call::Copy {
+                    source: plan().source,
+                    destination: plan().destination
+                }
+            ]
         );
         assert_eq!(report.register_attempts, 0);
     }

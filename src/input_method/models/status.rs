@@ -72,6 +72,9 @@ pub fn status_message(
         Install::Done(InstallOutcome::Failed(InstallFailure::Copy { detail })) => {
             Str::InputMethodCopyFailed(detail.clone())
         }
+        Install::Done(InstallOutcome::Failed(InstallFailure::InvalidSignature { detail })) => {
+            Str::InputMethodInvalidSignature(detail.clone())
+        }
         Install::Done(InstallOutcome::Failed(InstallFailure::NeverAppeared { attempts })) => {
             Str::InputMethodNeverAppeared(*attempts)
         }
@@ -154,6 +157,12 @@ mod tests {
                     detail: "ditto: permission denied".into(),
                 },
                 Str::InputMethodCopyFailed(String::new()),
+            ),
+            (
+                InstallFailure::InvalidSignature {
+                    detail: "code object is not signed at all".into(),
+                },
+                Str::InputMethodInvalidSignature(String::new()),
             ),
             (
                 InstallFailure::NeverAppeared { attempts: 5 },

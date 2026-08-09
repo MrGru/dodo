@@ -32,13 +32,16 @@ use dodo_ime_ipc::bundle::{BUNDLE_IDENTIFIER, BUNDLE_NAME, INPUT_SOURCE_ID};
 /// The steps of an install, in the order they must happen.
 ///
 /// The order is not a matter of taste and each adjacent pair has a reason:
-/// nothing can be registered before it is on disk; nothing can be enabled before
+/// the signature must be verified before the bundle is copied into the system
+/// directory; nothing can be registered before it is on disk; nothing can be enabled before
 /// the system can see it; selecting an input source that is not enabled fails;
 /// and killing the old process must come last, because everything above it
 /// operates on the *bundle* and this one operates on the process serving from it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallStep {
-    /// `ditto` the bundle into `~/Library/Input Methods`.
+    /// Verify the source bundle with `codesign --verify --deep --strict`.
+    VerifySignature,
+    /// `ditto` the verified bundle into `~/Library/Input Methods`.
     Copy,
     /// `TISRegisterInputSource`, until the source is visible.
     Register,
@@ -60,7 +63,8 @@ impl InstallStep {
     /// the shipped module — the condition for removing it is a caller outside
     /// tests, which would probably be a mistake.
     #[allow(dead_code)]
-    pub const ORDER: [InstallStep; 5] = [
+    pub const ORDER: [InstallStep; 6] = [
+        InstallStep::VerifySignature,
         InstallStep::Copy,
         InstallStep::Register,
         InstallStep::Enable,
@@ -158,6 +162,11 @@ pub enum InstallFailure {
     /// `ditto` refused. The detail is `ditto`'s own message, and is third-party
     /// English kept verbatim inside a translated frame.
     Copy { detail: String },
+    /// The bundle's code signature failed verification with
+    /// `codesign --verify --deep --strict`. The detail is `codesign`'s own
+    /// message. An invalid signature cannot produce a misleading successful
+    /// install result.
+    InvalidSignature { detail: String },
     /// Registration was accepted and the source never appeared in the Text Input
     /// Sources database. Distinct from every other failure because it is the one
     /// where `TISRegisterInputSource` *returned success* — see the module docs.
@@ -242,6 +251,7 @@ mod tests {
         assert_eq!(
             InstallStep::ORDER,
             [
+                InstallStep::VerifySignature,
                 InstallStep::Copy,
                 InstallStep::Register,
                 InstallStep::Enable,
