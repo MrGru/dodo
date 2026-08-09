@@ -16,6 +16,7 @@ mod assets;
 mod build_info;
 mod cleaner;
 mod database;
+mod dialog_slot;
 mod docker;
 mod encoder_decoder;
 mod i18n;
