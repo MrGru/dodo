@@ -74,6 +74,7 @@ mod tests {
     };
 
     const SCRIPT: &str = include_str!("../../../scripts/macos-input-method-bundle.sh");
+    const APP_SCRIPT: &str = include_str!("../../../scripts/macos-app-bundle.sh");
 
     /// The measured rule, as the assertion that would catch a rename back to the
     /// obvious-looking identifier.
@@ -130,5 +131,24 @@ mod tests {
         // suffix that has to be found rather than the whole string.
         assert!(SCRIPT.contains("$bundle_id.Vietnamese"));
         assert_eq!(INPUT_SOURCE_ID, format!("{BUNDLE_IDENTIFIER}.Vietnamese"));
+    }
+
+    #[test]
+    fn bundle_scripts_sign_after_assembly_and_inside_out() {
+        let inner_sign =
+            "codesign --force --options runtime --timestamp --sign \"$sign_identity\" \"$nested\"";
+        let outer_sign =
+            "codesign --force --options runtime --timestamp --sign \"$sign_identity\" \"$app\"";
+
+        assert!(
+            SCRIPT.find("plutil -lint").unwrap() < SCRIPT.find(outer_sign).unwrap(),
+            "the standalone bundle must be signed after its final contents are written"
+        );
+        assert!(
+            APP_SCRIPT.find(inner_sign).unwrap() < APP_SCRIPT.find(outer_sign).unwrap(),
+            "the nested input method must be signed before dodo.app"
+        );
+        assert!(SCRIPT.contains("codesign --verify --deep --strict"));
+        assert!(APP_SCRIPT.contains("codesign --verify --deep --strict"));
     }
 }

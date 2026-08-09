@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# Builds the unsigned "Dodo Vietnamese.app" input-method bundle.
+# Builds the "Dodo Vietnamese.app" input-method bundle.
 #
 #   scripts/macos-input-method-bundle.sh [--binary <path>] [--version <v>] [--out <dir>]
+#                                    [--sign <identity>]
 #
 # With no --binary it builds one:
 #     cargo build --release --locked -p dodo-ime-macos --bin DodoVietnamese
@@ -18,9 +19,10 @@
 # System Settings; docs/macos-input-method.md is the authority on that and on
 # what has and has not been verified.
 #
-# Signing is deliberately NOT done here: this bundle is signed by
-# scripts/macos-app-bundle.sh, which nests it and must sign inside-out. See
-# docs/macos-signing.md §4.1 and §7.2.
+# Signing: by default the bundle is ad-hoc signed (--sign -) so it is valid for
+# local use. Pass --sign "Developer ID Application: Name (TEAMID)" for a real
+# identity. When nested inside dodo.app, scripts/macos-app-bundle.sh re-signs
+# the inner bundle first, then the outer.
 
 set -euo pipefail
 
@@ -29,6 +31,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 binary=""
 version=""
 out_dir="$repo_root/dist"
+sign_identity="-"  # ad-hoc by default
 
 die() {
     printf 'macos-input-method-bundle.sh: %s\n' "$1" >&2
@@ -40,7 +43,8 @@ while [ $# -gt 0 ]; do
         --binary) binary="${2:?--binary needs a value}"; shift 2 ;;
         --version) version="${2:?--version needs a value}"; shift 2 ;;
         --out) out_dir="${2:?--out needs a value}"; shift 2 ;;
-        -h|--help) sed -n '2,23p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --sign) sign_identity="${2:?--sign needs a value}"; shift 2 ;;
+        -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
 done
@@ -203,5 +207,11 @@ STRINGS
 # plutil catches a malformed plist here rather than as "the input source never
 # appeared" an hour later.
 plutil -lint "$app/Contents/Info.plist" > /dev/null || die "Info.plist is malformed"
+
+# Sign after every bundle file is final. Ad-hoc (--sign -) is valid for local use.
+printf 'signing %s with identity: %s\n' "$app" "$sign_identity"
+codesign --force --options runtime --timestamp --sign "$sign_identity" "$app"
+# Verify immediately so a broken signature fails the build.
+codesign --verify --deep --strict --verbose=2 "$app" || die "signature verification failed"
 
 printf 'built %s\n' "$app"

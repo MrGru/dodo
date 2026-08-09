@@ -189,8 +189,8 @@ checksum "$archive"
 # what CI verification runs and what a terminal user wants, the bundle is what
 # a desktop user drags to /Applications.
 #
-# The bundle is unsigned. `scripts/macos-app-bundle.sh` is where codesign and
-# notarisation hook in later; see "Future readiness" in docs/release.md.
+# `scripts/macos-app-bundle.sh` ad-hoc signs the completed bundle. Developer ID
+# signing and notarisation remain future work; see "Future readiness" in docs/release.md.
 if [ "$app_bundle" = "1" ]; then
     [ "$platform" = "macos" ] || die "--app-bundle is macOS only (target: $target)"
     app_stage="$out_dir/.stage/app"
