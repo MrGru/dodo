@@ -51,6 +51,7 @@ edition = "2024"
 # crates that link into every build. THIRD-PARTY-NOTICES.md records which, and
 # records that question as open.
 license = "MIT"
+default-run = "dodo"
 
 # `tools/` holds release engineering that must never reach the application.
 # `tools/update-manifest` is its own crate with its own Cargo.toml and
