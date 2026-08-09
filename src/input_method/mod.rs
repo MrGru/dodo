@@ -67,6 +67,7 @@
 
 pub mod models;
 pub mod services;
+pub mod views;
 
 use std::sync::Arc;
 
@@ -197,8 +198,16 @@ impl InputMethod {
     ///
     /// A change that leaves the settings as they were writes nothing. That is not
     /// only about disk traffic: every write bumps the revision, and a revision the
-    /// bundle then has to catch up with for no reason would show the settings page
-    /// a "not applied yet" state nobody caused.
+    /// bundle then has to catch up with for no reason would show the tool a "not
+    /// applied yet" state nobody caused.
+    ///
+    /// It ends by refreshing the windows, and that is **not** bookkeeping the
+    /// caller could do instead. The controls that call this now live in a tool
+    /// pane that is built once and lives for the process, and they read this
+    /// global rather than holding a copy of it — so the switch the user just
+    /// pressed keeps drawing its old value until something repaints it. The
+    /// settings dialog never needed this because it was rebuilt each time it
+    /// opened.
     fn edit(cx: &mut App, change: impl FnOnce(&mut VietnameseSettings)) {
         if cx.try_global::<InputMethod>().is_none() {
             return;
@@ -238,6 +247,7 @@ impl InputMethod {
                 }
             }));
         });
+        cx.refresh_windows();
     }
 
     /// Runs an install, start to finish, off the UI thread.
@@ -334,6 +344,12 @@ impl InputMethod {
     }
 
     /// Adopts what the store read at launch.
+    ///
+    /// The refresh at the end is the one that matters most. `Layout::new` builds
+    /// the Input method pane *before* [`load`] has finished reading
+    /// `input-method.json`, so without it the pane would sit showing the
+    /// defaults, and every stored setting the user had chosen, plus "not
+    /// installed", would only appear once something else caused a repaint.
     fn adopt(
         loaded: Result<SettingsDocument, IpcError>,
         status: Option<StatusDocument>,
@@ -357,6 +373,7 @@ impl InputMethod {
                 }
             }
         });
+        cx.refresh_windows();
     }
 }
 

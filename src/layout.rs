@@ -14,6 +14,8 @@ use crate::database::DatabaseView;
 use crate::docker::{DockerPage, DockerView};
 use crate::encoder_decoder::{EncoderDecoder, Format};
 use crate::i18n::{Str, t};
+#[cfg(target_os = "macos")]
+use crate::input_method::views::InputMethodView;
 use crate::json_formatter::JsonFormatter;
 use crate::quick_nav::models::detect::Detector;
 use crate::quick_nav::models::route::Route;
@@ -57,6 +59,17 @@ use crate::updater;
 /// [`Layout::apply_route`] — which is still the one place a route meets a
 /// `View`. `quick_nav::models::detect`'s module doc is where the *order* it goes
 /// in has to be argued, and that order is emphatically not this list's.
+///
+/// **One tool is platform-conditional**, which nothing here was before. The
+/// Input method installs an InputMethodKit bundle, so off macOS there is no row
+/// for it rather than a row whose only button could not work — the call its
+/// settings page had already made, kept when it became a tool. Everything that
+/// matches on this enum therefore carries a `cfg` arm, and [`View::ALL`] is
+/// written out twice. The cost stops there: a `session.json` written on a Mac
+/// and opened on Linux loses the entry, because
+/// [`Features::resolve`](crate::session::models::features::Features::resolve)
+/// drops a stored tool this build does not have, and gets it back on the Mac
+/// beside its default neighbour.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum View {
     JsonFormatter,
@@ -65,6 +78,8 @@ pub enum View {
     Cleaner,
     Docker,
     Database,
+    #[cfg(target_os = "macos")]
+    InputMethod,
 }
 
 impl View {
@@ -78,6 +93,23 @@ impl View {
     /// [`Layout::features`]. This is what a stored order is resolved against —
     /// the list of what exists, and where a tool the stored order never mentions
     /// belongs.
+    /// Written twice rather than once with a `cfg` on one element: an attribute
+    /// on an array element is not a thing stable Rust has, and a `Vec` here
+    /// would cost every caller the fixed length [`View::codes`] returns.
+    #[cfg(target_os = "macos")]
+    const ALL: [View; 7] = [
+        View::JsonFormatter,
+        View::EncoderDecoder,
+        View::ApiExplorer,
+        View::Cleaner,
+        View::Docker,
+        View::Database,
+        // Last, which is also where its settings page sat. It is the one tool
+        // most people will open once, install from, and never come back to.
+        View::InputMethod,
+    ];
+
+    #[cfg(not(target_os = "macos"))]
     const ALL: [View; 6] = [
         View::JsonFormatter,
         View::EncoderDecoder,
@@ -105,9 +137,20 @@ impl View {
             View::Cleaner => Str::CleanerTitle,
             View::Docker => Str::Docker,
             View::Database => Str::DatabaseTitle,
+            #[cfg(target_os = "macos")]
+            View::InputMethod => Str::InputMethod,
         }
     }
 
+    /// The glyph on the sidebar row — which, collapsed to the rail, is the only
+    /// thing the row is.
+    ///
+    /// **No two tools share one.** The Input method used to draw
+    /// [`AppIcon::Globe`] on its settings page, which is the API Explorer's row;
+    /// as a tool beside it that would have been two unrelated things under one
+    /// mark. `keyboard` is what the thing *is*, and
+    /// [`tests::no_two_tools_wear_the_same_icon`] is what keeps the next
+    /// borrowing from happening.
     pub fn icon(self) -> AppIcon {
         match self {
             View::JsonFormatter => AppIcon::Json,
@@ -116,6 +159,8 @@ impl View {
             View::Cleaner => AppIcon::Cleaner,
             View::Docker => AppIcon::Container,
             View::Database => AppIcon::Database,
+            #[cfg(target_os = "macos")]
+            View::InputMethod => AppIcon::Keyboard,
         }
     }
 
@@ -132,6 +177,8 @@ impl View {
             View::Cleaner => "cleaner",
             View::Docker => "docker",
             View::Database => "database",
+            #[cfg(target_os = "macos")]
+            View::InputMethod => "input-method",
         }
     }
 
@@ -487,6 +534,8 @@ pub struct Layout {
     cleaner: Entity<CleanerView>,
     docker: Entity<DockerView>,
     database: Entity<DatabaseView>,
+    #[cfg(target_os = "macos")]
+    input_method: Entity<InputMethodView>,
 }
 
 impl Layout {
@@ -565,6 +614,8 @@ impl Layout {
             cleaner: cx.new(|cx| CleanerView::new(window, cx)),
             docker,
             database: cx.new(|cx| DatabaseView::new(window, cx)),
+            #[cfg(target_os = "macos")]
+            input_method: cx.new(|cx| InputMethodView::new(window, cx)),
         }
     }
 
@@ -959,6 +1010,8 @@ impl Render for Layout {
                                         View::Cleaner => this.child(self.cleaner.clone()),
                                         View::Docker => this.child(self.docker.clone()),
                                         View::Database => this.child(self.database.clone()),
+                                        #[cfg(target_os = "macos")]
+                                        View::InputMethod => this.child(self.input_method.clone()),
                                     }),
                             ),
                     ),
@@ -970,9 +1023,9 @@ impl Render for Layout {
 mod tests {
     use std::mem::{Discriminant, discriminant};
 
-    use gpui::px;
-    use gpui_component::Collapsible as _;
+    use gpui::{SharedString, px};
     use gpui_component::sidebar::SidebarMenuItem;
+    use gpui_component::{Collapsible as _, IconNamed as _};
 
     use super::{
         AUTO_COLLAPSE_WIDTH, Layout, MAIN_MIN_HEIGHT, MAIN_MIN_WIDTH, PANE_CHROME_HEIGHT,
@@ -1013,8 +1066,25 @@ mod tests {
         }
     }
 
+    /// The default order, in full. `View::ALL` is written out per platform, so
+    /// this is written out per platform too — asserting a prefix would let a
+    /// tool be dropped from the middle of one of them unnoticed.
     #[test]
     fn the_sidebar_lists_every_tool_once_with_docker_flat_and_last() {
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            View::ALL,
+            [
+                View::JsonFormatter,
+                View::EncoderDecoder,
+                View::ApiExplorer,
+                View::Cleaner,
+                View::Docker,
+                View::Database,
+                View::InputMethod,
+            ]
+        );
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(
             View::ALL,
             [
@@ -1026,10 +1096,72 @@ mod tests {
                 View::Database,
             ]
         );
+
         // One row per tool: Docker and Database are each a single entry, not a
         // group of children — an icon-collapsed sidebar renders no children at
         // all, which is what made Docker's four pages unreachable.
-        assert_eq!(View::ALL.len(), 6);
+        assert_eq!(
+            View::ALL.len(),
+            if cfg!(target_os = "macos") { 7 } else { 6 }
+        );
+    }
+
+    /// The Input method is a tool on macOS and does not exist anywhere else,
+    /// because the bundle it installs is an InputMethodKit object. A row whose
+    /// only button could not work is worse than no row.
+    #[test]
+    fn the_input_method_is_a_macos_tool_and_only_a_macos_tool() {
+        assert_eq!(
+            View::codes().contains(&"input-method"),
+            cfg!(target_os = "macos"),
+        );
+        assert_eq!(
+            View::lookup("input-method").is_some(),
+            cfg!(target_os = "macos"),
+        );
+    }
+
+    /// Registered exactly once. `View::ALL` is what `Features::resolve` places a
+    /// stored order against, and a tool listed twice there would be two sidebar
+    /// rows opening one pane — and two entries fighting over one code in
+    /// `session.json`.
+    #[test]
+    fn no_tool_is_registered_twice() {
+        for view in View::ALL {
+            assert_eq!(
+                View::ALL.iter().filter(|other| **other == view).count(),
+                1,
+                "{view:?} appears in View::ALL more than once",
+            );
+        }
+        assert_eq!(
+            everything().all().len(),
+            View::ALL.len(),
+            "the resolved tool list has one entry per tool",
+        );
+    }
+
+    /// Every tool's sidebar row is a *different* glyph, which collapsed to the
+    /// icon rail is the only thing distinguishing one row from another.
+    ///
+    /// This is what the Input method's move cost: its settings page drew
+    /// `AppIcon::Globe`, which is the API Explorer's row, and a settings page
+    /// sitting in a different dialog could get away with that. Two tools side by
+    /// side in one rail cannot.
+    #[test]
+    fn no_two_tools_wear_the_same_icon() {
+        // `AppIcon` is not `PartialEq`; its asset path is the identity that
+        // matters anyway, since that is what gpui rasterizes.
+        let mut paths: Vec<SharedString> =
+            View::ALL.iter().map(|view| view.icon().path()).collect();
+        let total = paths.len();
+        paths.sort_unstable();
+        paths.dedup();
+        assert_eq!(paths.len(), total, "two sidebar rows draw the same glyph");
+
+        assert_eq!(View::ApiExplorer.icon().path(), "icons/globe.svg");
+        #[cfg(target_os = "macos")]
+        assert_eq!(View::InputMethod.icon().path(), "icons/keyboard.svg");
     }
 
     /// With nothing chosen, the sidebar is exactly what it was before the
@@ -1048,12 +1180,15 @@ mod tests {
         features.move_to(View::Docker.code(), 0);
         features
             .set_enabled(View::Cleaner.code(), false)
-            .expect("five others remain");
+            .expect("the others remain");
 
         let visible: Vec<View> = features.visible().filter_map(View::lookup).collect();
+        // A prefix rather than the whole list, because the tail is
+        // platform-dependent: the moved tool leads, the hidden one is gone, and
+        // everything else keeps `View::ALL`'s order.
         assert_eq!(
-            visible,
-            [
+            &visible[..5],
+            &[
                 View::Docker,
                 View::JsonFormatter,
                 View::EncoderDecoder,
@@ -1061,6 +1196,8 @@ mod tests {
                 View::Database,
             ]
         );
+        assert!(!visible.contains(&View::Cleaner));
+        assert_eq!(visible.len(), View::ALL.len() - 1);
     }
 
     /// Every tool's `session.json` code is stable, unique, and reads as an
@@ -1070,17 +1207,18 @@ mod tests {
     fn every_tool_has_its_own_stable_code() {
         let codes: Vec<&str> = View::ALL.iter().map(|view| view.code()).collect();
 
-        assert_eq!(
-            codes,
-            [
-                "json-formatter",
-                "encoder-decoder",
-                "api-explorer",
-                "cleaner",
-                "docker",
-                "database",
-            ]
-        );
+        let mut expected = vec![
+            "json-formatter",
+            "encoder-decoder",
+            "api-explorer",
+            "cleaner",
+            "docker",
+            "database",
+        ];
+        if cfg!(target_os = "macos") {
+            expected.push("input-method");
+        }
+        assert_eq!(codes, expected);
 
         let mut unique = codes.clone();
         unique.sort_unstable();
