@@ -64,9 +64,9 @@ plus bounded query history, with query text intentionally stored as plain text),
 (`cleaner::services::ignore_store`, the orphan-detection candidates the user has marked "Keep",
 keyed by absolute path string rather than a `CleanableItemId` since that id is a session-local
 hash with no promise of surviving a restart), `session.json`
-(`session::services::session_store`) — which now also carries the tray's keyboard input language
-under its own `tray` section, deliberately **not** beside `appearance.language` — and
-`input-method.json` (`input_method::services::store`, the macOS input method's engine settings).
+(`session::services::session_store`) — and `input-method.json`
+(`input_method::services::store`, the macOS input method's engine settings and selected
+keyboard language).
 The eleventh is `input-method-status.json`, which **dodo only reads**: the input-method process
 writes it, and `dodo-ime-ipc`'s single-writer rule is why dodo has no method that could. Persistence
 and initial load run on the background executor, never the UI thread.
@@ -114,7 +114,7 @@ and the sidebar's order is a preference. `Layout::features` is the live list, `V
 the single mapping both `apply_route` and `allowed_detectors` read, and `settings::features_page`
 builds the rows by hand because a `SettingItem` cannot carry a position. Adding the field is also
 what took `session.json` to **schema version 2**; an older build would have read it, dropped the key
-and written it back pruned. The tray's keyboard input language took it to **3** for the same
+and written it back pruned. The historical tray language field took it to **3** for the same
 reason — and forced the fix that makes the claim true: `parse_document` now stamps
 `SCHEMA_VERSION` onto what it read, because until it did, a document loaded from a version-1
 file was written straight back *as* version 1, so a newly-added key landed in a file older
@@ -139,12 +139,10 @@ existing parsers — *a pattern selects candidates, the parser confirms*. `layou
 **`src/tray/` is the second feature that is not a tool**, and macOS-only: a menu bar
 `NSStatusItem` showing a dodo with one keyboard-input-language glyph, plus a four-row native
 menu. Its module docs are the authority. Four things there are decisions rather than details.
-**dodo has two language settings and they never merge** — `i18n::Language` is the *interface*
-language, changed in the Settings dialog; `tray::InputLanguage` is the *keyboard input*
-language, changed in the menu bar, stored under its own `session.json` key, and already
-carrying a language the interface does not have (Japanese). No shared type, no shared code
-table, no conversion; three tests in `tray::tests` enforce it, because it is exactly the
-tidy-up a future session would reach for. **Events arrive without a second event loop**: the
+**The menu bar and native input method share `dodo_ime_core::LanguageId`** — the selected
+language is written to `input-method.json`, which the bundle reads; `i18n::Language` remains
+dodo's interface-language preference. A historical `session.json` tray value is migrated once
+and no longer written. **Events arrive without a second event loop**: the
 `tray-icon`/`muda` handlers run on the main thread but are `Fn + Send + Sync`, so they only
 `unbounded_send` on a `futures-channel` mpsc that one foreground `Task` awaits — and both
 handler slots are `OnceCell`s, so they must be installed *before* the menu and status item
@@ -172,10 +170,10 @@ allow-list turns adding one — including a sibling workspace crate — into a f
 `the_scan_covers_every_file` proves the check reads every file. Never widen the allow-list; pass
 the value in at the boundary instead. The module-wide `#![allow(dead_code)]` is **gone**, not
 because it was wired up but because everything is `pub` in a library and therefore reachable.
-**`LanguageId` is not a third language type**: it names an
-*engine*, has no `English` variant, is never persisted, and the `tray::InputLanguage` →
-`Option<LanguageId>` mapping belongs to the round that wires it — the purity lint is what keeps
-that mapping outside the state machine. And **the Vietnamese engine is semantic, not string
+**`LanguageId` is the shared keyboard-language identity**: it is persisted through
+`input-method.json`; English and Japanese pass keys through until their native engines exist.
+The purity lint keeps UI and IPC dependencies outside the state machine. And **the Vietnamese
+engine is semantic, not string
 rewriting**: a letter is `(base, mark, case)`, the tone belongs to the syllable and its position is
 recomputed at render time, so `toas` + `n` becomes `toán` without anything relocating a mark.
 `InputScheme` is an enum for the same reason — Telex and VNI produce identical `Transform`s and

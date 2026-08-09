@@ -313,11 +313,13 @@ which is the whole concurrency design: no lock file, no advisory locking, and
 every write is a temp file plus `rename`, so a reader sees one complete version or
 the other and never half of either.
 
-`input-method.json` carries the four settings the page offers — input scheme
-(Telex or VNI), tone-mark placement (modern `hoà` or traditional `hòa`), spell
-check, bracket shortcuts — plus a `revision` dodo bumps on every write. The
-output mode is deliberately **not** a setting: macOS always has a marked-text
-channel, so the host always composes.
+`input-method.json` carries the selected keyboard language plus the four
+Vietnamese settings the page offers — input scheme (Telex or VNI), tone-mark
+placement (modern `hoà` or traditional `hòa`), spell check, bracket shortcuts —
+and a `revision` dodo bumps on every write. The menu bar and the bundle share
+that language identity; English and Japanese pass keys through until native
+engines exist. The output mode is deliberately **not** a setting: macOS always
+has a marked-text channel, so the host always composes.
 
 `input-method-status.json` carries the bundle's version, its pid, when it started
 and **the revision it has applied**. That last field is the only thing that can
@@ -348,12 +350,6 @@ say so.
   install button on a released build can only report that. Doing so means building
   `DodoVietnamese` in the macOS release rows and is a change to
   `.github/workflows/release.yml`.
-- **The tray mark.** `src/tray/input_language.rs` is presentational; once the IME
-  exists the truth about "which language am I typing in" lives in its process.
-  The report's §13.4 flags that this really is the same concept as
-  `tray::InputLanguage` — confirm that reading before wiring it, because
-  `AGENTS.md` is emphatic that dodo's two *existing* language settings never
-  merge, and a future session could easily merge the wrong pair.
 - **A menu-bar icon.** `tsInputMethodIconFileKey` is unset, so the input menu
   shows the name with no glyph. It wants a `.pdf` or `.tiff`, which
   `scripts/generate-icons.py` does not produce.

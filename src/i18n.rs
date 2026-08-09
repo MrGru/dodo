@@ -1287,7 +1287,7 @@ pub enum Str {
     //
     // The **input languages themselves are not here**: their names are endonyms
     // shown in their own language, so they never enter this mechanism. See
-    // `tray::input_language::InputLanguage::label`.
+    // `tray::menu::label`.
     TrayOpenDodo,
     TrayKeyboardInput,
     TrayQuitDodo,

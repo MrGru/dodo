@@ -552,7 +552,7 @@ Two costs the round deliberately did **not** pay:
   glyph even if PNGs had been wanted.
 - **No icon cache.** Rasterising a mark is one SVG parse at 36×36 and happens
   only when the user picks a different language from the menu. A
-  `HashMap<InputLanguage, Icon>` would be state to keep correct in exchange for
+  `HashMap<LanguageId, Icon>` would be state to keep correct in exchange for
   time nobody can perceive.
 
 ### Features deliberately not added
