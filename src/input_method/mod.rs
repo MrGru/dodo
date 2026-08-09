@@ -77,6 +77,7 @@ use gpui::{App, AsyncApp, BorrowAppContext as _, Global, Task};
 
 use crate::i18n::Str;
 use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallReport};
+pub use crate::input_method::models::status::Install;
 use crate::input_method::services::store::{DiskInputMethodStore, InputMethodStore, message_for};
 
 /// How long after a settings change to ask the bundle what it applied.
@@ -89,15 +90,6 @@ use crate::input_method::services::store::{DiskInputMethodStore, InputMethodStor
 /// not a poll: if the answer is still stale, the row says so until the next change
 /// or the next launch, which is honest rather than busy.
 const STATUS_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
-
-/// Whether an install is running, and what the last one did.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum Install {
-    #[default]
-    Idle,
-    Running,
-    Done(InstallOutcome),
-}
 
 /// What dodo knows about its input method.
 pub struct InputMethod {
@@ -455,7 +447,7 @@ pub async fn load(cx: &mut AsyncApp) {
 
 #[cfg(test)]
 mod tests {
-    use super::{InputMethod, Install};
+    use super::InputMethod;
     use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallStep};
     use crate::input_method::services::store::{InMemoryInputMethodStore, InputMethodStore};
     use dodo_ime_ipc::settings::{Scheme, SettingsDocument, Tone, VietnameseSettings};
@@ -547,10 +539,5 @@ mod tests {
         state.installed = state.installed
             || InstallOutcome::Failed(InstallFailure::NeverAppeared { attempts: 5 }).is_installed();
         assert!(state.installed);
-    }
-
-    #[test]
-    fn the_default_install_state_is_idle() {
-        assert_eq!(Install::default(), Install::Idle);
     }
 }
