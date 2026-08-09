@@ -117,12 +117,15 @@ fn register() -> Result<()> {
         unsafe { CoCreateInstance(&CLSID_TF_InputProcessorProfiles, None, CLSCTX_INPROC_SERVER) }?;
     unsafe {
         profiles.Register(&CLASS_ID)?;
+        let name: Vec<u16> = tsf::PROFILE_NAME.encode_utf16().collect();
+        // `AddLanguageProfile` takes counted UTF-16 slices, unlike registry
+        // strings below, so its counts must not include a trailing NUL.
         profiles.AddLanguageProfile(
             &CLASS_ID,
             tsf::LANGUAGE_ID,
             &PROFILE_ID,
-            &wide(tsf::PROFILE_NAME),
-            &path,
+            &name,
+            &path[..path.len().saturating_sub(1)],
             0,
         )?;
         profiles.EnableLanguageProfile(&CLASS_ID, tsf::LANGUAGE_ID, &PROFILE_ID, BOOL(1))?;
