@@ -41,11 +41,11 @@ pub const SETTINGS_FILE: &str = "input-method.json";
 /// defaults until it is updated. So a bump is for a change that would be
 /// actively misread, and an added field with a `#[serde(default)]` is not one.
 ///
-/// Version 2 adds the selected input language. Version 3 adds the backend. An
-/// older bundle would ignore Event Tap and still compose, so accepting it could
-/// put two transformers in one input path. Refusal falls back to English, which
-/// passes keys through until the bundle is updated.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 3;
+/// Version 2 adds the selected input language. Version 3 adds the backend.
+/// Version 4 adds Windows' Keyboard Hook backend. A host that cannot understand
+/// a selected fallback must refuse the file and pass keys through; accepting it
+/// could put two transformers in one input path.
+pub const SETTINGS_SCHEMA_VERSION: u32 = 4;
 
 /// How a key sequence becomes Vietnamese, as this file spells it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,28 +125,31 @@ impl Tone {
     }
 }
 
-/// Which macOS host owns Vietnamese transformation.
+/// Which platform-specific host owns Vietnamese transformation.
 ///
-/// The spelling is a compatibility boundary: an old native bundle must refuse
-/// a document that selects Event Tap, not silently keep composing beside it.
+/// The spelling is a compatibility boundary: a native host must refuse a
+/// document selecting a fallback it does not own, not compose beside it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Backend {
     /// The InputMethodKit bundle macOS launches independently of dodo.
     #[default]
     Native,
-    /// dodo's Accessibility-gated CGEventTap, active only while dodo runs.
+    /// dodo's macOS Accessibility-gated CGEventTap, active only while dodo runs.
     EventTap,
+    /// dodo's Windows `WH_KEYBOARD_LL` fallback, active only while dodo runs.
+    KeyboardHook,
 }
 
 impl Backend {
-    pub const ALL: [Backend; 2] = [Backend::Native, Backend::EventTap];
+    pub const ALL: [Backend; 3] = [Backend::Native, Backend::EventTap, Backend::KeyboardHook];
 
     /// Stable persisted identifier, never a localized label.
     pub fn code(self) -> &'static str {
         match self {
             Backend::Native => "native",
             Backend::EventTap => "event-tap",
+            Backend::KeyboardHook => "keyboard-hook",
         }
     }
 
@@ -396,6 +399,7 @@ mod tests {
         assert_eq!(Tone::Traditional.code(), "traditional");
         assert_eq!(Backend::Native.code(), "native");
         assert_eq!(Backend::EventTap.code(), "event-tap");
+        assert_eq!(Backend::KeyboardHook.code(), "keyboard-hook");
 
         let json = serde_json::to_string(&VietnameseSettings {
             scheme: Scheme::Vni,
@@ -434,6 +438,22 @@ mod tests {
             assert_eq!(Backend::from_code(backend.code()), Some(backend));
         }
         assert_eq!(Backend::from_code("keyboard-kit"), None);
+    }
+
+    #[test]
+    fn keyboard_hook_is_a_stable_persisted_backend() {
+        let document = SettingsDocument::next_with_backend(
+            &SettingsDocument::default(),
+            Backend::KeyboardHook,
+            LanguageId::Vietnamese,
+            VietnameseSettings::default(),
+        );
+        let json = serde_json::to_vec(&document).unwrap();
+        assert!(
+            json.windows(b"keyboard-hook".len())
+                .any(|part| part == b"keyboard-hook")
+        );
+        assert_eq!(SettingsDocument::parse(&json).unwrap(), document);
     }
 
     #[test]

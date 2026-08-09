@@ -18,8 +18,8 @@
 # different resolutions that nothing compares. One workspace, one `Cargo.lock`,
 # one `--locked`.
 #
-# `default-members` names all four, so a bare `cargo test` / `cargo clippy
-# --all-targets` at the root covers the engine's tests and the macOS host's too.
+# `default-members` names all five, so a bare `cargo test` / `cargo clippy
+# --all-targets` at the root covers the engine's tests and both native hosts too.
 # Without it cargo would default to the root package alone and the engine's ~200
 # tests would stop running the day they moved out of `src/`. The macOS host is
 # safe to name here on every platform because its Objective-C dependencies are
@@ -39,6 +39,7 @@ default-members = [
     "crates/dodo-ime-core",
     "crates/dodo-ime-ipc",
     "crates/dodo-ime-macos",
+    "crates/dodo-ime-windows",
 ]
 exclude = ["tools/update-manifest"]
 
@@ -406,6 +407,9 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Console",
+    "Win32_System_Registry",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 # Embeds the `RT_GROUP_ICON` resource that makes Explorer and the taskbar show

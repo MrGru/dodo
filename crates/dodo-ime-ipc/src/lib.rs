@@ -1,13 +1,12 @@
-//! The contract between `Dodo.app` and **Dodo Vietnamese.app**.
+//! The contract between dodo and its platform-native Vietnamese hosts.
 //!
 //! Two processes that never link each other: dodo is a gpui application, the
 //! input method is a faceless InputMethodKit agent macOS launches into every
 //! text field on the machine. Both link this crate, and it is the only thing
 //! they share besides the engine. It holds three kinds of agreement:
 //!
-//! - **The names macOS looks the bundle up by** — [`bundle`]. dodo's installer
-//!   needs the same identifiers the bundle's `Info.plist` carries, and three of
-//!   the four fail *silently* when they disagree.
+//! - **The names macOS looks the bundle up by** — [`bundle`], and the Windows
+//!   COM/profile identifiers — [`tsf`].
 //! - **The two files they exchange** — [`settings`] and [`status`], under
 //!   [`paths::support_dir`].
 //! - **The notification that says a file changed** — [`SETTINGS_CHANGED`].
@@ -85,6 +84,7 @@ pub mod document;
 pub mod paths;
 pub mod settings;
 pub mod status;
+pub mod tsf;
 
 pub use self::document::{IpcError, write_atomic};
 pub use self::settings::{SETTINGS_SCHEMA_VERSION, SettingsDocument, VietnameseSettings};

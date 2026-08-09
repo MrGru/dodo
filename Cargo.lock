@@ -1679,6 +1679,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dodo-ime-windows"
+version = "0.1.0"
+dependencies = [
+ "dodo-ime-core",
+ "dodo-ime-ipc",
+ "windows 0.57.0",
+ "windows-core 0.57.0",
+]
+
+[[package]]
 name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

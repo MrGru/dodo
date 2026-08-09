@@ -1,20 +1,12 @@
 //! Where the two files live, and where the bundle installs to.
 //!
-//! # This duplicates one line of dodo's `src/paths.rs`, on purpose
+//! # This duplicates dodo's platform paths, on purpose
 //!
-//! `~/Library/Application Support/dodo` is dodo's data directory and is
-//! **frozen** — changing it orphans every existing installation's saved
-//! collections. dodo resolves it in `crate::paths`, which classifies the
-//! platform from the target triple `build.rs` embedded and answers for Windows
-//! and Linux too. None of that can be reached from here: this crate is linked by
-//! a process that has no `build.rs`, no `build_info`, and no reason to know what
-//! `%APPDATA%` is.
-//!
-//! So the macOS branch is spelled out again, and dodo's own test suite compares
-//! the two spellings — see `paths::tests::the_input_method_agrees_about_the_data_directory`
-//! in the `dodo` crate. Two implementations with a test between them is the
-//! trade this crate makes everywhere: the alternative was for the bundle to link
-//! dodo.
+//! Native hosts cannot link dodo just to find `input-method.json`. macOS keeps
+//! that file under `~/Library/Application Support/dodo`; Windows uses
+//! `%APPDATA%\\dodo` (or `$HOME\\AppData\\Roaming\\dodo`). The matching pure
+//! resolver in `src/paths.rs` is tested against the Windows helper below so the
+//! processes do not silently read different settings files.
 //!
 //! # `~/Library/Input Methods` is not under `support_dir`
 //!
@@ -36,19 +28,55 @@ pub fn support_dir(home: &Path) -> PathBuf {
         .join("dodo")
 }
 
-/// dodo's data directory for the current user, or `None` when the environment
-/// names no home at all.
+/// dodo's Windows data directory, from the environment values a TSF host gets.
 ///
-/// dodo's own resolver has a last-resort `.dodo` fallback for that case; this
-/// one deliberately does not. A relative directory would put the input method's
-/// settings wherever the *bundle* was launched from, which is nowhere the user
-/// can find and not the same place dodo would look. Answering `None` means the
-/// bundle types with its compiled-in defaults, which is the honest outcome.
+/// Relative paths are rejected rather than using a directory chosen by the host
+/// process's current working directory.
+pub fn windows_support_dir(appdata: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
+    appdata
+        .filter(|path| is_windows_absolute(path))
+        .map(|path| path.join("dodo"))
+        .or_else(|| {
+            home.filter(|path| is_windows_absolute(path))
+                .map(|path| path.join("AppData").join("Roaming").join("dodo"))
+        })
+}
+
+/// A Windows path is not `Path::is_absolute()` when this pure function is
+/// tested on Unix, so recognise the two Windows absolute forms explicitly.
+fn is_windows_absolute(path: &Path) -> bool {
+    let path = path.to_string_lossy();
+    let bytes = path.as_bytes();
+    path.starts_with("\\\\")
+        || (bytes.len() >= 3
+            && bytes[1] == b':'
+            && bytes[0].is_ascii_alphabetic()
+            && matches!(bytes[2], b'\\' | b'/'))
+}
+
+/// dodo's data directory for the current user's native host.
+///
+/// dodo's own resolver has a last-resort `.dodo` fallback for a missing home;
+/// native hosts deliberately do not. A relative directory would put settings
+/// wherever a host was launched from, so `None` means pass-through defaults.
 pub fn support_dir_from_env() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|home| home.is_absolute())
-        .map(|home| support_dir(&home))
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var_os("APPDATA").map(PathBuf::from);
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        return windows_support_dir(appdata.as_deref(), home.as_deref());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|home| home.is_absolute())
+            .map(|home| support_dir(&home));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    None
 }
 
 /// The system directory input-method bundles are installed into.
@@ -66,7 +94,9 @@ pub fn installed_bundle(home: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{input_methods_dir, installed_bundle, support_dir, support_dir_from_env};
+    use super::{
+        input_methods_dir, installed_bundle, support_dir, support_dir_from_env, windows_support_dir,
+    };
     use crate::bundle::BUNDLE_NAME;
     use std::path::{Path, PathBuf};
 
@@ -96,6 +126,19 @@ mod tests {
     /// Every test process has a `HOME`, and it is absolute. This asserts the
     /// shape rather than the value, which is all that can be said about the
     /// machine it runs on.
+    #[test]
+    fn windows_and_dodo_agree_about_the_windows_data_directory() {
+        assert_eq!(
+            windows_support_dir(Some(Path::new("C:/Users/someone/AppData/Roaming")), None),
+            Some(PathBuf::from("C:/Users/someone/AppData/Roaming/dodo"))
+        );
+        assert_eq!(
+            windows_support_dir(None, Some(Path::new("C:/Users/someone"))),
+            Some(PathBuf::from("C:/Users/someone/AppData/Roaming/dodo"))
+        );
+        assert_eq!(windows_support_dir(Some(Path::new("relative")), None), None);
+    }
+
     #[test]
     fn the_environment_resolves_to_an_absolute_directory_named_dodo() {
         let Some(dir) = support_dir_from_env() else {
