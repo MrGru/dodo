@@ -261,6 +261,15 @@ macOS, where `clippy -D warnings` and the tests run, keeps full dead-code checki
 `Str` variants are unused on those two platforms for the same reason the tray's three already are;
 that noise is inherited, not new.
 
+**`src/dialog_slot.rs` is why Settings and the updater cannot stack two copies of themselves.**
+A dialog layer is a stack and `open_dialog` pushes unconditionally, so a dialog with two ways in —
+Settings (sidebar footer, menu bar item) and the updater (sidebar footer, background check) — put
+two identical cards on screen. Both now `claim` a slot keyed by a marker type and `release` it from
+`on_close`; the module doc is the authority, and `gpui-component-recipes` records the two rules that
+bite (never pair `release` with a second `close_dialog`, and the window rather than the flag
+decides). No other dodo dialog needs it: the rest are opened from a control the modal overlay
+covers.
+
 `data_dir()` lives in `src/paths.rs`, not under `api_explorer/` any more, and it knows all
 three platforms: `~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME` or
 `~/.config`. The macOS path is frozen — changing it orphans every existing installation's saved

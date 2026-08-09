@@ -302,6 +302,20 @@ None of this can be caught at runtime on macOS. `Root::new` calls
 cannot host a `Root` and there is no dialog layer to drive. Guard it by scanning source, the way
 `i18n_lint` does.
 
+**The dialog layer is a stack, and nothing in the library asks whether your dialog is already
+showing.** `open_dialog` pushes, every time. That is right for a confirmation raised over an
+editor, and wrong for a dialog reachable from two unrelated places — Settings (the sidebar footer
+and the menu bar item) and the updater (the sidebar footer and a background check) both shipped
+two identical stacked cards. `src/dialog_slot.rs` is the shared fix: a marker type per dialog,
+`claim` before building anything, `release` from `on_close`. Two rules come with it. `release`
+clears a flag and must **never** be paired with a second `close_dialog` — `on_close` fires *after*
+the library's own single pop, so releasing there is free, while a dialog closing itself from its
+own button (the updater's **Later**) releases beside its one `close_dialog` call. And the window,
+not the flag, is the authority: `decide_open` clears a flag that no dialog backs, so a missed
+release cannot make the dialog unopenable for the rest of the session. Reach for it only when
+there really are two ways in; every other dodo dialog is opened from a control the modal overlay
+covers, so it cannot be asked twice.
+
 **`Dialog` is also the only correct way to be modal.** It paints an `anchored().snap_to_window()`
 layer that is `.occlude()`d and `cx.stop_propagation()`s the backdrop, binds `escape` in its own
 `Dialog` key context, `focus_trap`s the card, and restores the previously focused handle on close.
