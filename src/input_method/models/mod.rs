@@ -6,5 +6,6 @@
 //! input-method bundle reads the same type and a dodo-side mirror of a mirror
 //! would be one more thing to keep in step.
 
+pub mod event_tap;
 pub mod install;
 pub mod status;

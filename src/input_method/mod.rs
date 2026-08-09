@@ -26,9 +26,10 @@
 //! `dodo-ime-macos`: linking the host would pull InputMethodKit into a UI
 //! application for four string constants, and the host must never link gpui.
 //!
-//! **It has no engine.** `dodo-ime-core` is linked, and this module names its
-//! configuration types only so the tool's pane can offer Telex or VNI. No
-//! keystroke is ever processed in this process.
+//! **Native Input Method has no engine here.** It is still a separate bundle
+//! macOS runs. Event Tap is the explicit alternative: while selected, this
+//! process drives the same `dodo-ime-core` engine through an Accessibility-gated
+//! `CGEventTap`; otherwise it creates no tap and observes no keystrokes.
 //!
 //! # Where the state is
 //!
@@ -71,11 +72,13 @@ use std::sync::Arc;
 
 use dodo_ime_core::LanguageId;
 use dodo_ime_ipc::document::IpcError;
-use dodo_ime_ipc::settings::{SettingsDocument, VietnameseSettings};
+use dodo_ime_ipc::settings::{Backend, SettingsDocument, VietnameseSettings};
 use dodo_ime_ipc::status::StatusDocument;
 use gpui::{App, AsyncApp, BorrowAppContext as _, Global, Task};
 
 use crate::i18n::Str;
+#[cfg(target_os = "macos")]
+use crate::input_method::models::event_tap::{EventTapStatus, desired_status};
 use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallReport};
 pub use crate::input_method::models::status::Install;
 use crate::input_method::services::store::{DiskInputMethodStore, InputMethodStore, message_for};
@@ -110,6 +113,12 @@ pub struct InputMethod {
     install: Install,
     save: Option<Task<()>>,
     installing: Option<Task<()>>,
+    /// Held only while Event Tap owns transformation. Dropping it detaches the
+    /// run-loop source before its callback state can be freed.
+    #[cfg(target_os = "macos")]
+    event_tap: Option<services::event_tap::EventTap>,
+    #[cfg(target_os = "macos")]
+    event_tap_status: EventTapStatus,
 }
 
 impl Global for InputMethod {}
@@ -125,6 +134,10 @@ impl InputMethod {
             install: Install::Idle,
             save: None,
             installing: None,
+            #[cfg(target_os = "macos")]
+            event_tap: None,
+            #[cfg(target_os = "macos")]
+            event_tap_status: EventTapStatus::Inactive,
         }
     }
 
@@ -172,6 +185,13 @@ impl InputMethod {
         Some(status.settings_revision >= state.document.revision)
     }
 
+    /// The selected backend.
+    pub fn backend(cx: &App) -> Backend {
+        cx.try_global::<InputMethod>()
+            .map(|state| state.document.backend)
+            .unwrap_or_default()
+    }
+
     /// The language the input method should use.
     pub fn language(cx: &App) -> LanguageId {
         cx.try_global::<InputMethod>()
@@ -181,6 +201,29 @@ impl InputMethod {
 
     pub fn set_language(language: LanguageId, cx: &mut App) {
         Self::edit(cx, |document| document.language = language);
+    }
+
+    /// Switches the sole transformation owner.
+    pub fn set_backend(backend: Backend, cx: &mut App) {
+        // Stop first when returning to Native. A failed write then causes a
+        // harmless gap rather than two backends racing on a user's text.
+        #[cfg(target_os = "macos")]
+        if backend == Backend::Native {
+            Self::stop_event_tap(cx);
+        }
+        Self::edit(cx, |document| document.backend = backend);
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn event_tap_status(cx: &App) -> EventTapStatus {
+        cx.try_global::<InputMethod>()
+            .map(|state| {
+                state.event_tap.as_ref().map_or(
+                    state.event_tap_status,
+                    services::event_tap::EventTap::status,
+                )
+            })
+            .unwrap_or(EventTapStatus::Inactive)
     }
 
     pub fn set_scheme(scheme: dodo_ime_ipc::settings::Scheme, cx: &mut App) {
@@ -229,8 +272,12 @@ impl InputMethod {
                 return;
             }
 
-            state.document =
-                SettingsDocument::next(&state.document, next.language, next.vietnamese);
+            state.document = SettingsDocument::next_with_backend(
+                &state.document,
+                next.backend,
+                next.language,
+                next.vietnamese,
+            );
             let store = state.store.clone();
             let document = state.document;
 
@@ -248,6 +295,8 @@ impl InputMethod {
                         cx.update(|cx| {
                             services::notify::settings_changed();
                             Self::clear_error(cx);
+                            #[cfg(target_os = "macos")]
+                            Self::reconcile_event_tap(cx);
                         });
                         cx.background_executor().timer(STATUS_SETTLE_DELAY).await;
                         Self::refresh_status(cx).await;
@@ -336,6 +385,8 @@ impl InputMethod {
                 // rather than as a fault. `store_error` is about dodo's own file.
                 state.status = read.clone().unwrap_or(None);
             });
+            #[cfg(target_os = "macos")]
+            Self::reconcile_event_tap(cx);
             cx.refresh_windows();
         });
     }
@@ -382,6 +433,80 @@ impl InputMethod {
                     eprintln!("input-method.json: {error}");
                     state.store_error = Some(error);
                 }
+            }
+        });
+        #[cfg(target_os = "macos")]
+        Self::reconcile_event_tap(cx);
+        cx.refresh_windows();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn stop_event_tap(cx: &mut App) {
+        if cx.try_global::<InputMethod>().is_some() {
+            cx.update_global::<InputMethod, _>(|state, _| {
+                state.event_tap = None;
+                state.event_tap_status = EventTapStatus::Inactive;
+            });
+        }
+    }
+
+    /// Starts only after a live native bundle has adopted Event Tap. A bundle
+    /// that is not running cannot transform, and a current bundle that later
+    /// launches reads the selection before its first controller exists.
+    #[cfg(target_os = "macos")]
+    fn reconcile_event_tap(cx: &mut App) {
+        if cx.try_global::<InputMethod>().is_none() {
+            return;
+        }
+        cx.update_global::<InputMethod, _>(|state, _| {
+            let native_live = state
+                .status
+                .as_ref()
+                .is_some_and(|status| status.describes_a_live_process());
+            let settings_applied = state
+                .status
+                .as_ref()
+                .is_some_and(|status| status.settings_revision >= state.document.revision);
+            // Permission is checked only if this reaches `EventTap::start`; the
+            // model still decides exclusive ownership and the native hand-off.
+            match desired_status(
+                state.document.backend,
+                state.document.language,
+                native_live,
+                settings_applied,
+                true,
+            ) {
+                EventTapStatus::Inactive => {
+                    state.event_tap = None;
+                    state.event_tap_status = EventTapStatus::Inactive;
+                    return;
+                }
+                EventTapStatus::WaitingForNative => {
+                    state.event_tap = None;
+                    state.event_tap_status = EventTapStatus::WaitingForNative;
+                    return;
+                }
+                EventTapStatus::NeedsAccessibility
+                | EventTapStatus::Running
+                | EventTapStatus::Failed => {}
+            }
+
+            let config = state.document.vietnamese.to_config();
+            if let Some(tap) = &state.event_tap {
+                tap.reconfigure(config);
+                state.event_tap_status = tap.status();
+                return;
+            }
+
+            match services::event_tap::EventTap::start(config) {
+                Ok(tap) => {
+                    state.event_tap_status = tap.status();
+                    state.event_tap = Some(tap);
+                }
+                Err(services::event_tap::StartError::AccessibilityDenied) => {
+                    state.event_tap_status = EventTapStatus::NeedsAccessibility;
+                }
+                Err(_) => state.event_tap_status = EventTapStatus::Failed,
             }
         });
         cx.refresh_windows();
@@ -478,7 +603,7 @@ mod tests {
     use super::{InputMethod, LanguageId};
     use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallStep};
     use crate::input_method::services::store::{InMemoryInputMethodStore, InputMethodStore};
-    use dodo_ime_ipc::settings::{Scheme, SettingsDocument, Tone, VietnameseSettings};
+    use dodo_ime_ipc::settings::{Backend, Scheme, SettingsDocument, Tone, VietnameseSettings};
     use dodo_ime_ipc::status::StatusDocument;
     use std::sync::Arc;
 
@@ -511,6 +636,20 @@ mod tests {
         assert_eq!(store.load_settings().unwrap().revision, 1);
     }
 
+    #[test]
+    fn backend_selection_persists_with_the_engine_settings() {
+        let store = Arc::new(InMemoryInputMethodStore::default());
+        let document = SettingsDocument::next_with_backend(
+            &SettingsDocument::default(),
+            Backend::EventTap,
+            LanguageId::Vietnamese,
+            VietnameseSettings::default(),
+        );
+        store.persist_settings(&document).unwrap();
+
+        assert_eq!(store.load_settings().unwrap().backend, Backend::EventTap);
+    }
+
     /// The three states the tool's status line distinguishes.
     #[test]
     fn applied_is_a_comparison_of_revisions_and_not_of_settings() {
@@ -519,6 +658,7 @@ mod tests {
 
         state.document = SettingsDocument {
             version: dodo_ime_ipc::settings::SETTINGS_SCHEMA_VERSION,
+            backend: Backend::Native,
             language: LanguageId::Vietnamese,
             revision: 4,
             vietnamese: VietnameseSettings {

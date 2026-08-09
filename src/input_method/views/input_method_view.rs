@@ -22,14 +22,13 @@
 //! whose selected row is a second copy of the setting, and the copy is what would
 //! drift.
 //!
-//! # Nothing here starts, stops or talks to the input method
+//! # Backend ownership stays outside this view
 //!
-//! dodo cannot: macOS launches the bundle out of `~/Library/Input Methods` and
-//! it keeps typing with dodo closed. Every control writes `input-method.json` and
-//! posts one notification; [`crate::input_method`] is where that happens and why
-//! the order is what it is. The status line is
-//! [`models::status::status_message`](crate::input_method::models::status), which
-//! is pure and tested — this file only assembles its four arguments.
+//! Native Input Method is still launched by macOS and keeps typing after dodo
+//! closes. Event Tap is dodo-owned, Accessibility-gated, and active only while
+//! selected. Every control writes `input-method.json`; [`crate::input_method`]
+//! is where exclusive ownership and lifecycle are decided. This file only reads
+//! that global and assembles the native status sentence.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -38,9 +37,10 @@ use gpui_component::radio::RadioGroup;
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, Disableable as _, StyledExt as _, h_flex, v_flex};
 
-use dodo_ime_ipc::settings::{Scheme, Tone};
+use dodo_ime_ipc::settings::{Backend, Scheme, Tone};
 
 use crate::i18n::{Str, t};
+use crate::input_method::models::event_tap::EventTapStatus;
 use crate::input_method::models::status::status_message;
 use crate::input_method::{InputMethod, Install};
 
@@ -171,6 +171,70 @@ impl InputMethodView {
             .child(div().flex_shrink_0().child(control))
     }
 
+    /// The two real transformation hosts. The radio reads the global on every
+    /// render, so asynchronous settings loading cannot leave it stale.
+    fn backend_choice(cx: &App) -> impl IntoElement {
+        let selected = Backend::ALL
+            .iter()
+            .position(|backend| *backend == InputMethod::backend(cx));
+
+        RadioGroup::horizontal("input-method-backend")
+            .children(Backend::ALL.map(|backend| {
+                t(
+                    match backend {
+                        Backend::Native => Str::InputMethodNative,
+                        Backend::EventTap => Str::InputMethodEventTap,
+                    },
+                    cx,
+                )
+            }))
+            .selected_index(selected)
+            .on_click(|ix: &usize, _, cx| {
+                if let Some(backend) = Backend::ALL.get(*ix).copied() {
+                    InputMethod::set_backend(backend, cx);
+                }
+            })
+    }
+
+    fn event_tap_status_line(cx: &App) -> Str {
+        match InputMethod::event_tap_status(cx) {
+            EventTapStatus::Inactive => Str::InputMethodEventTapInactive,
+            EventTapStatus::WaitingForNative => Str::InputMethodEventTapWaitingForNative,
+            EventTapStatus::NeedsAccessibility => Str::InputMethodEventTapNeedsAccessibility,
+            EventTapStatus::Running => Str::InputMethodEventTapRunning,
+            EventTapStatus::Failed => Str::InputMethodEventTapFailed,
+        }
+    }
+
+    /// Event Tap has no install action: its only prerequisite is the system's
+    /// Accessibility grant, which dodo reports but never attempts to change.
+    fn event_tap_status_card(cx: &App) -> impl IntoElement {
+        h_flex()
+            .items_center()
+            .gap_3()
+            .p_3()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .font_bold()
+                            .child(t(Str::InputMethodEventTapStatus, cx)),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(Self::event_tap_status_line(cx), cx)),
+                    ),
+            )
+    }
+
     /// Telex or VNI. The labels are proper nouns and identical in every
     /// language, so `Str::InputMethodTelex` and `…Vni` both answer `_`.
     fn scheme_choice(cx: &App) -> impl IntoElement {
@@ -243,16 +307,26 @@ impl Render for InputMethodView {
             .size_full()
             .gap_4()
             // The one thing worth saying about the whole tool, said once at the
-            // top: what an input method *is* here, and that it outlives dodo.
-            // Every row below is then about one decision rather than repeating
-            // the premise.
+            // top: Native Input Method outlives dodo; Event Tap intentionally
+            // does not. Every row below is then about one decision.
             .child(
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child(t(Str::InputMethodDescription, cx)),
             )
-            .child(Self::status_card(cx))
+            .child(Self::row(
+                Str::InputMethodBackend,
+                Str::InputMethodBackendDescription,
+                Self::backend_choice(cx),
+                cx,
+            ))
+            .when(InputMethod::backend(cx) == Backend::Native, |this| {
+                this.child(Self::status_card(cx))
+            })
+            .when(InputMethod::backend(cx) == Backend::EventTap, |this| {
+                this.child(Self::event_tap_status_card(cx))
+            })
             .when_some(InputMethod::store_error(cx), |this, problem| {
                 this.child(Self::storage_problem(problem, cx))
             })

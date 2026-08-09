@@ -8,6 +8,8 @@
 //! [`InstallOps`](installer::InstallOps) trait, which is what makes the sequence
 //! testable without a Mac.
 
+#[cfg(target_os = "macos")]
+pub mod event_tap;
 pub mod installer;
 pub mod notify;
 pub mod store;

@@ -1341,6 +1341,16 @@ pub enum Str {
     InputMethodSpellCheckDescription,
     InputMethodBracketShortcuts,
     InputMethodBracketShortcutsDescription,
+    InputMethodBackend,
+    InputMethodBackendDescription,
+    InputMethodNative,
+    InputMethodEventTap,
+    InputMethodEventTapStatus,
+    InputMethodEventTapInactive,
+    InputMethodEventTapWaitingForNative,
+    InputMethodEventTapNeedsAccessibility,
+    InputMethodEventTapRunning,
+    InputMethodEventTapFailed,
 }
 
 impl Str {
@@ -4557,13 +4567,65 @@ impl Str {
             (Str::InputMethod, Language::English) => "Input method".into(),
             (Str::InputMethod, Language::Vietnamese) => "Bộ gõ".into(),
             (Str::InputMethodDescription, Language::English) => {
-                "Install Dodo's Vietnamese input method to type Vietnamese in any application. \
-                 It keeps working while Dodo is closed."
+                "Choose Dodo's Vietnamese input method. Native Input Method works after Dodo \
+                 closes; Event Tap needs Accessibility permission and works while Dodo is open."
                     .into()
             }
             (Str::InputMethodDescription, Language::Vietnamese) => {
-                "Cài bộ gõ tiếng Việt của Dodo để gõ tiếng Việt trong mọi ứng dụng. Bộ gõ vẫn \
-                 hoạt động khi Dodo đã đóng."
+                "Chọn bộ gõ tiếng Việt của Dodo. Bộ gõ gốc hoạt động khi Dodo đã đóng; Chặn sự \
+                 kiện cần quyền Trợ năng và chỉ hoạt động khi Dodo đang mở."
+                    .into()
+            }
+            (Str::InputMethodBackend, Language::English) => "Backend".into(),
+            (Str::InputMethodBackend, Language::Vietnamese) => "Phụ trợ".into(),
+            (Str::InputMethodBackendDescription, Language::English) => {
+                "Only one backend transforms keys at a time.".into()
+            }
+            (Str::InputMethodBackendDescription, Language::Vietnamese) => {
+                "Chỉ một phụ trợ chuyển đổi phím tại một thời điểm.".into()
+            }
+            (Str::InputMethodNative, Language::English) => "Native Input Method".into(),
+            (Str::InputMethodNative, Language::Vietnamese) => "Bộ gõ gốc".into(),
+            (Str::InputMethodEventTap, Language::English) => "Event Tap".into(),
+            (Str::InputMethodEventTap, Language::Vietnamese) => "Chặn sự kiện".into(),
+            (Str::InputMethodEventTapStatus, Language::English) => "Event Tap status".into(),
+            (Str::InputMethodEventTapStatus, Language::Vietnamese) => {
+                "Trạng thái chặn sự kiện".into()
+            }
+            (Str::InputMethodEventTapInactive, Language::English) => {
+                "Select Vietnamese from Dodo's Keyboard Input menu to start Event Tap.".into()
+            }
+            (Str::InputMethodEventTapInactive, Language::Vietnamese) => {
+                "Chọn Tiếng Việt trong menu Bàn phím nhập của Dodo để khởi động chặn sự kiện."
+                    .into()
+            }
+            (Str::InputMethodEventTapWaitingForNative, Language::English) => {
+                "Waiting for Native Input Method to apply this selection.".into()
+            }
+            (Str::InputMethodEventTapWaitingForNative, Language::Vietnamese) => {
+                "Đang chờ Bộ gõ gốc áp dụng lựa chọn này.".into()
+            }
+            (Str::InputMethodEventTapNeedsAccessibility, Language::English) => {
+                "Event Tap needs Accessibility permission. Allow Dodo in System Settings → Privacy & Security → Accessibility."
+                    .into()
+            }
+            (Str::InputMethodEventTapNeedsAccessibility, Language::Vietnamese) => {
+                "Chặn sự kiện cần quyền Trợ năng. Hãy cho phép Dodo trong Cài đặt hệ thống → Quyền riêng tư và bảo mật → Trợ năng."
+                    .into()
+            }
+            (Str::InputMethodEventTapRunning, Language::English) => {
+                "Event Tap is active while Dodo is open. It never stores or sends what you type."
+                    .into()
+            }
+            (Str::InputMethodEventTapRunning, Language::Vietnamese) => {
+                "Chặn sự kiện hoạt động khi Dodo đang mở. Dodo không bao giờ lưu hoặc gửi nội dung bạn gõ."
+                    .into()
+            }
+            (Str::InputMethodEventTapFailed, Language::English) => {
+                "Event Tap could not start. Keys are passing through unchanged.".into()
+            }
+            (Str::InputMethodEventTapFailed, Language::Vietnamese) => {
+                "Không thể khởi động chặn sự kiện. Các phím được chuyển qua không thay đổi."
                     .into()
             }
             (Str::InputMethodInstall, Language::English) => "Install".into(),
@@ -5908,6 +5970,16 @@ mod tests {
             plain(Str::InputMethodSpellCheckDescription),
             plain(Str::InputMethodBracketShortcuts),
             plain(Str::InputMethodBracketShortcutsDescription),
+            plain(Str::InputMethodBackend),
+            plain(Str::InputMethodBackendDescription),
+            plain(Str::InputMethodNative),
+            plain(Str::InputMethodEventTap),
+            plain(Str::InputMethodEventTapStatus),
+            plain(Str::InputMethodEventTapInactive),
+            plain(Str::InputMethodEventTapWaitingForNative),
+            plain(Str::InputMethodEventTapNeedsAccessibility),
+            plain(Str::InputMethodEventTapRunning),
+            plain(Str::InputMethodEventTapFailed),
         ]
     }
 
@@ -6774,6 +6846,16 @@ mod tests {
             Str::InputMethodSpellCheckDescription => 846,
             Str::InputMethodBracketShortcuts => 847,
             Str::InputMethodBracketShortcutsDescription => 848,
+            Str::InputMethodBackend => 849,
+            Str::InputMethodBackendDescription => 850,
+            Str::InputMethodNative => 851,
+            Str::InputMethodEventTap => 852,
+            Str::InputMethodEventTapStatus => 853,
+            Str::InputMethodEventTapInactive => 854,
+            Str::InputMethodEventTapWaitingForNative => 855,
+            Str::InputMethodEventTapNeedsAccessibility => 856,
+            Str::InputMethodEventTapRunning => 857,
+            Str::InputMethodEventTapFailed => 858,
         }
     }
 

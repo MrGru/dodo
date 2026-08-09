@@ -341,9 +341,20 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
     "CFArray",
     "CFBase",
     "CFDictionary",
+    "CFMachPort",
+    "CFRunLoop",
     "CFNotificationCenter",
     "CFString",
     "CFURL",
+] }
+# The Event Tap backend's checked CoreGraphics bindings. This package already
+# enters through AppKit at this exact version; these narrow features merely make
+# the event/tap/run-loop API available to dodo's macOS-only service.
+objc2-core-graphics = { version = "=0.3.2", default-features = false, features = [
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGRemoteOperation",
 ] }
 
 # Cleaner's Universal Binaries scanner (Phase 14, analysis-only): reads a

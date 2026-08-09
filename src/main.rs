@@ -107,9 +107,10 @@ fn main() {
         // because the window cannot be opened until its geometry is known.
         session::init(cx);
         // Installs the input-method global. It reads `input-method.json` and the
-        // bundle's status file below, not here, and it starts no input method:
-        // macOS launches `Dodo Vietnamese.app` on its own and dodo cannot. Same
-        // post-`gpui_component::init` position as the rest.
+        // bundle's status file below. Native Input Method is still launched by
+        // macOS; Event Tap starts only after its stored selection and
+        // Accessibility state have been reconciled. Same post-`gpui_component::init`
+        // position as the rest.
         input_method::init(cx);
         init_close_window_binding(cx);
         // Dock icon for a directly-run macOS binary; a no-op inside a .app and

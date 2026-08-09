@@ -239,14 +239,21 @@ never on a keystroke, and a test pins its key set so adding a field is deliberat
 
 **`src/input_method/` is dodo's end of it, and `services/tis.rs` carries a crash worth knowing
 about.** It is a **tool, not a Settings page** — the captain asked on 2026-08-09 — and the move took
-the whole surface: status, install button and the four engine settings are on the pane and nowhere
-else, so no control is reachable twice. That makes `View::InputMethod` the **first
+the whole surface: backend choice, status, install button and the four engine settings are on the
+pane and nowhere else, so no control is reachable twice. That makes `View::InputMethod` the **first
 platform-conditional tool**, so `View::ALL` is written out twice and every `match` on `View` carries
 a `cfg` arm; the row draws `AppIcon::Keyboard`, deliberately not the globe, which is the API
 Explorer's. The pane holds **no state at all** — `Layout::new` builds it before
 `input_method::load` has read the file, so every control reads the global in `render` and the two
 either/or settings are radio groups rather than dropdowns, whose `SelectState` would be a second
-copy of the setting. `models/status.rs` is the eleven-way status sentence as a pure function, and
+copy of the setting. Native remains the persisted default; Event Tap is the macOS-only alternative
+in `services/event_tap.rs`, requiring Accessibility, active only while dodo runs, and uses the
+existing engine's direct mode. `SettingsDocument::backend` forced schema 3 because an old native
+bundle ignoring Event Tap could compose beside it; a current bundle maps that selection to English
+pass-through, while dodo waits for a live native bundle to report the revision before starting its
+tap. The tap never logs/persists/transmits keys, passes secure input and uncertain events through,
+tags its own direct-output events to prevent feedback, and re-enables exactly once per CoreGraphics
+disabled notification. `models/status.rs` is the native status sentence as a pure function, and
 liveness reaches it as an argument because `describes_a_live_process` is a syscall and Unix-only.
 The install button copies
 the nested bundle out with `ditto`, registers until the source is *visible* rather than trusting the

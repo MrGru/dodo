@@ -4,11 +4,13 @@
 method that types Vietnamese using `crates/dodo-ime-core`. macOS launches it;
 `Dodo.app` does not, and typing keeps working with dodo closed.
 
-dodo can now **install it** (§7) and **tell it how to type** (§8). The bundle
-is ad-hoc signed for local use; release wiring, the tray mark, a menu-bar icon
-and Developer ID signing/notarisation remain — §9 lists them. The design rationale lives in the crate's module docs, which are the
-authority; this file is how to build, install and enable it by hand, what dodo
-does when it does that for you, and what was and was not verified.
+dodo can now **install it** (§7), **tell it how to type** (§8), or choose an
+Accessibility-gated **Event Tap** alternative (§3a). The bundle is ad-hoc signed
+for local use; release wiring, the tray mark, a menu-bar icon and Developer ID
+signing/notarisation remain — §9 lists them. The design rationale lives in the
+crate's module docs, which are the authority; this file is how to build, install
+and enable it by hand, what dodo does when it does that for you, and what was
+and was not verified.
 
 Two documents sit behind it: the investigation report that proved the approach
 (`dodo-ime-macos-scout`), and `docs/macos-signing.md`, which constrains where
@@ -121,6 +123,28 @@ keystroke would be a typing log whatever its fields said. `dodo_ime_ipc::status`
 carries the constraint, and a test there pins the file's key set so that adding a
 field is a decision someone makes on purpose.
 
+### 3a. Event Tap backend
+
+**Sidebar → Input method → Backend → Event Tap.** This is an alternative to,
+not a replacement for, Native Input Method. It runs only while Dodo is open and
+requires Dodo to be allowed in **System Settings → Privacy & Security →
+Accessibility**. Dodo checks `AXIsProcessTrusted` without prompting or changing
+that permission; when absent, the pane says so and every key passes through.
+
+Event Tap drives the existing `dodo-ime-core` Vietnamese engine in its direct
+output mode. The trade-off is deliberate: unlike Native Input Method it cannot
+show marked text, so intermediate rewrites enter the focused application and
+its undo history. It never writes, logs, sends, or exposes keystrokes. Tagged
+synthetic output is ignored by the tap itself, so it cannot feed back into the
+engine; secure input is passed through unchanged.
+
+Only one backend transforms at a time. Selecting Native stops Event Tap before
+writing settings. Selecting Event Tap waits for a live Native Input Method to
+adopt the selection; a new native bundle then passes keys through. The settings
+schema is version 3 because an older bundle ignoring that selection could compose
+beside Event Tap; it refuses version 3 and falls back to English/pass-through
+until updated.
+
 ## 4. Verifying a change
 
 ```sh
@@ -196,11 +220,12 @@ input-method files in the real `~/Library/Application Support/dodo`.
   compiled-in defaults and report `settings-revision: 0`, which is the signal dodo
   shows as "the input method has not picked these settings up yet".
 
-**Not verified: dodo's own UI.** The install button, the pane it sits on and the
-notification dodo posts were not exercised through a running dodo — a GUI cannot
-be driven from this environment. What was exercised is the code underneath all
-three: the installer driver against the real system, the store against the real
-file names, and the notification through the same
+**Not verified: dodo's own UI or Event Tap.** The install button, the pane it
+sits on, Event Tap's Accessibility state, and the notification dodo posts were
+not exercised through a running dodo — a GUI cannot be driven from this
+environment. What was exercised is the code underneath the native controls: the
+installer driver against the real system, the store against the real file names,
+and the notification through the same
 `CFNotificationCenter::post_notification` call and the same shared name constant
 that `services::notify` uses, posted from a small harness rather than from dodo.
 
@@ -267,8 +292,8 @@ Three, all measured while building this:
 sidebar's last row on macOS, drawing a keyboard, and it does not exist on the
 other two platforms because the bundle it installs is an InputMethodKit object.
 The captain asked for that on 2026-08-09, and the move took the whole surface —
-the status line, the install button and the four engine settings are on the pane
-and nowhere else, so no control is reachable from two places.
+the backend choice, status line, install button and four engine settings are on
+the pane and nowhere else, so no control is reachable from two places.
 `src/input_method/` is the implementation and its module docs are the authority;
 this is what the button does and why.
 
@@ -329,13 +354,14 @@ which is the whole concurrency design: no lock file, no advisory locking, and
 every write is a temp file plus `rename`, so a reader sees one complete version or
 the other and never half of either.
 
-`input-method.json` carries the selected keyboard language plus the four
-Vietnamese settings the page offers — input scheme (Telex or VNI), tone-mark
-placement (modern `hoà` or traditional `hòa`), spell check, bracket shortcuts —
-and a `revision` dodo bumps on every write. The menu bar and the bundle share
+`input-method.json` carries the selected backend, the selected keyboard language,
+and the four Vietnamese settings the page offers — input scheme (Telex or VNI),
+tone-mark placement (modern `hoà` or traditional `hòa`), spell check, bracket
+shortcuts — plus a `revision` dodo bumps on every write. The menu bar and the bundle share
 that language identity; English and Japanese pass keys through until native
-engines exist. The output mode is deliberately **not** a setting: macOS always
-has a marked-text channel, so the host always composes.
+engines exist. The output mode is deliberately **not** persisted: Native Input
+Method always composes, while Event Tap deliberately uses direct rewriting
+because it has no marked-text client.
 
 `input-method-status.json` carries the bundle's version, its pid, when it started
 and **the revision it has applied**. That last field is the only thing that can
@@ -356,8 +382,8 @@ it — `environments.json`'s pattern, not `collections.json`'s — and here it m
 more than anywhere else in dodo, because the two processes are updated
 independently: a months-old bundle in `~/Library/Input Methods` reading a new
 dodo's settings file is an ordinary situation, not an exotic one. A bundle that
-refuses the file types with `DEFAULT_CONFIG` and reports revision `0`, so dodo can
-say so.
+refuses the file uses its English/pass-through default and reports revision `0`,
+so dodo can say so.
 
 ## 9. What the next round has to add
 
