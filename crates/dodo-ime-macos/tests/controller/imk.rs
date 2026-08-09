@@ -12,6 +12,8 @@ use objc2_foundation::{
 };
 use objc2_input_method_kit::IMKServer;
 
+use dodo_ime_core::LanguageId;
+use dodo_ime_ipc::settings::{SETTINGS_FILE, SettingsDocument, VietnameseSettings};
 use dodo_ime_macos::bundle::CONTROLLER_CLASS;
 use dodo_ime_macos::controller::DodoInputController;
 
@@ -151,6 +153,21 @@ fn press(
 }
 
 pub fn run_all() {
+    // The shared input-language setting defaults to English. This boundary test
+    // asserts the Vietnamese engine, so select Vietnamese exactly as dodo does.
+    let settings = std::env::temp_dir().join(format!("dodo-ime-controller-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&settings);
+    std::fs::create_dir_all(&settings).unwrap();
+    SettingsDocument::next(
+        &SettingsDocument::default(),
+        LanguageId::Vietnamese,
+        VietnameseSettings::default(),
+    )
+    .write(&settings.join(SETTINGS_FILE))
+    .unwrap();
+    dodo_ime_macos::ipc::adopt_from(&settings);
+    let _ = std::fs::remove_dir_all(&settings);
+
     let mtm = MainThreadMarker::new().expect("a custom-harness test owns the main thread");
     let mut checks = Checks {
         failures: Vec::new(),
