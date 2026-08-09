@@ -1,16 +1,12 @@
 # `crates/` holds code that shares this lockfile, which is what separates it
 # from `tools/`.
 #
-# There are three members. `crates/dodo-ime-core` is the input-method engine,
-# linked *into* dodo. `crates/dodo-ime-ipc` is everything the two *processes*
-# must agree on — the identifiers macOS looks the bundle up by, the two JSON
-# files they exchange, the notification between them — and is linked into both,
-# which is exactly why it is a crate: neither process can reach the other's code,
-# so the alternative was two copies of one schema kept in step by nothing.
-# `crates/dodo-ime-macos` is the macOS InputMethodKit host —
-# a separate `.app` bundle that macOS launches, so dodo does not link it at all,
-# but it links the *engine* and the contract, and that is what settles the
-# question:
+# There are four members. `crates/dodo-ime-core` is the input-method engine,
+# linked *into* dodo. `crates/dodo-ime-ipc` is the settings and identifier
+# contract shared by dodo and the native hosts. `crates/dodo-ime-macos` is an
+# InputMethodKit app and `crates/dodo-ime-windows` is a TSF COM DLL; neither is
+# linked into dodo, but both link the engine and contract. That is what settles
+# the question:
 # `tools/update-manifest` can carry its own `Cargo.lock` because nothing else
 # resolves what it resolves, whereas a second lockfile here would resolve
 # `dodo-ime-core` and `unicode-normalization` independently — so the engine
@@ -21,10 +17,9 @@
 # `default-members` names all five, so a bare `cargo test` / `cargo clippy
 # --all-targets` at the root covers the engine's tests and both native hosts too.
 # Without it cargo would default to the root package alone and the engine's ~200
-# tests would stop running the day they moved out of `src/`. The macOS host is
-# safe to name here on every platform because its Objective-C dependencies are
-# declared under a `cfg(target_os = "macos")` target table, so a Linux or Windows
-# `cargo check` builds its pure half and resolves no AppKit.
+# tests would stop running the day they moved out of `src/`. Each native host's
+# platform bindings are target-gated, so another platform's check builds only
+# its pure half.
 #
 # `exclude` names `tools/update-manifest` again at the workspace level: without
 # it, building that crate through `--manifest-path` fails with "current package

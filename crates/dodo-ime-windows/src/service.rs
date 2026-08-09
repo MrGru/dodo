@@ -67,16 +67,33 @@ impl TextService {
     /// Load only when this host owns the selected backend. Missing/refused
     /// settings intentionally produce English pass-through, never Telex beside
     /// dodo's Keyboard Hook.
-    fn configured_engine() -> Option<VietnameseEngine> {
+    fn configured_config() -> Option<VietnameseConfig> {
         let directory = paths::support_dir_from_env()?;
         let (document, _) = SettingsDocument::read_or_default(&directory.join(SETTINGS_FILE));
         (document.backend == Backend::Native && document.language == LanguageId::Vietnamese).then(
             || {
                 let mut config: VietnameseConfig = document.vietnamese.to_config();
                 config.output = OutputMode::Composition;
-                VietnameseEngine::new(config)
+                config
             },
         )
+    }
+
+    /// Preserve an in-flight syllable while settings stay the same. Rebuilding
+    /// the engine for every key would make every letter a new composition.
+    fn refresh_engine(state: &mut State) -> bool {
+        let Some(config) = Self::configured_config() else {
+            state.engine = None;
+            return false;
+        };
+        if state
+            .engine
+            .as_ref()
+            .is_none_or(|engine| engine.config() != config)
+        {
+            state.engine = Some(VietnameseEngine::new(config));
+        }
+        true
     }
 
     fn input_event(vkey: u32, lparam: LPARAM) -> Option<dodo_ime_core::KeyEvent> {
@@ -160,7 +177,9 @@ impl TextService {
         }
         let event = Self::input_event(vkey, lparam)?;
         let mut next = self.state.borrow().clone();
-        next.engine = Self::configured_engine();
+        if !Self::refresh_engine(&mut next) {
+            return None;
+        }
         let result = next.engine.as_mut()?.process_key(&event);
         Self::action_changes_text(&result.actions).then_some((next, result.actions, result.handled))
     }
@@ -207,7 +226,7 @@ impl ITfTextInputProcessor_Impl for TextService {
         let mut state = self.state.borrow_mut();
         state.manager = Some(manager.clone());
         state.client_id = client_id;
-        state.engine = Self::configured_engine();
+        state.engine = Self::configured_config().map(VietnameseEngine::new);
         Ok(())
     }
 

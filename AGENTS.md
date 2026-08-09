@@ -157,8 +157,9 @@ plus one `assets/icons/tray/dodo-<code>.svg`; the marks are rasterised through g
 **`crates/dodo-ime-core/` is dodo's own input method, and it is a crate, not a module.** dodo
 depends on it and names only its configuration types — a normalized `KeyEvent`/`EngineAction`
 vocabulary (`core/`) plus a Vietnamese engine speaking Telex and VNI (`languages/vietnamese/`);
-no keystroke is ever processed in the dodo process. Later rounds add tray wiring, per-application
-language memory, abbreviations and two more native hosts (Windows TSF DLL, Linux IBus). Its crate docs are the authority;
+no keystroke is ever processed in the dodo process **except the explicitly selected Windows
+Keyboard Hook fallback**. Windows TSF now lives in `crates/dodo-ime-windows/`; later rounds add
+per-application language memory, abbreviations and Linux IBus. Its crate docs are the authority;
 four things there are decisions rather than details. **It is a crate because the OS hosts are
 separate processes**: the macOS host has to be its own `.app` bundle that the system launches — it
 cannot be the dodo process — and Windows and Linux load theirs into other people's applications;
@@ -192,7 +193,7 @@ It is an `examples/` target, never a `[[bin]]`, so it ships in nothing; its own 
 the authority on why it is line-based (raw per-keystroke input costs a dependency) and why its
 strings are bare literals rather than `i18n::Str`.
 
-**`crates/dodo-ime-macos/` is the first of those three hosts**: an InputMethodKit `.app` that
+**`crates/dodo-ime-macos/` is the macOS host**: an InputMethodKit `.app` that
 macOS launches, links the engine, and types with **no dependency on `Dodo.app` running** — dodo
 does not link it and cannot start it. `docs/macos-input-method.md` is the authority on building,
 installing and enabling it by hand, on what dodo's own install action does (§7), on the two files
@@ -218,11 +219,18 @@ HIToolbox, not in InputMethodKit, so `objc2-input-method-kit` does not and will 
 engine counts graphemes, which `text.rs` converts through the engine's own walk so the two
 definitions cannot drift.
 
-**`crates/dodo-ime-ipc/` is a crate because neither process can reach the other's code**, and it is
-the third member of the workspace. dodo links it; the bundle links it; it holds the only three
-things they must agree on — the four identifiers macOS looks the bundle up by (moved here out of
-`dodo-ime-macos`, which re-exports them as `crate::bundle`), the two single-writer JSON files, and
-the distributed-notification name. The alternative was two copies of one schema kept in step by
+**`crates/dodo-ime-windows/` is the Windows TSF COM DLL**, a `cdylib` Windows loads
+independently of dodo. It links only the pure engine and IPC contract; `DllRegisterServer` writes
+per-user COM registration and the Vietnamese profile, while its TSF edit session performs marked
+composition rather than injecting keys. It re-reads settings before each key so a selected Keyboard
+Hook makes TSF pass through. The fallback itself lives in dodo's
+`src/input_method/services/keyboard_hook.rs`, is only active while dodo runs, tags injected output,
+and passes uncertainty, repeats, key-up, shortcuts and secure-desktop uncertainty through. See
+`docs/windows-input-method.md` for install/recovery and what captain testing still owes.
+
+**`crates/dodo-ime-ipc/` is a crate because neither process can reach the other's code**. dodo and
+both native hosts link it; it holds the identifiers each platform looks up, the two single-writer
+JSON files, and the distributed-notification name. The alternative was two copies of one schema kept in step by
 nothing, and a drifted field name there does not fail to compile: it reads as absent, so the user's
 setting silently has no effect. `dodo-ime-core` cannot hold it — its `purity_lint` forbids `serde::`
 by test — and dodo must not link `dodo-ime-macos`, which would drag InputMethodKit into a UI
@@ -246,36 +254,18 @@ a `cfg` arm; the row draws `AppIcon::Keyboard`, deliberately not the globe, whic
 Explorer's. The pane holds **no state at all** — `Layout::new` builds it before
 `input_method::load` has read the file, so every control reads the global in `render` and the two
 either/or settings are radio groups rather than dropdowns, whose `SelectState` would be a second
-copy of the setting. Native remains the persisted default; Event Tap is the macOS-only alternative
-in `services/event_tap.rs`, requiring Accessibility, active only while dodo runs, and uses the
-existing engine's direct mode. `SettingsDocument::backend` forced schema 3 because an old native
-bundle ignoring Event Tap could compose beside it; a current bundle maps that selection to English
-pass-through, while dodo waits for a live native bundle to report the revision before starting its
-tap. The tap never logs/persists/transmits keys, passes secure input and uncertain events through,
-tags its own direct-output events to prevent feedback, and re-enables exactly once per CoreGraphics
-disabled notification. `models/status.rs` is the native status sentence as a pure function, and
-liveness reaches it as an argument because `describes_a_live_process` is a syscall and Unix-only.
-The install button copies
-the nested bundle out with `ditto`, registers until the source is *visible* rather than trusting the
-`0` that `TISRegisterInputSource` returns, enables and selects **the mode, never the parent**, and
-`pkill -x`es the old process last. `models/install.rs` holds all of that as tested data and
-`services/installer.rs` is a driver over an `InstallOps` trait, which is what makes the three
-silent-on-a-real-Mac defects unit tests. Two measured facts to keep: **two concurrent
-`TISCreateInputSourceList` calls abort the process** (`SIGABRT` inside HIToolbox — found by
-`cargo test`'s own parallelism), so `tis` takes a process-wide lock *and* `SystemOps` performs all
-four TIS calls on the main queue, where AppKit's own TIS calls already are; and **`ditto src dir/`
-copies a bundle's contents into `dir`**, so the destination must name the bundle, which is a
-correction to what `docs/macos-input-method.md` §2 used to say. `dodo_ime_ipc::paths::support_dir`
-duplicates one line of `src/paths.rs` on purpose — the bundle has no `build_info` — and
-`paths::tests::the_input_method_agrees_about_the_data_directory` is what keeps the two one answer.
-Unlike `src/tray`, the module is **not** `#[cfg(target_os = "macos")]` at its `mod` line — most of
-its submodules contain no macOS at all and the Linux and Windows `cargo check` rows are worth
-having type-check them — so it carries a `#![cfg_attr(not(target_os = "macos"), allow(dead_code))]`
-instead, because on those platforms its only caller (`views/`, and so the sidebar row) does not
-exist.
-macOS, where `clippy -D warnings` and the tests run, keeps full dead-code checking. Its ~31 new
-`Str` variants are unused on those two platforms for the same reason the tray's three already are;
-that noise is inherited, not new.
+copy of the setting. Native remains the persisted default. Event Tap is the macOS-only alternative in
+`services/event_tap.rs`; Windows instead offers `Keyboard Hook`, a clearly-labelled no-install
+fallback that runs only while dodo does. Both direct-output fallbacks use the existing engine and
+never share transformation with Native TSF/InputMethodKit. `SettingsDocument::backend` is schema 4
+because a host that cannot understand Keyboard Hook must refuse the file rather than compose beside
+it. Event Tap retains its macOS-only accessibility/secure-input/feedback protections; the TSF
+installer has separate tested path data in `models/windows.rs` and is intentionally per-user. The
+Windows hook API has no normal password-field bit, so it passes secure-desktop and all other
+uncertain input through; `docs/windows-input-method.md` is explicit that this needs captain runtime
+testing. `dodo_ime_ipc::paths` now duplicates both the macOS and Windows data-directory rules and
+is tested against `src/paths.rs`. The module remains un-gated so Linux checks its pure parts, but
+only macOS and Windows expose the pane.
 
 **`src/dialog_slot.rs` is why Settings and the updater cannot stack two copies of themselves.**
 A dialog layer is a stack and `open_dialog` pushes unconditionally, so a dialog with two ways in —

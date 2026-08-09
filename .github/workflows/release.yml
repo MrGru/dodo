@@ -262,6 +262,8 @@ jobs:
           # 3/4. it runs and reports the expected metadata
           $exe = Get-ChildItem -Recurse -Filter dodo.exe $dest | Select-Object -First 1
           if (-not $exe) { throw "no dodo.exe in the archive" }
+          $tsf = Get-ChildItem -Recurse -Filter dodo_ime_windows.dll $dest | Select-Object -First 1
+          if (-not $tsf) { throw "no Windows TSF host DLL in the archive" }
 
           $infoFile = Join-Path $env:RUNNER_TEMP "build-info.txt"
           $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--build-info' `

@@ -141,9 +141,10 @@ engine; secure input is passed through unchanged.
 Only one backend transforms at a time. Selecting Native stops Event Tap before
 writing settings. Selecting Event Tap waits for a live Native Input Method to
 adopt the selection; a new native bundle then passes keys through. The settings
-schema is version 3 because an older bundle ignoring that selection could compose
-beside Event Tap; it refuses version 3 and falls back to English/pass-through
-until updated.
+schema is version 4: it also names Windows' Keyboard Hook backend, so an older
+host refuses the file and falls back to English/pass-through rather than compose
+beside a selected fallback. Windows details are in
+[`windows-input-method.md`](windows-input-method.md).
 
 ## 4. Verifying a change
 

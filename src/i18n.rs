@@ -1351,6 +1351,94 @@ pub enum Str {
     InputMethodEventTapNeedsAccessibility,
     InputMethodEventTapRunning,
     InputMethodEventTapFailed,
+
+    // Windows input method. Kept separate from the macOS backend names: TSF
+    // installation and the no-install Keyboard Hook have different promises.
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodWindowsDescription,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodWindowsLanguageDescription,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodNativeTsf,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodWindowsTsfStatus,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodWindowsTsfNotInstalled,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodWindowsTsfInstalled,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodWindowsTsfRemoved,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodWindowsTsfNoDll,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodWindowsTsfRegisterFailed(String),
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodWindowsTsfUnregisterFailed(String),
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodKeyboardHook,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodKeyboardHookStatus,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodKeyboardHookInactive,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodKeyboardHookRunning,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodKeyboardHookFailed,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodUninstall,
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only input-method copy.")
+    )]
+    InputMethodUninstalling,
 }
 
 impl Str {
@@ -4628,6 +4716,88 @@ impl Str {
                 "Không thể khởi động chặn sự kiện. Các phím được chuyển qua không thay đổi."
                     .into()
             }
+            (Str::InputMethodWindowsDescription, Language::English) => {
+                "Choose Dodo's Vietnamese input method. Native TSF works after Dodo closes and requires installation; Keyboard Hook needs Dodo to remain open."
+                    .into()
+            }
+            (Str::InputMethodWindowsDescription, Language::Vietnamese) => {
+                "Chọn bộ gõ tiếng Việt của Dodo. TSF gốc hoạt động khi Dodo đã đóng và cần cài đặt; Keyboard Hook cần Dodo tiếp tục chạy."
+                    .into()
+            }
+            (Str::InputMethodWindowsLanguageDescription, Language::English) => {
+                "Select Vietnamese before either Windows backend transforms input.".into()
+            }
+            (Str::InputMethodWindowsLanguageDescription, Language::Vietnamese) => {
+                "Chọn Tiếng Việt trước khi một trong hai phụ trợ Windows chuyển đổi đầu vào.".into()
+            }
+            (Str::InputMethodNativeTsf, Language::English) => "Native TSF".into(),
+            (Str::InputMethodNativeTsf, Language::Vietnamese) => "TSF gốc".into(),
+            (Str::InputMethodWindowsTsfStatus, Language::English) => "Native TSF status".into(),
+            (Str::InputMethodWindowsTsfStatus, Language::Vietnamese) => "Trạng thái TSF gốc".into(),
+            (Str::InputMethodWindowsTsfNotInstalled, Language::English) => {
+                "Not installed. Install Native TSF to type when Dodo is closed.".into()
+            }
+            (Str::InputMethodWindowsTsfNotInstalled, Language::Vietnamese) => {
+                "Chưa cài. Hãy cài TSF gốc để gõ khi Dodo đã đóng.".into()
+            }
+            (Str::InputMethodWindowsTsfInstalled, Language::English) => {
+                "Installed for this Windows account. Select Dodo Vietnamese from Windows input methods.".into()
+            }
+            (Str::InputMethodWindowsTsfInstalled, Language::Vietnamese) => {
+                "Đã cài cho tài khoản Windows này. Chọn Dodo Vietnamese trong bộ gõ của Windows.".into()
+            }
+            (Str::InputMethodWindowsTsfRemoved, Language::English) => {
+                "Native TSF was removed for this Windows account.".into()
+            }
+            (Str::InputMethodWindowsTsfRemoved, Language::Vietnamese) => {
+                "TSF gốc đã được gỡ cho tài khoản Windows này.".into()
+            }
+            (Str::InputMethodWindowsTsfNoDll, Language::English) => {
+                "This build carries no Windows TSF DLL to install.".into()
+            }
+            (Str::InputMethodWindowsTsfNoDll, Language::Vietnamese) => {
+                "Bản dựng này không kèm DLL TSF Windows để cài.".into()
+            }
+            (Str::InputMethodWindowsTsfRegisterFailed(detail), Language::English) => {
+                format!("Windows could not register Native TSF: {detail}").into()
+            }
+            (Str::InputMethodWindowsTsfRegisterFailed(detail), Language::Vietnamese) => {
+                format!("Windows không thể đăng ký TSF gốc: {detail}").into()
+            }
+            (Str::InputMethodWindowsTsfUnregisterFailed(detail), Language::English) => {
+                format!("Windows could not remove Native TSF: {detail}").into()
+            }
+            (Str::InputMethodWindowsTsfUnregisterFailed(detail), Language::Vietnamese) => {
+                format!("Windows không thể gỡ TSF gốc: {detail}").into()
+            }
+            (Str::InputMethodKeyboardHook, Language::English) => "Keyboard Hook".into(),
+            (Str::InputMethodKeyboardHook, Language::Vietnamese) => "Keyboard Hook".into(),
+            (Str::InputMethodKeyboardHookStatus, Language::English) => "Keyboard Hook status".into(),
+            (Str::InputMethodKeyboardHookStatus, Language::Vietnamese) => {
+                "Trạng thái Keyboard Hook".into()
+            }
+            (Str::InputMethodKeyboardHookInactive, Language::English) => {
+                "Select Vietnamese from Dodo's Keyboard Input menu to start Keyboard Hook.".into()
+            }
+            (Str::InputMethodKeyboardHookInactive, Language::Vietnamese) => {
+                "Chọn Tiếng Việt trong menu Bàn phím nhập của Dodo để khởi động Keyboard Hook.".into()
+            }
+            (Str::InputMethodKeyboardHookRunning, Language::English) => {
+                "Keyboard Hook is active only while Dodo is open. It never stores or sends what you type.".into()
+            }
+            (Str::InputMethodKeyboardHookRunning, Language::Vietnamese) => {
+                "Keyboard Hook chỉ hoạt động khi Dodo đang mở. Dodo không bao giờ lưu hoặc gửi nội dung bạn gõ.".into()
+            }
+            (Str::InputMethodKeyboardHookFailed, Language::English) => {
+                "Keyboard Hook could not start. Keys are passing through unchanged.".into()
+            }
+            (Str::InputMethodKeyboardHookFailed, Language::Vietnamese) => {
+                "Không thể khởi động Keyboard Hook. Các phím được chuyển qua không thay đổi.".into()
+            }
+            (Str::InputMethodUninstall, Language::English) => "Uninstall".into(),
+            (Str::InputMethodUninstall, Language::Vietnamese) => "Gỡ cài đặt".into(),
+            (Str::InputMethodUninstalling, Language::English) => "Uninstalling…".into(),
+            (Str::InputMethodUninstalling, Language::Vietnamese) => "Đang gỡ cài đặt…".into(),
             (Str::InputMethodInstall, Language::English) => "Install".into(),
             (Str::InputMethodInstall, Language::Vietnamese) => "Cài đặt".into(),
             (Str::InputMethodReinstall, Language::English) => "Reinstall".into(),
@@ -5980,6 +6150,29 @@ mod tests {
             plain(Str::InputMethodEventTapNeedsAccessibility),
             plain(Str::InputMethodEventTapRunning),
             plain(Str::InputMethodEventTapFailed),
+            plain(Str::InputMethodWindowsDescription),
+            plain(Str::InputMethodWindowsLanguageDescription),
+            plain(Str::InputMethodNativeTsf),
+            plain(Str::InputMethodWindowsTsfStatus),
+            plain(Str::InputMethodWindowsTsfNotInstalled),
+            plain(Str::InputMethodWindowsTsfInstalled),
+            plain(Str::InputMethodWindowsTsfRemoved),
+            plain(Str::InputMethodWindowsTsfNoDll),
+            with(
+                Str::InputMethodWindowsTsfRegisterFailed(DETAIL.into()),
+                &[DETAIL],
+            ),
+            with(
+                Str::InputMethodWindowsTsfUnregisterFailed(DETAIL.into()),
+                &[DETAIL],
+            ),
+            term(Str::InputMethodKeyboardHook),
+            plain(Str::InputMethodKeyboardHookStatus),
+            plain(Str::InputMethodKeyboardHookInactive),
+            plain(Str::InputMethodKeyboardHookRunning),
+            plain(Str::InputMethodKeyboardHookFailed),
+            plain(Str::InputMethodUninstall),
+            plain(Str::InputMethodUninstalling),
         ]
     }
 
@@ -6856,6 +7049,23 @@ mod tests {
             Str::InputMethodEventTapNeedsAccessibility => 856,
             Str::InputMethodEventTapRunning => 857,
             Str::InputMethodEventTapFailed => 858,
+            Str::InputMethodWindowsDescription => 859,
+            Str::InputMethodWindowsLanguageDescription => 860,
+            Str::InputMethodNativeTsf => 861,
+            Str::InputMethodWindowsTsfStatus => 862,
+            Str::InputMethodWindowsTsfNotInstalled => 863,
+            Str::InputMethodWindowsTsfInstalled => 864,
+            Str::InputMethodWindowsTsfRemoved => 865,
+            Str::InputMethodWindowsTsfNoDll => 866,
+            Str::InputMethodWindowsTsfRegisterFailed(_) => 867,
+            Str::InputMethodWindowsTsfUnregisterFailed(_) => 868,
+            Str::InputMethodKeyboardHook => 869,
+            Str::InputMethodKeyboardHookStatus => 870,
+            Str::InputMethodKeyboardHookInactive => 871,
+            Str::InputMethodKeyboardHookRunning => 872,
+            Str::InputMethodKeyboardHookFailed => 873,
+            Str::InputMethodUninstall => 874,
+            Str::InputMethodUninstalling => 875,
         }
     }
 

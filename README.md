@@ -56,14 +56,17 @@ What ships today:
   queries, bounded query history and a catalog search persist per connection.
   Redis is read-only; result columns cannot be sorted, and there is no
   autocomplete.
-- **Input method (macOS only)** - installs dodo's own Vietnamese input method, an
-  InputMethodKit bundle macOS launches on its own and that keeps typing with dodo
-  closed. The pane says whether it is installed and whether it is running,
-  installs or reinstalls it in one press, and carries the engine's four settings:
+- **Input method (macOS and Windows)** - dodo's Vietnamese Telex/VNI engine has
+  a real native host on each platform: InputMethodKit on macOS and a per-user
+  Text Services Framework (TSF) DLL on Windows. Both keep typing with dodo
+  closed once installed. Windows also offers a no-install **Keyboard Hook**
+  fallback that works only while dodo stays open; it is clearly labelled as the
+  fallback, and exactly one backend transforms keys at a time. The pane installs,
+  reinstalls, or removes the native host and carries the engine's four settings:
   Telex or VNI, modern or traditional tone placement, spell check and bracket
-  shortcuts. Everything a running dodo needs to say about it is here - it is not a
-  Settings page. On Linux and Windows there is no sidebar row at all, because
-  there is no host for those platforms yet.
+  shortcuts. Linux has no sidebar row until it has an IBus host. See
+  [`docs/windows-input-method.md`](docs/windows-input-method.md) and
+  [`docs/macos-input-method.md`](docs/macos-input-method.md).
 - **Quick navigation** - vim-shaped, and works across all of the above. Whenever
   no input is focused, `Cmd+V` / `Ctrl+V` — or just `p` — reads the clipboard,
   works out what the text is, and opens the tool that handles it with the value

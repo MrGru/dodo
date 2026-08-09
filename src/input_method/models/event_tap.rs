@@ -4,8 +4,10 @@
 //! to pass, process, or re-enable, then performs the platform call. Keeping the
 //! policy here proves the security defaults without needing Accessibility access.
 
-use dodo_ime_core::{EngineAction, LanguageId};
+use dodo_ime_core::LanguageId;
 use dodo_ime_ipc::settings::Backend;
+
+pub use crate::input_method::models::direct_output::OutputPlan;
 
 /// What the pane can honestly say about Event Tap.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -70,53 +72,6 @@ pub fn handling(event: TapEvent, secure_input: bool) -> Handling {
             autorepeat: matches!(event, TapEvent::KeyDown { autorepeat: true }),
         },
         TapEvent::KeyDown { .. } | TapEvent::Other => Handling::PassThrough,
-    }
-}
-
-/// The direct-typing work Event Tap can safely perform for one original event.
-///
-/// It intentionally understands only the engine's direct actions. A marked-text
-/// action or a future candidate action is uncertainty, so the caller resets the
-/// engine and returns the original event unchanged.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct OutputPlan {
-    pub delete_before: usize,
-    pub insert: Option<String>,
-    pub pass_through: bool,
-}
-
-impl OutputPlan {
-    /// Turns one direct engine result into one atomic output plan.
-    pub fn from_actions(actions: &[EngineAction]) -> Option<OutputPlan> {
-        let mut plan = OutputPlan::default();
-
-        for action in actions {
-            match action {
-                EngineAction::InsertText(text)
-                    if plan.insert.is_none() && plan.delete_before == 0 =>
-                {
-                    plan.insert = Some(text.clone());
-                }
-                EngineAction::DeleteBackward(count) if plan.insert.is_none() => {
-                    plan.delete_before = plan.delete_before.checked_add(*count)?;
-                }
-                EngineAction::ReplaceBeforeCursor {
-                    grapheme_count,
-                    text,
-                } if plan.insert.is_none() && plan.delete_before == 0 => {
-                    plan.delete_before = *grapheme_count;
-                    plan.insert = (!text.is_empty()).then(|| text.clone());
-                }
-                EngineAction::PassThrough if !plan.pass_through => plan.pass_through = true,
-                _ => return None,
-            }
-        }
-
-        (!actions.is_empty()).then_some(plan)
-    }
-
-    pub fn transforms(&self) -> bool {
-        self.delete_before != 0 || self.insert.is_some()
     }
 }
 

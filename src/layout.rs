@@ -14,7 +14,7 @@ use crate::database::DatabaseView;
 use crate::docker::{DockerPage, DockerView};
 use crate::encoder_decoder::{EncoderDecoder, Format};
 use crate::i18n::{Str, t};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::input_method::views::InputMethodView;
 use crate::json_formatter::JsonFormatter;
 use crate::quick_nav::models::detect::Detector;
@@ -78,7 +78,7 @@ pub enum View {
     Cleaner,
     Docker,
     Database,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     InputMethod,
 }
 
@@ -96,7 +96,7 @@ impl View {
     /// Written twice rather than once with a `cfg` on one element: an attribute
     /// on an array element is not a thing stable Rust has, and a `Vec` here
     /// would cost every caller the fixed length [`View::codes`] returns.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     const ALL: [View; 7] = [
         View::JsonFormatter,
         View::EncoderDecoder,
@@ -109,7 +109,7 @@ impl View {
         View::InputMethod,
     ];
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     const ALL: [View; 6] = [
         View::JsonFormatter,
         View::EncoderDecoder,
@@ -137,7 +137,7 @@ impl View {
             View::Cleaner => Str::CleanerTitle,
             View::Docker => Str::Docker,
             View::Database => Str::DatabaseTitle,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             View::InputMethod => Str::InputMethod,
         }
     }
@@ -159,7 +159,7 @@ impl View {
             View::Cleaner => AppIcon::Cleaner,
             View::Docker => AppIcon::Container,
             View::Database => AppIcon::Database,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             View::InputMethod => AppIcon::Keyboard,
         }
     }
@@ -177,7 +177,7 @@ impl View {
             View::Cleaner => "cleaner",
             View::Docker => "docker",
             View::Database => "database",
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             View::InputMethod => "input-method",
         }
     }
@@ -534,7 +534,7 @@ pub struct Layout {
     cleaner: Entity<CleanerView>,
     docker: Entity<DockerView>,
     database: Entity<DatabaseView>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     input_method: Entity<InputMethodView>,
 }
 
@@ -614,7 +614,7 @@ impl Layout {
             cleaner: cx.new(|cx| CleanerView::new(window, cx)),
             docker,
             database: cx.new(|cx| DatabaseView::new(window, cx)),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             input_method: cx.new(|cx| InputMethodView::new(window, cx)),
         }
     }
@@ -1010,7 +1010,7 @@ impl Render for Layout {
                                         View::Cleaner => this.child(self.cleaner.clone()),
                                         View::Docker => this.child(self.docker.clone()),
                                         View::Database => this.child(self.database.clone()),
-                                        #[cfg(target_os = "macos")]
+                                        #[cfg(any(target_os = "macos", target_os = "windows"))]
                                         View::InputMethod => this.child(self.input_method.clone()),
                                     }),
                             ),
@@ -1071,7 +1071,7 @@ mod tests {
     /// tool be dropped from the middle of one of them unnoticed.
     #[test]
     fn the_sidebar_lists_every_tool_once_with_docker_flat_and_last() {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         assert_eq!(
             View::ALL,
             [
@@ -1084,7 +1084,7 @@ mod tests {
                 View::InputMethod,
             ]
         );
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         assert_eq!(
             View::ALL,
             [
@@ -1102,22 +1102,25 @@ mod tests {
         // all, which is what made Docker's four pages unreachable.
         assert_eq!(
             View::ALL.len(),
-            if cfg!(target_os = "macos") { 7 } else { 6 }
+            if cfg!(any(target_os = "macos", target_os = "windows")) {
+                7
+            } else {
+                6
+            }
         );
     }
 
-    /// The Input method is a tool on macOS and does not exist anywhere else,
-    /// because the bundle it installs is an InputMethodKit object. A row whose
-    /// only button could not work is worse than no row.
+    /// Input method is a tool only where a native host exists. Linux remains
+    /// hidden until it has its own host rather than showing a dead install row.
     #[test]
-    fn the_input_method_is_a_macos_tool_and_only_a_macos_tool() {
+    fn the_input_method_is_a_native_host_tool_only() {
         assert_eq!(
             View::codes().contains(&"input-method"),
-            cfg!(target_os = "macos"),
+            cfg!(any(target_os = "macos", target_os = "windows")),
         );
         assert_eq!(
             View::lookup("input-method").is_some(),
-            cfg!(target_os = "macos"),
+            cfg!(any(target_os = "macos", target_os = "windows")),
         );
     }
 
@@ -1160,7 +1163,7 @@ mod tests {
         assert_eq!(paths.len(), total, "two sidebar rows draw the same glyph");
 
         assert_eq!(View::ApiExplorer.icon().path(), "icons/globe.svg");
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         assert_eq!(View::InputMethod.icon().path(), "icons/keyboard.svg");
     }
 
@@ -1215,7 +1218,7 @@ mod tests {
             "docker",
             "database",
         ];
-        if cfg!(target_os = "macos") {
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
             expected.push("input-method");
         }
         assert_eq!(codes, expected);

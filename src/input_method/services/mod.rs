@@ -11,8 +11,12 @@
 #[cfg(target_os = "macos")]
 pub mod event_tap;
 pub mod installer;
+#[cfg(target_os = "windows")]
+pub mod keyboard_hook;
 pub mod notify;
 pub mod store;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 #[cfg(target_os = "macos")]
 pub mod tis;

@@ -37,12 +37,24 @@ use gpui_component::radio::RadioGroup;
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, Disableable as _, StyledExt as _, h_flex, v_flex};
 
+#[cfg(target_os = "windows")]
+use dodo_ime_core::LanguageId;
 use dodo_ime_ipc::settings::{Backend, Scheme, Tone};
 
 use crate::i18n::{Str, t};
+use crate::input_method::InputMethod;
+#[cfg(target_os = "macos")]
+use crate::input_method::Install;
+#[cfg(target_os = "macos")]
 use crate::input_method::models::event_tap::EventTapStatus;
+#[cfg(target_os = "windows")]
+use crate::input_method::models::keyboard_hook::KeyboardHookStatus;
+#[cfg(target_os = "macos")]
 use crate::input_method::models::status::status_message;
-use crate::input_method::{InputMethod, Install};
+#[cfg(target_os = "windows")]
+use crate::input_method::models::windows::{
+    WindowsInstall, WindowsInstallFailure, WindowsInstallOutcome,
+};
 
 /// The Input method pane. A unit struct rather than one with fields — see the
 /// module docs for why holding anything here would be a defect rather than an
@@ -56,11 +68,17 @@ impl InputMethodView {
         Self
     }
 
+    #[cfg(target_os = "macos")]
+    const BACKENDS: [Backend; 2] = [Backend::Native, Backend::EventTap];
+    #[cfg(target_os = "windows")]
+    const BACKENDS: [Backend; 2] = [Backend::Native, Backend::KeyboardHook];
+
     /// The one sentence about the input method's standing state.
     ///
     /// Assembles the four arguments [`status_message`] decides from and does
     /// nothing else. `describes_a_live_process` is the one call that cannot move
     /// into the model: it is `kill(pid, 0)`, a syscall, and the model is pure.
+    #[cfg(target_os = "macos")]
     fn status_line(cx: &App) -> Str {
         let status = InputMethod::status(cx);
         let running = status
@@ -77,6 +95,7 @@ impl InputMethodView {
     }
 
     /// Install, or reinstall, or nothing while one is running.
+    #[cfg(target_os = "macos")]
     fn install_button(cx: &App) -> Button {
         let running = InputMethod::install_state(cx) == Install::Running;
         let label = if InputMethod::is_installed(cx) {
@@ -101,6 +120,7 @@ impl InputMethodView {
     /// **One card, not a "Status" row and an "Install" row.** There is one thing
     /// to say and one thing to do about it, and splitting them would be two rows
     /// that are each half an answer.
+    #[cfg(target_os = "macos")]
     fn status_card(cx: &App) -> impl IntoElement {
         h_flex()
             .items_center()
@@ -171,31 +191,51 @@ impl InputMethodView {
             .child(div().flex_shrink_0().child(control))
     }
 
+    #[cfg(target_os = "macos")]
+    fn description() -> Str {
+        Str::InputMethodDescription
+    }
+
+    #[cfg(target_os = "windows")]
+    fn description() -> Str {
+        Str::InputMethodWindowsDescription
+    }
+
+    fn backend_label(backend: Backend) -> Str {
+        match backend {
+            Backend::Native => {
+                #[cfg(target_os = "macos")]
+                {
+                    Str::InputMethodNative
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    Str::InputMethodNativeTsf
+                }
+            }
+            Backend::EventTap => Str::InputMethodEventTap,
+            Backend::KeyboardHook => Str::InputMethodKeyboardHook,
+        }
+    }
+
     /// The two real transformation hosts. The radio reads the global on every
     /// render, so asynchronous settings loading cannot leave it stale.
     fn backend_choice(cx: &App) -> impl IntoElement {
-        let selected = Backend::ALL
+        let selected = Self::BACKENDS
             .iter()
             .position(|backend| *backend == InputMethod::backend(cx));
 
         RadioGroup::horizontal("input-method-backend")
-            .children(Backend::ALL.map(|backend| {
-                t(
-                    match backend {
-                        Backend::Native => Str::InputMethodNative,
-                        Backend::EventTap => Str::InputMethodEventTap,
-                    },
-                    cx,
-                )
-            }))
+            .children(Self::BACKENDS.map(|backend| t(Self::backend_label(backend), cx)))
             .selected_index(selected)
             .on_click(|ix: &usize, _, cx| {
-                if let Some(backend) = Backend::ALL.get(*ix).copied() {
+                if let Some(backend) = Self::BACKENDS.get(*ix).copied() {
                     InputMethod::set_backend(backend, cx);
                 }
             })
     }
 
+    #[cfg(target_os = "macos")]
     fn event_tap_status_line(cx: &App) -> Str {
         match InputMethod::event_tap_status(cx) {
             EventTapStatus::Inactive => Str::InputMethodEventTapInactive,
@@ -208,6 +248,7 @@ impl InputMethodView {
 
     /// Event Tap has no install action: its only prerequisite is the system's
     /// Accessibility grant, which dodo reports but never attempts to change.
+    #[cfg(target_os = "macos")]
     fn event_tap_status_card(cx: &App) -> impl IntoElement {
         h_flex()
             .items_center()
@@ -231,6 +272,144 @@ impl InputMethodView {
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(t(Self::event_tap_status_line(cx), cx)),
+                    ),
+            )
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_tsf_status_line(cx: &App) -> Str {
+        match InputMethod::windows_install_state(cx) {
+            WindowsInstall::Installing => Str::InputMethodInstalling,
+            WindowsInstall::Uninstalling => Str::InputMethodUninstalling,
+            WindowsInstall::Done(WindowsInstallOutcome::Ready) => {
+                Str::InputMethodWindowsTsfInstalled
+            }
+            WindowsInstall::Done(WindowsInstallOutcome::Removed) => {
+                Str::InputMethodWindowsTsfRemoved
+            }
+            WindowsInstall::Done(WindowsInstallOutcome::Failed(
+                WindowsInstallFailure::NoSourceDll,
+            )) => Str::InputMethodWindowsTsfNoDll,
+            WindowsInstall::Done(WindowsInstallOutcome::Failed(WindowsInstallFailure::Copy {
+                detail,
+            })) => Str::InputMethodCopyFailed(detail),
+            WindowsInstall::Done(WindowsInstallOutcome::Failed(
+                WindowsInstallFailure::Register { detail },
+            )) => Str::InputMethodWindowsTsfRegisterFailed(detail),
+            WindowsInstall::Done(WindowsInstallOutcome::Failed(
+                WindowsInstallFailure::Unregister { detail },
+            )) => Str::InputMethodWindowsTsfUnregisterFailed(detail),
+            WindowsInstall::Idle if InputMethod::is_installed(cx) => {
+                Str::InputMethodWindowsTsfInstalled
+            }
+            WindowsInstall::Idle => Str::InputMethodWindowsTsfNotInstalled,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_tsf_status_card(cx: &App) -> impl IntoElement {
+        let running = matches!(
+            InputMethod::windows_install_state(cx),
+            WindowsInstall::Installing | WindowsInstall::Uninstalling
+        );
+        let install_label = if InputMethod::is_installed(cx) {
+            Str::InputMethodReinstall
+        } else {
+            Str::InputMethodInstall
+        };
+        h_flex()
+            .items_center()
+            .gap_3()
+            .p_3()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .font_bold()
+                            .child(t(Str::InputMethodWindowsTsfStatus, cx)),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(Self::windows_tsf_status_line(cx), cx)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_shrink_0()
+                    .child(
+                        Button::new("install-windows-tsf")
+                            .primary()
+                            .label(t(install_label, cx))
+                            .disabled(running)
+                            .on_click(|_, _, cx| InputMethod::install(cx)),
+                    )
+                    .child(
+                        Button::new("uninstall-windows-tsf")
+                            .ghost()
+                            .label(t(Str::InputMethodUninstall, cx))
+                            .disabled(running || !InputMethod::is_installed(cx))
+                            .on_click(|_, _, cx| InputMethod::uninstall(cx)),
+                    ),
+            )
+    }
+
+    #[cfg(target_os = "windows")]
+    fn language_choice(cx: &App) -> impl IntoElement {
+        let selected = LanguageId::ALL
+            .iter()
+            .position(|language| *language == InputMethod::language(cx));
+        RadioGroup::horizontal("input-method-language")
+            .children(LanguageId::ALL.map(language_label))
+            .selected_index(selected)
+            .on_click(|ix: &usize, _, cx| {
+                if let Some(language) = LanguageId::ALL.get(*ix).copied() {
+                    InputMethod::set_language(language, cx);
+                }
+            })
+    }
+
+    #[cfg(target_os = "windows")]
+    fn keyboard_hook_status_line(cx: &App) -> Str {
+        match InputMethod::keyboard_hook_status(cx) {
+            KeyboardHookStatus::Inactive => Str::InputMethodKeyboardHookInactive,
+            KeyboardHookStatus::Running => Str::InputMethodKeyboardHookRunning,
+            KeyboardHookStatus::Failed => Str::InputMethodKeyboardHookFailed,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn keyboard_hook_status_card(cx: &App) -> impl IntoElement {
+        h_flex()
+            .items_center()
+            .gap_3()
+            .p_3()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .font_bold()
+                            .child(t(Str::InputMethodKeyboardHookStatus, cx)),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(Self::keyboard_hook_status_line(cx), cx)),
                     ),
             )
     }
@@ -301,62 +480,86 @@ impl InputMethodView {
     }
 }
 
+/// Keyboard input languages are endonyms, as in the macOS tray menu; translating
+/// them would make the identifier less recognizable to the person selecting it.
+#[cfg(target_os = "windows")]
+fn language_label(language: LanguageId) -> &'static str {
+    match language {
+        LanguageId::English => "English",
+        LanguageId::Vietnamese => "Tiếng Việt",
+        LanguageId::Japanese => "日本語",
+    }
+}
+
 impl Render for InputMethodView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
+        let root = v_flex()
             .size_full()
             .gap_4()
-            // The one thing worth saying about the whole tool, said once at the
-            // top: Native Input Method outlives dodo; Event Tap intentionally
-            // does not. Every row below is then about one decision.
             .child(
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::InputMethodDescription, cx)),
+                    .child(t(Self::description(), cx)),
             )
             .child(Self::row(
                 Str::InputMethodBackend,
                 Str::InputMethodBackendDescription,
                 Self::backend_choice(cx),
                 cx,
-            ))
+            ));
+        #[cfg(target_os = "macos")]
+        let root = root
             .when(InputMethod::backend(cx) == Backend::Native, |this| {
                 this.child(Self::status_card(cx))
             })
             .when(InputMethod::backend(cx) == Backend::EventTap, |this| {
                 this.child(Self::event_tap_status_card(cx))
+            });
+        #[cfg(target_os = "windows")]
+        let root = root
+            .child(Self::row(
+                Str::TrayKeyboardInput,
+                Str::InputMethodWindowsLanguageDescription,
+                Self::language_choice(cx),
+                cx,
+            ))
+            .when(InputMethod::backend(cx) == Backend::Native, |this| {
+                this.child(Self::windows_tsf_status_card(cx))
             })
-            .when_some(InputMethod::store_error(cx), |this, problem| {
-                this.child(Self::storage_problem(problem, cx))
-            })
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(Self::row(
-                        Str::InputMethodScheme,
-                        Str::InputMethodSchemeDescription,
-                        Self::scheme_choice(cx),
-                        cx,
-                    ))
-                    .child(Self::row(
-                        Str::InputMethodTonePlacement,
-                        Str::InputMethodTonePlacementDescription,
-                        Self::tone_choice(cx),
-                        cx,
-                    ))
-                    .child(Self::row(
-                        Str::InputMethodSpellCheck,
-                        Str::InputMethodSpellCheckDescription,
-                        Self::spell_check_switch(cx),
-                        cx,
-                    ))
-                    .child(Self::row(
-                        Str::InputMethodBracketShortcuts,
-                        Str::InputMethodBracketShortcutsDescription,
-                        Self::bracket_shortcuts_switch(cx),
-                        cx,
-                    )),
-            )
+            .when(InputMethod::backend(cx) == Backend::KeyboardHook, |this| {
+                this.child(Self::keyboard_hook_status_card(cx))
+            });
+        root.when_some(InputMethod::store_error(cx), |this, problem| {
+            this.child(Self::storage_problem(problem, cx))
+        })
+        .child(
+            v_flex()
+                .gap_1()
+                .child(Self::row(
+                    Str::InputMethodScheme,
+                    Str::InputMethodSchemeDescription,
+                    Self::scheme_choice(cx),
+                    cx,
+                ))
+                .child(Self::row(
+                    Str::InputMethodTonePlacement,
+                    Str::InputMethodTonePlacementDescription,
+                    Self::tone_choice(cx),
+                    cx,
+                ))
+                .child(Self::row(
+                    Str::InputMethodSpellCheck,
+                    Str::InputMethodSpellCheckDescription,
+                    Self::spell_check_switch(cx),
+                    cx,
+                ))
+                .child(Self::row(
+                    Str::InputMethodBracketShortcuts,
+                    Str::InputMethodBracketShortcutsDescription,
+                    Self::bracket_shortcuts_switch(cx),
+                    cx,
+                )),
+        )
     }
 }

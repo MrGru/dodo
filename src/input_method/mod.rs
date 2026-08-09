@@ -1,19 +1,15 @@
-//! dodo's end of the macOS input method: installing it, and telling it how to
-//! type.
+//! dodo's end of the native input methods: installing them, and telling them
+//! how to type.
 //!
-//! **dodo does not run the input method and cannot start it.** macOS launches
-//! `Dodo Vietnamese.app` out of `~/Library/Input Methods` when the user selects
-//! it, and it keeps typing with dodo closed. So this module does exactly two
-//! things, and neither is "drive an input method":
+//! **dodo does not run either native input method.** macOS launches the
+//! InputMethodKit app and Windows loads the TSF DLL when the user selects its
+//! profile; both are designed to type with dodo closed. This module installs or
+//! removes the selected platform's native artifact and writes its settings.
 //!
-//! - **Install it.** [`InputMethod::install`] copies the bundle dodo carries into
-//!   `~/Library/Input Methods`, registers it, enables and selects the *mode*, and
-//!   kills any process still serving the previous copy.
-//!   `docs/macos-input-method.md` §2 is the authority on every one of those and
-//!   [`models::install`] is where its rules live as tested data.
-//! - **Write its settings.** dodo owns `input-method.json`; the bundle reads it.
-//!   The contract is `dodo-ime-ipc`, which both processes link, and it is where
-//!   the schema, the version rule and the notification name are documented.
+//! dodo owns `input-method.json`; native hosts only read it. The contract is
+//! `dodo-ime-ipc`, which carries the schema/version rule and host identifiers.
+//! `docs/macos-input-method.md` and `docs/windows-input-method.md` are the
+//! installation authorities.
 //!
 //! # What this module is not
 //!
@@ -22,14 +18,14 @@
 //! `input-method.json`, and the bundle reads it. dodo's interface language is
 //! still only a display preference.
 //!
-//! **It does not link the bundle.** dodo depends on `dodo-ime-ipc` and not on
-//! `dodo-ime-macos`: linking the host would pull InputMethodKit into a UI
-//! application for four string constants, and the host must never link gpui.
+//! **It does not link a native host.** dodo depends on `dodo-ime-ipc`, not the
+//! InputMethodKit app or TSF DLL; neither host may pull gpui into another
+//! application's input path.
 //!
-//! **Native Input Method has no engine here.** It is still a separate bundle
-//! macOS runs. Event Tap is the explicit alternative: while selected, this
-//! process drives the same `dodo-ime-core` engine through an Accessibility-gated
-//! `CGEventTap`; otherwise it creates no tap and observes no keystrokes.
+//! **Native Input Method has no engine here.** Event Tap (macOS) and Keyboard
+//! Hook (Windows) are explicit dodo-lifetime-only alternatives. When unselected
+//! they create no observer; when selected, the state layer makes the native host
+//! pass through before starting the fallback.
 //!
 //! # Where the state is
 //!
@@ -55,14 +51,10 @@
 //! assumption in the settings store is exactly the sort of thing those rows exist
 //! to catch.
 //!
-//! The cost is that on those two platforms **nothing calls any of it**, because the
-//! only caller is [`views`], which is macOS-only — there is no Windows or Linux
-//! input method to install yet, so `View::InputMethod` is not a sidebar row there
-//! either. So the compiler correctly reports every item here as dead, and the
-//! `allow` below is conditional on exactly that: on macOS, where
-//! `clippy -D warnings` and the test suite run, dead-code checking is untouched. It
-//! comes off when a Windows TSF or Linux IBus host gives these callers.
-#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+//! Linux still has no input-method host, so its sidebar has no row. macOS and
+//! Windows both call this module: macOS installs InputMethodKit and can select
+//! Event Tap; Windows installs a TSF DLL and can select Keyboard Hook.
+#![cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 
 pub mod models;
 pub mod services;
@@ -79,8 +71,16 @@ use gpui::{App, AsyncApp, BorrowAppContext as _, Global, Task};
 use crate::i18n::Str;
 #[cfg(target_os = "macos")]
 use crate::input_method::models::event_tap::{EventTapStatus, desired_status};
+#[cfg(target_os = "macos")]
 use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallReport};
+#[cfg(target_os = "windows")]
+use crate::input_method::models::keyboard_hook::{
+    KeyboardHookStatus, desired_status as hook_status,
+};
+#[cfg(target_os = "macos")]
 pub use crate::input_method::models::status::Install;
+#[cfg(target_os = "windows")]
+use crate::input_method::models::windows::{WindowsInstall, WindowsInstallOutcome};
 use crate::input_method::services::store::{DiskInputMethodStore, InputMethodStore, message_for};
 
 /// How long after a settings change to ask the bundle what it applied.
@@ -92,6 +92,7 @@ use crate::input_method::services::store::{DiskInputMethodStore, InputMethodStor
 /// read, once, after a pause long enough for a file read in another process. It is
 /// not a poll: if the answer is still stale, the row says so until the next change
 /// or the next launch, which is honest rather than busy.
+#[cfg(target_os = "macos")]
 const STATUS_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// What dodo knows about its input method.
@@ -110,8 +111,10 @@ pub struct InputMethod {
     /// it, or when the user deletes it behind dodo's back — and a `stat` per
     /// frame to notice the second would be a poor trade.
     installed: bool,
+    #[cfg(target_os = "macos")]
     install: Install,
     save: Option<Task<()>>,
+    #[cfg(target_os = "macos")]
     installing: Option<Task<()>>,
     /// Held only while Event Tap owns transformation. Dropping it detaches the
     /// run-loop source before its callback state can be freed.
@@ -119,6 +122,16 @@ pub struct InputMethod {
     event_tap: Option<services::event_tap::EventTap>,
     #[cfg(target_os = "macos")]
     event_tap_status: EventTapStatus,
+    /// Held only while Windows Keyboard Hook owns transformation. Dropping it
+    /// calls `UnhookWindowsHookEx` before callback state is released.
+    #[cfg(target_os = "windows")]
+    keyboard_hook: Option<services::keyboard_hook::KeyboardHook>,
+    #[cfg(target_os = "windows")]
+    keyboard_hook_status: KeyboardHookStatus,
+    #[cfg(target_os = "windows")]
+    windows_install: WindowsInstall,
+    #[cfg(target_os = "windows")]
+    windows_task: Option<Task<()>>,
 }
 
 impl Global for InputMethod {}
@@ -131,13 +144,23 @@ impl InputMethod {
             store_error: None,
             status: None,
             installed: false,
+            #[cfg(target_os = "macos")]
             install: Install::Idle,
             save: None,
+            #[cfg(target_os = "macos")]
             installing: None,
             #[cfg(target_os = "macos")]
             event_tap: None,
             #[cfg(target_os = "macos")]
             event_tap_status: EventTapStatus::Inactive,
+            #[cfg(target_os = "windows")]
+            keyboard_hook: None,
+            #[cfg(target_os = "windows")]
+            keyboard_hook_status: KeyboardHookStatus::Inactive,
+            #[cfg(target_os = "windows")]
+            windows_install: WindowsInstall::Idle,
+            #[cfg(target_os = "windows")]
+            windows_task: None,
         }
     }
 
@@ -160,6 +183,7 @@ impl InputMethod {
             .is_some_and(|state| state.installed)
     }
 
+    #[cfg(target_os = "macos")]
     pub fn install_state(cx: &App) -> Install {
         cx.try_global::<InputMethod>()
             .map(|state| state.install.clone())
@@ -205,12 +229,17 @@ impl InputMethod {
 
     /// Switches the sole transformation owner.
     pub fn set_backend(backend: Backend, cx: &mut App) {
+        if Self::backend(cx) == backend {
+            return;
+        }
         // Stop first when returning to Native. A failed write then causes a
         // harmless gap rather than two backends racing on a user's text.
         #[cfg(target_os = "macos")]
         if backend == Backend::Native {
             Self::stop_event_tap(cx);
         }
+        #[cfg(target_os = "windows")]
+        Self::stop_keyboard_hook(cx);
         Self::edit(cx, |document| document.backend = backend);
     }
 
@@ -272,6 +301,14 @@ impl InputMethod {
                 return;
             }
 
+            #[cfg(target_os = "windows")]
+            {
+                // Every setting write creates a conservative gap. The native
+                // host re-reads the completed file before each key; starting a
+                // hook before that write would let two owners see one key.
+                state.keyboard_hook = None;
+                state.keyboard_hook_status = KeyboardHookStatus::Inactive;
+            }
             state.document = SettingsDocument::next_with_backend(
                 &state.document,
                 next.backend,
@@ -293,13 +330,19 @@ impl InputMethod {
                         // notification is a CoreFoundation call and this is where
                         // dodo makes them.
                         cx.update(|cx| {
+                            #[cfg(target_os = "macos")]
                             services::notify::settings_changed();
                             Self::clear_error(cx);
                             #[cfg(target_os = "macos")]
                             Self::reconcile_event_tap(cx);
+                            #[cfg(target_os = "windows")]
+                            Self::reconcile_keyboard_hook(cx);
                         });
-                        cx.background_executor().timer(STATUS_SETTLE_DELAY).await;
-                        Self::refresh_status(cx).await;
+                        #[cfg(target_os = "macos")]
+                        {
+                            cx.background_executor().timer(STATUS_SETTLE_DELAY).await;
+                            Self::refresh_status(cx).await;
+                        }
                     }
                     Err(error) => {
                         cx.update(|cx| Self::report(error, cx));
@@ -310,11 +353,8 @@ impl InputMethod {
         cx.refresh_windows();
     }
 
-    /// Runs an install, start to finish, off the UI thread.
-    ///
-    /// Everything it does is [`services::installer::install`]'s; this is the part
-    /// that cannot be unit tested — finding the running executable, hopping to the
-    /// background executor and putting the answer back into the global.
+    /// Runs macOS's bundle install, start to finish, off the UI thread.
+    #[cfg(target_os = "macos")]
     pub fn install(cx: &mut App) {
         if cx.try_global::<InputMethod>().is_none() {
             return;
@@ -341,6 +381,7 @@ impl InputMethod {
         cx.refresh_windows();
     }
 
+    #[cfg(target_os = "macos")]
     fn adopt_report(report: InstallReport, cx: &mut App) {
         if report.outcome.is_installed() {
             eprintln!(
@@ -361,6 +402,7 @@ impl InputMethod {
     }
 
     /// Reads the bundle's status file and adopts it.
+    #[cfg(target_os = "macos")]
     async fn refresh_status(cx: &mut AsyncApp) {
         let Some(store) = cx.update(|cx| {
             cx.try_global::<InputMethod>()
@@ -437,6 +479,8 @@ impl InputMethod {
         });
         #[cfg(target_os = "macos")]
         Self::reconcile_event_tap(cx);
+        #[cfg(target_os = "windows")]
+        Self::reconcile_keyboard_hook(cx);
         cx.refresh_windows();
     }
 
@@ -511,14 +555,138 @@ impl InputMethod {
         });
         cx.refresh_windows();
     }
+
+    /// What the Windows TSF installer last did.
+    #[cfg(target_os = "windows")]
+    pub fn windows_install_state(cx: &App) -> WindowsInstall {
+        cx.try_global::<InputMethod>()
+            .map(|state| state.windows_install.clone())
+            .unwrap_or_default()
+    }
+
+    /// Installs or reinstalls the per-user TSF COM server off the UI thread.
+    #[cfg(target_os = "windows")]
+    pub fn install(cx: &mut App) {
+        if cx.try_global::<InputMethod>().is_none() {
+            return;
+        }
+        cx.update_global::<InputMethod, _>(|state, cx| {
+            if matches!(
+                state.windows_install,
+                WindowsInstall::Installing | WindowsInstall::Uninstalling
+            ) {
+                return;
+            }
+            state.windows_install = WindowsInstall::Installing;
+            state.windows_task = Some(cx.spawn(async move |cx| {
+                let outcome = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let executable = std::env::current_exe().unwrap_or_default();
+                        let working_directory = std::env::current_dir().unwrap_or_default();
+                        services::windows::install(
+                            &executable,
+                            &working_directory,
+                            &crate::paths::data_dir(),
+                        )
+                    })
+                    .await;
+                cx.update(|cx| Self::adopt_windows_outcome(outcome, cx));
+            }));
+        });
+        cx.refresh_windows();
+    }
+
+    /// Removes the current user's TSF COM server and its copied DLL.
+    #[cfg(target_os = "windows")]
+    pub fn uninstall(cx: &mut App) {
+        if cx.try_global::<InputMethod>().is_none() {
+            return;
+        }
+        Self::stop_keyboard_hook(cx);
+        cx.update_global::<InputMethod, _>(|state, cx| {
+            if matches!(
+                state.windows_install,
+                WindowsInstall::Installing | WindowsInstall::Uninstalling
+            ) {
+                return;
+            }
+            state.windows_install = WindowsInstall::Uninstalling;
+            state.windows_task = Some(cx.spawn(async move |cx| {
+                let outcome = cx
+                    .background_executor()
+                    .spawn(async move { services::windows::uninstall(&crate::paths::data_dir()) })
+                    .await;
+                cx.update(|cx| Self::adopt_windows_outcome(outcome, cx));
+            }));
+        });
+        cx.refresh_windows();
+    }
+
+    #[cfg(target_os = "windows")]
+    fn adopt_windows_outcome(outcome: WindowsInstallOutcome, cx: &mut App) {
+        if cx.try_global::<InputMethod>().is_some() {
+            cx.update_global::<InputMethod, _>(|state, _| {
+                state.installed = matches!(outcome, WindowsInstallOutcome::Ready);
+                state.windows_install = WindowsInstall::Done(outcome);
+            });
+        }
+        cx.refresh_windows();
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn keyboard_hook_status(cx: &App) -> KeyboardHookStatus {
+        cx.try_global::<InputMethod>()
+            .map(|state| {
+                state.keyboard_hook.as_ref().map_or(
+                    state.keyboard_hook_status,
+                    services::keyboard_hook::KeyboardHook::status,
+                )
+            })
+            .unwrap_or(KeyboardHookStatus::Inactive)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn stop_keyboard_hook(cx: &mut App) {
+        if cx.try_global::<InputMethod>().is_some() {
+            cx.update_global::<InputMethod, _>(|state, _| {
+                state.keyboard_hook = None;
+                state.keyboard_hook_status = KeyboardHookStatus::Inactive;
+            });
+        }
+    }
+
+    /// Starts only after the completed settings write selected the Windows
+    /// fallback. The native TSF DLL reads that same file before every key, so
+    /// the order leaves a harmless gap rather than competing owners.
+    #[cfg(target_os = "windows")]
+    fn reconcile_keyboard_hook(cx: &mut App) {
+        if cx.try_global::<InputMethod>().is_none() {
+            return;
+        }
+        cx.update_global::<InputMethod, _>(|state, _| {
+            if hook_status(state.document.backend, state.document.language, true)
+                != KeyboardHookStatus::Running
+            {
+                state.keyboard_hook = None;
+                state.keyboard_hook_status = KeyboardHookStatus::Inactive;
+                return;
+            }
+            let config = state.document.vietnamese.to_config();
+            match services::keyboard_hook::KeyboardHook::start(config) {
+                Ok(hook) => {
+                    state.keyboard_hook_status = hook.status();
+                    state.keyboard_hook = Some(hook);
+                }
+                Err(_) => state.keyboard_hook_status = KeyboardHookStatus::Failed,
+            }
+        });
+        cx.refresh_windows();
+    }
 }
 
-/// The whole install, on a background thread.
-///
-/// Split out of [`InputMethod::install`] so that the async plumbing and the
-/// blocking work are not the same function. `std::env::current_exe` is the one
-/// thing here that cannot be handed in: it is *the running dodo*, which is exactly
-/// what has to be found to locate the bundle it carries.
+/// The macOS bundle install, on a background thread.
+#[cfg(target_os = "macos")]
 fn run_install() -> InstallReport {
     let ops = system_ops();
 
@@ -556,11 +724,6 @@ fn system_ops() -> Option<Box<dyn services::installer::InstallOps>> {
     Some(Box::new(services::installer::SystemOps))
 }
 
-#[cfg(not(target_os = "macos"))]
-fn system_ops() -> Option<Box<dyn services::installer::InstallOps>> {
-    None
-}
-
 /// Registers the global. Called from `main` after `gpui_component::init`, like
 /// every other `init`.
 pub fn init(cx: &mut App) {
@@ -580,18 +743,27 @@ pub async fn load(cx: &mut AsyncApp) {
         return;
     };
 
-    let home = crate::paths::Environment::from_env().home;
     let (loaded, status, installed) = cx
         .background_executor()
         .spawn(async move {
             let loaded = store.load_settings();
-            // A status file dodo cannot read is not a reason to report anything:
-            // see `refresh_status`.
-            let status = store.read_status().ok().flatten();
-            let installed = home
-                .map(|home| dodo_ime_ipc::paths::installed_bundle(&home))
-                .is_some_and(|bundle| bundle.is_dir());
-            (loaded, status, installed)
+            #[cfg(target_os = "macos")]
+            {
+                // A status file dodo cannot read is not a reason to report
+                // anything: see `refresh_status`.
+                let status = store.read_status().ok().flatten();
+                let installed = crate::paths::Environment::from_env()
+                    .home
+                    .map(|home| dodo_ime_ipc::paths::installed_bundle(&home))
+                    .is_some_and(|bundle| bundle.is_dir());
+                (loaded, status, installed)
+            }
+            #[cfg(target_os = "windows")]
+            {
+                (loaded, None, services::windows::is_registered())
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            (loaded, None, false)
         })
         .await;
 

@@ -281,6 +281,16 @@ Neither file is embedded in the binary: `src/assets.rs`'s `#[include]` filters
 cover only `icons/**/*.svg` and `themes/**/*.json`, so these cost zero bytes.
 `dodo --build-info` does not print licence information.
 
+### Windows TSF artifact
+
+`scripts/package.ps1` treats `input-method/dodo_ime_windows.dll` as a required
+release artifact beside `dodo.exe`; it fails rather than publishing a ZIP whose
+Native TSF button cannot work. The Windows release verifier also checks that
+that DLL survived the ZIP. `cargo build` reaches it through the workspace
+`default-members`, and CI explicitly compiles and runs the TSF host's
+class-factory harness on Windows. User installation, recovery, and the manual
+runtime matrix are in [`windows-input-method.md`](windows-input-method.md).
+
 ### Checking a Windows fix without a Windows machine
 
 `build (windows-x64)` is the row most likely to break from a macOS-only desk, so
