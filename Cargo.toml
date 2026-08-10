@@ -399,6 +399,17 @@ tray-icon = { version = "0.24", default-features = false }
 [target.'cfg(target_os = "linux")'.dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+# Cleaner's move-to-trash for Windows and Linux (`cleaner::windows::platform`,
+# `cleaner::linux::platform`). macOS keeps its existing direct
+# `NSFileManager` call in `cleaner::macos::platform::trash` rather than being
+# switched to this too — it already shipped and is already tested, and
+# `trash` would buy it nothing it does not already have. On Windows this
+# drives `IFileOperation`; on Linux it implements the freedesktop.org Trash
+# spec (`$XDG_DATA_HOME/Trash`) itself, in pure Rust — no `pkg-config`, no
+# GTK/D-Bus dependency, so it costs the Linux build nothing beyond the crate.
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+trash = "5.2"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

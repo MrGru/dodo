@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::cleaner::core::cancellation::CancellationToken;
 use crate::cleaner::core::category::CleanerCategory;
 use crate::cleaner::core::errors::ScanError;
+use crate::cleaner::core::fs::measure_size;
 use crate::cleaner::core::item::{
     ApplicationMetadata, CleanableItem, CleanableItemId, ItemMetadata,
 };
@@ -173,44 +174,56 @@ impl CleanerScanner for InstalledAppsScanner {
                         .sum(),
                 });
                 match parse_bundle(path.as_path()) {
-                    Ok(bundle) => items.push(CleanableItem {
-                        id: item_id(path.as_path()),
-                        category: CleanerCategory::InstalledApps,
-                        group: Some(root_label(root.as_path())),
-                        display_name: bundle.display_name,
-                        path,
-                        logical_size: 0,
-                        allocated_size: None,
-                        modified_at: bundle.modified_at,
-                        last_accessed_at: None,
-                        risk: if bundle.is_system_app {
+                    Ok(bundle) => {
+                        let risk = if bundle.is_system_app {
                             RiskLevel::Protected
                         } else {
                             RiskLevel::ReviewRecommended
-                        },
-                        selection_policy: SelectionPolicy::NeverBulkSelect,
-                        capabilities: if bundle.is_system_app {
-                            // "System apps must never be uninstallable" — no
-                            // `UninstallApplication` capability at all, so the
-                            // review view has nothing to gate a button on
-                            // rather than needing to remember to check risk.
-                            vec![ItemCapability::RevealInFinder, ItemCapability::CopyPath]
-                        } else {
-                            vec![
-                                ItemCapability::RevealInFinder,
-                                ItemCapability::CopyPath,
-                                ItemCapability::UninstallApplication,
-                            ]
-                        },
-                        explanation: bundle.explanation,
-                        warnings: Vec::new(),
-                        metadata: ItemMetadata::Application(ApplicationMetadata {
-                            bundle_id: bundle.bundle_id,
-                            team_id: None,
-                            version: bundle.version,
-                            executable: bundle.executable,
-                        }),
-                    }),
+                        };
+                        // The bundle's own on-disk size — a directory walk,
+                        // not free, so it runs once per app here rather than
+                        // being left at the round-1 placeholder of `0`. Shares
+                        // `core::fs::measure_size` with the uninstall review
+                        // workflow and orphan detection rather than a third
+                        // copy of the same best-effort traversal.
+                        let logical_size =
+                            measure_size(path.as_path(), CleanerCategory::InstalledApps, risk);
+                        items.push(CleanableItem {
+                            id: item_id(path.as_path()),
+                            category: CleanerCategory::InstalledApps,
+                            group: Some(root_label(root.as_path())),
+                            display_name: bundle.display_name,
+                            path,
+                            logical_size,
+                            allocated_size: None,
+                            modified_at: bundle.modified_at,
+                            last_accessed_at: None,
+                            risk,
+                            selection_policy: SelectionPolicy::NeverBulkSelect,
+                            capabilities: if bundle.is_system_app {
+                                // "System apps must never be uninstallable" —
+                                // no `UninstallApplication` capability at
+                                // all, so the review view has nothing to
+                                // gate a button on rather than needing to
+                                // remember to check risk.
+                                vec![ItemCapability::RevealInFinder, ItemCapability::CopyPath]
+                            } else {
+                                vec![
+                                    ItemCapability::RevealInFinder,
+                                    ItemCapability::CopyPath,
+                                    ItemCapability::UninstallApplication,
+                                ]
+                            },
+                            explanation: bundle.explanation,
+                            warnings: Vec::new(),
+                            metadata: ItemMetadata::Application(ApplicationMetadata {
+                                bundle_id: bundle.bundle_id,
+                                team_id: None,
+                                version: bundle.version,
+                                executable: bundle.executable,
+                            }),
+                        });
+                    }
                     Err(message) => warnings.push(ScanWarning {
                         message: format!("{}: {message}", path.display()),
                     }),

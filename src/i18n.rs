@@ -1200,6 +1200,27 @@ pub enum Str {
     CleanerExplanation,
     CleanerCopyPath,
     CleanerRevealInFinder,
+    /// Only reachable from `results_table::reveal_label` on a Windows build
+    /// (its Windows `#[cfg]` arm). The blocking `clippy` CI job runs on
+    /// `macos-15`, where cfg strips that arm and this variant is never
+    /// constructed at all — dead code on this platform's build, live on
+    /// Windows'. Comes off if `reveal_label` ever stops being cfg'd per
+    /// platform.
+    #[allow(dead_code)]
+    CleanerRevealInExplorer,
+    /// See `CleanerRevealInExplorer` — same reasoning, for Linux's arm.
+    #[allow(dead_code)]
+    CleanerRevealInFileManager,
+    CleanerMoreActions,
+    CleanerColumnName,
+    CleanerColumnRisk,
+    CleanerColumnSize,
+    CleanerColumnActions,
+    CleanerRiskSafe,
+    CleanerRiskReview,
+    CleanerRiskUserData,
+    CleanerRiskAppChange,
+    CleanerRiskProtected,
     CleanerSelectItem,
     CleanerDeselectItem,
     CleanerSelectSafeItems,
@@ -1632,6 +1653,36 @@ impl Str {
             (Str::CleanerRevealInFinder, Language::Vietnamese) => {
                 "Hiện trong Finder".into()
             }
+            (Str::CleanerRevealInExplorer, Language::English) => "Reveal in Explorer".into(),
+            (Str::CleanerRevealInExplorer, Language::Vietnamese) => {
+                "Hiện trong Explorer".into()
+            }
+            (Str::CleanerRevealInFileManager, Language::English) => {
+                "Reveal in file manager".into()
+            }
+            (Str::CleanerRevealInFileManager, Language::Vietnamese) => {
+                "Hiện trong trình quản lý tệp".into()
+            }
+            (Str::CleanerMoreActions, Language::English) => "More actions".into(),
+            (Str::CleanerMoreActions, Language::Vietnamese) => "Thêm hành động".into(),
+            (Str::CleanerColumnName, Language::English) => "Name".into(),
+            (Str::CleanerColumnName, Language::Vietnamese) => "Tên".into(),
+            (Str::CleanerColumnRisk, Language::English) => "Risk".into(),
+            (Str::CleanerColumnRisk, Language::Vietnamese) => "Rủi ro".into(),
+            (Str::CleanerColumnSize, Language::English) => "Size".into(),
+            (Str::CleanerColumnSize, Language::Vietnamese) => "Kích thước".into(),
+            (Str::CleanerColumnActions, Language::English) => "Actions".into(),
+            (Str::CleanerColumnActions, Language::Vietnamese) => "Hành động".into(),
+            (Str::CleanerRiskSafe, Language::English) => "Safe".into(),
+            (Str::CleanerRiskSafe, Language::Vietnamese) => "An toàn".into(),
+            (Str::CleanerRiskReview, Language::English) => "Review".into(),
+            (Str::CleanerRiskReview, Language::Vietnamese) => "Cần xem lại".into(),
+            (Str::CleanerRiskUserData, Language::English) => "User Data".into(),
+            (Str::CleanerRiskUserData, Language::Vietnamese) => "Dữ liệu người dùng".into(),
+            (Str::CleanerRiskAppChange, Language::English) => "App Change".into(),
+            (Str::CleanerRiskAppChange, Language::Vietnamese) => "Thay đổi ứng dụng".into(),
+            (Str::CleanerRiskProtected, Language::English) => "Protected".into(),
+            (Str::CleanerRiskProtected, Language::Vietnamese) => "Được bảo vệ".into(),
             (Str::CleanerSelectItem, Language::English) => "Select".into(),
             (Str::CleanerSelectItem, Language::Vietnamese) => "Chọn".into(),
             (Str::CleanerDeselectItem, Language::English) => "Deselect".into(),
@@ -6173,6 +6224,18 @@ mod tests {
             plain(Str::InputMethodKeyboardHookFailed),
             plain(Str::InputMethodUninstall),
             plain(Str::InputMethodUninstalling),
+            plain(Str::CleanerRevealInExplorer),
+            plain(Str::CleanerRevealInFileManager),
+            plain(Str::CleanerMoreActions),
+            plain(Str::CleanerColumnName),
+            plain(Str::CleanerColumnRisk),
+            plain(Str::CleanerColumnSize),
+            plain(Str::CleanerColumnActions),
+            plain(Str::CleanerRiskSafe),
+            plain(Str::CleanerRiskReview),
+            plain(Str::CleanerRiskUserData),
+            plain(Str::CleanerRiskAppChange),
+            plain(Str::CleanerRiskProtected),
         ]
     }
 
@@ -7066,6 +7129,18 @@ mod tests {
             Str::InputMethodKeyboardHookFailed => 873,
             Str::InputMethodUninstall => 874,
             Str::InputMethodUninstalling => 875,
+            Str::CleanerRevealInExplorer => 876,
+            Str::CleanerRevealInFileManager => 877,
+            Str::CleanerMoreActions => 878,
+            Str::CleanerColumnName => 879,
+            Str::CleanerColumnRisk => 880,
+            Str::CleanerColumnSize => 881,
+            Str::CleanerColumnActions => 882,
+            Str::CleanerRiskSafe => 883,
+            Str::CleanerRiskReview => 884,
+            Str::CleanerRiskUserData => 885,
+            Str::CleanerRiskAppChange => 886,
+            Str::CleanerRiskProtected => 887,
         }
     }
 

@@ -125,6 +125,25 @@ pub enum AppIcon {
     /// database constraint. A keyboard is what the thing *is*, so it survives
     /// being read at 16px on the collapsed rail with no label beside it.
     Keyboard,
+
+    // Cleaner's section and category rows. All six resolve through `Assets`'
+    // fallback to `gpui_component_assets` — no new SVG files were needed,
+    // the vendored Lucide-ish set already had a glyph for each of these.
+    /// The Smart Care section, and Docker's own Overview-style rows
+    /// elsewhere: a scan-everything overview reads naturally as a dashboard.
+    ChartPie,
+    /// The Applications section.
+    LayoutDashboard,
+    /// The AI Apps category.
+    Bot,
+    /// The Node Tooling Cache category: npm/yarn/pnpm/bun are all
+    /// terminal-driven tools, and the set has no package-manager glyph.
+    SquareTerminal,
+    /// The Universal Binaries category — an architecture is a CPU property.
+    Cpu,
+    /// The Installed Apps category's row icon, kept distinct from the
+    /// Applications section's own `LayoutDashboard` above.
+    Building2,
 }
 
 impl IconNamed for AppIcon {
@@ -185,6 +204,12 @@ impl IconNamed for AppIcon {
             Self::EyeOff => "icons/eye-off.svg",
             Self::GripVertical => "icons/grip-vertical.svg",
             Self::Keyboard => "icons/keyboard.svg",
+            Self::ChartPie => "icons/chart-pie.svg",
+            Self::LayoutDashboard => "icons/layout-dashboard.svg",
+            Self::Bot => "icons/bot.svg",
+            Self::SquareTerminal => "icons/square-terminal.svg",
+            Self::Cpu => "icons/cpu.svg",
+            Self::Building2 => "icons/building-2.svg",
         }
         .into()
     }

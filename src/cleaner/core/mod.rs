@@ -5,6 +5,7 @@ pub mod cancellation;
 pub mod category;
 pub mod errors;
 pub mod fs;
+pub mod generic_scanner;
 pub mod ignore;
 pub mod item;
 pub mod node_tool_provider;

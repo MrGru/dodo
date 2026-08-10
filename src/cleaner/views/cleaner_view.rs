@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{StatefulInteractiveElement as _, *};
+use gpui::*;
 use gpui_component::WindowExt as _;
-use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _};
 use gpui_component::dialog::DialogButtonProps;
-use gpui_component::{ActiveTheme, Disableable as _, StyledExt as _, h_flex, v_flex};
+use gpui_component::table::{DataTable, TableState};
+use gpui_component::{ActiveTheme, Disableable as _, Icon, StyledExt as _, h_flex, v_flex};
 
+use crate::app_icon::AppIcon;
 use crate::cleaner::core::cancellation::CancellationToken;
 use crate::cleaner::core::category::{CleanerCategory, CleanerSection};
 use crate::cleaner::core::errors::{CleanupError, ScanError};
@@ -14,12 +16,11 @@ use crate::cleaner::core::ignore::{IgnoredItemsDocument, path_signature};
 use crate::cleaner::core::item::{CleanableItem, CleanableItemId};
 use crate::cleaner::core::permissions::{MacPermission, PermissionService, PermissionState};
 use crate::cleaner::core::progress::{ProgressSink, ScanProgress};
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 use crate::cleaner::core::report::CleanupReport;
 use crate::cleaner::core::report::{
     CategoryScanResult, PartialScanReason, ScanCompleteness, ScanWarning,
 };
-use crate::cleaner::core::risk::{ItemCapability, RiskLevel};
 use crate::cleaner::core::scan_context::ScanContext;
 use crate::cleaner::core::scanner::CleanerScanner;
 #[cfg(target_os = "macos")]
@@ -32,9 +33,28 @@ use crate::cleaner::services::ignore_store::{
     DiskOrphanIgnoreStore, OrphanIgnoreStore, OrphanIgnoreStoreError,
 };
 use crate::cleaner::state::{CleanerState, CleanerStatus, default_scanners};
+use crate::cleaner::views::results_table::{ResultsTableDelegate, category_icon};
 #[cfg(target_os = "macos")]
 use crate::cleaner::views::uninstall_review_dialog;
 use crate::i18n::{Str, t};
+
+/// The pure decision behind the sidebar's single-open accordion: clicking
+/// `clicked` collapses everything when it was already the open one, else it
+/// becomes the only open one. Pulled out of `CleanerView::toggle_section` so
+/// this can be tested directly — a real click cannot be driven in this
+/// project's test setup, which has no way to host a `Root` (see
+/// `gpui-component-recipes`), so the GPUI wrapper around this has no test of
+/// its own and this is the whole coverage for the behaviour.
+fn next_expanded_section(
+    current: Option<CleanerSection>,
+    clicked: CleanerSection,
+) -> Option<CleanerSection> {
+    if current == Some(clicked) {
+        None
+    } else {
+        Some(clicked)
+    }
+}
 
 #[derive(Clone)]
 struct ChannelProgressSink {
@@ -73,12 +93,31 @@ pub struct CleanerView {
     /// anything. `None` in the ordinary case, including a first run with no
     /// file yet.
     ignore_store_error: Option<OrphanIgnoreStoreError>,
+    /// The virtualized results grid for the active category. See
+    /// `results_table`'s module doc for why it holds a `WeakEntity` back to
+    /// this view rather than the other way around.
+    results_table: Entity<TableState<ResultsTableDelegate>>,
+    /// Which sidebar section's categories are currently showing, if any.
+    /// Purely a sidebar-accordion display concern — not `CleanerState`'s
+    /// `section`, which is "the section scanned when Smart Care runs" and
+    /// must keep its own value even while every section is collapsed.
+    expanded_section: Option<CleanerSection>,
 }
 
 impl CleanerView {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // `cx.entity()` here is `Entity<CleanerView>` — the entity `new` is
+        // building — grabbed *before* the inner `cx.new` call so the closure
+        // that builds `results_table` (whose own `cx` is `Context<TableState<_>>`,
+        // not this one) can hand `ResultsTableDelegate` a way back to it.
+        let this = cx.entity().downgrade();
+        let results_table = cx.new(|cx| {
+            TableState::new(ResultsTableDelegate::new(this), window, cx).col_selectable(false)
+        });
+        let state = CleanerState::default();
+        let expanded_section = Some(state.section());
         let mut view = Self {
-            state: CleanerState::default(),
+            state,
             scanners: default_scanners(),
             #[cfg(target_os = "macos")]
             permission_service: permissions::default_service(),
@@ -93,6 +132,8 @@ impl CleanerView {
             ignored_paths: std::collections::BTreeSet::new(),
             ignore_load_task: None,
             ignore_store_error: None,
+            results_table,
+            expanded_section,
         };
         #[cfg(target_os = "macos")]
         view.refresh_permission_state(cx);
@@ -101,7 +142,34 @@ impl CleanerView {
     }
 
     fn supported_platform() -> bool {
-        cfg!(target_os = "macos")
+        cfg!(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux"
+        ))
+    }
+
+    /// Copies the active category's current items and selection into
+    /// [`Self::results_table`]'s delegate. Called at the top of every
+    /// `render`, not gated behind a dirty flag: `render` itself only runs
+    /// when something already changed (a `cx.notify()` fired), and the copy
+    /// is a `Vec`/`HashSet` clone bounded by the active category's own item
+    /// count — cheap next to the GPUI element tree `DataTable` builds only
+    /// for the rows actually on screen. A dirty flag would risk a stale
+    /// table on the one call site someone forgets to set it.
+    fn sync_results_table(&mut self, cx: &mut Context<Self>) {
+        let category = self.state.category();
+        let items = self
+            .state
+            .result_for(category)
+            .map(|result| result.items.clone())
+            .unwrap_or_default();
+        let selected_ids: std::collections::HashSet<CleanableItemId> =
+            self.state.selected_ids_for(category).into_iter().collect();
+        self.results_table.update(cx, |table, cx| {
+            table.delegate_mut().set(items, selected_ids);
+            table.refresh(cx);
+        });
     }
 
     fn category_permission_requirement(category: CleanerCategory) -> Option<MacPermission> {
@@ -191,7 +259,7 @@ impl CleanerView {
     /// afterwards. A path already in the list (should not normally happen,
     /// since the item would already be gone from view) is a no-op: nothing
     /// new to persist.
-    fn mark_kept(&mut self, item: CleanableItem, cx: &mut Context<Self>) {
+    pub(super) fn mark_kept(&mut self, item: CleanableItem, cx: &mut Context<Self>) {
         if !self
             .ignored_paths
             .insert(path_signature(item.path.as_path()))
@@ -221,8 +289,18 @@ impl CleanerView {
         .detach();
     }
 
-    fn set_section(&mut self, section: CleanerSection, cx: &mut Context<Self>) {
-        self.state.set_section(section);
+    /// A section header's click handler: standard single-open accordion
+    /// behaviour. Clicking the already-expanded section collapses it;
+    /// clicking any other section collapses whatever was open and expands
+    /// that one instead. Deliberately not the same thing as "which section
+    /// is active for scanning" — collapsing a section must not lose the
+    /// user's place in the main pane, so `self.expanded_section` is its own
+    /// field rather than being read off `self.state.section()`.
+    fn toggle_section(&mut self, section: CleanerSection, cx: &mut Context<Self>) {
+        self.expanded_section = next_expanded_section(self.expanded_section, section);
+        if self.expanded_section == Some(section) {
+            self.state.set_section(section);
+        }
         cx.notify();
     }
 
@@ -396,7 +474,7 @@ impl CleanerView {
         }
     }
 
-    fn toggle_selected(&mut self, id: CleanableItemId, cx: &mut Context<Self>) {
+    pub(super) fn toggle_selected(&mut self, id: CleanableItemId, cx: &mut Context<Self>) {
         self.state.toggle_selected(id);
         cx.notify();
     }
@@ -411,21 +489,27 @@ impl CleanerView {
         cx.notify();
     }
 
-    fn reveal_in_finder(
+    pub(super) fn reveal_in_finder(
         &mut self,
         path: std::path::PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         #[cfg(target_os = "macos")]
-        {
-            if let Err(error) = platform::reveal_in_finder(path.as_path()) {
-                window.open_alert_dialog(cx, move |alert, _, cx| {
-                    alert
-                        .title(t(Str::CleanerStatusFailed, cx))
-                        .description(error.clone())
-                });
-            }
+        let result = platform::reveal_in_finder(path.as_path());
+        #[cfg(target_os = "windows")]
+        let result = crate::cleaner::windows::platform::reveal_in_explorer(path.as_path());
+        #[cfg(target_os = "linux")]
+        let result = crate::cleaner::linux::platform::reveal_in_file_manager(path.as_path());
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        let result: Result<(), String> = Ok(());
+
+        if let Err(error) = result {
+            window.open_alert_dialog(cx, move |alert, _, cx| {
+                alert
+                    .title(t(Str::CleanerStatusFailed, cx))
+                    .description(error.clone())
+            });
         }
     }
 
@@ -522,9 +606,23 @@ impl CleanerView {
                             cleanup::cleanup_items(&items)
                         }
                     }
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(target_os = "windows")]
                     {
-                        let _ = items;
+                        let _ = is_docker;
+                        crate::cleaner::windows::cleanup::cleanup_items(&items)
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        let _ = is_docker;
+                        crate::cleaner::linux::cleanup::cleanup_items(&items)
+                    }
+                    #[cfg(not(any(
+                        target_os = "macos",
+                        target_os = "windows",
+                        target_os = "linux"
+                    )))]
+                    {
+                        let _ = (is_docker, items);
                         CleanupReport {
                             successes: Vec::new(),
                             failures: Vec::new(),
@@ -542,7 +640,7 @@ impl CleanerView {
         }));
     }
 
-    fn begin_uninstall_review(
+    pub(super) fn begin_uninstall_review(
         &mut self,
         item: CleanableItem,
         window: &mut Window,
@@ -567,11 +665,11 @@ impl CleanerView {
         }
     }
 
-    fn section_categories(&self) -> Vec<CleanerCategory> {
-        if self.state.section() == CleanerSection::SmartCare {
+    fn categories_for_section(section: CleanerSection) -> Vec<CleanerCategory> {
+        if section == CleanerSection::SmartCare {
             CleanerCategory::ALL.to_vec()
         } else {
-            CleanerCategory::categories_for(self.state.section()).collect()
+            CleanerCategory::categories_for(section).collect()
         }
     }
 
@@ -637,6 +735,15 @@ impl CleanerView {
         }
     }
 
+    fn section_icon(section: CleanerSection) -> AppIcon {
+        match section {
+            CleanerSection::SmartCare => AppIcon::ChartPie,
+            CleanerSection::Cleanup => AppIcon::Trash,
+            CleanerSection::Applications => AppIcon::LayoutDashboard,
+            CleanerSection::Advanced => AppIcon::Sliders,
+        }
+    }
+
     fn category_label(category: CleanerCategory) -> Str {
         match category {
             CleanerCategory::SystemJunk => Str::CleanerCategorySystemJunk,
@@ -694,14 +801,6 @@ impl CleanerView {
         }
     }
 
-    fn select_label(selected: bool) -> Str {
-        if selected {
-            Str::CleanerDeselectItem
-        } else {
-            Str::CleanerSelectItem
-        }
-    }
-
     fn permission_state_label(state: PermissionState) -> Str {
         match state {
             PermissionState::Unknown => Str::CleanerPermissionUnknown,
@@ -710,16 +809,6 @@ impl CleanerView {
             PermissionState::Denied => Str::CleanerPermissionDenied,
             PermissionState::Restricted => Str::CleanerPermissionRestricted,
             PermissionState::RequiresRestart => Str::CleanerPermissionRequiresRestart,
-        }
-    }
-
-    fn risk_badge(risk: RiskLevel) -> &'static str {
-        match risk {
-            RiskLevel::SafeRecreatable => "safe",
-            RiskLevel::ReviewRecommended => "review",
-            RiskLevel::UserData => "user-data",
-            RiskLevel::ApplicationMutation => "mutation",
-            RiskLevel::Protected => "protected",
         }
     }
 
@@ -733,10 +822,142 @@ impl CleanerView {
             }
         }
     }
+
+    /// The colour scheme for one sidebar row (section header or category).
+    /// `active` gets a tinted rest background on top of the same
+    /// hover/press tint everything else gets, so a selected row still reads
+    /// as "more selected" on hover rather than losing its highlight.
+    fn sidebar_row_variant(cx: &App, active: bool) -> ButtonCustomVariant {
+        let base = ButtonCustomVariant::new(cx)
+            .hover(cx.theme().primary.opacity(0.08))
+            .active(cx.theme().primary_active.opacity(0.16));
+        if active {
+            base.color(cx.theme().primary.opacity(0.12))
+        } else {
+            base
+        }
+    }
+
+    /// One accordion group in the sidebar: the section's own header row,
+    /// followed by its categories only while `self.expanded_section` names
+    /// this section — see [`Self::toggle_section`] for why that is tracked
+    /// separately from `self.state.section()`.
+    fn render_section_group(
+        &self,
+        section: CleanerSection,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let expanded = self.expanded_section == Some(section);
+        let accent_color = if expanded {
+            cx.theme().primary
+        } else {
+            cx.theme().muted_foreground
+        };
+        let mut rows = vec![
+            Button::new(format!("cleaner-section-{section:?}"))
+                .custom(Self::sidebar_row_variant(cx, expanded))
+                .w_full()
+                .when(expanded, |btn| {
+                    btn.border_l_2().border_color(cx.theme().primary)
+                })
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            h_flex()
+                                .min_w_0()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Icon::new(Self::section_icon(section))
+                                        .size_4()
+                                        .flex_shrink_0()
+                                        .text_color(accent_color),
+                                )
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(accent_color)
+                                        .when(expanded, |div| div.font_bold())
+                                        .child(t(Self::section_label(section), cx)),
+                                ),
+                        )
+                        .child(
+                            Icon::new(if expanded {
+                                AppIcon::ChevronDown
+                            } else {
+                                AppIcon::ChevronRight
+                            })
+                            .size_3()
+                            .flex_shrink_0()
+                            .text_color(accent_color),
+                        ),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.toggle_section(section, cx);
+                }))
+                .into_any_element(),
+        ];
+
+        if expanded {
+            rows.extend(
+                Self::categories_for_section(section)
+                    .into_iter()
+                    .map(|category| self.render_category_row(category, cx)),
+            );
+        }
+
+        rows
+    }
+
+    fn render_category_row(&self, category: CleanerCategory, cx: &mut Context<Self>) -> AnyElement {
+        let active = self.state.category() == category;
+        let accent_color = if active {
+            cx.theme().primary
+        } else {
+            cx.theme().muted_foreground
+        };
+        Button::new(format!("cleaner-category-{category:?}"))
+            .custom(Self::sidebar_row_variant(cx, active))
+            .w_full()
+            .when(active, |btn| {
+                btn.border_l_2().border_color(cx.theme().primary)
+            })
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .pl_6()
+                    .child(
+                        Icon::new(category_icon(category))
+                            .size_4()
+                            .flex_shrink_0()
+                            .text_color(accent_color),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(accent_color)
+                            .when(active, |div| div.font_bold())
+                            .child(t(Self::category_label(category), cx)),
+                    ),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_category(category, cx);
+            }))
+            .into_any_element()
+    }
 }
 
 impl Render for CleanerView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_results_table(cx);
         let is_scanning = matches!(
             self.state.status(),
             CleanerStatus::Scanning | CleanerStatus::Cancelling
@@ -778,39 +999,8 @@ impl Render for CleanerView {
                                         .text_sm()
                                         .child(t(Str::CleanerSidebarTitle, cx)),
                                 )
-                                .children(CleanerSection::ALL.into_iter().map(|section| {
-                                    Button::new(format!("cleaner-section-{section:?}"))
-                                        .ghost()
-                                        .w_full()
-                                        .child(
-                                            div()
-                                                .w_full()
-                                                .when(self.state.section() == section, |div| {
-                                                    div.font_bold()
-                                                })
-                                                .child(t(Self::section_label(section), cx)),
-                                        )
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.set_section(section, cx);
-                                        }))
-                                }))
-                                .child(div().h(px(8.)))
-                                .children(self.section_categories().into_iter().map(|category| {
-                                    Button::new(format!("cleaner-category-{category:?}"))
-                                        .ghost()
-                                        .w_full()
-                                        .child(
-                                            div()
-                                                .w_full()
-                                                .pl_3()
-                                                .when(self.state.category() == category, |div| {
-                                                    div.font_bold()
-                                                })
-                                                .child(t(Self::category_label(category), cx)),
-                                        )
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.set_category(category, cx);
-                                        }))
+                                .children(CleanerSection::ALL.into_iter().flat_map(|section| {
+                                    self.render_section_group(section, cx)
                                 })),
                         )
                         .child(
@@ -1081,295 +1271,119 @@ impl Render for CleanerView {
                                     )
                                 })
                                 .child(
-                                    div()
-                                        .id("cleaner-results-scroll")
+                                    v_flex()
                                         .flex_1()
                                         .min_h_0()
-                                        .rounded(cx.theme().radius)
-                                        .border_1()
-                                        .border_color(cx.theme().border)
-                                        .overflow_scroll()
-                                        .p_2()
+                                        .gap_2()
                                         .when_some(
                                             self.state.result_for(self.state.category()),
                                             |container, result| {
-                                                container.child(
-                                                    v_flex()
-                                                        .gap_2()
-                                                        .when_some(
-                                                            Self::completeness_label(
-                                                                &result.completeness,
-                                                            ),
-                                                            |list, label| {
-                                                                list.child(
-                                                                    div()
-                                                                        .rounded(cx.theme().radius)
-                                                                        .border_1()
-                                                                        .border_color(
-                                                                            cx.theme().border,
-                                                                        )
-                                                                        .bg(
-                                                                            cx.theme()
-                                                                                .warning
-                                                                                .opacity(0.08),
-                                                                        )
-                                                                        .px_3()
-                                                                        .py_2()
-                                                                        .child(t(label, cx)),
-                                                                )
-                                                            },
-                                                        )
-                                                        .when(!result.warnings.is_empty(), |list| {
+                                                container
+                                                    .when_some(
+                                                        Self::completeness_label(
+                                                            &result.completeness,
+                                                        ),
+                                                        |list, label| {
                                                             list.child(
-                                                                v_flex()
-                                                                    .gap_1()
-                                                                    .child(
-                                                                        div()
-                                                                            .font_bold()
-                                                                            .child(t(
-                                                                                Str::CleanerWarnings,
-                                                                                cx,
-                                                                            )),
+                                                                div()
+                                                                    .rounded(cx.theme().radius)
+                                                                    .border_1()
+                                                                    .border_color(
+                                                                        cx.theme().border,
                                                                     )
-                                                                    .children(
-                                                                        result.warnings.iter().map(
-                                                                            |warning| {
-                                                                                div()
-                                                                                    .text_sm()
-                                                                                    .text_color(
-                                                                                        cx.theme()
-                                                                                            .muted_foreground,
-                                                                                    )
-                                                                                    .child(
-                                                                                        warning
-                                                                                            .message
-                                                                                            .clone(),
-                                                                                    )
-                                                                            },
-                                                                        ),
-                                                                    ),
+                                                                    .bg(
+                                                                        cx.theme()
+                                                                            .warning
+                                                                            .opacity(0.08),
+                                                                    )
+                                                                    .px_3()
+                                                                    .py_2()
+                                                                    .child(t(label, cx)),
                                                             )
-                                                        })
-                                                        .children(result.items.iter().map(|item| {
-                                                            let path_text =
-                                                                item.path.display().to_string();
-                                                            let item_id = item.id;
-                                                            let reveal_path = item.path.clone();
-                                                            let selected = self.state.is_selected(item.id);
-                                                            let can_cleanup = item
-                                                                .capabilities
-                                                                .contains(&ItemCapability::MoveToTrash);
-                                                            let can_reveal = item
-                                                                .capabilities
-                                                                .contains(&ItemCapability::RevealInFinder);
-                                                            let can_uninstall = item
-                                                                .capabilities
-                                                                .contains(&ItemCapability::UninstallApplication);
-                                                            let uninstall_item = item.clone();
-                                                            let can_keep = item
-                                                                .capabilities
-                                                                .contains(&ItemCapability::MarkAsKept);
-                                                            let keep_item = item.clone();
+                                                        },
+                                                    )
+                                                    .when(!result.warnings.is_empty(), |list| {
+                                                        list.child(
                                                             v_flex()
                                                                 .gap_1()
-                                                                .rounded(cx.theme().radius)
-                                                                .border_1()
-                                                                .border_color(cx.theme().border)
-                                                                .p_2()
-                                                                .child(
-                                                                    h_flex()
-                                                                        .justify_between()
-                                                                        .items_center()
-                                                                        .gap_2()
-                                                                        .child(
-                                                                            v_flex()
-                                                                                .min_w_0()
-                                                                                .child(
-                                                                                    div()
-                                                                                        .font_bold()
-                                                                                        .child(
-                                                                                            item.display_name
-                                                                                                .clone(),
-                                                                                        ),
-                                                                                )
-                                                                                .child(
-                                                                                    div()
-                                                                                        .text_sm()
-                                                                                        .text_color(
-                                                                                            cx.theme()
-                                                                                                .muted_foreground,
-                                                                                        )
-                                                                                        .child(
-                                                                                            Self::risk_badge(
-                                                                                                item.risk,
-                                                                                            ),
-                                                                                        ),
-                                                                                ),
-                                                                        )
-                                                                        .child(
-                                                                            h_flex()
-                                                                                .items_center()
-                                                                                .gap_2()
-                                                                                .when(can_cleanup, |row| {
-                                                                                    row.child(
-                                                                                        Button::new((
-                                                                                            "cleaner-select-item",
-                                                                                            item_id.0,
-                                                                                        ))
-                                                                                        .ghost()
-                                                                                        .label(t(
-                                                                                            Self::select_label(
-                                                                                                selected,
-                                                                                            ),
-                                                                                            cx,
-                                                                                        ))
-                                                                                        .on_click(cx.listener(
-                                                                                            move |this, _, _, cx| {
-                                                                                                this.toggle_selected(
-                                                                                                    item_id,
-                                                                                                    cx,
-                                                                                                )
-                                                                                            },
-                                                                                        )),
-                                                                                    )
-                                                                                })
-                                                                                .child(
-                                                                                    div().child(
-                                                                                        Self::format_bytes(
-                                                                                            item.logical_size,
-                                                                                        ),
-                                                                                    ),
-                                                                                )
-                                                                                .when(can_reveal, |row| {
-                                                                                    row.child(
-                                                                                        Button::new((
-                                                                                            "cleaner-reveal",
-                                                                                            item_id.0,
-                                                                                        ))
-                                                                                        .ghost()
-                                                                                        .label(t(
-                                                                                            Str::CleanerRevealInFinder,
-                                                                                            cx,
-                                                                                        ))
-                                                                                        .on_click(cx.listener(
-                                                                                            move |this, _, window, cx| {
-                                                                                                this.reveal_in_finder(
-                                                                                                    reveal_path.clone(),
-                                                                                                    window,
-                                                                                                    cx,
-                                                                                                )
-                                                                                            },
-                                                                                        )),
-                                                                                    )
-                                                                                })
-                                                                                .child(
-                                                                                    Button::new((
-                                                                                        "cleaner-copy-path",
-                                                                                        item_id.0,
-                                                                                    ))
-                                                                                    .ghost()
-                                                                                    .label(t(
-                                                                                        Str::CleanerCopyPath,
-                                                                                        cx,
-                                                                                    ))
-                                                                                    .on_click(cx.listener(
-                                                                                        move |_, _, _, cx| {
-                                                                                            cx.write_to_clipboard(
-                                                                                                gpui::ClipboardItem::new_string(
-                                                                                                    path_text
-                                                                                                        .clone(),
-                                                                                                ),
-                                                                                            );
-                                                                                        },
-                                                                                    )),
-                                                                                )
-                                                                                .when(can_uninstall, |row| {
-                                                                                    row.child(
-                                                                                        Button::new((
-                                                                                            "cleaner-begin-uninstall",
-                                                                                            item_id.0,
-                                                                                        ))
-                                                                                        .ghost()
-                                                                                        .label(t(
-                                                                                            Str::CleanerBeginUninstallReview,
-                                                                                            cx,
-                                                                                        ))
-                                                                                        .on_click(cx.listener(
-                                                                                            move |this, _, window, cx| {
-                                                                                                this.begin_uninstall_review(
-                                                                                                    uninstall_item.clone(),
-                                                                                                    window,
-                                                                                                    cx,
-                                                                                                );
-                                                                                            },
-                                                                                        )),
-                                                                                    )
-                                                                                })
-                                                                                .when(can_keep, |row| {
-                                                                                    row.child(
-                                                                                        Button::new((
-                                                                                            "cleaner-keep-item",
-                                                                                            item_id.0,
-                                                                                        ))
-                                                                                        .ghost()
-                                                                                        .label(t(
-                                                                                            Str::CleanerKeepItem,
-                                                                                            cx,
-                                                                                        ))
-                                                                                        .on_click(cx.listener(
-                                                                                            move |this, _, _, cx| {
-                                                                                                this.mark_kept(
-                                                                                                    keep_item.clone(),
-                                                                                                    cx,
-                                                                                                );
-                                                                                            },
-                                                                                        )),
-                                                                                    )
-                                                                                }),
-                                                                        ),
-                                                                )
                                                                 .child(
                                                                     div()
-                                                                        .text_sm()
-                                                                        .child(format!(
-                                                                            "{}: {}",
-                                                                            t(Str::CleanerPath, cx),
-                                                                            item.path.display()
+                                                                        .font_bold()
+                                                                        .child(t(
+                                                                            Str::CleanerWarnings,
+                                                                            cx,
                                                                         )),
                                                                 )
-                                                                .child(
-                                                                    div()
-                                                                        .text_sm()
-                                                                        .text_color(
-                                                                            cx.theme()
-                                                                                .muted_foreground,
-                                                                        )
-                                                                        .child(format!(
-                                                                            "{}: {}",
-                                                                            t(
-                                                                                Str::CleanerExplanation,
-                                                                                cx,
-                                                                            ),
-                                                                            item.explanation
-                                                                        )),
-                                                                )
-                                                        })),
-                                                )
+                                                                .children(
+                                                                    result.warnings.iter().map(
+                                                                        |warning| {
+                                                                            div()
+                                                                                .text_sm()
+                                                                                .text_color(
+                                                                                    cx.theme()
+                                                                                        .muted_foreground,
+                                                                                )
+                                                                                .child(
+                                                                                    warning
+                                                                                        .message
+                                                                                        .clone(),
+                                                                                )
+                                                                        },
+                                                                    ),
+                                                                ),
+                                                        )
+                                                    })
                                             },
                                         )
-                                        .when(
-                                            self.state.result_for(self.state.category()).is_none(),
-                                            |container| {
-                                                container.child(
-                                                    div()
-                                                        .text_color(cx.theme().muted_foreground)
-                                                        .child(t(Str::CleanerNoResultsYet, cx)),
-                                                )
-                                            },
+                                        .child(
+                                            div().flex_1().min_h_0().child(
+                                                DataTable::new(&self.results_table)
+                                                    .stripe(true)
+                                                    .bordered(true),
+                                            ),
                                         ),
                                 ),
                         ),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_expanded_section;
+    use crate::cleaner::core::category::CleanerSection;
+
+    #[test]
+    fn clicking_a_closed_section_opens_only_that_one() {
+        assert_eq!(
+            next_expanded_section(None, CleanerSection::Cleanup),
+            Some(CleanerSection::Cleanup)
+        );
+        assert_eq!(
+            next_expanded_section(Some(CleanerSection::SmartCare), CleanerSection::Cleanup),
+            Some(CleanerSection::Cleanup),
+            "opening a different section must replace whatever was open, not add to it"
+        );
+    }
+
+    #[test]
+    fn clicking_the_already_open_section_closes_it() {
+        assert_eq!(
+            next_expanded_section(Some(CleanerSection::Advanced), CleanerSection::Advanced),
+            None
+        );
+    }
+
+    #[test]
+    fn a_second_click_on_the_same_section_after_it_reopens_elsewhere_still_toggles() {
+        // The exact sequence the bug report described: open Cleanup, open
+        // Advanced (Cleanup implicitly closes), then click Advanced again —
+        // it must close, not require a third, different section first.
+        let mut expanded = next_expanded_section(None, CleanerSection::Cleanup);
+        expanded = next_expanded_section(expanded, CleanerSection::Advanced);
+        assert_eq!(expanded, Some(CleanerSection::Advanced));
+        expanded = next_expanded_section(expanded, CleanerSection::Advanced);
+        assert_eq!(expanded, None);
     }
 }

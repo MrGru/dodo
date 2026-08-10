@@ -148,10 +148,6 @@ impl CleanerState {
         self.results.get(&category)
     }
 
-    pub fn is_selected(&self, id: CleanableItemId) -> bool {
-        self.selected_items.contains(&id)
-    }
-
     pub fn toggle_selected(&mut self, id: CleanableItemId) {
         if !self.selected_items.remove(&id) {
             self.selected_items.insert(id);
