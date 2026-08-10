@@ -120,6 +120,17 @@ fn connect() -> Result<Docker, DockerError> {
         return Docker::connect_with_unix(DOCKER_SOCKET, CONNECT_TIMEOUT, API_DEFAULT_VERSION)
             .map_err(unreachable);
     }
+    // 2b. macOS only: Docker Desktop's own per-user socket. Recent Docker
+    //     Desktop builds no longer symlink `/var/run/docker.sock` unless
+    //     "Allow the default Docker socket to be used" is turned on in
+    //     Settings, so a stock install is only reachable through its
+    //     `desktop-linux` context, whose endpoint is always
+    //     `~/.docker/run/docker.sock` — step 2 above misses it entirely.
+    #[cfg(target_os = "macos")]
+    if let Some(socket) = docker_desktop_macos_socket() {
+        return Docker::connect_with_unix(&socket, CONNECT_TIMEOUT, API_DEFAULT_VERSION)
+            .map_err(unreachable);
+    }
     // 3. macOS only: a running `podman machine`. Podman has no native macOS
     //    daemon — it runs the engine inside a VM and publishes its
     //    Docker-compatible API socket under `$TMPDIR/podman/`, a per-user path
@@ -140,6 +151,22 @@ fn connect() -> Result<Docker, DockerError> {
     // 4. Otherwise fall back to Podman's default socket probing, which is what
     //    finds a Linux user's Podman.
     Docker::connect_with_podman_defaults().map_err(unreachable)
+}
+
+/// Docker Desktop's own socket on macOS, at `~/.docker/run/docker.sock`. This is
+/// where the `desktop-linux` context always points, regardless of whether the
+/// legacy `/var/run/docker.sock` compat symlink is enabled in Settings, so it is
+/// the socket a stock install is actually reachable through. Existence is
+/// checked rather than dialled blind so a machine that never ran Docker Desktop
+/// still falls through to the podman steps below.
+#[cfg(target_os = "macos")]
+fn docker_desktop_macos_socket() -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let socket = Path::new(&home).join(".docker/run/docker.sock");
+    if !socket.exists() {
+        return None;
+    }
+    socket.to_str().map(str::to_string)
 }
 
 /// The API socket of a `podman machine` on macOS, discovered by looking in
