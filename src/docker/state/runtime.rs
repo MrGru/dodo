@@ -131,5 +131,4 @@ mod tests {
         assert_eq!(state.pending(), None);
         assert!(state.action_error().is_some());
     }
-
 }

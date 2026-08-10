@@ -5,6 +5,7 @@ use gpui::*;
 use gpui_component::WindowExt as _;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _};
 use gpui_component::dialog::DialogButtonProps;
+use gpui_component::progress::Progress;
 use gpui_component::table::{DataTable, TableState};
 use gpui_component::{ActiveTheme, Disableable as _, Icon, StyledExt as _, h_flex, v_flex};
 
@@ -102,6 +103,16 @@ pub struct CleanerView {
     /// `section`, which is "the section scanned when Smart Care runs" and
     /// must keep its own value even while every section is collapsed.
     expanded_section: Option<CleanerSection>,
+    /// Which categories `self.state.status()` actually describes: the scan's
+    /// targets (one category outside Smart Care, all of them inside it) or,
+    /// while cleaning, whichever categories the items being cleaned belong
+    /// to. `CleanerState::status` is a single field shared by every category
+    /// — without this, switching to a category outside that set (e.g. one
+    /// Smart Care hasn't reached yet, or one a single-category scan never
+    /// touched) would still read "Scanning"/"Completed" left over from
+    /// whatever run last touched the status field. Read only through
+    /// [`Self::displayed_status`].
+    active_run_categories: Vec<CleanerCategory>,
 }
 
 impl CleanerView {
@@ -134,6 +145,7 @@ impl CleanerView {
             ignore_store_error: None,
             results_table,
             expanded_section,
+            active_run_categories: Vec::new(),
         };
         #[cfg(target_os = "macos")]
         view.refresh_permission_state(cx);
@@ -323,6 +335,7 @@ impl CleanerView {
         let permission_state = self.permission_state;
         self.cancellation = Some(cancellation);
         self.progress_rx = Some(rx);
+        self.active_run_categories.clone_from(&targets);
         self.state.begin_scan();
         cx.notify();
 
@@ -587,6 +600,12 @@ impl CleanerView {
         if self.cleanup_task.is_some() || items.is_empty() {
             return;
         }
+        self.active_run_categories = items
+            .iter()
+            .map(|item| item.category)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         self.state.begin_cleaning();
         cx.notify();
 
@@ -709,6 +728,17 @@ impl CleanerView {
             format!("{:.1} KiB", bytes as f64 / KIB as f64)
         } else {
             format!("{bytes} B")
+        }
+    }
+
+    /// `self.state.status()` filtered through [`Self::active_run_categories`]:
+    /// `Idle` for a category the current or last run never touched, the real
+    /// status otherwise. See the field doc for why this indirection exists.
+    fn displayed_status(&self) -> CleanerStatus {
+        if self.active_run_categories.contains(&self.state.category()) {
+            self.state.status()
+        } else {
+            CleanerStatus::Idle
         }
     }
 
@@ -1084,7 +1114,7 @@ impl Render for CleanerView {
                                 .child(
                                     div()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(t(Self::status_label(self.state.status()), cx)),
+                                        .child(t(Self::status_label(self.displayed_status()), cx)),
                                 )
                                 .when_some(self.ignore_store_error.as_ref(), |this, error| {
                                     this.child(
@@ -1194,40 +1224,97 @@ impl Render for CleanerView {
                                         )
                                     },
                                 )
-                                .when_some(self.state.progress(), |this, progress| {
+                                .when(
+                                    is_scanning
+                                        && self
+                                            .active_run_categories
+                                            .contains(&self.state.category()),
+                                    |this| {
+                                    // Only this category's own scan may draw here: a scan
+                                    // running for a different category (started before the
+                                    // user navigated away) must not bleed its loading bar or
+                                    // progress into whichever category happens to be on screen.
+                                    let own_progress = self
+                                        .state
+                                        .progress()
+                                        .filter(|progress| progress.category == self.state.category());
                                     this.child(
-                                        div()
-                                            .text_sm()
-                                            .child(format!(
-                                                "{} · {} · {}{}",
-                                                t(Str::CleanerStatusProgress, cx),
-                                                progress.scanned_entries,
-                                                progress.discovered_items,
-                                                progress
-                                                    .current_path
-                                                    .as_ref()
-                                                    .map(|path| format!(" · {}", path.display()))
-                                                    .unwrap_or_default()
-                                            )),
+                                        v_flex()
+                                            .gap_1()
+                                            .child(Progress::new("cleaner-scan-progress").loading(true))
+                                            .when_some(own_progress, |this, progress| {
+                                                this.child(
+                                                    h_flex()
+                                                        .items_center()
+                                                        .gap_2()
+                                                        .text_sm()
+                                                        .child(format!(
+                                                            "{} · {} · {}",
+                                                            t(Str::CleanerStatusProgress, cx),
+                                                            progress.scanned_entries,
+                                                            progress.discovered_items,
+                                                        ))
+                                                        .child(
+                                                            // Fixed height + horizontal scroll
+                                                            // instead of letting a long path
+                                                            // reflow (and jump) the row.
+                                                            div()
+                                                                .id("cleaner-scan-progress-path")
+                                                                .flex_1()
+                                                                .min_w_0()
+                                                                .h(px(20.))
+                                                                .overflow_x_scroll()
+                                                                .whitespace_nowrap()
+                                                                .text_color(
+                                                                    cx.theme().muted_foreground,
+                                                                )
+                                                                .child(
+                                                                    progress
+                                                                        .current_path
+                                                                        .as_ref()
+                                                                        .map(|path| {
+                                                                            path.display().to_string()
+                                                                        })
+                                                                        .unwrap_or_default(),
+                                                                ),
+                                                        ),
+                                                )
+                                            }),
                                     )
                                 })
-                                .child(
+                                .child({
+                                    // `CleanerState::{estimated_reclaimable_bytes,
+                                    // total_scanned_entries}` are running sums across every
+                                    // category scanned in this run (all of them, once Smart
+                                    // Care is done) — showing those here would put User
+                                    // Cache's numbers on the System Junk page just because
+                                    // both were part of the same run. This category's own
+                                    // result is what belongs on its own page.
+                                    let own_result = self.state.result_for(self.state.category());
                                     h_flex()
                                         .gap_4()
                                         .child(div().child(format!(
                                             "{}: {}",
                                             t(Str::CleanerEstimatedReclaimable, cx),
                                             Self::format_bytes(
-                                                self.state.estimated_reclaimable_bytes()
+                                                own_result
+                                                    .map(|result| result.estimated_reclaimable_bytes)
+                                                    .unwrap_or(0)
                                             )
                                         )))
                                         .child(div().child(format!(
                                             "{}: {}",
                                             t(Str::CleanerEntriesScanned, cx),
-                                            self.state.total_scanned_entries()
-                                        ))),
-                                )
-                                .when_some(self.state.cleanup_report(), |this, report| {
+                                            own_result
+                                                .map(|result| result.scanned_entries)
+                                                .unwrap_or(0)
+                                        )))
+                                })
+                                .when_some(
+                                    self.state.cleanup_report().filter(|_| {
+                                        self.active_run_categories.contains(&self.state.category())
+                                    }),
+                                    |this, report| {
                                     this.child(
                                         v_flex()
                                             .gap_1()
