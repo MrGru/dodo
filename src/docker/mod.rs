@@ -67,6 +67,21 @@
 //!   [`views::detail`]'s module doc for why, and for why
 //!   `settings::open`'s pattern is the one followed here.
 //!
+//! Round 7 adds a fifth rail page unrelated to the connected engine's own
+//! resources: [`views::runtime::RuntimesView`] automatically detects the
+//! container runtimes/daemons on the host machine itself — Docker, Podman
+//! Machine, Kubernetes, containerd — and offers Start/Stop per row.
+//! [`services::runtime`] is a second, independent backend beside
+//! [`services::DockerEngine`]: it shells out to each tool's own CLI
+//! (`docker`, `podman`, `kubectl`, `systemctl`) rather than talking to
+//! `bollard`, because it answers "what is installed and running on this
+//! machine" rather than "what does the connected engine report". Kubernetes
+//! is deliberately read-only — there is no Start/Stop command correct for
+//! every local-cluster provider — and `services::runtime`'s module doc
+//! records the platform gaps the other three carry (Podman Machine has no
+//! meaning on Linux; containerd has no standalone system service on macOS or
+//! Windows).
+//!
 //! # What is still a placeholder, and where it plugs in
 //!
 //! These are deliberately disabled controls with a "Coming soon" label, not

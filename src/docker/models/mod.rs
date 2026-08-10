@@ -34,6 +34,15 @@
 //!   tested against literal documents.
 //! - [`logs`] — the reassembly of the engine's log *frames* into whole lines and
 //!   the bounded tail the viewer keeps.
+//!
+//! Round 7 adds the Runtimes tab's data:
+//!
+//! - [`runtime`] — automatic detection of the container runtimes/daemons on
+//!   this machine (Docker, Podman Machine, Kubernetes, containerd): which
+//!   command detects or controls each on which platform, and how to read that
+//!   command's captured output back into a status. Pure and platform-keyed by
+//!   [`crate::paths::HostOs`], the same trick `crate::paths` uses, so it is
+//!   unit tested for all three platforms without spawning a process.
 
 pub mod container;
 pub mod image;
@@ -41,6 +50,7 @@ pub mod inspect;
 pub mod logs;
 pub mod network;
 pub mod port;
+pub mod runtime;
 pub mod size;
 pub mod stats;
 pub mod status;

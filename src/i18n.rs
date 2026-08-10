@@ -585,6 +585,28 @@ pub enum Str {
     // tab labels reuse `DockerInspect` and `DockerViewLogs`.
     DockerOpenDetails,
 
+    // Docker module (round 7) — the Runtimes tab: automatic detection of the
+    // container runtimes/daemons on this machine plus Start/Stop. The tab
+    // title is a term of art like the other three page names; row names reuse
+    // `Docker` for the Docker row, and `DockerStart`/`DockerStop`/
+    // `DockerRefresh`/`DockerOperationError` for the actions and their
+    // failure, since those are exactly the same concepts already named above.
+    Runtimes,
+    RuntimesDescription,
+    RuntimePodmanMachine,
+    RuntimeKubernetes,
+    RuntimeContainerd,
+    RuntimeStatusRunning,
+    RuntimeStatusStopped,
+    RuntimeStatusNotInstalled,
+    RuntimeStatusUnsupported,
+    RuntimeStatusUnknown,
+    RuntimeManagedExternally,
+    RuntimeStarting,
+    RuntimeStopping,
+    RuntimeBinaryNotFound,
+    RuntimeActionUnsupported,
+
     // API Explorer (round 7) — typed form rows, the binary body, and the tab
     // title. Appended rather than slotted in beside the strings they read next
     // to, for the reason the block above says: a new string must not renumber
@@ -2930,6 +2952,51 @@ impl Str {
             (Str::DockerStats, Language::Vietnamese) => "Thống kê".into(),
             (Str::DockerOpenDetails, Language::English) => "Open details".into(),
             (Str::DockerOpenDetails, Language::Vietnamese) => "Mở chi tiết".into(),
+
+            (Str::Runtimes, _) => "Runtimes".into(),
+            (Str::RuntimesDescription, Language::English) => {
+                "Detect the container runtimes on this machine and control them without leaving Dodo.".into()
+            }
+            (Str::RuntimesDescription, Language::Vietnamese) => {
+                "Tự động phát hiện các runtime container trên máy này và điều khiển trực tiếp trong Dodo.".into()
+            }
+            (Str::RuntimePodmanMachine, _) => "Podman Machine".into(),
+            (Str::RuntimeKubernetes, _) => "Kubernetes".into(),
+            (Str::RuntimeContainerd, _) => "containerd".into(),
+            (Str::RuntimeStatusRunning, Language::English) => "Running".into(),
+            (Str::RuntimeStatusRunning, Language::Vietnamese) => "Đang chạy".into(),
+            (Str::RuntimeStatusStopped, Language::English) => "Stopped".into(),
+            (Str::RuntimeStatusStopped, Language::Vietnamese) => "Đã dừng".into(),
+            (Str::RuntimeStatusNotInstalled, Language::English) => "Not installed".into(),
+            (Str::RuntimeStatusNotInstalled, Language::Vietnamese) => "Chưa cài đặt".into(),
+            (Str::RuntimeStatusUnsupported, Language::English) => "Not supported on this platform".into(),
+            (Str::RuntimeStatusUnsupported, Language::Vietnamese) => {
+                "Không hỗ trợ trên nền tảng này".into()
+            }
+            (Str::RuntimeStatusUnknown, Language::English) => "Unknown".into(),
+            (Str::RuntimeStatusUnknown, Language::Vietnamese) => "Không rõ".into(),
+            (Str::RuntimeManagedExternally, Language::English) => {
+                "Managed by your cluster provider (Docker Desktop, minikube, kind, …), not from here.".into()
+            }
+            (Str::RuntimeManagedExternally, Language::Vietnamese) => {
+                "Được quản lý bởi nhà cung cấp cụm của bạn (Docker Desktop, minikube, kind, …), không phải từ đây.".into()
+            }
+            (Str::RuntimeStarting, Language::English) => "Starting…".into(),
+            (Str::RuntimeStarting, Language::Vietnamese) => "Đang khởi động…".into(),
+            (Str::RuntimeStopping, Language::English) => "Stopping…".into(),
+            (Str::RuntimeStopping, Language::Vietnamese) => "Đang dừng…".into(),
+            (Str::RuntimeBinaryNotFound, Language::English) => {
+                "The required command-line tool could not be found on this machine.".into()
+            }
+            (Str::RuntimeBinaryNotFound, Language::Vietnamese) => {
+                "Không tìm thấy công cụ dòng lệnh cần thiết trên máy này.".into()
+            }
+            (Str::RuntimeActionUnsupported, Language::English) => {
+                "This action isn't available for this runtime.".into()
+            }
+            (Str::RuntimeActionUnsupported, Language::Vietnamese) => {
+                "Thao tác này không khả dụng cho runtime này.".into()
+            }
 
             // Round 7 — typed form rows, the binary body, the tab title.
             (Str::UntitledRequest, Language::English) => "Untitled".into(),
@@ -6236,6 +6303,22 @@ mod tests {
             plain(Str::CleanerRiskUserData),
             plain(Str::CleanerRiskAppChange),
             plain(Str::CleanerRiskProtected),
+            // Docker module (round 7) — the Runtimes tab.
+            term(Str::Runtimes),
+            plain(Str::RuntimesDescription),
+            term(Str::RuntimePodmanMachine),
+            term(Str::RuntimeKubernetes),
+            term(Str::RuntimeContainerd),
+            plain(Str::RuntimeStatusRunning),
+            plain(Str::RuntimeStatusStopped),
+            plain(Str::RuntimeStatusNotInstalled),
+            plain(Str::RuntimeStatusUnsupported),
+            plain(Str::RuntimeStatusUnknown),
+            plain(Str::RuntimeManagedExternally),
+            plain(Str::RuntimeStarting),
+            plain(Str::RuntimeStopping),
+            plain(Str::RuntimeBinaryNotFound),
+            plain(Str::RuntimeActionUnsupported),
         ]
     }
 
@@ -7141,6 +7224,22 @@ mod tests {
             Str::CleanerRiskUserData => 885,
             Str::CleanerRiskAppChange => 886,
             Str::CleanerRiskProtected => 887,
+
+            Str::Runtimes => 888,
+            Str::RuntimesDescription => 889,
+            Str::RuntimePodmanMachine => 890,
+            Str::RuntimeKubernetes => 891,
+            Str::RuntimeContainerd => 892,
+            Str::RuntimeStatusRunning => 893,
+            Str::RuntimeStatusStopped => 894,
+            Str::RuntimeStatusNotInstalled => 895,
+            Str::RuntimeStatusUnsupported => 896,
+            Str::RuntimeStatusUnknown => 897,
+            Str::RuntimeManagedExternally => 898,
+            Str::RuntimeStarting => 899,
+            Str::RuntimeStopping => 900,
+            Str::RuntimeBinaryNotFound => 901,
+            Str::RuntimeActionUnsupported => 902,
         }
     }
 

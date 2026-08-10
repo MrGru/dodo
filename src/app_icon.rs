@@ -144,6 +144,14 @@ pub enum AppIcon {
     /// The Installed Apps category's row icon, kept distinct from the
     /// Applications section's own `LayoutDashboard` above.
     Building2,
+
+    /// The Runtimes tab's rail icon (Docker module, round 7): detecting and
+    /// controlling the container runtimes/daemons on this machine reads as a
+    /// system-resource concern, distinct from every other icon already on the
+    /// rail (`Container`, `Layers`, `HardDrive`, `Network`). Resolves through
+    /// `Assets`' fallback to `gpui_component_assets`, which already carries
+    /// it — no new SVG file needed.
+    MemoryStick,
 }
 
 impl IconNamed for AppIcon {
@@ -210,6 +218,7 @@ impl IconNamed for AppIcon {
             Self::SquareTerminal => "icons/square-terminal.svg",
             Self::Cpu => "icons/cpu.svg",
             Self::Building2 => "icons/building-2.svg",
+            Self::MemoryStick => "icons/memory-stick.svg",
         }
         .into()
     }

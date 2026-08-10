@@ -43,8 +43,22 @@
 //! call — so an unreachable daemon surfaces as a [`DockerError::Unreachable`]
 //! from `list_containers`, which the page renders as its error state with a
 //! Retry button rather than crashing.
+//!
+//! # Runtime detection (round 7)
+//!
+//! [`runtime`] is a second, unrelated backend: [`runtime::RuntimeService`]
+//! detects and controls the container runtimes/daemons on the host machine
+//! itself (Docker, Podman Machine, Kubernetes, containerd) by running the
+//! platform's own CLI tools, not by talking to `bollard`. It exists beside
+//! [`DockerEngine`] rather than as a method on it because it answers a
+//! different question — "what is installed and running on this machine" vs
+//! "what does the connected engine report" — and needs none of `bollard`'s
+//! socket, so mixing the two into one trait would make every `DockerEngine`
+//! implementation (including a test fake) carry process-spawning it does not
+//! need.
 
 pub mod engine;
+pub mod runtime;
 
 use std::sync::Arc;
 

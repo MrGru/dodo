@@ -26,6 +26,12 @@
 //! the container store's spine (load status, rows, search query, the derived
 //! usage and an action-error banner), not its grouping/filter/selection
 //! machinery. The [`LoadStatus`](containers::LoadStatus) is reused across both.
+//!
+//! - [`runtime`] — round 7's Runtimes page store: one row per detected
+//!   container runtime/daemon, which one (if any) has a Start/Stop in flight,
+//!   and an action-error banner. Its own [`RuntimeLoadStatus`](runtime::RuntimeLoadStatus)
+//!   rather than a reused [`LoadStatus`](containers::LoadStatus) — see that
+//!   module's doc for why.
 
 pub mod containers;
 pub mod detail;
@@ -34,4 +40,5 @@ pub mod filters;
 pub mod focus;
 pub mod grouping;
 pub mod resource;
+pub mod runtime;
 pub mod selection;

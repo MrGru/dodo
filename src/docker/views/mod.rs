@@ -10,12 +10,18 @@
 //! pages, Logs on Containers. Every page owns one and renders it over its table;
 //! its module doc explains why it is an owned struct rather than an entity or a
 //! dialog.
+//!
+//! [`runtime::RuntimesView`] is round 7's fifth page: automatic detection of
+//! the container runtimes/daemons on this machine plus Start/Stop, over
+//! [`services::runtime`](crate::docker::services::runtime) rather than
+//! `bollard`.
 
 pub mod containers;
 pub mod detail;
 pub mod docker;
 pub mod images;
 pub mod networks;
+pub mod runtime;
 pub mod volumes;
 pub mod widgets;
 

@@ -25,6 +25,7 @@ use crate::app_icon::AppIcon;
 use crate::docker::views::containers::ContainersView;
 use crate::docker::views::images::ImagesView;
 use crate::docker::views::networks::NetworksView;
+use crate::docker::views::runtime::RuntimesView;
 use crate::docker::views::volumes::VolumesView;
 use crate::i18n::{Str, t};
 
@@ -39,7 +40,7 @@ const RAIL_WIDTH: Pixels = px(84.);
 /// icon or the label sideways.
 const RAIL_ACCENT_WIDTH: Pixels = px(2.);
 
-/// Which Docker page is showing. The four are the rail's tabs, in the order
+/// Which Docker page is showing. The five are the rail's tabs, in the order
 /// [`DockerPage::ALL`] lists them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DockerPage {
@@ -47,16 +48,23 @@ pub enum DockerPage {
     Images,
     Volumes,
     Networks,
+    /// Round 7: automatic detection of the container runtimes/daemons on this
+    /// machine plus Start/Stop. Last on the rail — it is about the host
+    /// machine rather than the connected engine's own resources, so it reads
+    /// as an addendum to the other four rather than a peer swapped in among
+    /// them.
+    Runtimes,
 }
 
 impl DockerPage {
     /// The pages the rail shows, top to bottom. `ALL[0]` is also the page a
     /// freshly opened Docker section starts on — see [`DockerView::new`].
-    pub const ALL: [DockerPage; 4] = [
+    pub const ALL: [DockerPage; 5] = [
         DockerPage::Containers,
         DockerPage::Images,
         DockerPage::Volumes,
         DockerPage::Networks,
+        DockerPage::Runtimes,
     ];
 
     /// The page a freshly opened Docker section shows.
@@ -71,18 +79,21 @@ impl DockerPage {
             DockerPage::Images => Str::Images,
             DockerPage::Volumes => Str::Volumes,
             DockerPage::Networks => Str::Networks,
+            DockerPage::Runtimes => Str::Runtimes,
         }
     }
 
-    /// The page's icon, drawn above its label on the rail. These are the same
-    /// four icons the sidebar's Docker children carried before the pages moved
-    /// in here, so nothing a user recognises changed.
+    /// The page's icon, drawn above its label on the rail. The first four are
+    /// the same icons the sidebar's Docker children carried before the pages
+    /// moved in here, so nothing a user recognises changed; `Runtimes` is new
+    /// in round 7.
     pub fn icon(self) -> AppIcon {
         match self {
             DockerPage::Containers => AppIcon::Container,
             DockerPage::Images => AppIcon::Layers,
             DockerPage::Volumes => AppIcon::HardDrive,
             DockerPage::Networks => AppIcon::Network,
+            DockerPage::Runtimes => AppIcon::MemoryStick,
         }
     }
 
@@ -94,6 +105,7 @@ impl DockerPage {
             DockerPage::Images => "docker-rail-images",
             DockerPage::Volumes => "docker-rail-volumes",
             DockerPage::Networks => "docker-rail-networks",
+            DockerPage::Runtimes => "docker-rail-runtimes",
         }
     }
 }
@@ -111,6 +123,7 @@ pub struct DockerView {
     images: Entity<ImagesView>,
     volumes: Entity<VolumesView>,
     networks: Entity<NetworksView>,
+    runtimes: Entity<RuntimesView>,
 }
 
 impl DockerView {
@@ -124,6 +137,7 @@ impl DockerView {
             images: cx.new(|cx| ImagesView::new(window, cx)),
             volumes: cx.new(|cx| VolumesView::new(window, cx)),
             networks: cx.new(|cx| NetworksView::new(window, cx)),
+            runtimes: cx.new(|cx| RuntimesView::new(window, cx)),
         }
     }
 
@@ -153,6 +167,9 @@ impl DockerView {
             }
             DockerPage::Networks => {
                 self.networks.update(cx, |view, cx| view.ensure_loaded(cx));
+            }
+            DockerPage::Runtimes => {
+                self.runtimes.update(cx, |view, cx| view.ensure_loaded(cx));
             }
         }
         self.sync_polling(cx);
@@ -195,6 +212,9 @@ impl DockerView {
         });
         self.networks.update(cx, |view, cx| {
             view.set_polling(should_poll(active, page, DockerPage::Networks), cx)
+        });
+        self.runtimes.update(cx, |view, cx| {
+            view.set_polling(should_poll(active, page, DockerPage::Runtimes), cx)
         });
     }
 
@@ -274,6 +294,7 @@ impl Render for DockerView {
             DockerPage::Images => self.images.clone().into_any_element(),
             DockerPage::Volumes => self.volumes.clone().into_any_element(),
             DockerPage::Networks => self.networks.clone().into_any_element(),
+            DockerPage::Runtimes => self.runtimes.clone().into_any_element(),
         };
 
         h_flex()
@@ -329,6 +350,7 @@ mod tests {
                 DockerPage::Images,
                 DockerPage::Volumes,
                 DockerPage::Networks,
+                DockerPage::Runtimes,
             ]
         );
         assert_eq!(DockerPage::DEFAULT, DockerPage::Containers);
@@ -349,6 +371,7 @@ mod tests {
                 discriminant(&Str::Images),
                 discriminant(&Str::Volumes),
                 discriminant(&Str::Networks),
+                discriminant(&Str::Runtimes),
             ]
         );
 
