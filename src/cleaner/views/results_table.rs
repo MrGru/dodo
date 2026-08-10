@@ -376,11 +376,9 @@ impl TableDelegate for ResultsTableDelegate {
         &mut self,
         row_ix: usize,
         _window: &mut Window,
-        cx: &mut Context<TableState<Self>>,
+        _cx: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
-        div()
-            .id(("cleaner-result-row", row_ix))
-            .hover(|this| this.bg(cx.theme().primary.opacity(0.05)))
+        div().id(("cleaner-result-row", row_ix))
     }
 
     fn render_td(
