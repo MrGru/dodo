@@ -62,9 +62,12 @@ pub mod views;
 
 use std::sync::Arc;
 
-use dodo_ime_core::LanguageId;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use futures_util::StreamExt as _;
+
+use dodo_ime_core::{ActiveLanguages, LanguageId};
 use dodo_ime_ipc::document::IpcError;
-use dodo_ime_ipc::settings::{Backend, SettingsDocument, VietnameseSettings};
+use dodo_ime_ipc::settings::{Backend, LanguageSwitch, SettingsDocument, VietnameseSettings};
 use dodo_ime_ipc::status::StatusDocument;
 use gpui::{App, AsyncApp, BorrowAppContext as _, Global, Task};
 
@@ -88,12 +91,10 @@ use crate::input_method::services::store::{DiskInputMethodStore, InputMethodStor
 /// How long after a settings change to ask the bundle what it applied.
 ///
 /// The bundle reads the file when the notification arrives, so there is a moment
-/// between "dodo wrote it" and "the input method says it has it" — and dodo has no
-/// way to be told, because the status file has no notification of its own (see
-/// `dodo_ime_ipc::SETTINGS_CHANGED`, which is deliberately one-directional). One
-/// read, once, after a pause long enough for a file read in another process. It is
-/// not a poll: if the answer is still stale, the row says so until the next change
-/// or the next launch, which is honest rather than busy.
+/// between "dodo wrote it" and "the input method says it has it". One read,
+/// once, after a pause long enough for a file read in another process. Explicit
+/// host language switches use the same notification to cause their own one read;
+/// neither path polls.
 #[cfg(target_os = "macos")]
 const STATUS_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
 
@@ -116,6 +117,8 @@ pub struct InputMethod {
     #[cfg(target_os = "macos")]
     install: Install,
     save: Option<Task<()>>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    language_changes: Option<Task<()>>,
     #[cfg(target_os = "macos")]
     installing: Option<Task<()>>,
     /// Held only while Event Tap owns transformation. Dropping it detaches the
@@ -153,6 +156,8 @@ impl InputMethod {
             #[cfg(target_os = "macos")]
             install: Install::Idle,
             save: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            language_changes: None,
             #[cfg(target_os = "macos")]
             installing: None,
             #[cfg(target_os = "macos")]
@@ -231,8 +236,47 @@ impl InputMethod {
             .unwrap_or_default()
     }
 
+    /// The only input languages a person has enabled for menus and cycling.
+    pub fn active_languages(cx: &App) -> ActiveLanguages {
+        cx.try_global::<InputMethod>()
+            .map(|state| state.document.active_languages)
+            .unwrap_or_default()
+    }
+
+    /// The shared, persisted language-switch shortcut.
+    pub fn language_switch(cx: &App) -> LanguageSwitch {
+        cx.try_global::<InputMethod>()
+            .map(|state| state.document.language_switch)
+            .unwrap_or_default()
+    }
+
     pub fn set_language(language: LanguageId, cx: &mut App) {
-        Self::edit(cx, |document| document.language = language);
+        Self::edit(cx, |document| {
+            if document.active_languages.contains(language) {
+                document.language = language;
+            }
+        });
+    }
+
+    /// Enables or disables a language, never leaving no cycle destination.
+    pub fn set_language_enabled(language: LanguageId, enabled: bool, cx: &mut App) {
+        Self::edit(cx, |document| {
+            document.active_languages = document.active_languages.with(language, enabled);
+            if !document.active_languages.contains(document.language) {
+                document.language = document
+                    .active_languages
+                    .iter()
+                    .next()
+                    .expect("ActiveLanguages is non-empty");
+            }
+        });
+    }
+
+    /// Replaces the shortcut only when it cannot consume ordinary typing.
+    pub fn set_language_switch(shortcut: LanguageSwitch, cx: &mut App) {
+        if shortcut.has_modifier() {
+            Self::edit(cx, |document| document.language_switch = shortcut);
+        }
     }
 
     /// Switches the sole transformation owner.
@@ -317,12 +361,7 @@ impl InputMethod {
                 state.keyboard_hook = None;
                 state.keyboard_hook_status = KeyboardHookStatus::Inactive;
             }
-            state.document = SettingsDocument::next_with_backend(
-                &state.document,
-                next.backend,
-                next.language,
-                next.vietnamese,
-            );
+            state.document = SettingsDocument::next_from(&state.document, next);
             let store = state.store.clone();
             let document = state.document;
 
@@ -358,6 +397,8 @@ impl InputMethod {
                 }
             }));
         });
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        crate::tray::set_active_languages(Self::active_languages(cx), Self::language(cx), cx);
         cx.refresh_windows();
     }
 
@@ -424,17 +465,36 @@ impl InputMethod {
             .spawn(async move { store.read_status() })
             .await;
 
-        cx.update(|cx| {
-            if cx.try_global::<InputMethod>().is_none() {
-                return;
-            }
+        let reported_language = read
+            .as_ref()
+            .ok()
+            .and_then(|status| status.as_ref())
+            .and_then(StatusDocument::language);
+        let adopt_language = cx.update(|cx| {
+            cx.try_global::<InputMethod>()?;
+            let mut selected = None;
             cx.update_global::<InputMethod, _>(|state, _| {
                 // A status file this dodo cannot read is *not* an error worth
                 // showing beside the settings: it means the installed bundle is
                 // newer than dodo, which the settings row phrases as "unknown"
                 // rather than as a fault. `store_error` is about dodo's own file.
                 state.status = read.clone().unwrap_or(None);
+                if state
+                    .status
+                    .as_ref()
+                    .is_some_and(|status| status.settings_revision == state.document.revision)
+                    && reported_language
+                        .is_some_and(|language| state.document.active_languages.contains(language))
+                {
+                    selected = reported_language;
+                }
             });
+            selected
+        });
+        if let Some(language) = adopt_language {
+            cx.update(|cx| Self::set_language(language, cx));
+        }
+        cx.update(|cx| {
             #[cfg(target_os = "macos")]
             Self::reconcile_event_tap(cx);
             cx.refresh_windows();
@@ -471,11 +531,22 @@ impl InputMethod {
         if cx.try_global::<InputMethod>().is_none() {
             return;
         }
+        let reported_language = status.as_ref().and_then(StatusDocument::language);
+        let mut adopt_language = None;
         cx.update_global::<InputMethod, _>(|state, _| {
             state.status = status;
             state.installed = installed;
             match loaded {
                 Ok(document) => {
+                    if state
+                        .status
+                        .as_ref()
+                        .is_some_and(|status| status.settings_revision == document.revision)
+                        && reported_language
+                            .is_some_and(|language| document.active_languages.contains(language))
+                    {
+                        adopt_language = reported_language;
+                    }
                     state.document = document;
                     state.store_error = None;
                 }
@@ -485,6 +556,25 @@ impl InputMethod {
                 }
             }
         });
+        if adopt_language.is_none() {
+            adopt_language = cx.try_global::<InputMethod>().and_then(|state| {
+                (!state
+                    .document
+                    .active_languages
+                    .contains(state.document.language))
+                .then(|| {
+                    state
+                        .document
+                        .active_languages
+                        .iter()
+                        .next()
+                        .expect("ActiveLanguages is non-empty")
+                })
+            });
+        }
+        if let Some(language) = adopt_language {
+            Self::set_language(language, cx);
+        }
         #[cfg(target_os = "macos")]
         Self::reconcile_event_tap(cx);
         #[cfg(target_os = "windows")]
@@ -755,6 +845,16 @@ fn system_ops() -> Option<Box<dyn services::installer::InstallOps>> {
 /// every other `init`.
 pub fn init(cx: &mut App) {
     cx.set_global(InputMethod::new(Arc::new(DiskInputMethodStore::new())));
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let mut receiver = services::notify::language_changes();
+        let task = cx.spawn(async move |cx| {
+            while receiver.next().await.is_some() {
+                InputMethod::refresh_status(cx).await;
+            }
+        });
+        cx.update_global::<InputMethod, _>(|state, _| state.language_changes = Some(task));
+    }
 }
 
 /// Reads the settings and the bundle's status on the background executor and
@@ -787,7 +887,8 @@ pub async fn load(cx: &mut AsyncApp) {
             }
             #[cfg(target_os = "windows")]
             {
-                (loaded, None, services::windows::is_registered())
+                let status = store.read_status().ok().flatten();
+                (loaded, status, services::windows::is_registered())
             }
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             (loaded, None, false)
@@ -864,6 +965,7 @@ mod tests {
                 tone_placement: Tone::Traditional,
                 ..VietnameseSettings::default()
             },
+            ..SettingsDocument::default()
         };
 
         // Nothing has ever run.

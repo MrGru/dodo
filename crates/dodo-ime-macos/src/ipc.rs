@@ -46,9 +46,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-use dodo_ime_core::{LanguageId, VietnameseConfig};
+use dodo_ime_core::{ActiveLanguages, LanguageId, VietnameseConfig};
 use dodo_ime_ipc::paths;
-use dodo_ime_ipc::settings::{Backend, SETTINGS_FILE, SettingsDocument};
+use dodo_ime_ipc::settings::{Backend, LanguageSwitch, SETTINGS_FILE, SettingsDocument};
 use dodo_ime_ipc::status::{STATUS_FILE, StatusDocument};
 
 use crate::DEFAULT_CONFIG;
@@ -64,6 +64,8 @@ const BUNDLE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct Live {
     pub backend: Backend,
     pub language: LanguageId,
+    pub active_languages: ActiveLanguages,
+    pub language_switch: LanguageSwitch,
     pub config: VietnameseConfig,
     /// The settings revision this came from. `0` means the compiled-in
     /// defaults — no file, or a file that was refused.
@@ -74,6 +76,8 @@ impl Live {
     const DEFAULT: Live = Live {
         backend: Backend::Native,
         language: LanguageId::English,
+        active_languages: ActiveLanguages::DEFAULT,
+        language_switch: LanguageSwitch::DEFAULT,
         config: DEFAULT_CONFIG,
         revision: 0,
     };
@@ -116,6 +120,35 @@ pub fn revision() -> u64 {
     LIVE.read().map(|live| live.revision).unwrap_or(0)
 }
 
+/// The language-switch shortcut currently configured by dodo.
+pub fn language_switch() -> LanguageSwitch {
+    LIVE.read()
+        .map(|live| live.language_switch)
+        .unwrap_or_default()
+}
+
+/// Selects the next enabled language and reports that deliberate command.
+///
+/// The status file remains bundle-owned; dodo adopts the selection before its
+/// next settings write, so the host never races dodo for `input-method.json`.
+pub fn cycle_language() -> Option<(LanguageId, bool)> {
+    let (language, beep, revision) = {
+        let mut live = LIVE.write().ok()?;
+        if live.backend != Backend::Native {
+            return None;
+        }
+        live.language = live.active_languages.next(live.language);
+        (live.language, live.language_switch.beep, live.revision)
+    };
+    if let Some(dir) = dir() {
+        let status = StatusDocument::now(BUNDLE_VERSION, revision).with_selected_language(language);
+        let _ = status.write(&dir.join(STATUS_FILE));
+    }
+    #[cfg(target_os = "macos")]
+    language_changed();
+    Some((language, beep))
+}
+
 /// Reads the settings file in `dir`, adopts it, and returns what is now live.
 ///
 /// Pure enough to test: everything about *which* directory is the caller's
@@ -127,6 +160,8 @@ pub fn adopt_from(dir: &Path) -> Live {
     let live = Live {
         backend: document.backend,
         language: document.language,
+        active_languages: document.active_languages,
+        language_switch: document.language_switch,
         config: document.vietnamese.to_config(),
         // A refused file reports revision 0, because `read_or_default` hands
         // back the defaults: dodo then sees "the bundle is on its defaults" and
@@ -145,13 +180,30 @@ pub fn adopt_from(dir: &Path) -> Live {
 /// Best effort: the only consequence of failing is that dodo cannot tell whether
 /// its settings arrived.
 pub fn report_into(dir: &Path) {
-    let status = StatusDocument::now(BUNDLE_VERSION, revision());
+    let status = StatusDocument::now(BUNDLE_VERSION, revision()).with_selected_language(language());
     let _ = status.write(&dir.join(STATUS_FILE));
 }
 
 /// dodo's data directory, or `None` when the environment names no home.
 fn dir() -> Option<PathBuf> {
     paths::support_dir_from_env()
+}
+
+/// Wakes dodo after this host has atomically written its status command.
+#[cfg(target_os = "macos")]
+fn language_changed() {
+    use objc2_core_foundation::{CFNotificationCenter, CFString};
+    use std::ptr::null;
+
+    let Some(center) = CFNotificationCenter::distributed_center() else {
+        return;
+    };
+    let name = CFString::from_str(dodo_ime_ipc::LANGUAGE_CHANGED);
+    // SAFETY: no foreign payload crosses this boundary; dodo re-reads the
+    // versioned, bundle-owned status file before adopting anything.
+    unsafe {
+        center.post_notification(Some(&name), null(), None, true);
+    }
 }
 
 /// Read the settings, then say what was read. The whole exchange, in the order
@@ -424,6 +476,7 @@ mod tests {
             language: LanguageId::Vietnamese,
             revision: 12,
             vietnamese: VietnameseSettings::default(),
+            ..SettingsDocument::default()
         }
         .write(&dir.join(SETTINGS_FILE))
         .unwrap();
@@ -436,6 +489,7 @@ mod tests {
             .expect("the status file was written");
         assert_eq!(status.bundle_version, BUNDLE_VERSION);
         assert_eq!(status.settings_revision, 12);
+        assert_eq!(status.language(), Some(LanguageId::Vietnamese));
         assert_eq!(status.pid, std::process::id());
 
         let _ = std::fs::remove_dir_all(&dir);

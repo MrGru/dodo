@@ -46,6 +46,7 @@ objc2-app-kit = { version = "0.3.2", features = [
     "NSApplication",
     "NSResponder",
     "NSEvent",
+    "NSGraphics",
 ] }
 # `IMKInputController` and `IMKServer`. Note that `IMKTextInput` — the *client*
 # side, which is where every call that puts text on screen lives — is NOT in

@@ -43,3 +43,91 @@ pub fn settings_changed() {
 /// is still written — there is simply no input-method process to tell.
 #[cfg(not(target_os = "macos"))]
 pub fn settings_changed() {}
+
+/// Delivers a native host's explicit language-switch command to dodo.
+///
+/// The receiver parks when idle; it is a notification callback, never a file
+/// poll. Dodo remains the sole `input-method.json` writer.
+#[cfg(target_os = "macos")]
+pub fn language_changes() -> futures_channel::mpsc::UnboundedReceiver<()> {
+    observer::install()
+}
+
+#[cfg(target_os = "windows")]
+pub fn language_changes() -> futures_channel::mpsc::UnboundedReceiver<()> {
+    use futures_channel::mpsc::unbounded;
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
+
+    let (sender, receiver) = unbounded();
+    std::thread::spawn(move || {
+        let name = dodo_ime_ipc::WINDOWS_LANGUAGE_CHANGED
+            .encode_utf16()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        // SAFETY: the terminated name lives through CreateEventW; the unnamed
+        // security attributes request Windows' current-user defaults.
+        let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+        if event.is_null() {
+            return;
+        }
+        while unsafe { WaitForSingleObject(event, INFINITE) } == WAIT_OBJECT_0 {
+            if sender.unbounded_send(()).is_err() {
+                break;
+            }
+        }
+        // SAFETY: this thread owns the event handle it created.
+        unsafe { CloseHandle(event) };
+    });
+    receiver
+}
+
+#[cfg(target_os = "macos")]
+mod observer {
+    use std::ffi::c_void;
+    use std::ptr::null;
+    use std::sync::OnceLock;
+
+    use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+    use objc2_core_foundation::{
+        CFDictionary, CFNotificationCenter, CFNotificationName, CFNotificationSuspensionBehavior,
+        CFString,
+    };
+
+    static SENDER: OnceLock<UnboundedSender<()>> = OnceLock::new();
+
+    unsafe extern "C-unwind" fn language_changed(
+        _center: *mut CFNotificationCenter,
+        _observer: *mut c_void,
+        _name: *const CFNotificationName,
+        _object: *const c_void,
+        _user_info: *const CFDictionary,
+    ) {
+        if let Some(sender) = SENDER.get() {
+            let _ = sender.unbounded_send(());
+        }
+    }
+
+    pub fn install() -> UnboundedReceiver<()> {
+        let (sender, receiver) = unbounded();
+        if SENDER.set(sender).is_err() {
+            return receiver;
+        }
+        let Some(center) = CFNotificationCenter::distributed_center() else {
+            return receiver;
+        };
+        let name = CFString::from_str(dodo_ime_ipc::LANGUAGE_CHANGED);
+        // SAFETY: the callback reads no pointers; the global sender remains live
+        // until dodo exits, and a distributed notification carries no payload.
+        unsafe {
+            center.add_observer(
+                null(),
+                Some(language_changed),
+                Some(&name),
+                null(),
+                CFNotificationSuspensionBehavior::DeliverImmediately,
+            );
+        }
+        receiver
+    }
+}

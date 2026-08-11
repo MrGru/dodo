@@ -37,6 +37,7 @@ use std::cell::RefCell;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send};
+use objc2_app_kit::NSBeep;
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString, NSUInteger};
 use objc2_input_method_kit::{IMKInputController, IMKServer, IMKStateSetting};
 
@@ -203,6 +204,20 @@ impl DodoInputController {
         // key this table would not have named anyway.
         let key_code = u16::try_from(key_code).unwrap_or(u16::MAX);
         let event = keymap::key_event(&text, key_code, flags as u64);
+        if ipc::language_switch().matches(&event) {
+            let Some((language, beep)) = ipc::cycle_language() else {
+                return false;
+            };
+            let handled = self.run(sender, |session| {
+                let mut response = session.reconfigure(language, ipc::config());
+                response.handled = true;
+                response
+            });
+            if beep {
+                NSBeep();
+            }
+            return handled;
+        }
         self.run(sender, |session| session.key(&event))
     }
 }

@@ -451,6 +451,22 @@ mod tests {
     }
 
     #[test]
+    fn a_language_switch_commits_then_passes_new_keys_through() {
+        let mut session = session();
+        let (mut client, _) = type_keys(&mut session, "tieengs");
+        assert_eq!(client.marked, "tiếng");
+
+        let response = session.reconfigure(LanguageId::English, DEFAULT_CONFIG);
+        client.perform(&response.ops, None);
+        assert_eq!(client.document, "tiếng");
+        assert_eq!(client.marked, "");
+        assert_eq!(session.pending(), "");
+
+        let response = session.key(&KeyEvent::character('d'));
+        assert_eq!(response, Response::unhandled());
+    }
+
+    #[test]
     fn reconfiguring_to_the_configuration_already_in_force_does_nothing() {
         let mut session = session();
         let (mut client, _) = type_keys(&mut session, "tieengs");

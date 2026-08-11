@@ -15,7 +15,10 @@ use dodo_ime_core::{
 };
 use dodo_ime_ipc::paths;
 use dodo_ime_ipc::settings::{Backend, SETTINGS_FILE, SettingsDocument};
-use windows::Win32::Foundation::{BOOL, E_FAIL, LPARAM, WPARAM};
+use dodo_ime_ipc::status::{STATUS_FILE, StatusDocument};
+use windows::Win32::Foundation::{BOOL, CloseHandle, E_FAIL, LPARAM, WPARAM};
+use windows::Win32::System::Diagnostics::Debug::MessageBeep;
+use windows::Win32::System::Threading::{EVENT_MODIFY_STATE, OpenEventW, SetEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyboardLayout, GetKeyboardState, ToUnicodeEx, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
     VK_SHIFT,
@@ -23,12 +26,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::TextServices::{
     ITfComposition, ITfCompositionSink, ITfContext, ITfContextComposition, ITfEditSession,
     ITfEditSession_Impl, ITfKeyEventSink, ITfKeyEventSink_Impl, ITfKeystrokeMgr,
-    ITfTextInputProcessor, ITfTextInputProcessor_Impl, ITfTextInputProcessorEx,
-    ITfTextInputProcessorEx_Impl, ITfThreadMgr, TF_CONTEXT_EDIT_CONTEXT_FLAGS,
-    TF_DEFAULT_SELECTION, TF_ES_READWRITE, TF_ES_SYNC, TF_SELECTION, TS_SD_READONLY,
+    ITfTextInputProcessor_Impl, ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl,
+    ITfThreadMgr, TF_CONTEXT_EDIT_CONTEXT_FLAGS, TF_DEFAULT_SELECTION, TF_ES_READWRITE, TF_ES_SYNC,
+    TF_SELECTION, TS_SD_READONLY,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
-use windows::core::{Error, Interface, Result, implement};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetWindowThreadProcessId, MB_OK,
+};
+use windows::core::{Error, Interface, PCWSTR, Result, implement};
 
 use crate::keymap;
 
@@ -45,6 +50,8 @@ struct State {
     client_id: u32,
     engine: Option<VietnameseEngine>,
     composition: Option<ITfComposition>,
+    language: LanguageId,
+    settings_revision: u64,
 }
 
 impl Default for State {
@@ -54,6 +61,10 @@ impl Default for State {
             client_id: 0,
             engine: None,
             composition: None,
+            language: LanguageId::English,
+            // No settings revision is loaded yet, so the first key must adopt
+            // even a hand-written revision-0 document.
+            settings_revision: u64::MAX,
         }
     }
 }
@@ -65,28 +76,37 @@ impl TextService {
         }
     }
 
-    /// Load only when this host owns the selected backend. Missing/refused
-    /// settings intentionally produce English pass-through, never Telex beside
-    /// dodo's Keyboard Hook.
-    fn configured_config() -> Option<VietnameseConfig> {
+    /// Reads the existing settings once for this key decision. The native host
+    /// already did this before every key; keeping the document together avoids
+    /// a second hot-path read for language-switch metadata.
+    fn configured_document() -> Option<SettingsDocument> {
         let directory = paths::support_dir_from_env()?;
-        let (document, _) = SettingsDocument::read_or_default(&directory.join(SETTINGS_FILE));
-        (document.backend == Backend::Native && document.language == LanguageId::Vietnamese).then(
-            || {
-                let mut config: VietnameseConfig = document.vietnamese.to_config();
-                config.output = OutputMode::Composition;
-                config
-            },
-        )
+        Some(SettingsDocument::read_or_default(&directory.join(SETTINGS_FILE)).0)
     }
 
-    /// Preserve an in-flight syllable while settings stay the same. Rebuilding
-    /// the engine for every key would make every letter a new composition.
-    fn refresh_engine(state: &mut State) -> bool {
-        let Some(config) = Self::configured_config() else {
+    fn vietnamese_config(document: SettingsDocument) -> VietnameseConfig {
+        let mut config = document.vietnamese.to_config();
+        config.output = OutputMode::Composition;
+        config
+    }
+
+    /// Preserve an in-flight syllable while settings stay the same. A changed
+    /// revision deliberately adopts dodo's selected language; a shortcut keeps
+    /// its local selection until dodo has persisted that command.
+    fn refresh_engine(state: &mut State, document: SettingsDocument) -> bool {
+        if document.backend != Backend::Native {
             state.engine = None;
             return false;
-        };
+        }
+        if state.settings_revision != document.revision {
+            state.language = document.language;
+            state.settings_revision = document.revision;
+        }
+        if state.language != LanguageId::Vietnamese {
+            state.engine = None;
+            return true;
+        }
+        let config = Self::vietnamese_config(document);
         if state
             .engine
             .as_ref()
@@ -95,6 +115,35 @@ impl TextService {
             state.engine = Some(VietnameseEngine::new(config));
         }
         true
+    }
+
+    /// Reports only an explicit language command, never ordinary typing.
+    fn report_language(language: LanguageId, revision: u64) {
+        let Some(directory) = paths::support_dir_from_env() else {
+            return;
+        };
+        let status = StatusDocument::now(env!("CARGO_PKG_VERSION"), revision)
+            .with_selected_language(language);
+        let _ = status.write(&directory.join(STATUS_FILE));
+        Self::signal_dodo();
+    }
+
+    /// Wakes dodo's event-driven status reader when its tray process is alive.
+    fn signal_dodo() {
+        let name = dodo_ime_ipc::WINDOWS_LANGUAGE_CHANGED
+            .encode_utf16()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        // SAFETY: OpenEventW only opens dodo's current-session event; a missing
+        // dodo process is normal and status remains available at its next start.
+        let Ok(event) = (unsafe { OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(name.as_ptr())) })
+        else {
+            return;
+        };
+        // SAFETY: event is the valid handle OpenEventW returned above.
+        let _ = unsafe { SetEvent(event) };
+        // SAFETY: event is still the valid handle OpenEventW returned above.
+        let _ = unsafe { CloseHandle(event) };
     }
 
     fn input_event(vkey: u32, lparam: LPARAM) -> Option<dodo_ime_core::KeyEvent> {
@@ -172,21 +221,38 @@ impl TextService {
         context: &ITfContext,
         vkey: u32,
         lparam: LPARAM,
-    ) -> Option<(State, Vec<EngineAction>, bool)> {
+    ) -> Option<(State, Vec<EngineAction>, bool, Option<bool>)> {
         if !Self::writable(context) {
             return None;
         }
         let event = Self::input_event(vkey, lparam)?;
+        let document = Self::configured_document()?;
         let mut next = self.state.borrow().clone();
-        if !Self::refresh_engine(&mut next) {
+        if !Self::refresh_engine(&mut next, document) {
             return None;
         }
+        if document.language_switch.matches(&event) {
+            next.language = document.active_languages.next(next.language);
+            next.engine = (next.language == LanguageId::Vietnamese)
+                .then(|| VietnameseEngine::new(Self::vietnamese_config(document)));
+            return Some((
+                next,
+                vec![EngineAction::CommitComposition],
+                true,
+                Some(document.language_switch.beep),
+            ));
+        }
         let result = next.engine.as_mut()?.process_key(&event);
-        Self::action_changes_text(&result.actions).then_some((next, result.actions, result.handled))
+        Self::action_changes_text(&result.actions).then_some((
+            next,
+            result.actions,
+            result.handled,
+            None,
+        ))
     }
 
     fn apply(&self, context: &ITfContext, vkey: u32, lparam: LPARAM) -> Result<BOOL> {
-        let Some((next, actions, handled)) = self.prepare(context, vkey, lparam) else {
+        let Some((next, actions, handled, switched)) = self.prepare(context, vkey, lparam) else {
             return Ok(BOOL(0));
         };
         let shared = Rc::new(RefCell::new(next));
@@ -206,6 +272,13 @@ impl TextService {
         }?;
         if requested.is_ok() {
             *self.state.borrow_mut() = shared.borrow().clone();
+            if let Some(beep) = switched {
+                let state = self.state.borrow();
+                Self::report_language(state.language, state.settings_revision);
+                if beep {
+                    unsafe { MessageBeep(MB_OK) };
+                }
+            }
             Ok(BOOL(handled as i32))
         } else {
             // The original key is passed on. Forgetting the engine avoids any
@@ -227,7 +300,9 @@ impl ITfTextInputProcessor_Impl for TextService {
         let mut state = self.state.borrow_mut();
         state.manager = Some(manager.clone());
         state.client_id = client_id;
-        state.engine = Self::configured_config().map(VietnameseEngine::new);
+        if let Some(document) = Self::configured_document() {
+            let _ = Self::refresh_engine(&mut state, document);
+        }
         Ok(())
     }
 

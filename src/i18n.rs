@@ -1498,6 +1498,22 @@ pub enum Str {
     StartWithOsDescription,
     StartWithOsChecking,
     StartWithOsStatusUnknown,
+
+    // Input-language selection. Appended to keep existing position slots fixed.
+    InputMethodActiveLanguages,
+    InputMethodActiveLanguagesDescription,
+    InputMethodLanguageDescription,
+    InputMethodLanguageSwitch,
+    InputMethodLanguageSwitchDescription,
+    InputMethodShortcutControl,
+    InputMethodShortcutAlt,
+    InputMethodShortcutShift,
+    InputMethodShortcutMeta,
+    InputMethodShortcutBeep,
+    InputMethodShortcutSpace,
+    InputMethodShortcutEnter,
+    InputMethodShortcutTab,
+    InputMethodShortcutEscape,
 }
 
 impl Str {
@@ -4764,6 +4780,52 @@ impl Str {
                 "Không thể khởi động chặn sự kiện. Các phím được chuyển qua không thay đổi."
                     .into()
             }
+            (Str::InputMethodActiveLanguages, Language::English) => "Active languages".into(),
+            (Str::InputMethodActiveLanguages, Language::Vietnamese) => {
+                "Ngôn ngữ đang bật".into()
+            }
+            (Str::InputMethodActiveLanguagesDescription, Language::English) => {
+                "Choose the languages shown in the menu and used by the switch shortcut.".into()
+            }
+            (Str::InputMethodActiveLanguagesDescription, Language::Vietnamese) => {
+                "Chọn các ngôn ngữ có trong menu và được phím tắt chuyển đổi sử dụng.".into()
+            }
+            (Str::InputMethodLanguageDescription, Language::English) => {
+                "Select the current input language.".into()
+            }
+            (Str::InputMethodLanguageDescription, Language::Vietnamese) => {
+                "Chọn ngôn ngữ nhập hiện tại.".into()
+            }
+            (Str::InputMethodLanguageSwitch, Language::English) => "Language switch".into(),
+            (Str::InputMethodLanguageSwitch, Language::Vietnamese) => {
+                "Chuyển ngôn ngữ".into()
+            }
+            (Str::InputMethodLanguageSwitchDescription, Language::English) => {
+                "Cycles active languages. Choose modifiers, a key, and an optional sound.".into()
+            }
+            (Str::InputMethodLanguageSwitchDescription, Language::Vietnamese) => {
+                "Luân chuyển các ngôn ngữ đang bật. Chọn phím bổ trợ, một phím và âm báo tùy chọn.".into()
+            }
+            (Str::InputMethodShortcutControl, Language::English) => "Control".into(),
+            (Str::InputMethodShortcutControl, Language::Vietnamese) => "Phím Control".into(),
+            (Str::InputMethodShortcutAlt, Language::English) => "Alt".into(),
+            (Str::InputMethodShortcutAlt, Language::Vietnamese) => "Phím Alt".into(),
+            (Str::InputMethodShortcutShift, Language::English) => "Shift".into(),
+            (Str::InputMethodShortcutShift, Language::Vietnamese) => "Phím Shift".into(),
+            (Str::InputMethodShortcutMeta, Language::English) => "Command / Windows".into(),
+            (Str::InputMethodShortcutMeta, Language::Vietnamese) => {
+                "Phím Command / Windows".into()
+            }
+            (Str::InputMethodShortcutBeep, Language::English) => "Beep".into(),
+            (Str::InputMethodShortcutBeep, Language::Vietnamese) => "Âm báo".into(),
+            (Str::InputMethodShortcutSpace, Language::English) => "Space".into(),
+            (Str::InputMethodShortcutSpace, Language::Vietnamese) => "Phím cách".into(),
+            (Str::InputMethodShortcutEnter, Language::English) => "Enter".into(),
+            (Str::InputMethodShortcutEnter, Language::Vietnamese) => "Phím Enter".into(),
+            (Str::InputMethodShortcutTab, Language::English) => "Tab".into(),
+            (Str::InputMethodShortcutTab, Language::Vietnamese) => "Phím Tab".into(),
+            (Str::InputMethodShortcutEscape, Language::English) => "Escape".into(),
+            (Str::InputMethodShortcutEscape, Language::Vietnamese) => "Phím Esc".into(),
             (Str::InputMethodWindowsDescription, Language::English) => {
                 "Choose Dodo's Vietnamese input method. Native TSF works after Dodo closes and requires installation; Keyboard Hook needs Dodo to remain open."
                     .into()
@@ -6369,6 +6431,20 @@ mod tests {
             plain(Str::StartWithOsDescription),
             plain(Str::StartWithOsChecking),
             plain(Str::StartWithOsStatusUnknown),
+            plain(Str::InputMethodActiveLanguages),
+            plain(Str::InputMethodActiveLanguagesDescription),
+            plain(Str::InputMethodLanguageDescription),
+            plain(Str::InputMethodLanguageSwitch),
+            plain(Str::InputMethodLanguageSwitchDescription),
+            plain(Str::InputMethodShortcutControl),
+            plain(Str::InputMethodShortcutAlt),
+            plain(Str::InputMethodShortcutShift),
+            plain(Str::InputMethodShortcutMeta),
+            plain(Str::InputMethodShortcutBeep),
+            plain(Str::InputMethodShortcutSpace),
+            plain(Str::InputMethodShortcutEnter),
+            plain(Str::InputMethodShortcutTab),
+            plain(Str::InputMethodShortcutEscape),
         ]
     }
 
@@ -7283,6 +7359,20 @@ mod tests {
             Str::StartWithOsDescription => 904,
             Str::StartWithOsChecking => 905,
             Str::StartWithOsStatusUnknown => 906,
+            Str::InputMethodActiveLanguages => 907,
+            Str::InputMethodActiveLanguagesDescription => 908,
+            Str::InputMethodLanguageDescription => 909,
+            Str::InputMethodLanguageSwitch => 910,
+            Str::InputMethodLanguageSwitchDescription => 911,
+            Str::InputMethodShortcutControl => 912,
+            Str::InputMethodShortcutAlt => 913,
+            Str::InputMethodShortcutShift => 914,
+            Str::InputMethodShortcutMeta => 915,
+            Str::InputMethodShortcutBeep => 916,
+            Str::InputMethodShortcutSpace => 917,
+            Str::InputMethodShortcutEnter => 918,
+            Str::InputMethodShortcutTab => 919,
+            Str::InputMethodShortcutEscape => 920,
         }
     }
 

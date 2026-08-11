@@ -108,9 +108,18 @@ pub use self::status::{STATUS_SCHEMA_VERSION, StatusDocument};
 /// is reverse-DNS prefixed like everything else macOS looks up by string.
 pub const SETTINGS_CHANGED: &str = "io.github.mrgru.dodo.inputmethod.Dodo.settings-changed";
 
+/// The distributed notification a native host posts after writing its selected
+/// language to the host-owned status file. It deliberately differs from
+/// [`SETTINGS_CHANGED`] so the host never re-reads and undoes its own command.
+pub const LANGUAGE_CHANGED: &str = "io.github.mrgru.dodo.inputmethod.Dodo.language-changed";
+
+/// The Windows named event a TSF host signals after a deliberate language
+/// switch. It carries no data; dodo re-reads the host-owned status file.
+pub const WINDOWS_LANGUAGE_CHANGED: &str = "Local\\dodo-input-method-language-changed";
+
 #[cfg(test)]
 mod tests {
-    use super::SETTINGS_CHANGED;
+    use super::{LANGUAGE_CHANGED, SETTINGS_CHANGED, WINDOWS_LANGUAGE_CHANGED};
     use crate::bundle::BUNDLE_IDENTIFIER;
 
     /// The notification shares the bundle's namespace, so a future rename moves
@@ -118,5 +127,7 @@ mod tests {
     #[test]
     fn the_notification_name_is_in_the_bundles_namespace() {
         assert!(SETTINGS_CHANGED.starts_with(BUNDLE_IDENTIFIER));
+        assert!(LANGUAGE_CHANGED.starts_with(BUNDLE_IDENTIFIER));
+        assert!(WINDOWS_LANGUAGE_CHANGED.starts_with("Local\\dodo-"));
     }
 }

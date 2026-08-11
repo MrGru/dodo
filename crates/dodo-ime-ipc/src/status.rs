@@ -1,6 +1,6 @@
 //! `input-method-status.json`: what the input method tells dodo about itself.
 //!
-//! **The bundle is the only writer.** dodo reads it to answer one question — is
+//! **The native input-method host is the only writer.** dodo reads it to answer one question — is
 //! the thing I installed running, and has it seen my settings — and never writes
 //! it.
 //!
@@ -31,6 +31,7 @@
 //!   must not treat a pid as "running", and [`StatusDocument::describes_a_live_process`]
 //!   is the deliberately narrow thing it may do instead.
 
+use dodo_ime_core::LanguageId;
 use serde::{Deserialize, Serialize};
 
 use crate::document::{IpcError, parse_versioned, read_versioned, write_atomic};
@@ -67,6 +68,10 @@ pub struct StatusDocument {
     /// was refused.
     #[serde(default)]
     pub settings_revision: u64,
+    /// The language most recently selected by a deliberate shortcut command.
+    /// This records no typed text or application identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_language: Option<String>,
 }
 
 impl Default for StatusDocument {
@@ -77,6 +82,7 @@ impl Default for StatusDocument {
             pid: 0,
             started_unix: 0,
             settings_revision: 0,
+            selected_language: None,
         }
     }
 }
@@ -95,7 +101,21 @@ impl StatusDocument {
             pid: std::process::id(),
             started_unix: unix_seconds(),
             settings_revision,
+            selected_language: None,
         }
+    }
+
+    /// Includes the host's most recently selected input language.
+    pub fn with_selected_language(mut self, language: LanguageId) -> StatusDocument {
+        self.selected_language = Some(language.code().to_owned());
+        self
+    }
+
+    /// The selected language when it is one this dodo knows about.
+    pub fn language(&self) -> Option<LanguageId> {
+        self.selected_language
+            .as_deref()
+            .and_then(LanguageId::from_code)
     }
 
     /// Whether this file was written by a process that still exists.
@@ -127,8 +147,8 @@ impl StatusDocument {
         parse_versioned(bytes, STATUS_SCHEMA_VERSION)
     }
 
-    /// Writes the file. **The bundle only** — see the single-writer rule in the
-    /// crate docs.
+    /// Writes the file. **The native host only** — see the single-writer rule
+    /// in the crate docs.
     pub fn write(&self, path: &std::path::Path) -> Result<(), IpcError> {
         write_atomic(path, self)
     }
@@ -160,6 +180,7 @@ fn unix_seconds() -> u64 {
 mod tests {
     use super::{STATUS_SCHEMA_VERSION, StatusDocument};
     use crate::document::IpcError;
+    use dodo_ime_core::LanguageId;
 
     /// The privacy guard. Every key in this file is about the bundle; none is
     /// about what was typed. A new field fails here on purpose — read the module
@@ -183,6 +204,20 @@ mod tests {
                 "started-unix",
                 "version"
             ]
+        );
+    }
+
+    #[test]
+    fn selected_language_is_the_only_optional_command_field() {
+        let status = StatusDocument::now("0.1.0", 3).with_selected_language(LanguageId::Japanese);
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(status.language(), Some(LanguageId::Japanese));
+        assert_eq!(json["selected-language"], "ja");
+        assert_eq!(
+            StatusDocument::parse(serde_json::to_string(&status).unwrap().as_bytes())
+                .unwrap()
+                .language(),
+            Some(LanguageId::Japanese)
         );
     }
 

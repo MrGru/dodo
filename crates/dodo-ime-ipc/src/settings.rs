@@ -26,7 +26,10 @@
 //!   that transport detail configurable would expose controls with no choice.
 //!   [`VietnameseSettings::to_config`] supplies the native default.
 
-use dodo_ime_core::{InputScheme, LanguageId, OutputMode, TonePlacement, VietnameseConfig};
+use dodo_ime_core::{
+    ActiveLanguages, InputScheme, Key, KeyEvent, LanguageId, OutputMode, TonePlacement,
+    VietnameseConfig,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::document::{IpcError, parse_versioned, read_versioned, write_atomic};
@@ -158,6 +161,84 @@ impl Backend {
     }
 }
 
+/// The non-printing key that changes the selected keyboard language.
+///
+/// These identities are stable on both macOS and Windows, unlike a physical
+/// letter key under Control or Option.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LanguageSwitchKey {
+    #[default]
+    Space,
+    Enter,
+    Tab,
+    Escape,
+}
+
+impl LanguageSwitchKey {
+    pub const ALL: [LanguageSwitchKey; 4] = [
+        LanguageSwitchKey::Space,
+        LanguageSwitchKey::Enter,
+        LanguageSwitchKey::Tab,
+        LanguageSwitchKey::Escape,
+    ];
+
+    fn matches(self, event: &KeyEvent) -> bool {
+        matches!(
+            (self, event.key),
+            (LanguageSwitchKey::Space, Key::Space)
+                | (LanguageSwitchKey::Enter, Key::Enter)
+                | (LanguageSwitchKey::Tab, Key::Tab)
+                | (LanguageSwitchKey::Escape, Key::Escape)
+        )
+    }
+}
+
+/// The shared shortcut that cycles the enabled input languages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct LanguageSwitch {
+    pub key: LanguageSwitchKey,
+    pub control: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub meta: bool,
+    pub beep: bool,
+}
+
+impl Default for LanguageSwitch {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl LanguageSwitch {
+    /// Control-Shift-Space is unlikely to type into an application by accident.
+    pub const DEFAULT: Self = Self {
+        key: LanguageSwitchKey::Space,
+        control: true,
+        alt: false,
+        shift: true,
+        meta: false,
+        beep: false,
+    };
+
+    /// Whether this is a safe shortcut rather than a plain typing key.
+    pub fn has_modifier(self) -> bool {
+        self.control || self.alt || self.shift || self.meta
+    }
+
+    /// Whether a normalized key press invokes the language switch.
+    pub fn matches(self, event: &KeyEvent) -> bool {
+        self.has_modifier()
+            && self.key.matches(event)
+            && self.control == event.modifiers.control
+            && self.alt == event.modifiers.alt
+            && self.shift == event.modifiers.shift
+            && self.meta == event.modifiers.meta
+    }
+}
+
 /// The Vietnamese engine's settings, as a file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -219,6 +300,12 @@ pub struct SettingsDocument {
     /// preserving `LanguageId` as the one identity on both sides of IPC.
     #[serde(default, with = "language")]
     pub language: LanguageId,
+    /// The language choices shown in the tray and cycled by the shortcut.
+    #[serde(default, with = "active_languages")]
+    pub active_languages: ActiveLanguages,
+    /// The one cross-platform language-switch shortcut.
+    #[serde(default)]
+    pub language_switch: LanguageSwitch,
     /// Bumped by dodo on every write.
     ///
     /// The bundle echoes the revision it has applied into
@@ -240,6 +327,8 @@ impl Default for SettingsDocument {
             version: SETTINGS_SCHEMA_VERSION,
             backend: Backend::default(),
             language: LanguageId::default(),
+            active_languages: ActiveLanguages::default(),
+            language_switch: LanguageSwitch::default(),
             revision: 0,
             vietnamese: VietnameseSettings::default(),
         }
@@ -260,6 +349,13 @@ impl SettingsDocument {
         Self::next_with_backend(previous, previous.backend, language, vietnamese)
     }
 
+    /// Carries arbitrary edited fields forward while owning the version and revision.
+    pub fn next_from(previous: &SettingsDocument, mut next: SettingsDocument) -> SettingsDocument {
+        next.version = SETTINGS_SCHEMA_VERSION;
+        next.revision = previous.revision.saturating_add(1);
+        next
+    }
+
     /// Like [`next`](Self::next), with an explicitly selected host.
     pub fn next_with_backend(
         previous: &SettingsDocument,
@@ -273,6 +369,7 @@ impl SettingsDocument {
             language,
             revision: previous.revision.saturating_add(1),
             vietnamese,
+            ..*previous
         }
     }
 
@@ -309,6 +406,35 @@ impl SettingsDocument {
     }
 }
 
+mod active_languages {
+    use dodo_ime_core::{ActiveLanguages, LanguageId};
+    use serde::{Deserialize as _, Deserializer, Serializer, de::Error as _};
+
+    pub fn serialize<S>(languages: &ActiveLanguages, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_seq(languages.iter().map(LanguageId::code))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ActiveLanguages, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let codes = Vec::<String>::deserialize(deserializer)?;
+        let languages = codes
+            .into_iter()
+            .map(|code| {
+                LanguageId::from_code(&code)
+                    .ok_or_else(|| D::Error::custom(format!("unknown input language: {code}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        ActiveLanguages::from_languages(languages).ok_or_else(|| {
+            D::Error::custom("active input languages must be non-empty and distinct")
+        })
+    }
+}
+
 mod language {
     use dodo_ime_core::LanguageId;
     use serde::{Deserialize as _, Deserializer, Serializer, de::Error as _};
@@ -333,10 +459,14 @@ mod language {
 #[cfg(test)]
 mod tests {
     use super::{
-        Backend, SETTINGS_SCHEMA_VERSION, Scheme, SettingsDocument, Tone, VietnameseSettings,
+        Backend, LanguageSwitch, LanguageSwitchKey, SETTINGS_SCHEMA_VERSION, Scheme,
+        SettingsDocument, Tone, VietnameseSettings,
     };
     use crate::document::IpcError;
-    use dodo_ime_core::{InputScheme, LanguageId, OutputMode, TonePlacement, VietnameseConfig};
+    use dodo_ime_core::{
+        ActiveLanguages, InputScheme, KeyEvent, LanguageId, Modifiers, OutputMode, TonePlacement,
+        VietnameseConfig,
+    };
 
     #[test]
     fn a_fresh_document_carries_the_current_version_and_unikeys_defaults() {
@@ -345,6 +475,11 @@ mod tests {
         assert_eq!(document.revision, 0);
         assert_eq!(document.backend, Backend::Native);
         assert_eq!(document.language, LanguageId::English);
+        assert_eq!(
+            document.active_languages.iter().collect::<Vec<_>>(),
+            vec![LanguageId::English, LanguageId::Vietnamese]
+        );
+        assert_eq!(document.language_switch, LanguageSwitch::default());
         assert_eq!(document.vietnamese.scheme, Scheme::Telex);
         assert_eq!(document.vietnamese.tone_placement, Tone::Modern);
         assert!(document.vietnamese.spell_check);
@@ -457,6 +592,18 @@ mod tests {
     }
 
     #[test]
+    fn editing_a_document_keeps_new_language_settings_and_bumps_the_revision() {
+        let previous = SettingsDocument::default();
+        let mut edited = previous;
+        edited.active_languages = ActiveLanguages::from_languages(LanguageId::ALL).unwrap();
+        edited.language_switch.beep = true;
+        let next = SettingsDocument::next_from(&previous, edited);
+        assert_eq!(next.revision, 1);
+        assert_eq!(next.active_languages, edited.active_languages);
+        assert!(next.language_switch.beep);
+    }
+
+    #[test]
     fn each_write_bumps_the_revision() {
         let first = SettingsDocument::default();
         let second = SettingsDocument::next(
@@ -505,6 +652,61 @@ mod tests {
         assert!(json.contains(r#""language":"vi""#));
         assert_eq!(SettingsDocument::parse(json.as_bytes()).unwrap(), document);
         assert!(SettingsDocument::parse(br#"{"version":2,"language":"ko"}"#).is_err());
+    }
+
+    #[test]
+    fn the_default_language_shortcut_requires_its_exact_modifiers_and_key() {
+        let shortcut = LanguageSwitch::default();
+        assert!(
+            shortcut.matches(&KeyEvent::character(' ').with_modifiers(Modifiers {
+                control: true,
+                shift: true,
+                ..Modifiers::NONE
+            }))
+        );
+        assert!(
+            !shortcut.matches(&KeyEvent::character(' ').with_modifiers(Modifiers {
+                control: true,
+                ..Modifiers::NONE
+            }))
+        );
+        assert!(
+            !LanguageSwitch {
+                control: false,
+                alt: false,
+                shift: false,
+                meta: false,
+                ..shortcut
+            }
+            .matches(&KeyEvent::character(' '))
+        );
+    }
+
+    #[test]
+    fn active_languages_and_the_shortcut_round_trip_without_changing_the_schema() {
+        let document = SettingsDocument {
+            active_languages: ActiveLanguages::from_languages(LanguageId::ALL).unwrap(),
+            language_switch: LanguageSwitch {
+                key: LanguageSwitchKey::Enter,
+                control: false,
+                alt: true,
+                shift: false,
+                meta: false,
+                beep: true,
+            },
+            ..SettingsDocument::default()
+        };
+        let json = serde_json::to_string(&document).unwrap();
+        assert!(json.contains(r#""active_languages":["en","vi","ja"]"#));
+        assert!(json.contains(r#""language_switch":{"key":"enter""#));
+        assert_eq!(SettingsDocument::parse(json.as_bytes()).unwrap(), document);
+
+        let old = SettingsDocument::parse(br#"{"version":4,"language":"vi"}"#).unwrap();
+        assert_eq!(old.active_languages, ActiveLanguages::default());
+        assert_eq!(old.language_switch, LanguageSwitch::default());
+        assert!(
+            SettingsDocument::parse(br#"{"version":4,"active_languages":["en","en"]}"#).is_err()
+        );
     }
 
     #[test]

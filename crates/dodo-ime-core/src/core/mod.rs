@@ -25,4 +25,4 @@ pub use self::candidate::{Candidate, CandidateList};
 pub use self::composition::{Composition, grapheme_count, grapheme_prefix, truncate_graphemes};
 pub use self::engine::{EngineResult, LanguageEngine};
 pub use self::event::{Key, KeyEvent, Modifiers};
-pub use self::language::LanguageId;
+pub use self::language::{ActiveLanguages, LanguageId};

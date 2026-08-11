@@ -95,8 +95,8 @@ mod testing;
 // The crate's public face, for the tray/settings wiring and the OS hosts that
 // later rounds add.
 pub use self::core::{
-    Candidate, CandidateList, Composition, EngineAction, EngineResult, Key, KeyEvent,
-    LanguageEngine, LanguageId, Modifiers,
+    ActiveLanguages, Candidate, CandidateList, Composition, EngineAction, EngineResult, Key,
+    KeyEvent, LanguageEngine, LanguageId, Modifiers,
 };
 pub use self::languages::vietnamese::{
     InputScheme, OutputMode, TonePlacement, VietnameseConfig, VietnameseEngine,

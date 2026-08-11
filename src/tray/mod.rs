@@ -71,7 +71,7 @@ pub mod icon;
 pub mod menu;
 pub mod startup;
 
-use dodo_ime_core::LanguageId;
+use dodo_ime_core::{ActiveLanguages, LanguageId};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt as _;
 use gpui::{App, BorrowAppContext as _, Global, QuitMode, Subscription, Task, WeakEntity};
@@ -168,6 +168,9 @@ impl Tray {
     /// The same identity is persisted to `input-method.json`, so the native
     /// input method adopts the selected language on its next notification.
     pub fn set_input_language(language: LanguageId, cx: &mut App) {
+        if !crate::input_method::InputMethod::active_languages(cx).contains(language) {
+            return;
+        }
         let Some(tray) = cx.try_global::<Tray>() else {
             return;
         };
@@ -222,6 +225,18 @@ fn restored_language(stored: Option<String>, fallback: LanguageId) -> LanguageId
 /// Called from [`Layout::new`], which runs once per window — including the
 /// window the tray itself rebuilds — so the handle is refreshed rather than
 /// stale. A no-op when the tray never came up.
+/// Updates the live menu when the shared enabled-language setting changes.
+pub fn set_active_languages(active: ActiveLanguages, selected: LanguageId, cx: &mut App) {
+    let Some(tray) = cx.try_global::<Tray>() else {
+        return;
+    };
+    tray.menu.set_active_languages(active, selected);
+    let needs_selection = tray.input_language != selected;
+    if needs_selection {
+        Tray::set_input_language(selected, cx);
+    }
+}
+
 pub fn attach_layout(layout: WeakEntity<Layout>, cx: &mut App) {
     if cx.try_global::<Tray>().is_none() {
         return;
@@ -249,7 +264,11 @@ pub fn init(cx: &mut App) -> bool {
     // Migrate a pre-IPC tray choice, or make the input-method document match
     // the selection it already supplied. The latter is an idempotent no-op.
     crate::input_method::InputMethod::set_language(language, cx);
-    let menu = TrayMenu::new(language, cx);
+    let menu = TrayMenu::new(
+        language,
+        crate::input_method::InputMethod::active_languages(cx),
+        cx,
+    );
 
     let mut builder = TrayIconBuilder::new()
         .with_menu(menu.as_context_menu())

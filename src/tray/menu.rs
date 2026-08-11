@@ -3,7 +3,7 @@
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 
-use dodo_ime_core::LanguageId;
+use dodo_ime_core::{ActiveLanguages, LanguageId};
 
 use crate::i18n::{Str, t};
 
@@ -59,7 +59,7 @@ impl TrayMenu {
     /// Must run on the main thread: `muda::Menu::new` *panics* off it rather
     /// than returning an error. Every caller is inside `App::run`'s callback or
     /// a foreground task, so that is structural — see [`crate::tray::init`].
-    pub fn new(selected: LanguageId, cx: &gpui::App) -> TrayMenu {
+    pub fn new(selected: LanguageId, active: ActiveLanguages, cx: &gpui::App) -> TrayMenu {
         let languages = LanguageId::ALL
             .into_iter()
             .map(|language| {
@@ -67,7 +67,12 @@ impl TrayMenu {
                     language,
                     // The label is the language's endonym and is deliberately
                     // not a `Str`.
-                    CheckMenuItem::new(label(language), true, language == selected, None),
+                    CheckMenuItem::new(
+                        label(language),
+                        active.contains(language),
+                        active.contains(language) && language == selected,
+                        None,
+                    ),
                 )
             })
             .collect::<Vec<_>>();
@@ -137,6 +142,14 @@ impl TrayMenu {
             .map(|(language, _)| TrayCommand::SelectInputLanguage(*language))
     }
 
+    /// Applies the enabled-language setting without replacing the menu.
+    pub fn set_active_languages(&self, active: ActiveLanguages, selected: LanguageId) {
+        for (language, item) in &self.languages {
+            item.set_enabled(active.contains(*language));
+            item.set_checked(active.contains(*language) && *language == selected);
+        }
+    }
+
     /// Makes `selected` the only checked row.
     ///
     /// **`muda` has no radio group**, and worse, it toggles a `CheckMenuItem`
@@ -151,7 +164,7 @@ impl TrayMenu {
     /// [`crate::tray::Tray::set_input_language`]'s early return is *after* it.
     pub fn check_only(&self, selected: LanguageId) {
         for (language, item) in &self.languages {
-            item.set_checked(*language == selected);
+            item.set_checked(item.is_enabled() && *language == selected);
         }
     }
 

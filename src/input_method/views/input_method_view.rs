@@ -37,9 +37,8 @@ use gpui_component::radio::RadioGroup;
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, Disableable as _, StyledExt as _, h_flex, v_flex};
 
-#[cfg(target_os = "windows")]
 use dodo_ime_core::LanguageId;
-use dodo_ime_ipc::settings::{Backend, Scheme, Tone};
+use dodo_ime_ipc::settings::{Backend, LanguageSwitchKey, Scheme, Tone};
 
 use crate::i18n::{Str, t};
 use crate::input_method::InputMethod;
@@ -362,19 +361,124 @@ impl InputMethodView {
             )
     }
 
-    #[cfg(target_os = "windows")]
+    fn active_languages_choice(cx: &App) -> impl IntoElement {
+        let active = InputMethod::active_languages(cx);
+        let count = active.iter().count();
+        h_flex().gap_3().children(LanguageId::ALL.map(|language| {
+            let enabled = active.contains(language);
+            h_flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    Switch::new(format!("input-method-active-language-{}", language.code()))
+                        .checked(enabled)
+                        .disabled(enabled && count == 1)
+                        .on_click(move |checked: &bool, _, cx| {
+                            InputMethod::set_language_enabled(language, *checked, cx)
+                        }),
+                )
+                // Keyboard language names are endonyms, so they deliberately
+                // stay recognizable regardless of dodo's display language.
+                .child(div().text_sm().child(language_label(language)))
+        }))
+    }
+
     fn language_choice(cx: &App) -> impl IntoElement {
-        let selected = LanguageId::ALL
+        let active = InputMethod::active_languages(cx);
+        let selected = active
             .iter()
-            .position(|language| *language == InputMethod::language(cx));
+            .position(|language| language == InputMethod::language(cx));
         RadioGroup::horizontal("input-method-language")
-            .children(LanguageId::ALL.map(language_label))
+            .children(active.iter().map(language_label))
             .selected_index(selected)
-            .on_click(|ix: &usize, _, cx| {
-                if let Some(language) = LanguageId::ALL.get(*ix).copied() {
+            .on_click(move |ix: &usize, _, cx| {
+                if let Some(language) = active.iter().nth(*ix) {
                     InputMethod::set_language(language, cx);
                 }
             })
+    }
+
+    fn language_switch_choice(cx: &App) -> impl IntoElement {
+        let shortcut = InputMethod::language_switch(cx);
+        let selected = LanguageSwitchKey::ALL
+            .iter()
+            .position(|key| *key == shortcut.key);
+        v_flex()
+            .items_end()
+            .gap_2()
+            .child(
+                RadioGroup::horizontal("input-method-language-switch-key")
+                    .children(
+                        LanguageSwitchKey::ALL.map(|key| t(language_switch_key_label(key), cx)),
+                    )
+                    .selected_index(selected)
+                    .on_click(|ix: &usize, _, cx| {
+                        if let Some(key) = LanguageSwitchKey::ALL.get(*ix).copied() {
+                            let mut shortcut = InputMethod::language_switch(cx);
+                            shortcut.key = key;
+                            InputMethod::set_language_switch(shortcut, cx);
+                        }
+                    }),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(Self::shortcut_modifier(
+                        ShortcutModifier::Control,
+                        Str::InputMethodShortcutControl,
+                        cx,
+                    ))
+                    .child(Self::shortcut_modifier(
+                        ShortcutModifier::Alt,
+                        Str::InputMethodShortcutAlt,
+                        cx,
+                    ))
+                    .child(Self::shortcut_modifier(
+                        ShortcutModifier::Shift,
+                        Str::InputMethodShortcutShift,
+                        cx,
+                    ))
+                    .child(Self::shortcut_modifier(
+                        ShortcutModifier::Meta,
+                        Str::InputMethodShortcutMeta,
+                        cx,
+                    ))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                Switch::new("input-method-language-switch-beep")
+                                    .checked(shortcut.beep)
+                                    .on_click(|checked: &bool, _, cx| {
+                                        let mut shortcut = InputMethod::language_switch(cx);
+                                        shortcut.beep = *checked;
+                                        InputMethod::set_language_switch(shortcut, cx);
+                                    }),
+                            )
+                            .child(div().text_sm().child(t(Str::InputMethodShortcutBeep, cx))),
+                    ),
+            )
+    }
+
+    fn shortcut_modifier(modifier: ShortcutModifier, label: Str, cx: &App) -> impl IntoElement {
+        let shortcut = InputMethod::language_switch(cx);
+        h_flex()
+            .items_center()
+            .gap_1()
+            .child(
+                Switch::new(format!(
+                    "input-method-language-switch-modifier-{}",
+                    modifier.id()
+                ))
+                .checked(modifier.enabled(shortcut))
+                .on_click(move |checked: &bool, _, cx| {
+                    let mut shortcut = InputMethod::language_switch(cx);
+                    modifier.set(&mut shortcut, *checked);
+                    InputMethod::set_language_switch(shortcut, cx);
+                }),
+            )
+            .child(div().text_sm().child(t(label, cx)))
     }
 
     #[cfg(target_os = "windows")]
@@ -480,14 +584,59 @@ impl InputMethodView {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ShortcutModifier {
+    Control,
+    Alt,
+    Shift,
+    Meta,
+}
+
+impl ShortcutModifier {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Control => "control",
+            Self::Alt => "alt",
+            Self::Shift => "shift",
+            Self::Meta => "meta",
+        }
+    }
+
+    fn enabled(self, shortcut: dodo_ime_ipc::settings::LanguageSwitch) -> bool {
+        match self {
+            Self::Control => shortcut.control,
+            Self::Alt => shortcut.alt,
+            Self::Shift => shortcut.shift,
+            Self::Meta => shortcut.meta,
+        }
+    }
+
+    fn set(self, shortcut: &mut dodo_ime_ipc::settings::LanguageSwitch, enabled: bool) {
+        match self {
+            Self::Control => shortcut.control = enabled,
+            Self::Alt => shortcut.alt = enabled,
+            Self::Shift => shortcut.shift = enabled,
+            Self::Meta => shortcut.meta = enabled,
+        }
+    }
+}
+
 /// Keyboard input languages are endonyms, as in the macOS tray menu; translating
 /// them would make the identifier less recognizable to the person selecting it.
-#[cfg(target_os = "windows")]
 fn language_label(language: LanguageId) -> &'static str {
     match language {
         LanguageId::English => "English",
         LanguageId::Vietnamese => "Tiếng Việt",
         LanguageId::Japanese => "日本語",
+    }
+}
+
+fn language_switch_key_label(key: LanguageSwitchKey) -> Str {
+    match key {
+        LanguageSwitchKey::Space => Str::InputMethodShortcutSpace,
+        LanguageSwitchKey::Enter => Str::InputMethodShortcutEnter,
+        LanguageSwitchKey::Tab => Str::InputMethodShortcutTab,
+        LanguageSwitchKey::Escape => Str::InputMethodShortcutEscape,
     }
 }
 
@@ -516,14 +665,27 @@ impl Render for InputMethodView {
             .when(InputMethod::backend(cx) == Backend::EventTap, |this| {
                 this.child(Self::event_tap_status_card(cx))
             });
-        #[cfg(target_os = "windows")]
         let root = root
             .child(Self::row(
+                Str::InputMethodActiveLanguages,
+                Str::InputMethodActiveLanguagesDescription,
+                Self::active_languages_choice(cx),
+                cx,
+            ))
+            .child(Self::row(
                 Str::TrayKeyboardInput,
-                Str::InputMethodWindowsLanguageDescription,
+                Str::InputMethodLanguageDescription,
                 Self::language_choice(cx),
                 cx,
             ))
+            .child(Self::row(
+                Str::InputMethodLanguageSwitch,
+                Str::InputMethodLanguageSwitchDescription,
+                Self::language_switch_choice(cx),
+                cx,
+            ));
+        #[cfg(target_os = "windows")]
+        let root = root
             .when(InputMethod::backend(cx) == Backend::Native, |this| {
                 this.child(Self::windows_tsf_status_card(cx))
             })

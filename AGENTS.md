@@ -173,7 +173,12 @@ the value in at the boundary instead. The module-wide `#![allow(dead_code)]` is 
 because it was wired up but because everything is `pub` in a library and therefore reachable.
 **`LanguageId` is the shared keyboard-language identity**: it is persisted through
 `input-method.json`; English and Japanese pass keys through until their native engines exist.
-The purity lint keeps UI and IPC dependencies outside the state machine. And **the Vietnamese
+`ActiveLanguages` defaults to English/Vietnamese and is the one menu/cycle set;
+`LanguageSwitch` persists its key, modifiers and optional beep beside it. dodo remains the only
+settings writer: native hosts report an explicit switch through the host-owned status file, waking
+dodo via macOS's separate distributed notification or Windows' named event, so the UI and tray
+adopt then persist it without polling. The purity lint keeps UI and IPC dependencies outside the
+state machine. And **the Vietnamese
 engine is semantic, not string
 rewriting**: a letter is `(base, mark, case)`, the tone belongs to the syllable and its position is
 recomputed at render time, so `toas` + `n` becomes `toán` without anything relocating a mark.
@@ -235,15 +240,16 @@ nothing, and a drifted field name there does not fail to compile: it reads as ab
 setting silently has no effect. `dodo-ime-core` cannot hold it — its `purity_lint` forbids `serde::`
 by test — and dodo must not link `dodo-ime-macos`, which would drag InputMethodKit into a UI
 application for four string constants. Three things there are decisions. **One writer per file, and
-no locking**: dodo owns `input-method.json`, the bundle owns `input-method-status.json`, every write
+no locking**: dodo owns `input-method.json`, the native host owns `input-method-status.json`, every write
 is temp-file-then-`rename`, and neither side has a method that could write the other's. **The
 version rule matters more here than anywhere else in dodo** — a months-old bundle reading a new
 dodo's settings file is ordinary, not exotic, so both parsers refuse a `"version"` above their own
 and the bundle then types with `DEFAULT_CONFIG` and reports revision `0`, which is exactly how dodo
-knows to say "not picked up yet". And **the status file is the one file the bundle writes**, which
+knows to say "not picked up yet". And **the status file is the one file the native host writes**, which
 contradicts the older "writes no file" claim in `dodo-ime-macos`'s own docs and is corrected there:
-nothing the user typed may ever appear in it, it is written on start and on a settings change and
-never on a keystroke, and a test pins its key set so adding a field is deliberate.
+nothing the user typed may ever appear in it; it is written on start, settings changes and explicit
+language-switch commands, never ordinary typing, and a test pins its key set so adding a field is
+deliberate.
 
 **`src/input_method/` is dodo's end of it, and `services/tis.rs` carries a crash worth knowing
 about.** It is a **tool, not a Settings page** — the captain asked on 2026-08-09 — and the move took
