@@ -159,7 +159,7 @@ impl IconNamed for AppIcon {
             Self::Dodo => "icons/dodo.svg",
             Self::Binary => "icons/binary.svg",
             Self::Json => "icons/json.svg",
-            Self::Cleaner => "icons/cleaner.svg",
+            Self::Cleaner => "icons/brush-cleaning.svg",
             Self::Palette => "icons/palatte.svg",
             Self::Search => "icons/search.svg",
             Self::Settings => "icons/settings.svg",
