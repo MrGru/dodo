@@ -202,6 +202,8 @@ pub fn open(layout: WeakEntity<Layout>, window: &mut Window, cx: &mut App) {
 enum Setting {
     Language,
     RunScripts,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    StartWithOs,
     FontSize,
     BorderRadius,
     Theme,
@@ -225,6 +227,8 @@ impl Setting {
             Setting::Theme,
             Setting::QuickNavEnabled,
         ];
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        all.push(Setting::StartWithOs);
         all.extend(Detector::ORDER.map(Setting::QuickNavPattern));
         all.push(Setting::Features);
         all
@@ -234,6 +238,8 @@ impl Setting {
     fn page_ix(self) -> usize {
         match self {
             Setting::Language | Setting::RunScripts => 0,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            Setting::StartWithOs => 0,
             Setting::FontSize | Setting::BorderRadius | Setting::Theme => 1,
             Setting::QuickNavEnabled | Setting::QuickNavPattern(_) => 2,
             Setting::Features => 3,
@@ -244,6 +250,8 @@ impl Setting {
         match self {
             Setting::Language => Str::Language,
             Setting::RunScripts => Str::RunScripts,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            Setting::StartWithOs => Str::StartWithOs,
             Setting::FontSize => Str::FontSize,
             Setting::BorderRadius => Str::BorderRadius,
             Setting::Theme => Str::Theme,
@@ -258,6 +266,8 @@ impl Setting {
     fn section(self) -> Str {
         match self {
             Setting::Language | Setting::RunScripts => Str::General,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            Setting::StartWithOs => Str::General,
             Setting::FontSize | Setting::BorderRadius | Setting::Theme => Str::Appearance,
             Setting::QuickNavEnabled | Setting::QuickNavPattern(_) => Str::QuickNavigation,
             Setting::Features => Str::Features,
@@ -623,6 +633,18 @@ fn pages(layout: &WeakEntity<Layout>, highlight: Option<Setting>, cx: &App) -> V
             .description(t(Str::RunScriptsDescription, cx))
             .keywords([general.clone()]),
         );
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        general_group = general_group.item(
+            SettingItem::new(
+                t(Str::StartWithOs, cx),
+                highlighted(start_with_os_field(), lit(Setting::StartWithOs), cx),
+            )
+            .description(t(Str::StartWithOsDescription, cx))
+            .keywords([general.clone()]),
+        );
+    }
 
     // Only when there is something wrong with `session.json` — and there is
     // something to say, because a refused file means nothing is being saved at
@@ -1117,6 +1139,22 @@ fn language_field() -> SettingField<SharedString> {
 /// this stays deliberate rather than convenient. The *approvals* the prompt
 /// collects are persisted separately, per script — see
 /// `api_explorer::services::consent_store`.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn start_with_os_field() -> SettingField<bool> {
+    SettingField::switch(
+        |_: &App| crate::tray::startup::enabled(),
+        |enabled: bool, cx: &mut App| {
+            if let Err(error) = crate::tray::startup::set_enabled(enabled) {
+                eprintln!("start with OS: {error}");
+            }
+            // The OS registration is the source of truth, so repaint from its
+            // answer rather than retaining a second, potentially stale toggle.
+            cx.refresh_windows();
+        },
+    )
+    .default_value(false)
+}
+
 fn run_scripts_field(cx: &App) -> SettingField<SharedString> {
     let options = ConsentPolicy::ALL
         .map(|policy| (policy.code().into(), t(policy.label(), cx)))

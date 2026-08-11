@@ -562,9 +562,9 @@ impl Layout {
         // `settings::open` needs a handle to the pane. Published here rather
         // than fetched there because the window can be closed and rebuilt while
         // the process lives on: every rebuild runs this and refreshes the
-        // handle. A `cfg` for the same reason `main.rs` has one around the dock
-        // icon — the tray module does not exist off macOS.
-        #[cfg(target_os = "macos")]
+        // handle. A `cfg` for the same reason `main.rs` has one around the tray
+        // module — it does not exist off macOS or Windows.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         crate::tray::attach_layout(cx.entity().downgrade(), cx);
 
         // dodo opens in normal mode, so the pane takes focus straight away. See

@@ -1491,6 +1491,11 @@ pub enum Str {
     CleanerPermissionNotNow,
     CleanerStatusCompletedWithWarnings,
     CleanerStatusCancelled,
+
+    // Close-to-tray and OS startup. Appended rather than slotted into Settings
+    // so `position()` stays a fixed compatibility table.
+    StartWithOs,
+    StartWithOsDescription,
 }
 
 impl Str {
@@ -5074,6 +5079,15 @@ impl Str {
             }
             (Str::CleanerStatusCancelled, Language::English) => "Cancelled".into(),
             (Str::CleanerStatusCancelled, Language::Vietnamese) => "Đã hủy".into(),
+
+            (Str::StartWithOs, Language::English) => "Start with OS".into(),
+            (Str::StartWithOs, Language::Vietnamese) => "Khởi động cùng hệ điều hành".into(),
+            (Str::StartWithOsDescription, Language::English) => {
+                "Start Dodo in the tray when you sign in. macOS requires macOS 13+ and a bundled Dodo.app; Windows adds a per-user Startup Apps entry.".into()
+            }
+            (Str::StartWithOsDescription, Language::Vietnamese) => {
+                "Khởi động Dodo trong khay khi bạn đăng nhập. macOS cần macOS 13 trở lên và Dodo.app đã đóng gói; Windows thêm mục Khởi động cho người dùng hiện tại.".into()
+            }
         }
     }
 }
@@ -6342,6 +6356,9 @@ mod tests {
             plain(Str::CleanerPermissionNotNow),
             plain(Str::CleanerStatusCompletedWithWarnings),
             plain(Str::CleanerStatusCancelled),
+            // Close-to-tray and OS startup.
+            plain(Str::StartWithOs),
+            plain(Str::StartWithOsDescription),
         ]
     }
 
@@ -7252,6 +7269,8 @@ mod tests {
             Str::CleanerPermissionNotNow => 900,
             Str::CleanerStatusCompletedWithWarnings => 901,
             Str::CleanerStatusCancelled => 902,
+            Str::StartWithOs => 903,
+            Str::StartWithOsDescription => 904,
         }
     }
 

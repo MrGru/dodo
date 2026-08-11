@@ -36,7 +36,7 @@ mod paths;
 mod quick_nav;
 mod session;
 mod settings;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
 mod updater;
 mod window_icon;
@@ -64,14 +64,13 @@ fn main() {
     // Dialogs are in-window layers, not OS windows, so they never reach this
     // path.
     //
-    // **The macOS menu bar item overrides this at runtime, and deliberately not
-    // here.** Once a status item exists there *is* a way back, so `tray::init`
-    // switches to `QuitMode::Explicit` and closing the window leaves dodo
-    // running behind its menu bar icon. Setting `Explicit` statically instead
-    // would be a trap: a tray that failed to come up would leave a process with
-    // no window, no menu bar and no icon — unquittable except from Activity
-    // Monitor. Deriving the mode from the status item actually existing makes
-    // that state unreachable.
+    // **The tray overrides this at runtime, and deliberately not here.** Once
+    // its icon exists there is a way back, so `tray::init` switches to
+    // `QuitMode::Explicit` and closing the window leaves dodo running behind
+    // it. Setting `Explicit` statically instead would be a trap: a tray that
+    // failed to come up would leave a process with no window and no icon —
+    // unquittable except from Activity Monitor. Deriving the mode from the icon
+    // actually existing makes that state unreachable.
     let app = gpui_platform::application()
         .with_assets(Assets)
         .with_quit_mode(QuitMode::LastWindowClosed);
@@ -113,12 +112,24 @@ fn main() {
         // rest.
         input_method::init(cx);
         init_close_window_binding(cx);
+        // Read this while the OS launch arguments are still the only startup
+        // signal. It is captured into the foreground task below, which avoids
+        // any dependency on the selected input-method backend.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let startup_launch = tray::startup::launched_at_login();
         // Dock icon for a directly-run macOS binary; a no-op inside a .app and
         // on every other platform. Here rather than earlier because it needs
         // the `NSApplication` GPUI has by now created, and it must be on the
-        // main thread — which this closure is.
+        // main thread — which this closure is. A login launch becomes an
+        // accessory app before the asynchronous settings load, so it has no
+        // transient Dock entry.
         #[cfg(target_os = "macos")]
-        window_icon::set_macos_dock_icon();
+        {
+            window_icon::set_macos_dock_icon();
+            if startup_launch {
+                window_icon::set_macos_dock_visible(false);
+            }
+        }
 
         cx.spawn(async move |cx| {
             // `session.json` decides the theme, the font size and the window
@@ -139,18 +150,15 @@ fn main() {
                 // Theme, font size, border radius and language, in that
                 // order — see `settings::apply_session`.
                 settings::apply_session(cx);
-                // The menu bar item, **after** the session is known and before
-                // the window exists. Two requirements it shares with the dock
-                // icon above — the `NSApplication` exists, and this is the main
-                // thread, which a foreground task still is — plus two of its
-                // own. `[NSApp run]`'s loop is already going, which is what
-                // `tray-icon` asks for; and the remembered keyboard input
-                // language has just been read, so the menu bar opens on the
-                // right glyph instead of drawing English and correcting itself
-                // a frame later. It opens no window and cannot fail upward: a
-                // tray that does not come up is one line on stderr.
-                #[cfg(target_os = "macos")]
-                tray::init(cx);
+                // The tray, **after** the session is known and before the
+                // window exists. It opens no window, and its remembered input
+                // language is already available for the first glyph. A failed
+                // tray falls back to the normal window so dodo is never left
+                // running without a way back.
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                if tray::init(cx) && startup_launch {
+                    return;
+                }
 
                 open_main_window(cx).expect("Failed to open window");
             });
@@ -161,8 +169,8 @@ fn main() {
 
 /// Opens dodo's one window, restored the way the session left it.
 ///
-/// **Extracted so the menu bar item's "Open Dodo" can call it too.** A user who
-/// closed the window keeps the process — see `tray::init` — and reopening has to
+/// **Extracted so the tray's "Open Dodo" can call it too.** A user who closed
+/// the window keeps the process — see `tray::init` — and reopening has to
 /// go through exactly this, or the window comes back ignoring its saved
 /// rectangle, its saved display and the layout's minimum size. A second copy of
 /// these options that drifts from this one is the bug this shape prevents.
@@ -170,6 +178,11 @@ fn main() {
 /// Fallible rather than panicking, because the tray's caller must not take the
 /// process down; `main` still treats a failure at launch as fatal.
 fn open_main_window(cx: &mut App) -> Result<WindowHandle<Root>> {
+    // A close-to-tray macOS app uses the accessory activation policy to leave
+    // the Dock. Restore the regular policy before opening a real window.
+    #[cfg(target_os = "macos")]
+    window_icon::set_macos_dock_visible(true);
+
     let options = window_options(cx);
     cx.open_window(options, |window, cx| {
         let view = cx.new(|cx| DodoApp::new(window, cx));

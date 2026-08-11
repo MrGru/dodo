@@ -86,13 +86,27 @@ check on its own at startup, but never downloads anything without you pressing a
 button.
 
 Settings covers language, theme, font size, border radius, the script-execution
-policy, quick navigation, and **Features** - which of the tools above the sidebar
-lists, and in what order. Drag a row by its handle or use the arrows to reorder
-it, and switch off the ones you do not use; at least one tool has to stay. Every
-one of these survives a restart except the script-execution policy, which goes
-back to asking about imported scripts at every launch on purpose. So do the
-window's size, position and display, the open tool, and whether the sidebar is
-collapsed.
+policy, quick navigation, **Start with OS** (macOS and Windows), and
+**Features** - which of the tools above the sidebar lists, and in what order.
+Drag a row by its handle or use the arrows to reorder it, and switch off the
+ones you do not use; at least one tool has to stay. Every one of these survives
+a restart except the script-execution policy, which goes back to asking about
+imported scripts at every launch on purpose. So do the window's size, position
+and display, the open tool, and whether the sidebar is collapsed.
+
+## Tray and startup
+
+On macOS and Windows, closing Dodo removes its main window from the Dock or
+taskbar but leaves Dodo and its input method running behind the tray icon. Click
+the tray icon, or choose **Open Dodo** from its context menu, to restore it;
+**Quit Dodo** is the only full shutdown path.
+
+**Start with OS** starts tray-only after sign-in. macOS uses the Login Items API,
+which requires macOS 13 or later and an installed `Dodo.app`; macOS can require
+approval in System Settings → General → Login Items. Windows uses this user's
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry, whose command is
+limited to 260 characters and may be delayed by Windows after sign-in. Linux has
+neither feature yet.
 
 ## Tech stack
 

@@ -136,6 +136,28 @@ pub fn set_macos_dock_icon() {
     }
 }
 
+/// Shows or hides dodo's Dock tile while its tray icon keeps the process
+/// reachable. AppKit's `Accessory` policy is the supported way to run a
+/// menu-bar app without a Dock entry; `Regular` restores the normal app before
+/// a window is opened again.
+#[cfg(target_os = "macos")]
+pub fn set_macos_dock_visible(visible: bool) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let policy = if visible {
+        NSApplicationActivationPolicy::Regular
+    } else {
+        NSApplicationActivationPolicy::Accessory
+    };
+    if !NSApplication::sharedApplication(mtm).setActivationPolicy(policy) {
+        eprintln!("dodo: could not update the macOS Dock visibility");
+    }
+}
+
 /// Whether `exe` is the executable *inside* a macOS application bundle, i.e.
 /// whether it sits at `<name>.app/Contents/MacOS/<exe>`.
 ///

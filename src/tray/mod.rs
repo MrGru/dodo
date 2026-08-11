@@ -1,11 +1,9 @@
 //! The macOS menu bar item: a dodo carrying one keyboard-input-language glyph,
 //! and a small native menu.
 //!
-//! macOS only for now. Windows and Linux are *possible* without rewriting
-//! anything above the platform line — `tray-icon` implements both, and
-//! everything in [`menu`] and [`icon`] is platform-free —
-//! but neither is built or tested here, so the whole module sits behind
-//! `#[cfg(target_os = "macos")]` in `main.rs`.
+//! macOS and Windows share this module through `tray-icon`; Linux stays out
+//! until its GTK backend is deliberately adopted. The only platform-specific
+//! work belongs in [`startup`]: macOS Login Items and Windows' per-user Run key.
 //!
 //! # What it is not
 //!
@@ -71,13 +69,14 @@
 
 pub mod icon;
 pub mod menu;
+pub mod startup;
 
 use dodo_ime_core::LanguageId;
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt as _;
 use gpui::{App, BorrowAppContext as _, Global, QuitMode, Subscription, Task, WeakEntity};
 use tray_icon::menu::MenuEvent;
-use tray_icon::{TrayIcon, TrayIconBuilder};
+use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::layout::Layout;
 use crate::tray::menu::{TrayCommand, TrayMenu};
@@ -143,6 +142,10 @@ pub struct Tray {
     /// detached, for the same reason as `events`.
     #[allow(dead_code, reason = "held for its Drop; nothing reads it")]
     localization: Subscription,
+    /// Moves the app out of the Dock only after its last window has gone.
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code, reason = "held for its Drop; nothing reads it")]
+    dock_visibility: Subscription,
 }
 
 impl Global for Tray {}
@@ -227,25 +230,16 @@ pub fn attach_layout(layout: WeakEntity<Layout>, cx: &mut App) {
 }
 
 /// One event from either of the two global channels `tray-icon` owns.
-///
-/// Only menu events carry a command today. Tray events — clicks, enter, leave,
-/// move — are drained and dropped: nothing reacts to them, but the channel must
-/// still be emptied, and a future floating panel would want the `rect` they
-/// carry.
 enum Signal {
     Menu(MenuEvent),
+    Tray(TrayIconEvent),
 }
 
-/// Builds the status item, or says why it could not and returns.
+/// Builds the tray icon and returns whether it is usable.
 ///
-/// Must run on the main thread with `NSApp`'s run loop already going. Both hold
-/// wherever this is called from `main.rs`: gpui's macOS backend calls
-/// `App::run`'s closure from inside `applicationDidFinishLaunching:`, i.e. after
-/// `[NSApp run]` has started, and a `cx.spawn` continuation of that closure runs
-/// on the foreground executor, which dispatches to the main queue. If that ever
-/// stops being true the cost is one logged line: `TrayIcon::new` returns
-/// `Error::NotMainThread` rather than panicking.
-pub fn init(cx: &mut App) {
+/// It runs on GPUI's event-loop thread. A failed tray must not make startup
+/// tray-only, because a windowless process without an icon has no exit path.
+pub fn init(cx: &mut App) -> bool {
     let receiver = install_event_handlers();
 
     let language = restored_language(
@@ -261,10 +255,12 @@ pub fn init(cx: &mut App) {
         .with_menu(menu.as_context_menu())
         // Not localized: it names the application, which has one name.
         .with_tooltip("dodo")
-        // macOS then paints the mark itself from its alpha — dark on a light
-        // menu bar, light on a dark one, inverted while the menu is open. It is
-        // also why the marks are shapes rather than colours.
-        .with_icon_as_template(true);
+        // macOS paints this template mark from its alpha. Windows ignores the
+        // flag and uses the same bitmap normally.
+        .with_icon_as_template(true)
+        // A left click restores Dodo; the native context menu remains on a
+        // right click and still includes the equivalent Open Dodo command.
+        .with_menu_on_left_click(false);
 
     match icon::render(language, cx) {
         Ok(icon) => builder = builder.with_icon(icon),
@@ -279,7 +275,7 @@ pub fn init(cx: &mut App) {
             problem(&format!(
                 "no menu bar item, continuing without one: {error}"
             ));
-            return;
+            return false;
         }
     };
 
@@ -294,6 +290,15 @@ pub fn init(cx: &mut App) {
         }
     });
 
+    // `on_window_closed` runs after GPUI has removed the window, which makes
+    // this a real last-window check instead of a close callback that guesses.
+    #[cfg(target_os = "macos")]
+    let dock_visibility = cx.on_window_closed(|cx, _| {
+        if cx.windows().is_empty() {
+            crate::window_icon::set_macos_dock_visible(false);
+        }
+    });
+
     cx.set_global(Tray {
         icon,
         menu,
@@ -301,6 +306,8 @@ pub fn init(cx: &mut App) {
         layout: None,
         events,
         localization,
+        #[cfg(target_os = "macos")]
+        dock_visibility,
     });
 
     // **Only now**, and never statically in `main.rs`. Closing the window stops
@@ -311,7 +318,8 @@ pub fn init(cx: &mut App) {
     // menu bar, no tray — cannot be reached: if `build` above had failed, this
     // line was never run and closing the window still quits.
     cx.set_quit_mode(QuitMode::Explicit);
-    note("menu bar item ready");
+    note("tray ready");
+    true
 }
 
 /// Points both of `tray-icon`'s global handler slots at one channel.
@@ -322,12 +330,15 @@ pub fn init(cx: &mut App) {
 fn install_event_handlers() -> UnboundedReceiver<Signal> {
     let (sender, receiver) = unbounded::<Signal>();
 
-    let menu_sender: UnboundedSender<Signal> = sender;
+    let menu_sender: UnboundedSender<Signal> = sender.clone();
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-        // Runs on the main thread, synchronously from the `NSMenuItem` action.
         // A closed receiver means dodo is shutting down, so the error is
-        // deliberately dropped rather than logged from an AppKit callback.
+        // deliberately dropped rather than logged from the native callback.
         let _ = menu_sender.unbounded_send(Signal::Menu(event));
+    }));
+
+    TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+        let _ = sender.unbounded_send(Signal::Tray(event));
     }));
 
     receiver
@@ -336,23 +347,47 @@ fn install_event_handlers() -> UnboundedReceiver<Signal> {
 /// The one long-lived listener. Parks when the channel is empty; ends when the
 /// sender is dropped or the task is.
 async fn drain(mut receiver: UnboundedReceiver<Signal>, cx: &mut gpui::AsyncApp) {
-    while let Some(Signal::Menu(event)) = receiver.next().await {
-        let command = cx.update(|cx| {
-            cx.try_global::<Tray>()
-                .and_then(|tray| tray.menu.command_for(&event.id))
-        });
+    while let Some(signal) = receiver.next().await {
+        match signal {
+            Signal::Menu(event) => {
+                let command = cx.update(|cx| {
+                    cx.try_global::<Tray>()
+                        .and_then(|tray| tray.menu.command_for(&event.id))
+                });
 
-        let Some(command) = command else {
-            continue;
-        };
+                let Some(command) = command else {
+                    continue;
+                };
 
-        cx.update(|cx| match command {
-            TrayCommand::OpenDodo => open_dodo(cx),
-            TrayCommand::SelectInputLanguage(language) => Tray::set_input_language(language, cx),
-            TrayCommand::OpenSettings => open_settings(cx),
-            TrayCommand::Quit => cx.quit(),
-        });
+                cx.update(|cx| match command {
+                    TrayCommand::OpenDodo => open_dodo(cx),
+                    TrayCommand::SelectInputLanguage(language) => {
+                        Tray::set_input_language(language, cx)
+                    }
+                    TrayCommand::OpenSettings => open_settings(cx),
+                    TrayCommand::Quit => cx.quit(),
+                });
+            }
+            Signal::Tray(event) if opens_dodo(&event) => cx.update(open_dodo),
+            Signal::Tray(_) => {}
+        }
     }
+}
+
+/// A normal left-button release, or Windows' matching double click, restores
+/// the one window. Right clicks keep opening the native context menu.
+fn opens_dodo(event: &TrayIconEvent) -> bool {
+    matches!(
+        event,
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } | TrayIconEvent::DoubleClick {
+            button: MouseButton::Left,
+            ..
+        }
+    )
 }
 
 /// Shows dodo's window and brings it to the front.
@@ -420,5 +455,25 @@ mod tests {
             restored_language(None, LanguageId::Vietnamese),
             LanguageId::Vietnamese,
         );
+    }
+
+    #[test]
+    fn only_a_completed_left_click_opens_dodo() {
+        let event = |button, button_state| TrayIconEvent::Click {
+            id: tray_icon::TrayIconId::new("dodo"),
+            position: Default::default(),
+            rect: Default::default(),
+            button,
+            button_state,
+        };
+        assert!(opens_dodo(&event(MouseButton::Left, MouseButtonState::Up)));
+        assert!(!opens_dodo(&event(
+            MouseButton::Left,
+            MouseButtonState::Down
+        )));
+        assert!(!opens_dodo(&event(
+            MouseButton::Right,
+            MouseButtonState::Up
+        )));
     }
 }

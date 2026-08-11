@@ -363,28 +363,13 @@ object = { version = "0.39", default-features = false, features = [
     "read",
     "macho",
 ] }
-# The macOS menu bar item — an `NSStatusItem` plus a `muda` `NSMenu`. Only
-# `src/tray` may name it, the containment rule `reqwest`, `bollard` and
-# `rquickjs` already follow.
+# The macOS menu bar item and Windows notification-area icon. Only `src/tray`
+# may name this crate; its native event loop integration is what lets one tray
+# implementation serve both platforms without a helper process.
 #
-# **This one really does add packages**, five of them: `tray-icon`, `muda`,
-# `crossbeam-channel`, `dpi` and `keyboard-types`. (`once_cell`, `thiserror` and
-# `png` were already in the graph.) It measured at +184,656 bytes on the release
-# binary — see "System tray" in `docs/build-optimization.md` — and the captain
-# accepted that on 2026-08-07 knowing the number, the same way the
-# `sql-highlighting` feature above was accepted.
-#
-# The alternative that was weighed and rejected was calling `NSStatusBar` /
-# `NSStatusItem` through the `objc2` crates directly, which costs zero new
-# packages. It loses on two counts: it is a few hundred lines of `unsafe`
-# responder-chain code that no CI on this project can exercise, and it would
-# have to be written from scratch again for Windows and Linux, which `tray-icon`
-# already implements. `TrayIcon::ns_status_item()` keeps the raw `NSStatusItem`
-# reachable, so nothing is locked away.
-#
-# `default-features = false` drops `libxdo` and `gtk`. Both are Linux-only and
-# therefore inert behind this `cfg` today, but they must be chosen deliberately
-# when Linux support lands rather than inherited by accident.
+# `default-features = false` keeps the Linux GTK/libxdo backend out of both
+# builds. No package is added: this dependency was already locked for macOS.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 tray-icon = { version = "0.24", default-features = false }
 
 # Decodes the embedded 256px PNG into the RGBA buffer GPUI's X11 backend writes
