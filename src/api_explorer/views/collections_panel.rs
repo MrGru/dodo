@@ -209,8 +209,9 @@ impl ApiExplorer {
         Some(column.id(("node-subtree", id as usize)).into_any_element())
     }
 
-    /// The single row for a node: the disclosure chevron, an icon, the name
-    /// (clickable — a request opens, a container toggles), and the actions menu.
+    /// The single row for a node: the disclosure chevron, a folder icon where
+    /// applicable, the name (clickable — a request opens, a container toggles),
+    /// and the actions menu.
     fn node_row(
         &self,
         node: &Node,
@@ -220,7 +221,7 @@ impl ApiExplorer {
     ) -> impl IntoElement {
         let id = node.id;
         let is_container = node.is_container();
-        let icon = node_icon(node, depth, expanded);
+        let icon = node_icon(node, expanded);
         let method = node.snapshot().map(|snapshot| snapshot.method);
         let name = node.name.clone();
         let indent = px(8. + depth as f32 * 14.);
@@ -263,6 +264,7 @@ impl ApiExplorer {
             .when_some(method, |this, method| {
                 this.child(
                     div()
+                        .w(px(56.))
                         .flex_shrink_0()
                         .text_xs()
                         .font_bold()
@@ -394,17 +396,16 @@ fn node_matches(node: &Node, query: &str) -> bool {
         || node.children.iter().any(|child| node_matches(child, query))
 }
 
-/// The icon for a node: root collections are named headings, folders remain
-/// folders, and saved requests are files.
-fn node_icon(node: &Node, depth: usize, expanded: bool) -> Option<AppIcon> {
+/// Only organizational folders have icons; collections are headings and
+/// requests use their method label instead.
+fn node_icon(node: &Node, expanded: bool) -> Option<AppIcon> {
     match node.kind {
-        NodeKind::Collection if depth == 0 => None,
-        NodeKind::Collection | NodeKind::Folder => Some(if expanded {
+        NodeKind::Folder => Some(if expanded {
             AppIcon::FolderOpen
         } else {
             AppIcon::Folder
         }),
-        NodeKind::Request(_) => Some(AppIcon::File),
+        NodeKind::Collection | NodeKind::Request(_) => None,
     }
 }
 
@@ -424,8 +425,9 @@ mod tests {
     }
 
     #[test]
-    fn root_collections_are_text_headings_but_folders_keep_their_icons() {
-        assert!(node_icon(&node(NodeKind::Collection), 0, true).is_none());
-        assert!(node_icon(&node(NodeKind::Folder), 1, true).is_some());
+    fn only_folders_have_icons() {
+        assert!(node_icon(&node(NodeKind::Collection), true).is_none());
+        assert!(node_icon(&node(NodeKind::Folder), true).is_some());
+        assert!(node_icon(&node(NodeKind::Request(Box::default())), true).is_none());
     }
 }
