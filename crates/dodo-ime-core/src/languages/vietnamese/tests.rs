@@ -45,6 +45,20 @@ fn check(cases: &[(&str, &str)], typed: impl Fn(&str) -> String) {
     assert!(failures.is_empty(), "\n  {}", failures.join("\n  "));
 }
 
+fn composition(text: &str) -> Vec<EngineAction> {
+    vec![EngineAction::SetComposition {
+        text: text.into(),
+        cursor: text.chars().count(),
+        selection: None,
+    }]
+}
+
+fn action_stream(engine: &mut VietnameseEngine, keys: &str) -> Vec<Vec<EngineAction>> {
+    keys.chars()
+        .map(|key| engine.process_key(&KeyEvent::character(key)).actions)
+        .collect()
+}
+
 // ---------------------------------------------------------------- the spec
 
 /// The five worked examples from the specification, hand-written so that a
@@ -68,6 +82,42 @@ fn the_specifications_worked_examples() {
             ("thieenj", "thiện"),
         ],
         telex,
+    );
+}
+
+#[test]
+fn telex_rewrites_each_intermediate_state() {
+    let mut telex = engine();
+    assert_eq!(
+        action_stream(&mut telex, "thuwowng"),
+        ["t", "th", "thu", "thư", "thưo", "thươ", "thươn", "thương"].map(composition)
+    );
+
+    let mut incremental = engine();
+    assert_eq!(
+        action_stream(&mut incremental, "thuow"),
+        ["t", "th", "thu", "thuo", "thươ"].map(composition)
+    );
+    assert_eq!(action_stream(&mut incremental, "w"), [composition("thưow")]);
+}
+
+#[test]
+fn telex_modifier_and_tone_rewrites_are_ordered() {
+    let mut lower = engine();
+    assert_eq!(
+        action_stream(&mut lower, "ddd"),
+        ["d", "đ", "dd"].map(composition)
+    );
+    let mut upper = engine();
+    assert_eq!(
+        action_stream(&mut upper, "DDD"),
+        ["D", "Đ", "DD"].map(composition)
+    );
+
+    let mut tone = engine();
+    assert_eq!(
+        action_stream(&mut tone, "toasn"),
+        ["t", "to", "toa", "toá", "toán"].map(composition)
     );
 }
 
@@ -686,8 +736,17 @@ fn backspace_removes_one_visible_character_at_a_time() {
     }
     assert_eq!(host.visible(), "tiếng");
 
-    for expected in ["tiến", "tiế", "ti", "t", ""] {
-        press(&mut engine, &mut host, Key::Backspace);
+    for (expected, actions) in [
+        ("tiến", composition("tiến")),
+        ("tiế", composition("tiế")),
+        ("ti", composition("ti")),
+        ("t", composition("t")),
+        ("", vec![EngineAction::ClearComposition]),
+    ] {
+        let event = KeyEvent::special(Key::Backspace);
+        let result = engine.process_key(&event);
+        assert_eq!(result.actions, actions);
+        host.apply(&result.actions, event.text);
         assert_eq!(host.visible(), expected);
     }
 }
@@ -753,6 +812,31 @@ fn commit_accepts_what_is_in_flight() {
     assert!(engine.composition().is_empty());
     // A second commit has nothing left to do.
     assert!(engine.commit().actions.is_empty());
+}
+
+#[test]
+fn a_foreign_precomposed_scalar_commits_and_passes_through() {
+    for scalar in ['ư', 'é', '日'] {
+        let mut engine = engine();
+        let mut host = Host::new();
+        for key in "tieengs".chars() {
+            let event = KeyEvent::character(key);
+            let result = engine.process_key(&event);
+            host.apply(&result.actions, event.text);
+        }
+
+        let event = KeyEvent::character(scalar);
+        let result = engine.process_key(&event);
+        assert_eq!(
+            result.actions,
+            vec![EngineAction::CommitComposition, EngineAction::PassThrough],
+            "{scalar:?}"
+        );
+        assert!(!result.handled, "{scalar:?}");
+        host.apply(&result.actions, event.text);
+        assert_eq!(host.document, format!("tiếng{scalar}"));
+        assert!(engine.composition().is_empty());
+    }
 }
 
 // -------------------------------------------------- English and nonsense

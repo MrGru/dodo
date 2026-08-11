@@ -7,7 +7,7 @@
 //! recompute after a physical edit without reading the focused application.
 //! Nothing here touches Accessibility, files, locks, or GPUI.
 
-use dodo_ime_core::core::{grapheme_count, grapheme_prefix, truncate_graphemes};
+use dodo_ime_core::core::truncate_graphemes;
 use dodo_ime_core::{
     EngineAction, Key, KeyEvent, LanguageEngine as _, LanguageId, OutputMode, VietnameseConfig,
     VietnameseEngine,
@@ -193,10 +193,6 @@ impl DirectComposer {
         if self.raw.len() == MAX_RAW_KEYS {
             return self.commit_before_passing();
         }
-        if let Some(plan) = self.literal_horn(&event) {
-            return plan;
-        }
-
         let reopen = (separator && !self.raw.is_empty() && !self.rendered.is_empty()).then(|| {
             ReopenableWord {
                 config: self.config,
@@ -271,38 +267,6 @@ impl DirectComposer {
             plan.pass_through = true;
         }
         plan
-    }
-
-    /// A literal `ư` can be the old direct-output fallback for a Telex `w`
-    /// that arrived after a later vowel. Accept that reading only when the core
-    /// engine rewrites an internal grapheme while preserving a later one:
-    /// `hoiư` becomes `hơi`, while literal `tư` and `hư` stay literal.
-    fn literal_horn(&mut self, event: &KeyEvent) -> Option<OutputPlan> {
-        if event.key != Key::Character || event.typed() != Some('ư') || !event.modifiers.is_plain()
-        {
-            return None;
-        }
-
-        let mut engine = self.engine.clone();
-        let result = engine.process_key(&KeyEvent::character('w'));
-        if result.actions.iter().any(EngineAction::passes_through) {
-            return None;
-        }
-        let next = engine.composition().text().to_owned();
-        if grapheme_count(&next) != grapheme_count(&self.rendered)
-            || !has_common_trailing_grapheme(&self.rendered, &next)
-        {
-            return None;
-        }
-
-        let plan = OutputPlan::minimal(&self.rendered, &next);
-        if !plan.transforms() {
-            return None;
-        }
-        self.engine = engine;
-        self.raw.push('w');
-        self.rendered = next;
-        Some(plan)
     }
 
     /// Let macOS remove one rendered character itself, then replay the raw
@@ -482,15 +446,6 @@ fn is_reopen_separator(event: &KeyEvent) -> bool {
 fn direct_config(mut config: VietnameseConfig) -> VietnameseConfig {
     config.output = OutputMode::Direct;
     config
-}
-
-fn has_common_trailing_grapheme(before: &str, after: &str) -> bool {
-    let before_count = grapheme_count(before);
-    let after_count = grapheme_count(after);
-    before_count != 0
-        && after_count != 0
-        && before[grapheme_prefix(before, before_count - 1).len()..]
-            == after[grapheme_prefix(after, after_count - 1).len()..]
 }
 
 fn direct_actions_after(before: &str, actions: &[EngineAction]) -> Option<String> {
@@ -708,11 +663,6 @@ mod tests {
         let decomposed = OutputPlan::minimal("e\u{0302}\u{0301}", "");
         assert_eq!(decomposed.delete_before, 1);
         assert_eq!(macos_event_count(&decomposed), 2);
-
-        // The old event-order state `hoiư` is repaired from the complete word.
-        let converged = OutputPlan::minimal("hoiư", "hơi");
-        assert_eq!(converged.delete_before, 3);
-        assert_eq!(converged.insert.as_deref(), Some("ơi"));
     }
 
     #[test]
@@ -847,11 +797,26 @@ mod tests {
     #[test]
     fn complete_word_replay_converges_across_modifier_order() {
         assert_eq!(type_at_end_cursor("hoiw"), "hơi");
-        assert_eq!(type_at_end_cursor("hoiư"), "hơi");
-        assert_eq!(type_at_end_cursor("tư"), "tư");
-        assert_eq!(type_at_end_cursor("hư"), "hư");
         assert_eq!(type_at_end_cursor("thienej"), "thiện");
         assert_eq!(type_at_end_cursor("thieenj"), "thiện");
+    }
+
+    #[test]
+    fn a_foreign_precomposed_scalar_ends_direct_composition_and_passes_through() {
+        let mut harness = EndCursorHarness::new();
+        harness.type_keys("hoi");
+        let plan = harness.press(KeyEvent::character('ư'));
+
+        assert_eq!(
+            plan,
+            OutputPlan {
+                pass_through: true,
+                ..OutputPlan::default()
+            }
+        );
+        assert_eq!(harness.document, "hoiư");
+        assert_eq!(harness.composer.rendered(), "");
+        assert_eq!(harness.synthetic_events, 0);
     }
 
     #[test]

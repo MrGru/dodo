@@ -740,45 +740,47 @@ mod tests {
     }
 
     #[test]
-    fn dd_replacement_stages_one_tagged_backspace_pair_and_one_unicode_key() {
-        let mut composer = DirectComposer::new(VietnameseConfig::default());
-        let first = composer.process(KeyEvent::character('D'));
-        assert!(first.pass_through);
-        let plan = composer.process(KeyEvent::character('D'));
-        assert_eq!(plan.delete_before, 1);
-        assert_eq!(plan.insert.as_deref(), Some("Đ"));
-        assert!(!plan.pass_through);
-
+    fn lowercase_and_uppercase_stroke_replacements_stage_one_backspace_pair_then_one_unicode_key() {
         let tag = 41;
-        assert_eq!(
-            synthetic_event_descriptors(&plan, tag),
-            Some(vec![
-                SyntheticEventDescriptor {
-                    key_code: DELETE_KEY_CODE,
-                    down: true,
-                    unicode_payload: false,
-                    tag,
-                },
-                SyntheticEventDescriptor {
-                    key_code: DELETE_KEY_CODE,
-                    down: false,
-                    unicode_payload: false,
-                    tag,
-                },
-                SyntheticEventDescriptor {
-                    key_code: 0,
-                    down: true,
-                    unicode_payload: true,
-                    tag,
-                },
-                SyntheticEventDescriptor {
-                    key_code: 0,
-                    down: false,
-                    unicode_payload: false,
-                    tag,
-                },
-            ])
-        );
+        let expected = vec![
+            SyntheticEventDescriptor {
+                key_code: DELETE_KEY_CODE,
+                down: true,
+                unicode_payload: false,
+                tag,
+            },
+            SyntheticEventDescriptor {
+                key_code: DELETE_KEY_CODE,
+                down: false,
+                unicode_payload: false,
+                tag,
+            },
+            SyntheticEventDescriptor {
+                key_code: 0,
+                down: true,
+                unicode_payload: true,
+                tag,
+            },
+            SyntheticEventDescriptor {
+                key_code: 0,
+                down: false,
+                unicode_payload: false,
+                tag,
+            },
+        ];
+
+        for (key, replacement) in [('d', "đ"), ('D', "Đ")] {
+            let mut composer = DirectComposer::new(VietnameseConfig::default());
+            assert!(composer.process(KeyEvent::character(key)).pass_through);
+            let plan = composer.process(KeyEvent::character(key));
+            assert_eq!(plan.delete_before, 1, "{key}");
+            assert_eq!(plan.insert.as_deref(), Some(replacement), "{key}");
+            assert!(!plan.pass_through, "{key}");
+            assert_eq!(
+                synthetic_event_descriptors(&plan, tag),
+                Some(expected.clone())
+            );
+        }
     }
 
     #[test]

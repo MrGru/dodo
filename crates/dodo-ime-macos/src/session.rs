@@ -323,6 +323,30 @@ mod tests {
         assert_eq!(session.pending(), "");
     }
 
+    #[test]
+    fn a_foreign_precomposed_scalar_commits_then_reaches_the_native_client() {
+        let mut session = session();
+        let (mut client, _) = type_keys(&mut session, "tieengs");
+        let event = KeyEvent::character('ư');
+        let response = session.key(&event);
+
+        assert_eq!(
+            response,
+            Response {
+                ops: vec![
+                    ClientOp::ClearMarked,
+                    ClientOp::Insert("tiếng".into()),
+                    ClientOp::PassThrough,
+                ],
+                handled: false,
+            }
+        );
+        client.perform(&response.ops, event.typed());
+        assert_eq!(client.document, "tiếngư");
+        assert_eq!(client.marked, "");
+        assert_eq!(session.pending(), "");
+    }
+
     /// Committing twice must not type the syllable twice.
     #[test]
     fn a_second_commit_inserts_nothing() {
