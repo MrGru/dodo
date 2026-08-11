@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -105,19 +104,6 @@ impl CleanerScanner for MockScanner {
             completeness: ScanCompleteness::Complete,
         })
     }
-}
-
-#[cfg(target_os = "macos")]
-pub fn default_scanners() -> Vec<Arc<dyn CleanerScanner>> {
-    CleanerCategory::ALL
-        .into_iter()
-        .map(|category| Arc::new(MockScanner::new(category)) as Arc<dyn CleanerScanner>)
-        .collect()
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn default_scanners() -> Vec<Arc<dyn CleanerScanner>> {
-    Vec::new()
 }
 
 #[cfg(test)]
