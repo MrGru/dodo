@@ -356,6 +356,7 @@ impl EncoderDecoder {
 
         match layout {
             PaneLayout::Horizontal => h_flex()
+                .items_stretch()
                 .size_full()
                 .min_w_0()
                 .min_h_0()
