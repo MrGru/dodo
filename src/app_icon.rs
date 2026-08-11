@@ -126,9 +126,11 @@ pub enum AppIcon {
     /// being read at 16px on the collapsed rail with no label beside it.
     Keyboard,
 
-    // Cleaner's section and category rows. All resolve through `Assets`'
-    // fallback to `gpui_component_assets` — no new SVG files were needed,
-    // the vendored Lucide-ish set already had a glyph for each of these.
+    // Cleaner's section and category rows. Most resolve through `Assets`'
+    // fallback to `gpui_component_assets`.
+    /// The Cleanup section. Ships as our own `icons/brush-cleaning.svg`:
+    /// neither the project nor the pinned library has a cleaning brush.
+    BrushCleaning,
     /// The Applications section.
     LayoutDashboard,
     /// The AI Apps category.
@@ -209,6 +211,7 @@ impl IconNamed for AppIcon {
             Self::EyeOff => "icons/eye-off.svg",
             Self::GripVertical => "icons/grip-vertical.svg",
             Self::Keyboard => "icons/keyboard.svg",
+            Self::BrushCleaning => "icons/brush-cleaning.svg",
             Self::LayoutDashboard => "icons/layout-dashboard.svg",
             Self::Bot => "icons/bot.svg",
             Self::SquareTerminal => "icons/square-terminal.svg",

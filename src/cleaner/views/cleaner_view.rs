@@ -699,7 +699,7 @@ impl CleanerView {
 
     fn section_icon(section: CleanerSection) -> AppIcon {
         match section {
-            CleanerSection::Cleanup => AppIcon::Trash,
+            CleanerSection::Cleanup => AppIcon::BrushCleaning,
             CleanerSection::Applications => AppIcon::LayoutDashboard,
             CleanerSection::Advanced => AppIcon::Sliders,
         }
