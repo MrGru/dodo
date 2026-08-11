@@ -257,7 +257,20 @@ fn a_repeated_modifier_undoes_itself_and_types_its_key() {
             ("caf f", "cà f"),
             ("cassa", "casa"),
             ("aww", "aw"),
+            // The first `w` is the whole source of `ư`, not a typed `u` with
+            // a later mark. Repeating that source removes the whole letter.
+            ("ww", "w"),
+            ("wW", "W"),
+            ("Ww", "w"),
+            ("WW", "W"),
+            // But when the `u` was physical, it remains after the horn is
+            // undone; source provenance distinguishes this from `ww`.
             ("uww", "uw"),
+            // The ordinary mark and tone repetitions retain their source
+            // letters and continue to type the repeated key literally.
+            ("aaa", "aa"),
+            ("ddd", "dd"),
+            ("mass", "mas"),
         ],
         telex,
     );
@@ -265,6 +278,8 @@ fn a_repeated_modifier_undoes_itself_and_types_its_key() {
 
 /// The VNI half of the same rule. A digit cannot join a syllable, so the
 /// syllable ends and the digit is typed by the application: `a11` is `a1`.
+/// Unlike Telex's bare `w`, no VNI digit creates a whole marked letter, so
+/// `u77` still retains its physical `u`.
 #[test]
 fn a_repeated_vni_digit_undoes_itself_and_types_its_digit() {
     check(

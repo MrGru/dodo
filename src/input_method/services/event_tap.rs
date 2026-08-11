@@ -28,6 +28,17 @@ const DELETE_KEY_CODE: u16 = 0x33;
 const MAX_INPUT_UNICODE_UNITS: usize = 8;
 const MAX_REPLACEMENT_UNICODE_UNITS: usize = 64;
 
+/// One synthetic keyboard event, fully described before CoreGraphics allocates
+/// it. Unicode belongs to key-down only: key-up ends that key without asking a
+/// client to insert the scalar a second time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SyntheticEventDescriptor {
+    key_code: u16,
+    down: bool,
+    unicode_payload: bool,
+    tag: i64,
+}
+
 /// Why a requested tap cannot start. No platform detail carries user input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartError {
@@ -377,21 +388,38 @@ fn transform(state: &State, event: &CGEvent) -> *mut CGEvent {
     let Ok(mut composer) = state.composer.try_borrow_mut() else {
         return original;
     };
-    let plan = composer.process(key);
-    drop(composer);
-
-    if plan.pass_through {
-        // A repeat can switch from a replaced down to an original down before
-        // the one physical key-up arrives, so that up must now pass as well.
-        state.allow_key_up(key_code);
-    }
+    // Plan against a copy. A failed CoreGraphics allocation must not leave
+    // composition claiming text that the original event will now type.
+    let mut next = composer.clone();
+    let plan = next.process(key);
     if !plan.transforms() {
+        *composer = next;
+        drop(composer);
+        if plan.pass_through {
+            // A repeat can switch from a replaced down to an original down before
+            // the one physical key-up arrives, so that up must now pass as well.
+            state.allow_key_up(key_code);
+        }
         return original;
     }
     let Some(output) = staged_output(&plan, state.synthetic_tag) else {
-        state.reset();
+        composer.reset();
+        drop(composer);
+        // The original down is passing, so its up must pass too even if an
+        // earlier repeat of this key had been replaced.
+        state.allow_key_up(key_code);
         return original;
     };
+    // The plan is now fully staged. Commit its state before any post can
+    // re-enter this callback through a synthetic event.
+    *composer = next;
+    drop(composer);
+
+    if plan.pass_through {
+        state.allow_key_up(key_code);
+    } else {
+        state.suppress_key_up(key_code);
+    }
     for output in &output {
         CGEvent::post(CGEventTapLocation::SessionEventTap, Some(output));
     }
@@ -399,7 +427,6 @@ fn transform(state: &State, event: &CGEvent) -> *mut CGEvent {
     if plan.pass_through {
         original
     } else {
-        state.suppress_key_up(key_code);
         null_mut()
     }
 }
@@ -435,25 +462,65 @@ fn single_character(units: &[u16]) -> Option<char> {
 }
 
 fn staged_output(plan: &OutputPlan, tag: i64) -> Option<Vec<CFRetained<CGEvent>>> {
-    // Stage every fallible allocation before posting any event. The Vec exists
-    // only for a rewrite; ordinary physical appends allocate no native events.
-    let mut output = Vec::with_capacity(plan.delete_before.saturating_mul(2) + 2);
-    for _ in 0..plan.delete_before {
-        output.push(tagged_key_event(DELETE_KEY_CODE, true, tag)?);
-        output.push(tagged_key_event(DELETE_KEY_CODE, false, tag)?);
-    }
+    // Derive the replacement once, describe every event, then complete every
+    // fallible CoreGraphics allocation before posting any of them.
+    let descriptors = synthetic_event_descriptors(plan, tag)?;
+    let mut units = [0_u16; MAX_REPLACEMENT_UNICODE_UNITS];
+    let mut length = 0;
     if let Some(text) = &plan.insert {
-        let mut units = [0_u16; MAX_REPLACEMENT_UNICODE_UNITS];
-        let mut length = 0;
         for unit in text.encode_utf16() {
-            if length == units.len() {
-                return None;
-            }
             units[length] = unit;
             length += 1;
         }
-        output.push(tagged_unicode_event(&units[..length], true, tag)?);
-        output.push(tagged_unicode_event(&units[..length], false, tag)?);
+    }
+
+    let mut output = Vec::with_capacity(descriptors.len());
+    for descriptor in descriptors {
+        let event = if descriptor.unicode_payload {
+            tagged_unicode_event(&units[..length], true, descriptor.tag)?
+        } else {
+            tagged_key_event(descriptor.key_code, descriptor.down, descriptor.tag)?
+        };
+        output.push(event);
+    }
+    Some(output)
+}
+
+fn synthetic_event_descriptors(
+    plan: &OutputPlan,
+    tag: i64,
+) -> Option<Vec<SyntheticEventDescriptor>> {
+    let mut output = Vec::with_capacity(plan.delete_before.saturating_mul(2) + 2);
+    for _ in 0..plan.delete_before {
+        output.push(SyntheticEventDescriptor {
+            key_code: DELETE_KEY_CODE,
+            down: true,
+            unicode_payload: false,
+            tag,
+        });
+        output.push(SyntheticEventDescriptor {
+            key_code: DELETE_KEY_CODE,
+            down: false,
+            unicode_payload: false,
+            tag,
+        });
+    }
+    if let Some(text) = &plan.insert {
+        if text.is_empty() || text.encode_utf16().count() > MAX_REPLACEMENT_UNICODE_UNITS {
+            return None;
+        }
+        output.push(SyntheticEventDescriptor {
+            key_code: 0,
+            down: true,
+            unicode_payload: true,
+            tag,
+        });
+        output.push(SyntheticEventDescriptor {
+            key_code: 0,
+            down: false,
+            unicode_payload: false,
+            tag,
+        });
     }
     (!output.is_empty()).then_some(output)
 }
@@ -554,8 +621,13 @@ unsafe extern "C" {
 
 #[cfg(test)]
 mod tests {
-    use super::{State, classify_tap_event, event_mask, key_event, single_character};
+    use super::{
+        DELETE_KEY_CODE, DirectComposer, MAX_REPLACEMENT_UNICODE_UNITS, OutputPlan, State,
+        SyntheticEventDescriptor, callback, classify_tap_event, event_mask, key_event,
+        single_character, synthetic_event_descriptors, tag_event,
+    };
     use dodo_ime_core::{Key, KeyEvent, Modifiers, VietnameseConfig};
+    use objc2_core_graphics::{CGEvent, CGEventField, CGEventType};
 
     fn press(state: &State, document: &mut String, event: KeyEvent) {
         let plan = state.composer.borrow_mut().process(event);
@@ -629,6 +701,93 @@ mod tests {
         press(&state, &mut document, KeyEvent::special(Key::Backspace));
         press(&state, &mut document, KeyEvent::character('f'));
         assert_eq!(document, "đêf");
+    }
+
+    #[test]
+    fn a_tagged_callback_cannot_reset_the_physical_target_or_composition() {
+        let state = State::new(VietnameseConfig::default());
+        assert!(!state.reset_if_target_changed(Some(1)));
+        assert!(
+            state
+                .composer
+                .borrow_mut()
+                .process(KeyEvent::character('D'))
+                .pass_through
+        );
+
+        // This is created only to call the callback directly; it is never posted.
+        let event = CGEvent::new_keyboard_event(None, 0x02, true).unwrap();
+        tag_event(&event, state.synthetic_tag);
+        CGEvent::set_integer_value_field(Some(&event), CGEventField::EventTargetUnixProcessID, 2);
+        let event_ptr = std::ptr::NonNull::from(&*event);
+        let returned = unsafe {
+            callback(
+                std::ptr::null_mut(),
+                CGEventType::KeyDown,
+                event_ptr,
+                (&state as *const State).cast_mut().cast(),
+            )
+        };
+        assert_eq!(returned, event_ptr.as_ptr());
+        assert_eq!(state.target_process.get(), Some(1));
+
+        let plan = state
+            .composer
+            .borrow_mut()
+            .process(KeyEvent::character('D'));
+        assert_eq!(plan.delete_before, 1);
+        assert_eq!(plan.insert.as_deref(), Some("Đ"));
+    }
+
+    #[test]
+    fn dd_replacement_stages_one_tagged_backspace_pair_and_one_unicode_key() {
+        let mut composer = DirectComposer::new(VietnameseConfig::default());
+        let first = composer.process(KeyEvent::character('D'));
+        assert!(first.pass_through);
+        let plan = composer.process(KeyEvent::character('D'));
+        assert_eq!(plan.delete_before, 1);
+        assert_eq!(plan.insert.as_deref(), Some("Đ"));
+        assert!(!plan.pass_through);
+
+        let tag = 41;
+        assert_eq!(
+            synthetic_event_descriptors(&plan, tag),
+            Some(vec![
+                SyntheticEventDescriptor {
+                    key_code: DELETE_KEY_CODE,
+                    down: true,
+                    unicode_payload: false,
+                    tag,
+                },
+                SyntheticEventDescriptor {
+                    key_code: DELETE_KEY_CODE,
+                    down: false,
+                    unicode_payload: false,
+                    tag,
+                },
+                SyntheticEventDescriptor {
+                    key_code: 0,
+                    down: true,
+                    unicode_payload: true,
+                    tag,
+                },
+                SyntheticEventDescriptor {
+                    key_code: 0,
+                    down: false,
+                    unicode_payload: false,
+                    tag,
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn an_unstageable_replacement_has_no_partial_descriptor() {
+        let plan = OutputPlan {
+            insert: Some("x".repeat(MAX_REPLACEMENT_UNICODE_UNITS + 1)),
+            ..OutputPlan::default()
+        };
+        assert_eq!(synthetic_event_descriptors(&plan, 1), None);
     }
 
     #[test]

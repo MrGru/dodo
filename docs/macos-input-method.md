@@ -156,10 +156,19 @@ Every Dodo-generated `CGEvent` has a process-unique
 `kCGEventSourceUserData` marker. The callback passes a marked event through
 before decoding it or touching composition state, including generated
 Backspace and Unicode key-up/down pairs, so output cannot feed back into the
-engine. An ordinary physical Backspace is never replaced: it passes through
-once and removes one rendered grapheme from the in-memory word state. Secure
-input is passed through unchanged. Space, punctuation, navigation and shortcuts
-commit the current word if needed, then pass through unchanged.
+engine. A Unicode replacement carries its payload on key-down only; its tagged
+key-up only ends that key, avoiding a second insertion. The smallest
+counterfactual changes only that key-up to carry the payload too; the native
+descriptor test pins it empty. An ordinary physical
+Backspace is never replaced: it passes through once and removes one rendered
+grapheme from the in-memory word state. Secure input is passed through
+unchanged. Space, punctuation, navigation and shortcuts commit the current word
+if needed, then pass through unchanged. The rewrite trigger is a changed tail
+such as physical `D` followed by `D` (`D` → `Đ`); ordinary physical appends do
+not stage Unicode and so mask the defect. Target changes and marked synthetic
+re-entry are separate reset/filter paths, covered independently of that
+replacement. The descriptor and document simulators cover the transaction, but
+no browser or native-editor Event Tap run was available here.
 
 Only one backend transforms at a time. Selecting Native stops Event Tap before
 writing settings. Selecting Event Tap waits for a live Native Input Method to

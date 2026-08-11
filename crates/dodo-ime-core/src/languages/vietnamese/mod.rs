@@ -194,6 +194,8 @@ impl Default for VietnameseConfig {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Transform {
     /// An ordinary letter, possibly already carrying a diacritic (`w` → `ư`).
+    /// The engine retains the physical source for those direct marked letters,
+    /// so repeating it can cancel the whole source rather than leave its base.
     Letter {
         base: char,
         mark: Option<Mark>,
@@ -372,20 +374,28 @@ impl VietnameseEngine {
     /// that was already there comes off and the key is typed as itself, and so
     /// does a tone that was already set. Everything that cannot apply falls
     /// through [`VietnameseEngine::fall_back`].
-    fn apply(&mut self, transform: Transform) -> Applied {
+    fn apply(&mut self, transform: Transform, source: char) -> Applied {
         match transform {
             Transform::Letter { base, mark, upper } => {
-                self.syllable.push_marked_letter(base, mark, upper);
-                Applied::Changed
-            }
-            Transform::Mark { mark, literal } => match self.syllable.apply_mark(mark) {
-                MarkOutcome::Applied => Applied::Changed,
-                MarkOutcome::Reverted => {
+                if mark.is_some_and(|mark| self.syllable.cancel_self_mark(mark, source)) {
                     self.syllable.distrust_raw();
-                    self.fall_back(literal)
+                    self.fall_back(source)
+                } else {
+                    self.syllable
+                        .push_marked_letter(base, mark, upper, mark.map(|_| source));
+                    Applied::Changed
                 }
-                MarkOutcome::NoTarget => self.fall_back(literal),
-            },
+            }
+            Transform::Mark { mark, literal } => {
+                match self.syllable.apply_mark_from(mark, Some(source)) {
+                    MarkOutcome::Applied => Applied::Changed,
+                    MarkOutcome::SourceCancelled | MarkOutcome::Reverted => {
+                        self.syllable.distrust_raw();
+                        self.fall_back(literal)
+                    }
+                    MarkOutcome::NoTarget => self.fall_back(literal),
+                }
+            }
             Transform::Tone { tone, literal } => {
                 if !self.syllable.is_valid() {
                     return self.fall_back(literal);
@@ -476,7 +486,7 @@ impl LanguageEngine for VietnameseEngine {
         };
 
         self.syllable.record_key(key);
-        match self.apply(transform) {
+        match self.apply(transform, key) {
             Applied::Changed => EngineResult::from_actions(self.show()),
             Applied::Release => self.release(),
         }

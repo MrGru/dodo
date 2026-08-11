@@ -129,6 +129,7 @@ pub fn invalidates_composer(event: TapEvent) -> bool {
 /// The raw keys and config are enough to reconstruct the engine through its
 /// normal rules; `rendered` remains the document truth that the next plan
 /// replaces. This is deliberately one bounded snapshot, not document history.
+#[derive(Clone)]
 struct ReopenableWord {
     config: VietnameseConfig,
     raw: Vec<char>,
@@ -141,6 +142,7 @@ struct ReopenableWord {
 /// The engine remains the sole owner of Vietnamese rules. This type retains the
 /// physical characters that built the in-flight word only so a physical
 /// Backspace can remove one rendered grapheme and replay the remaining intent.
+#[derive(Clone)]
 pub(crate) struct DirectComposer {
     config: VietnameseConfig,
     engine: VietnameseEngine,
@@ -711,6 +713,16 @@ mod tests {
         let converged = OutputPlan::minimal("hoiư", "hơi");
         assert_eq!(converged.delete_before, 3);
         assert_eq!(converged.insert.as_deref(), Some("ơi"));
+    }
+
+    #[test]
+    fn direct_document_simulator_converges_dd_and_repeated_w_cancellation() {
+        for (keys, expected) in [("dd", "đ"), ("DD", "Đ"), ("dD", "đ"), ("Dd", "Đ")] {
+            assert_eq!(type_at_end_cursor(keys), expected, "{keys}");
+        }
+        for (keys, expected) in [("ww", "w"), ("wW", "W"), ("uww", "uw")] {
+            assert_eq!(type_at_end_cursor(keys), expected, "{keys}");
+        }
     }
 
     #[test]

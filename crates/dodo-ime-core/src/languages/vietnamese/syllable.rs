@@ -83,6 +83,11 @@ pub struct Letter {
     pub base: char,
     pub mark: Option<Mark>,
     pub upper: bool,
+    /// The physical key that produced this whole marked letter, rather than
+    /// merely decorating a letter already in the syllable. It is how a second
+    /// matching source cancels `ư` back to literal `w` without treating its
+    /// synthetic `u` as independently typed.
+    source: Option<(Mark, char)>,
 }
 
 impl Letter {
@@ -91,12 +96,24 @@ impl Letter {
             base: base.to_ascii_lowercase(),
             mark: None,
             upper,
+            source: None,
         }
     }
 
     pub fn with_mark(mut self, mark: Option<Mark>) -> Letter {
         self.mark = mark;
         self
+    }
+
+    fn with_source(mut self, mark: Option<Mark>, source: Option<char>) -> Letter {
+        self.source = mark.zip(source);
+        self
+    }
+
+    fn is_self_marked_by(&self, mark: Mark, source: char) -> bool {
+        self.source.is_some_and(|(source_mark, key)| {
+            source_mark == mark && key.eq_ignore_ascii_case(&source)
+        })
     }
 }
 
@@ -105,6 +122,9 @@ impl Letter {
 pub enum MarkOutcome {
     /// The mark landed on a letter.
     Applied,
+    /// A one-key transformed letter was cancelled, so the whole letter went
+    /// away before the caller types this key literally (`ww` becomes `w`).
+    SourceCancelled,
     /// The letter already had that mark, so it was taken off again — the
     /// second `aa` in `aaa`, the second `w` in `aww`. The caller then types the
     /// key literally, which is what makes the undo produce `aa` rather than
@@ -194,8 +214,18 @@ impl Syllable {
         self.letters.push(Letter::new(base, upper));
     }
 
-    pub fn push_marked_letter(&mut self, base: char, mark: Option<Mark>, upper: bool) {
-        self.letters.push(Letter::new(base, upper).with_mark(mark));
+    pub fn push_marked_letter(
+        &mut self,
+        base: char,
+        mark: Option<Mark>,
+        upper: bool,
+        source: Option<char>,
+    ) {
+        self.letters.push(
+            Letter::new(base, upper)
+                .with_mark(mark)
+                .with_source(mark, source),
+        );
     }
 
     /// Remove the last letter, as a backspace would.
@@ -274,6 +304,14 @@ impl Syllable {
     /// `a6`, `w`, `7` and `9` all arrive here as a [`Mark`], and every rule
     /// about where a mark may live is stated once, below.
     pub fn apply_mark(&mut self, mark: Mark) -> MarkOutcome {
+        self.apply_mark_from(mark, None)
+    }
+
+    /// As [`Syllable::apply_mark`], retaining the physical key that supplied
+    /// the mark. The engine uses this to distinguish a literal `u` decorated by
+    /// `w` (`uww` → `uw`) from `ư` that the first `w` created by itself (`ww` →
+    /// `w`).
+    pub fn apply_mark_from(&mut self, mark: Mark, source: Option<char>) -> MarkOutcome {
         if mark == Mark::Horn
             && let Some((first, second)) = self.bare_uo_pair()
         {
@@ -286,14 +324,34 @@ impl Syllable {
             return MarkOutcome::NoTarget;
         };
         if self.letters[at].mark == Some(mark) {
+            if source.is_some_and(|source| self.letters[at].is_self_marked_by(mark, source)) {
+                self.letters.remove(at);
+                return MarkOutcome::SourceCancelled;
+            }
             self.letters[at].mark = None;
             MarkOutcome::Reverted
         } else {
             // A different mark is replaced rather than refused: `oow` is `ô`
             // corrected to `ơ`, which is a typist changing their mind, not an
-            // error.
+            // error. Its old source no longer describes the letter.
             self.letters[at].mark = Some(mark);
+            self.letters[at].source = None;
             MarkOutcome::Applied
+        }
+    }
+
+    /// Cancel a whole letter made by one marked source key, if this is the same
+    /// source again. Bracket shortcuts are direct marked letters too; this keeps
+    /// their cancellation rule shared with any future direct transform.
+    pub fn cancel_self_mark(&mut self, mark: Mark, source: char) -> bool {
+        let Some(at) = self.mark_target(mark) else {
+            return false;
+        };
+        if self.letters[at].is_self_marked_by(mark, source) {
+            self.letters.remove(at);
+            true
+        } else {
+            false
         }
     }
 
@@ -393,6 +451,28 @@ mod tests {
         assert_eq!(syllable.render(MODERN), "tâ");
         assert_eq!(syllable.apply_mark(Mark::Circumflex), MarkOutcome::Reverted);
         assert_eq!(syllable.render(MODERN), "ta");
+    }
+
+    #[test]
+    fn only_a_repeated_self_marked_source_removes_the_whole_letter() {
+        let mut sourced = Syllable::new();
+        sourced.push_marked_letter('u', Some(Mark::Horn), false, Some('w'));
+        assert_eq!(
+            sourced.apply_mark_from(Mark::Horn, Some('W')),
+            MarkOutcome::SourceCancelled
+        );
+        assert_eq!(sourced.render(MODERN), "");
+
+        let mut literal = make("u");
+        assert_eq!(
+            literal.apply_mark_from(Mark::Horn, Some('w')),
+            MarkOutcome::Applied
+        );
+        assert_eq!(
+            literal.apply_mark_from(Mark::Horn, Some('w')),
+            MarkOutcome::Reverted
+        );
+        assert_eq!(literal.render(MODERN), "u");
     }
 
     #[test]
