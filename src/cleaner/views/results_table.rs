@@ -17,11 +17,13 @@
 //! that `CleanerView` owns, so a *strong* back-reference would be a cycle.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, ClipboardItem, Context, Div, InteractiveElement as _, IntoElement,
-    ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
-    WeakEntity, Window, div, px,
+    AnyElement, App, ClipboardItem, Context, Div, Image, ImageFormat, ImageSource,
+    InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, StyledImage as _, WeakEntity, Window, div, img,
+    px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
@@ -32,14 +34,14 @@ use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 use super::CleanerView;
 use crate::app_icon::AppIcon;
 use crate::cleaner::core::category::CleanerCategory;
-use crate::cleaner::core::item::{CleanableItem, CleanableItemId};
+use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata};
 use crate::cleaner::core::risk::{ItemCapability, RiskLevel};
 use crate::i18n::{Str, t};
 
 const CHECKBOX_COLUMN_WIDTH: gpui::Pixels = px(36.);
 const RISK_COLUMN_WIDTH: gpui::Pixels = px(112.);
 const SIZE_COLUMN_WIDTH: gpui::Pixels = px(90.);
-const ACTIONS_COLUMN_WIDTH: gpui::Pixels = px(88.);
+const ACTIONS_COLUMN_WIDTH: gpui::Pixels = px(64.);
 
 /// The icon drawn beside a row's name, keyed on the category every item in
 /// a given render shares (results are always scoped to the active category —
@@ -90,6 +92,7 @@ pub struct ResultsTableDelegate {
     view: WeakEntity<CleanerView>,
     items: Vec<CleanableItem>,
     selected_ids: HashSet<CleanableItemId>,
+    category: CleanerCategory,
 }
 
 impl ResultsTableDelegate {
@@ -98,14 +101,33 @@ impl ResultsTableDelegate {
             view,
             items: Vec::new(),
             selected_ids: HashSet::new(),
+            category: CleanerCategory::SystemJunk,
         }
     }
 
     /// Replaces what the grid shows. The caller (`CleanerView::render`, via
     /// `sync_results_table`) follows this with `TableState::refresh`.
-    pub fn set(&mut self, items: Vec<CleanableItem>, selected_ids: HashSet<CleanableItemId>) {
+    pub fn set(
+        &mut self,
+        category: CleanerCategory,
+        items: Vec<CleanableItem>,
+        selected_ids: HashSet<CleanableItemId>,
+    ) {
+        self.category = category;
         self.items = items;
         self.selected_ids = selected_ids;
+    }
+
+    fn shows_selection(&self) -> bool {
+        !matches!(
+            self.category,
+            CleanerCategory::InstalledApps
+                | CleanerCategory::AiApps
+                | CleanerCategory::XcodeJunk
+                | CleanerCategory::HomebrewCache
+                | CleanerCategory::UniversalBinaries
+                | CleanerCategory::LanguageFiles
+        )
     }
 
     /// Every row the header checkbox may bulk-select — the same
@@ -248,12 +270,7 @@ impl ResultsTableDelegate {
                     .min_w_0()
                     .items_center()
                     .gap_2()
-                    .child(
-                        Icon::new(category_icon(item.category))
-                            .size_4()
-                            .flex_shrink_0()
-                            .text_color(cx.theme().muted_foreground),
-                    )
+                    .child(application_icon(item, cx))
                     .child(
                         div()
                             .min_w_0()
@@ -399,6 +416,34 @@ impl ResultsTableDelegate {
     }
 }
 
+fn application_icon(item: &CleanableItem, cx: &App) -> AnyElement {
+    let icon_tiff = match &item.metadata {
+        ItemMetadata::Application(metadata) => metadata.icon_tiff.as_ref(),
+        ItemMetadata::UniversalBinary(metadata) => metadata.icon_tiff.as_ref(),
+        _ => None,
+    };
+    let fallback = category_icon(item.category);
+    icon_tiff.map_or_else(
+        || {
+            Icon::new(fallback)
+                .size_4()
+                .flex_shrink_0()
+                .text_color(cx.theme().muted_foreground)
+                .into_any_element()
+        },
+        |bytes| {
+            img(ImageSource::Image(Arc::new(Image::from_bytes(
+                ImageFormat::Tiff,
+                bytes.clone(),
+            ))))
+            .size_4()
+            .flex_shrink_0()
+            .with_fallback(move || Icon::new(fallback).size_4().into_any_element())
+            .into_any_element()
+        },
+    )
+}
+
 fn copy_path_button(item: &CleanableItem, cx: &App) -> impl IntoElement {
     let path_text = item.path.display().to_string();
     Button::new(("cleaner-row-copy", item.id.0))
@@ -413,7 +458,7 @@ fn copy_path_button(item: &CleanableItem, cx: &App) -> impl IntoElement {
 
 impl TableDelegate for ResultsTableDelegate {
     fn columns_count(&self, _cx: &App) -> usize {
-        6
+        5 + self.shows_selection() as usize
     }
 
     fn rows_count(&self, _cx: &App) -> usize {
@@ -426,7 +471,7 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        if col_ix == 0 {
+        if self.shows_selection() && col_ix == 0 {
             return self.render_header_select_cell(cx);
         }
         div()
@@ -436,6 +481,7 @@ impl TableDelegate for ResultsTableDelegate {
     }
 
     fn column(&self, col_ix: usize, cx: &App) -> Column {
+        let col_ix = col_ix + (!self.shows_selection()) as usize;
         match col_ix {
             0 => Column::new("select", "")
                 .width(CHECKBOX_COLUMN_WIDTH)
@@ -458,7 +504,7 @@ impl TableDelegate for ResultsTableDelegate {
             5 => Column::new("actions", t(Str::CleanerColumnActions, cx))
                 .width(ACTIONS_COLUMN_WIDTH)
                 .min_width(ACTIONS_COLUMN_WIDTH)
-                .resizable(false)
+                .max_width(px(96.))
                 .movable(false)
                 .selectable(false),
             _ => Column::new("", ""),
@@ -497,6 +543,7 @@ impl TableDelegate for ResultsTableDelegate {
         let Some(item) = self.items.get(row_ix).cloned() else {
             return div().into_any_element();
         };
+        let col_ix = col_ix + (!self.shows_selection()) as usize;
         match col_ix {
             0 => self.render_select_cell(&item, cx),
             1 => self.render_name_cell(&item, cx),

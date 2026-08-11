@@ -6,7 +6,6 @@ use gpui::*;
 use gpui_component::WindowExt as _;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _};
 use gpui_component::dialog::DialogButtonProps;
-use gpui_component::progress::Progress;
 use gpui_component::spinner::Spinner;
 use gpui_component::table::{DataTable, TableState};
 use gpui_component::{
@@ -161,7 +160,7 @@ impl CleanerView {
         let selected_ids: HashSet<CleanableItemId> =
             category_state.selected_ids().into_iter().collect();
         self.results_table.update(cx, |table, cx| {
-            table.delegate_mut().set(items, selected_ids);
+            table.delegate_mut().set(category, items, selected_ids);
             table.refresh(cx);
         });
     }
@@ -495,6 +494,43 @@ impl CleanerView {
         }
     }
 
+    fn confirm_empty_trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(result) = self.state.category(CleanerCategory::TrashBins).result() else {
+            return;
+        };
+        let items = result.items.clone();
+        if items.is_empty() {
+            return;
+        }
+        let count = result.scanned_entries;
+        let size = Self::format_bytes(result.estimated_reclaimable_bytes);
+        let view = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let confirm_view = view.clone();
+            let items = items.clone();
+            alert
+                .title(t(Str::CleanerEmptyTrashConfirmTitle, cx))
+                .description(t(
+                    Str::CleanerEmptyTrashConfirmMessage {
+                        count,
+                        size: size.clone(),
+                    },
+                    cx,
+                ))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t(Str::CleanerEmptyTrash, cx))
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(t(Str::CleanerCancelScan, cx))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _, cx| {
+                    confirm_view.update(cx, |this, cx| this.run_empty_trash(items.clone(), cx));
+                    true
+                })
+        });
+    }
+
     fn confirm_cleanup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected = self.selected_items_for_active_category();
         if selected.is_empty() {
@@ -569,6 +605,41 @@ impl CleanerView {
     /// this a single-category list) and never touches any other category's
     /// `cleaning`/`cleanup_report` — a cleanup running for one category never
     /// blocks scanning or viewing another.
+    fn run_empty_trash(&mut self, items: Vec<CleanableItem>, cx: &mut Context<Self>) {
+        if self.cleanup_tasks.contains_key(&CleanerCategory::TrashBins) {
+            return;
+        }
+        self.state.begin_cleaning(CleanerCategory::TrashBins);
+        cx.notify();
+        let task = cx.spawn(async move |this, cx| {
+            let report = cx
+                .background_executor()
+                .spawn(async move {
+                    #[cfg(target_os = "macos")]
+                    {
+                        cleanup::empty_trash_items(&items)
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let _ = items;
+                        crate::cleaner::core::report::CleanupReport {
+                            successes: Vec::new(),
+                            failures: Vec::new(),
+                            estimated_reclaimed_bytes: 0,
+                        }
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.state
+                    .finish_cleaning(CleanerCategory::TrashBins, report);
+                this.cleanup_tasks.remove(&CleanerCategory::TrashBins);
+                cx.notify();
+            });
+        });
+        self.cleanup_tasks.insert(CleanerCategory::TrashBins, task);
+    }
+
     fn run_cleanup(&mut self, items: Vec<CleanableItem>, cx: &mut Context<Self>) {
         let Some(category) = items.first().map(|item| item.category) else {
             return;
@@ -796,9 +867,7 @@ impl CleanerView {
     /// never been scanned or whose scan was cancelled outright.
     fn render_scan_state_glyph(&self, category: CleanerCategory, cx: &App) -> AnyElement {
         match self.state.category(category).scan_state() {
-            ScanState::Scanning | ScanState::Cancelling => {
-                Spinner::new().xsmall().into_any_element()
-            }
+            ScanState::Scanning | ScanState::Cancelling => div().into_any_element(),
             ScanState::Completed => Icon::new(AppIcon::CircleCheck)
                 .size_3()
                 .text_color(cx.theme().success.opacity(0.7))
@@ -1074,7 +1143,6 @@ impl CleanerView {
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .child(Spinner::new().xsmall())
                     .child(div().font_bold().child(t(
                         if cancelling {
                             Str::CleanerStatusCancelling
@@ -1084,7 +1152,6 @@ impl CleanerView {
                         cx,
                     ))),
             )
-            .child(Progress::new("cleaner-scan-progress").loading(true))
             .when_some(state.progress(), |this, progress| {
                 this.child(
                     h_flex()
@@ -1401,7 +1468,46 @@ impl CleanerView {
     /// the table it acts on, and the table body is the only thing that
     /// scrolls — the toolbar above it stays put, standing in for a sticky
     /// action bar without any extra scroll tracking (req #12).
+    fn render_trash_results_area(&self, cx: &mut Context<Self>) -> AnyElement {
+        let state = self.state.category(CleanerCategory::TrashBins);
+        let result = state.result();
+        let count = result.map_or(0, |result| result.scanned_entries);
+        let size = result.map_or(0, |result| result.estimated_reclaimable_bytes);
+        let busy = self.is_category_busy(CleanerCategory::TrashBins);
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .child(
+                div()
+                    .text_lg()
+                    .font_bold()
+                    .child(t(Str::CleanerItemsFound(count as usize), cx)),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(Self::format_bytes(size)),
+            )
+            .child(
+                Button::new("cleaner-empty-trash")
+                    .danger()
+                    .disabled(busy || count == 0)
+                    .label(t(Str::CleanerEmptyTrash, cx))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.confirm_empty_trash(window, cx)),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_results_area(&self, category: CleanerCategory, cx: &mut Context<Self>) -> AnyElement {
+        if category == CleanerCategory::TrashBins {
+            return self.render_trash_results_area(cx);
+        }
         let category_state = self.state.category(category);
         let selected_count = category_state.selected_count();
         let selected_bytes = category_state.selected_reclaimable_bytes();

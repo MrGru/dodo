@@ -1514,6 +1514,13 @@ pub enum Str {
     InputMethodShortcutEnter,
     InputMethodShortcutTab,
     InputMethodShortcutEscape,
+
+    CleanerEmptyTrash,
+    CleanerEmptyTrashConfirmTitle,
+    CleanerEmptyTrashConfirmMessage {
+        count: u64,
+        size: String,
+    },
 }
 
 impl Str {
@@ -1719,6 +1726,20 @@ impl Str {
             (Str::CleanerCleanSelected, Language::Vietnamese) => {
                 "Dọn mục đã chọn".into()
             }
+            (Str::CleanerEmptyTrash, Language::English) => "Empty Trash".into(),
+            (Str::CleanerEmptyTrash, Language::Vietnamese) => "Dọn sạch Thùng rác".into(),
+            (Str::CleanerEmptyTrashConfirmTitle, Language::English) => "Empty Trash?".into(),
+            (Str::CleanerEmptyTrashConfirmTitle, Language::Vietnamese) => {
+                "Dọn sạch Thùng rác?".into()
+            }
+            (
+                Str::CleanerEmptyTrashConfirmMessage { count, size },
+                Language::English,
+            ) => format!("{count} items will be permanently deleted. Estimated size: {size}.").into(),
+            (
+                Str::CleanerEmptyTrashConfirmMessage { count, size },
+                Language::Vietnamese,
+            ) => format!("{count} mục sẽ bị xóa vĩnh viễn. Dung lượng ước tính: {size}.").into(),
             (Str::CleanerCleanupReport, Language::English) => "Cleanup report".into(),
             (Str::CleanerCleanupReport, Language::Vietnamese) => {
                 "Báo cáo dọn dẹp".into()
@@ -6445,6 +6466,15 @@ mod tests {
             plain(Str::InputMethodShortcutEnter),
             plain(Str::InputMethodShortcutTab),
             plain(Str::InputMethodShortcutEscape),
+            plain(Str::CleanerEmptyTrash),
+            plain(Str::CleanerEmptyTrashConfirmTitle),
+            with(
+                Str::CleanerEmptyTrashConfirmMessage {
+                    count: NUMBER as u64,
+                    size: DETAIL.into(),
+                },
+                &[NUMBER_TEXT, DETAIL],
+            ),
         ]
     }
 
@@ -7373,6 +7403,9 @@ mod tests {
             Str::InputMethodShortcutEnter => 918,
             Str::InputMethodShortcutTab => 919,
             Str::InputMethodShortcutEscape => 920,
+            Str::CleanerEmptyTrash => 921,
+            Str::CleanerEmptyTrashConfirmTitle => 922,
+            Str::CleanerEmptyTrashConfirmMessage { .. } => 923,
         }
     }
 

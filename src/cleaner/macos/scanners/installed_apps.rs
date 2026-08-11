@@ -20,6 +20,7 @@ use crate::cleaner::core::scan_context::ScanContext;
 use crate::cleaner::core::scanner::CleanerScanner;
 use crate::cleaner::macos::applications::bundle::parse_bundle;
 use crate::cleaner::macos::applications::identity::AppIdentity;
+use crate::cleaner::macos::platform::application_icon_tiff;
 
 /// The standard top-level application roots this scanner indexes, and the
 /// same roots Phase 10's [`installed_app_identities`] builds its
@@ -188,6 +189,7 @@ impl CleanerScanner for InstalledAppsScanner {
                         // copy of the same best-effort traversal.
                         let logical_size =
                             measure_size(path.as_path(), CleanerCategory::InstalledApps, risk);
+                        let icon_tiff = application_icon_tiff(path.as_path());
                         items.push(CleanableItem {
                             id: item_id(path.as_path()),
                             category: CleanerCategory::InstalledApps,
@@ -221,6 +223,7 @@ impl CleanerScanner for InstalledAppsScanner {
                                 team_id: None,
                                 version: bundle.version,
                                 executable: bundle.executable,
+                                icon_tiff,
                             }),
                         });
                     }

@@ -56,6 +56,9 @@ pub struct ApplicationMetadata {
     pub team_id: Option<String>,
     pub version: Option<String>,
     pub executable: Option<String>,
+    /// Native Finder icon encoded as TIFF by the background scanner, ready for
+    /// GPUI's asynchronous image decoder.
+    pub icon_tiff: Option<Vec<u8>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -133,6 +136,8 @@ pub struct UniversalBinaryMetadata {
     /// when the check itself could not run (`codesign` missing) rather than
     /// a real signing verdict.
     pub signed: Option<bool>,
+    /// Native Finder icon encoded as TIFF by the background scanner.
+    pub icon_tiff: Option<Vec<u8>>,
 }
 
 /// Attached to every item

@@ -61,7 +61,7 @@ use crate::cleaner::core::risk::{RiskLevel, SelectionPolicy};
 use crate::cleaner::core::scan_context::ScanContext;
 use crate::cleaner::core::scanner::CleanerScanner;
 use crate::cleaner::macos::applications::bundle::parse_bundle;
-use crate::cleaner::macos::platform::is_any_bundle_running;
+use crate::cleaner::macos::platform::{application_icon_tiff, is_any_bundle_running};
 
 const DEFAULT_APP_ROOTS: &[&str] = &[
     "/Applications",
@@ -272,6 +272,7 @@ fn build_item(
             current_architecture: architecture_label(current_arch).to_string(),
             estimated_removable_bytes: removable_bytes,
             signed,
+            icon_tiff: application_icon_tiff(app_path),
         }),
     }
 }

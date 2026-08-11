@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 
 use crate::cleaner::core::category::CleanerCategory;
@@ -14,6 +15,80 @@ use crate::cleaner::macos::scanners::{
     ai_apps, homebrew_cache, mail_files, node_tooling_cache, xcode_junk,
 };
 use crate::paths;
+
+pub fn empty_trash_items(items: &[CleanableItem]) -> CleanupReport {
+    let mut successes = Vec::new();
+    let mut failures = Vec::new();
+    for item in items {
+        match empty_trash_root(item.path.as_path()) {
+            Ok(()) => successes.push(CleanupItemSuccess {
+                id: item.id,
+                path: item.path.clone(),
+                trashed_path: None,
+                logical_size: item.logical_size,
+            }),
+            Err(message) => failures.push(CleanupItemFailure {
+                id: item.id,
+                path: item.path.clone(),
+                error: CleanupError::ExternalOperationFailed {
+                    operation: "empty trash".into(),
+                    message,
+                },
+            }),
+        }
+    }
+    CleanupReport {
+        estimated_reclaimed_bytes: successes.iter().map(|item| item.logical_size).sum(),
+        successes,
+        failures,
+    }
+}
+
+fn empty_trash_root(root: &std::path::Path) -> Result<(), String> {
+    if !is_trash_root(root) {
+        return Err(format!(
+            "refusing to empty unrecognized Trash root {}",
+            root.display()
+        ));
+    }
+    if std::fs::symlink_metadata(root)
+        .map_err(|error| error.to_string())?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(format!("refusing symlinked Trash root {}", root.display()));
+    }
+    for entry in std::fs::read_dir(root).map_err(|error| error.to_string())? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.is_dir() {
+            std::fs::remove_dir_all(path).map_err(|error| error.to_string())?;
+        } else {
+            std::fs::remove_file(path).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn is_trash_root(path: &std::path::Path) -> bool {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home_trash = home.as_ref().map(|home| home.join(".Trash"));
+    let uid = home
+        .as_deref()
+        .and_then(|home| std::fs::metadata(home).ok())
+        .map(|metadata| metadata.uid().to_string());
+    home_trash.as_deref() == Some(path)
+        || uid
+            .as_deref()
+            .is_some_and(|uid| path.file_name().is_some_and(|name| name == uid))
+            && path
+                .parent()
+                .is_some_and(|parent| parent.ends_with(".Trashes"))
+            && path
+                .parent()
+                .and_then(std::path::Path::parent)
+                .is_some_and(|volume| volume.starts_with("/Volumes"))
+}
 
 pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
     let mut by_path = BTreeMap::new();

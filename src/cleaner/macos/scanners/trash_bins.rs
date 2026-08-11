@@ -76,13 +76,9 @@ impl CleanerScanner for TrashBinsScanner {
                             last_accessed_at: None,
                             risk: RiskLevel::ReviewRecommended,
                             selection_policy: SelectionPolicy::NeverBulkSelect,
-                            capabilities: vec![
-                                ItemCapability::RevealInFinder,
-                                ItemCapability::CopyPath,
-                            ],
-                            explanation:
-                                "Trash bin contents are review-only here; emptying Trash is a separate future flow."
-                                    .into(),
+                            capabilities: vec![ItemCapability::EmptyTrash],
+                            explanation: "Empty Trash removes this bin's contents permanently."
+                                .into(),
                             warnings: Vec::new(),
                             metadata: ItemMetadata::Generic,
                         });
