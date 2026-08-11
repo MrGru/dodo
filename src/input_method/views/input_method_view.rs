@@ -429,31 +429,24 @@ impl InputMethodView {
 
     fn language_switch_choice(cx: &App) -> impl IntoElement {
         let shortcut = InputMethod::language_switch(cx);
-        let selected = shortcut
-            .key
-            .and_then(|key| {
-                LanguageSwitchKey::ALL
-                    .iter()
-                    .position(|candidate| *candidate == key)
-            })
-            .map(|index| index + 1);
+        let selected = LanguageSwitchKey::ALL
+            .iter()
+            .position(|candidate| *candidate == shortcut.key);
         v_flex()
             .w_full()
             .gap_2()
             .child(
                 RadioGroup::horizontal("input-method-language-switch-key")
                     .children(
-                        std::iter::once(t(Str::InputMethodShortcutModifiersOnly, cx)).chain(
-                            LanguageSwitchKey::ALL.map(|key| t(language_switch_key_label(key), cx)),
-                        ),
+                        LanguageSwitchKey::ALL.map(|key| t(language_switch_key_label(key), cx)),
                     )
                     .selected_index(selected)
                     .on_click(|ix: &usize, _, cx| {
-                        let mut shortcut = InputMethod::language_switch(cx);
-                        shortcut.key = ix
-                            .checked_sub(1)
-                            .and_then(|index| LanguageSwitchKey::ALL.get(index).copied());
-                        InputMethod::set_language_switch(shortcut, cx);
+                        if let Some(key) = LanguageSwitchKey::ALL.get(*ix).copied() {
+                            let mut shortcut = InputMethod::language_switch(cx);
+                            shortcut.key = key;
+                            InputMethod::set_language_switch(shortcut, cx);
+                        }
                     }),
             )
             .child(
@@ -510,6 +503,7 @@ impl InputMethodView {
                     modifier.id()
                 ))
                 .checked(modifier.enabled(shortcut))
+                .disabled(modifier.is_required(shortcut))
                 .on_click(move |checked: &bool, _, cx| {
                     let mut shortcut = InputMethod::language_switch(cx);
                     modifier.set(&mut shortcut, *checked);
@@ -647,6 +641,15 @@ impl ShortcutModifier {
             Self::Shift => shortcut.shift,
             Self::Meta => shortcut.meta,
         }
+    }
+
+    fn is_required(self, shortcut: dodo_ime_ipc::settings::LanguageSwitch) -> bool {
+        self.enabled(shortcut)
+            && [Self::Control, Self::Alt, Self::Shift, Self::Meta]
+                .into_iter()
+                .filter(|modifier| modifier.enabled(shortcut))
+                .count()
+                == 1
     }
 
     fn set(self, shortcut: &mut dodo_ime_ipc::settings::LanguageSwitch, enabled: bool) {

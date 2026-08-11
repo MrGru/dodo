@@ -67,7 +67,9 @@ use futures_util::StreamExt as _;
 
 use dodo_ime_core::{ActiveLanguages, LanguageId};
 use dodo_ime_ipc::document::IpcError;
-use dodo_ime_ipc::settings::{Backend, LanguageSwitch, SettingsDocument, VietnameseSettings};
+use dodo_ime_ipc::settings::{
+    Backend, LanguageSwitch, SETTINGS_SCHEMA_VERSION, SettingsDocument, VietnameseSettings,
+};
 use dodo_ime_ipc::status::StatusDocument;
 use gpui::{App, AsyncApp, BorrowAppContext as _, Global, Task};
 
@@ -349,7 +351,7 @@ impl InputMethod {
         cx.update_global::<InputMethod, _>(|state, cx| {
             let mut next = state.document;
             change(&mut next);
-            if next == state.document {
+            if next == state.document && state.document.version == SETTINGS_SCHEMA_VERSION {
                 return;
             }
 
@@ -531,6 +533,9 @@ impl InputMethod {
         if cx.try_global::<InputMethod>().is_none() {
             return;
         }
+        let migrate_settings = loaded
+            .as_ref()
+            .is_ok_and(|document| document.version < SETTINGS_SCHEMA_VERSION);
         let reported_language = status.as_ref().and_then(StatusDocument::language);
         let mut adopt_language = None;
         cx.update_global::<InputMethod, _>(|state, _| {
@@ -571,6 +576,11 @@ impl InputMethod {
                         .expect("ActiveLanguages is non-empty")
                 })
             });
+        }
+        if migrate_settings {
+            // Rewrite an older document so its migrated shortcut reaches every
+            // host, including one launched after dodo closes.
+            Self::edit(cx, |_| {});
         }
         if let Some(language) = adopt_language {
             Self::set_language(language, cx);

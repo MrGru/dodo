@@ -1521,8 +1521,6 @@ pub enum Str {
         count: u64,
         size: String,
     },
-
-    InputMethodShortcutModifiersOnly,
 }
 
 impl Str {
@@ -4824,10 +4822,10 @@ impl Str {
                 "Chuyển ngôn ngữ".into()
             }
             (Str::InputMethodLanguageSwitchDescription, Language::English) => {
-                "Cycles active languages. Choose at least two keys and an optional sound.".into()
+                "Cycles active languages. Choose a base key, at least one modifier, and an optional sound.".into()
             }
             (Str::InputMethodLanguageSwitchDescription, Language::Vietnamese) => {
-                "Luân chuyển các ngôn ngữ đang bật. Chọn ít nhất hai phím và âm báo tùy chọn.".into()
+                "Luân chuyển các ngôn ngữ đang bật. Chọn phím chính, ít nhất một phím bổ trợ và âm báo tùy chọn.".into()
             }
             (Str::InputMethodShortcutControl, Language::English) => "Control".into(),
             (Str::InputMethodShortcutControl, Language::Vietnamese) => "Phím Control".into(),
@@ -4849,10 +4847,6 @@ impl Str {
             (Str::InputMethodShortcutTab, Language::Vietnamese) => "Phím Tab".into(),
             (Str::InputMethodShortcutEscape, Language::English) => "Escape".into(),
             (Str::InputMethodShortcutEscape, Language::Vietnamese) => "Phím Esc".into(),
-            (Str::InputMethodShortcutModifiersOnly, Language::English) => "Modifiers only".into(),
-            (Str::InputMethodShortcutModifiersOnly, Language::Vietnamese) => {
-                "Chỉ phím bổ trợ".into()
-            }
             (Str::InputMethodWindowsDescription, Language::English) => {
                 "Choose Dodo's Vietnamese input method. Native TSF works after Dodo closes and requires installation; Keyboard Hook needs Dodo to remain open."
                     .into()
@@ -6481,7 +6475,6 @@ mod tests {
                 },
                 &[NUMBER_TEXT, DETAIL],
             ),
-            plain(Str::InputMethodShortcutModifiersOnly),
         ]
     }
 
@@ -7413,7 +7406,6 @@ mod tests {
             Str::CleanerEmptyTrash => 921,
             Str::CleanerEmptyTrashConfirmTitle => 922,
             Str::CleanerEmptyTrashConfirmMessage { .. } => 923,
-            Str::InputMethodShortcutModifiersOnly => 924,
         }
     }
 
