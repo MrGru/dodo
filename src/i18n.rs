@@ -1496,6 +1496,8 @@ pub enum Str {
     // so `position()` stays a fixed compatibility table.
     StartWithOs,
     StartWithOsDescription,
+    StartWithOsChecking,
+    StartWithOsStatusUnknown,
 }
 
 impl Str {
@@ -5088,6 +5090,12 @@ impl Str {
             (Str::StartWithOsDescription, Language::Vietnamese) => {
                 "Khởi động Dodo trong khay khi bạn đăng nhập. macOS cần macOS 13 trở lên và Dodo.app đã đóng gói; Windows thêm mục Khởi động cho người dùng hiện tại.".into()
             }
+            (Str::StartWithOsChecking, Language::English) => "Checking status…".into(),
+            (Str::StartWithOsChecking, Language::Vietnamese) => "Đang kiểm tra trạng thái…".into(),
+            (Str::StartWithOsStatusUnknown, Language::English) => "Status unavailable".into(),
+            (Str::StartWithOsStatusUnknown, Language::Vietnamese) => {
+                "Không có trạng thái".into()
+            }
         }
     }
 }
@@ -6359,6 +6367,8 @@ mod tests {
             // Close-to-tray and OS startup.
             plain(Str::StartWithOs),
             plain(Str::StartWithOsDescription),
+            plain(Str::StartWithOsChecking),
+            plain(Str::StartWithOsStatusUnknown),
         ]
     }
 
@@ -7271,6 +7281,8 @@ mod tests {
             Str::CleanerStatusCancelled => 902,
             Str::StartWithOs => 903,
             Str::StartWithOsDescription => 904,
+            Str::StartWithOsChecking => 905,
+            Str::StartWithOsStatusUnknown => 906,
         }
     }
 

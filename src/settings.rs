@@ -34,6 +34,8 @@
 //! themselves nowhere near here — they are pure data in
 //! [`crate::session::models::features`].
 
+use std::{cell::Cell, rc::Rc};
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
@@ -448,6 +450,32 @@ impl ListDelegate for SearchDelegate {
     }
 }
 
+/// The one OS-backed setting's last trustworthy answer.
+///
+/// It begins loading rather than pretending that a false switch reflects the
+/// OS. A failed write is unknown too: the OS may have changed despite returning
+/// an error, so the old value is no longer an honest answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartupStatus {
+    Loading,
+    Known(bool),
+    Unknown,
+}
+
+impl StartupStatus {
+    fn read_once(read: impl FnOnce() -> bool) -> Self {
+        Self::Known(read())
+    }
+
+    fn after_successful_set(enabled: bool) -> Self {
+        Self::Known(enabled)
+    }
+
+    fn after_failed_set() -> Self {
+        Self::Unknown
+    }
+}
+
 /// The dialog body: the search box and result list above the library's own
 /// settings panel.
 struct SettingsView {
@@ -464,6 +492,8 @@ struct SettingsView {
     /// Where the last jump landed. Its control is drawn with the accent colour
     /// until the next jump, so the setting is obvious on arrival.
     highlight: Option<Setting>,
+    /// This field-local snapshot keeps the OS reader out of render.
+    start_with_os: Rc<Cell<StartupStatus>>,
 }
 
 impl SettingsView {
@@ -480,12 +510,35 @@ impl SettingsView {
             ListState::new(delegate, window, cx).searchable(true)
         });
 
+        let start_with_os = Rc::new(Cell::new(StartupStatus::Loading));
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let start_with_os = start_with_os.clone();
+            cx.spawn(async move |_, cx| {
+                // SMAppService's headers do not mark these selectors as
+                // main-thread-only, so this (and Windows' registry read) can
+                // run off the UI thread. The first Settings frame therefore
+                // paints before the potentially slow OS query completes.
+                let status = cx
+                    .background_executor()
+                    .spawn(async move { StartupStatus::read_once(crate::tray::startup::enabled) })
+                    .await;
+                cx.update(|cx| {
+                    start_with_os.set(status);
+                    cx.refresh_windows();
+                });
+            })
+            .detach();
+        }
+
         Self {
             search,
             layout,
             page_ix: 0,
             nonce: 0,
             highlight: None,
+            start_with_os,
         }
     }
 
@@ -595,7 +648,12 @@ impl Render for SettingsView {
                             page_ix: self.page_ix,
                             group_ix: None,
                         })
-                        .pages(pages(&self.layout, self.highlight, cx)),
+                        .pages(pages(
+                            &self.layout,
+                            self.highlight,
+                            self.start_with_os.clone(),
+                            cx,
+                        )),
                 ),
             )
     }
@@ -610,7 +668,12 @@ impl Render for SettingsView {
 /// own search box — which is what those keywords feed — is styled away in
 /// [`SettingsView::render`] so the dialog does not end up with two search
 /// boxes, but the keywords cost nothing and keep it working if it comes back.
-fn pages(layout: &WeakEntity<Layout>, highlight: Option<Setting>, cx: &App) -> Vec<SettingPage> {
+fn pages(
+    layout: &WeakEntity<Layout>,
+    highlight: Option<Setting>,
+    start_with_os: Rc<Cell<StartupStatus>>,
+    cx: &App,
+) -> Vec<SettingPage> {
     let general = t(Str::General, cx);
     let appearance = t(Str::Appearance, cx);
     let lit = |setting: Setting| highlight == Some(setting);
@@ -639,7 +702,11 @@ fn pages(layout: &WeakEntity<Layout>, highlight: Option<Setting>, cx: &App) -> V
         general_group = general_group.item(
             SettingItem::new(
                 t(Str::StartWithOs, cx),
-                highlighted(start_with_os_field(), lit(Setting::StartWithOs), cx),
+                highlighted(
+                    start_with_os_field(start_with_os),
+                    lit(Setting::StartWithOs),
+                    cx,
+                ),
             )
             .description(t(Str::StartWithOsDescription, cx))
             .keywords([general.clone()]),
@@ -1140,19 +1207,31 @@ fn language_field() -> SettingField<SharedString> {
 /// collects are persisted separately, per script — see
 /// `api_explorer::services::consent_store`.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn start_with_os_field() -> SettingField<bool> {
-    SettingField::switch(
-        |_: &App| crate::tray::startup::enabled(),
-        |enabled: bool, cx: &mut App| {
-            if let Err(error) = crate::tray::startup::set_enabled(enabled) {
-                eprintln!("start with OS: {error}");
-            }
-            // The OS registration is the source of truth, so repaint from its
-            // answer rather than retaining a second, potentially stale toggle.
-            cx.refresh_windows();
-        },
-    )
-    .default_value(false)
+fn start_with_os_field(status: Rc<Cell<StartupStatus>>) -> SettingField<SharedString> {
+    SettingField::render(move |_, _, cx| match status.get() {
+        StartupStatus::Loading => div()
+            .child(t(Str::StartWithOsChecking, cx))
+            .into_any_element(),
+        StartupStatus::Unknown => div()
+            .child(t(Str::StartWithOsStatusUnknown, cx))
+            .into_any_element(),
+        StartupStatus::Known(enabled) => {
+            let status = status.clone();
+            Switch::new("start-with-os")
+                .checked(enabled)
+                .on_click(move |enabled: &bool, _, cx: &mut App| {
+                    match crate::tray::startup::set_enabled(*enabled) {
+                        Ok(()) => status.set(StartupStatus::after_successful_set(*enabled)),
+                        Err(error) => {
+                            status.set(StartupStatus::after_failed_set());
+                            eprintln!("start with OS: {error}");
+                        }
+                    }
+                    cx.refresh_windows();
+                })
+                .into_any_element()
+        }
+    })
 }
 
 fn run_scripts_field(cx: &App) -> SettingField<SharedString> {
@@ -1304,7 +1383,9 @@ fn size_value(size: f32) -> SharedString {
 mod tests {
     // Deliberately not `use super::*`: that pulls in `use gpui::*`, whose `test`
     // re-export shadows the standard attribute. See the dodo-build-validate skill.
-    use super::rank;
+    use std::cell::Cell;
+
+    use super::{StartupStatus, rank};
 
     fn labels() -> Vec<String> {
         [
@@ -1385,6 +1466,41 @@ mod tests {
         assert_eq!(super::fold("Giao diện"), "Giao dien");
         assert_eq!(super::fold("Định dạng"), "Dinh dang");
         assert_eq!(super::fold("Border radius"), "Border radius");
+    }
+
+    #[test]
+    fn repeated_start_with_os_renders_do_not_read_the_os_status() {
+        let reads = Cell::new(0);
+        let status = StartupStatus::Loading;
+
+        for _ in 0..3 {
+            assert_eq!(status, StartupStatus::Loading);
+        }
+        assert_eq!(reads.get(), 0);
+
+        let status = StartupStatus::read_once(|| {
+            reads.set(reads.get() + 1);
+            true
+        });
+        for _ in 0..3 {
+            assert_eq!(status, StartupStatus::Known(true));
+        }
+        assert_eq!(reads.get(), 1);
+    }
+
+    #[test]
+    fn start_with_os_write_transitions_keep_only_trustworthy_values() {
+        let mut status = StartupStatus::Loading;
+        assert_eq!(status, StartupStatus::Loading);
+
+        status = StartupStatus::read_once(|| false);
+        assert_eq!(status, StartupStatus::Known(false));
+
+        status = StartupStatus::after_successful_set(true);
+        assert_eq!(status, StartupStatus::Known(true));
+
+        status = StartupStatus::after_failed_set();
+        assert_eq!(status, StartupStatus::Unknown);
     }
 }
 
