@@ -2,8 +2,8 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
-use gpui_component::select::{Select, SelectState};
-use gpui_component::{ActiveTheme, IndexPath, Sizable, StyledExt as _, h_flex, v_flex};
+use gpui_component::tab::{Tab, TabBar};
+use gpui_component::{ActiveTheme, Sizable, StyledExt as _, h_flex, v_flex};
 
 use base64::alphabet;
 use base64::engine::{DecodePaddingMode, Engine as _, GeneralPurpose, GeneralPurposeConfig};
@@ -31,12 +31,12 @@ const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'(')
     .remove(b')');
 
-/// Which conversion the dropdown has selected.
+/// Which conversion the selected tab represents.
 ///
 /// `pub` only so that quick navigation can say which one a pasted value needs;
 /// nothing outside this module constructs an `EncoderDecoder` or reads its
 /// state.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Base64,
     Base64UrlSafe,
@@ -53,33 +53,55 @@ const FORMATS: [(Format, Str); 5] = [
     (Format::Jwt, Str::FormatJwt),
 ];
 
-/// The format dropdown labels in the active language, in `FORMATS` order so a
-/// row index still maps to a format.
-fn format_options(cx: &App) -> Vec<SharedString> {
-    FORMATS
-        .iter()
-        .map(|(_, label)| t(label.clone(), cx))
-        .collect()
+/// The pane layout flips only when two editors would become cramped.
+const HORIZONTAL_PANES_MIN_WIDTH: f32 = 640.;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaneLayout {
+    Horizontal,
+    Vertical,
 }
 
-/// The encoder/decoder view: a format dropdown, an input editor, and an output
-/// area. Base64/URL/Hex convert between the input and a single output editor in
-/// either direction; JWT decodes the pasted token into three separate
+fn pane_layout(width: Pixels) -> PaneLayout {
+    if width >= px(HORIZONTAL_PANES_MIN_WIDTH) {
+        PaneLayout::Horizontal
+    } else {
+        PaneLayout::Vertical
+    }
+}
+
+fn format_at(index: usize) -> Format {
+    FORMATS
+        .get(index)
+        .map(|(format, _)| *format)
+        .unwrap_or(FORMATS[0].0)
+}
+
+fn format_index(format: Format) -> usize {
+    FORMATS
+        .iter()
+        .position(|(candidate, _)| *candidate == format)
+        .unwrap_or_default()
+}
+
+/// The encoder/decoder view: compact format tabs, an input editor, and an
+/// output area. Base64/URL/Hex convert between the input and a single output
+/// editor in either direction; JWT decodes the pasted token into three separate
 /// header/payload/signature areas. Errors are surfaced in a banner rather than
 /// silently producing empty output.
 ///
 /// The error is kept as a [`Str`] rather than a rendered string so that it is
 /// re-translated when the language changes while it is on screen.
 pub struct EncoderDecoder {
-    format: Entity<SelectState<Vec<SharedString>>>,
+    format: Format,
     input: Entity<InputState>,
     output: Entity<InputState>,
     jwt_header: Entity<InputState>,
     jwt_payload: Entity<InputState>,
     jwt_signature: SharedString,
     error: Option<Str>,
-    /// The language the placeholders and dropdown labels were built for. Those
-    /// live inside library state rather than being rebuilt every frame, so
+    /// The language the placeholders were built for. Those live inside library
+    /// state rather than being rebuilt every frame, so
     /// [`Self::sync_language`] pushes new text into them when this goes stale.
     language: Language,
 }
@@ -87,9 +109,6 @@ pub struct EncoderDecoder {
 impl EncoderDecoder {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let language = Language::current(cx);
-        let options = format_options(cx);
-        let format = cx.new(|cx| SelectState::new(options, Some(IndexPath::default()), window, cx));
-
         let input_placeholder = t(Str::EncoderInputPlaceholder, cx);
         let input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -118,7 +137,7 @@ impl EncoderDecoder {
         });
 
         Self {
-            format,
+            format: Format::Base64,
             input,
             output,
             jwt_header,
@@ -147,16 +166,11 @@ impl EncoderDecoder {
                 state.set_placeholder(placeholder, window, cx);
             });
         }
+    }
 
-        let options = format_options(cx);
-        self.format.update(cx, |state, cx| {
-            let selected = state.selected_index(cx);
-            state.set_items(options, window, cx);
-            // `set_items` swaps the item list but leaves the trigger showing the
-            // old item; re-selecting refreshes it from the new list.
-            state.set_selected_index(selected, window, cx);
-            cx.notify();
-        });
+    fn select_format(&mut self, format: Format, cx: &mut Context<Self>) {
+        self.format = format;
+        cx.notify();
     }
 
     /// Selects `format`, loads `text` and decodes it in one act.
@@ -164,7 +178,7 @@ impl EncoderDecoder {
     /// Quick navigation's entry point (`quick_nav`). The format is set rather
     /// than guessed because detection already knows which one it is looking at —
     /// which alphabet a Base64 string is written in, or that it is a JWT — and
-    /// the dropdown has to agree with what the output pane is showing.
+    /// the selected tab has to agree with what the output pane is showing.
     ///
     /// [`Self::decode`] routes JWT to the three-pane view by itself, so there is
     /// one path here and not two.
@@ -175,14 +189,7 @@ impl EncoderDecoder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let row = FORMATS
-            .iter()
-            .position(|(candidate, _)| *candidate == format)
-            .unwrap_or_default();
-        self.format.update(cx, |state, cx| {
-            state.set_selected_index(Some(IndexPath::new(row)), window, cx);
-            cx.notify();
-        });
+        self.select_format(format, cx);
 
         self.input.update(cx, |state, cx| {
             state.set_value(text, window, cx);
@@ -191,17 +198,13 @@ impl EncoderDecoder {
         self.decode(window, cx);
     }
 
-    fn format(&self, cx: &App) -> Format {
+    fn format(&self) -> Format {
         self.format
-            .read(cx)
-            .selected_index(cx)
-            .and_then(|ip| FORMATS.get(ip.row).map(|(f, _)| *f))
-            .unwrap_or(FORMATS[0].0)
     }
 
     fn encode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let source = self.input.read(cx).value().to_string();
-        let result = match self.format(cx) {
+        let result = match self.format() {
             Format::Base64 => Ok(B64_STANDARD.encode(source.as_bytes())),
             Format::Base64UrlSafe => Ok(B64_URL_SAFE.encode(source.as_bytes())),
             Format::Url => Ok(utf8_percent_encode(&source, URI_COMPONENT).to_string()),
@@ -214,7 +217,7 @@ impl EncoderDecoder {
 
     fn decode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let source = self.input.read(cx).value().to_string();
-        let result = match self.format(cx) {
+        let result = match self.format() {
             Format::Base64 => decode_base64(&B64_STANDARD, &source),
             Format::Base64UrlSafe => decode_base64(&B64_URL_SAFE, &source),
             Format::Url => decode_url(&source),
@@ -275,7 +278,7 @@ impl EncoderDecoder {
         })
     }
 
-    fn editor(&self, state: &Entity<InputState>, cx: &App) -> impl IntoElement {
+    fn editor(state: &Entity<InputState>, cx: &App) -> impl IntoElement {
         div()
             .flex_1()
             .min_h_0()
@@ -293,13 +296,98 @@ impl EncoderDecoder {
     fn label(text: Str, cx: &App) -> impl IntoElement {
         div().text_sm().font_bold().child(t(text, cx))
     }
+
+    fn pane(label: Str, state: Entity<InputState>, cx: &App) -> AnyElement {
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .gap_1()
+            .child(Self::label(label, cx))
+            .child(Self::editor(&state, cx))
+            .into_any_element()
+    }
+
+    fn output_pane(
+        is_jwt: bool,
+        output: Entity<InputState>,
+        jwt: (Entity<InputState>, Entity<InputState>, SharedString),
+        cx: &App,
+    ) -> AnyElement {
+        if !is_jwt {
+            return Self::pane(Str::OutputLabel, output, cx);
+        }
+        let (jwt_header, jwt_payload, jwt_signature) = jwt;
+
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .gap_2()
+            .child(Self::pane(Str::JwtHeaderLabel, jwt_header, cx))
+            .child(Self::pane(Str::JwtPayloadLabel, jwt_payload, cx))
+            .child(Self::label(Str::JwtSignatureLabel, cx))
+            .child(
+                div()
+                    .min_h(px(36.))
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(cx.theme().mono_font_size)
+                    .px_3()
+                    .py_2()
+                    .overflow_hidden()
+                    .child(jwt_signature),
+            )
+            .into_any_element()
+    }
+
+    fn panes(
+        layout: PaneLayout,
+        is_jwt: bool,
+        input: Entity<InputState>,
+        output: Entity<InputState>,
+        jwt: (Entity<InputState>, Entity<InputState>, SharedString),
+        cx: &App,
+    ) -> AnyElement {
+        let input = Self::pane(Str::InputLabel, input, cx);
+        let output = Self::output_pane(is_jwt, output, jwt, cx);
+
+        match layout {
+            PaneLayout::Horizontal => h_flex()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .gap_3()
+                .child(input)
+                .child(output)
+                .into_any_element(),
+            PaneLayout::Vertical => v_flex()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .gap_3()
+                .child(input)
+                .child(output)
+                .into_any_element(),
+        }
+    }
 }
 
 impl Render for EncoderDecoder {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_language(window, cx);
 
-        let is_jwt = self.format(cx) == Format::Jwt;
+        let is_jwt = self.format() == Format::Jwt;
+        let selected = format_index(self.format());
+        let input = self.input.clone();
+        let output = self.output.clone();
+        let jwt = (
+            self.jwt_header.clone(),
+            self.jwt_payload.clone(),
+            self.jwt_signature.clone(),
+        );
 
         v_flex()
             .size_full()
@@ -307,9 +395,32 @@ impl Render for EncoderDecoder {
             .child(
                 h_flex()
                     .items_center()
-                    .gap_3()
-                    .child(div().text_sm().child(t(Str::FormatLabel, cx)))
-                    .child(Select::new(&self.format).small().w(px(200.)))
+                    .min_w_0()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("encoder-format-tabs")
+                            .role(Role::Group)
+                            .aria_label(t(Str::FormatLabel, cx))
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(
+                                TabBar::new("encoder-formats")
+                                    .segmented()
+                                    .small()
+                                    .menu(true)
+                                    .selected_index(selected)
+                                    .children(
+                                        FORMATS.iter().map(|(_, label)| {
+                                            Tab::new().label(t(label.clone(), cx))
+                                        }),
+                                    )
+                                    .on_click(cx.listener(|this, index: &usize, _, cx| {
+                                        this.select_format(format_at(*index), cx);
+                                    })),
+                            ),
+                    )
                     .when(!is_jwt, |this| {
                         this.child(
                             Button::new("encode")
@@ -342,30 +453,14 @@ impl Render for EncoderDecoder {
                     }),
             )
             .children(self.error_banner(cx))
-            .child(Self::label(Str::InputLabel, cx))
-            .child(self.editor(&self.input, cx))
-            .when(!is_jwt, |this| {
-                this.child(Self::label(Str::OutputLabel, cx))
-                    .child(self.editor(&self.output, cx))
-            })
-            .when(is_jwt, |this| {
-                this.child(Self::label(Str::JwtHeaderLabel, cx))
-                    .child(self.editor(&self.jwt_header, cx))
-                    .child(Self::label(Str::JwtPayloadLabel, cx))
-                    .child(self.editor(&self.jwt_payload, cx))
-                    .child(Self::label(Str::JwtSignatureLabel, cx))
-                    .child(
-                        div()
-                            .rounded(cx.theme().radius)
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .font_family(cx.theme().mono_font_family.clone())
-                            .text_size(cx.theme().mono_font_size)
-                            .px_3()
-                            .py_2()
-                            .child(self.jwt_signature.clone()),
-                    )
-            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(container_query(move |size, _, cx| {
+                        Self::panes(pane_layout(size.width), is_jwt, input, output, jwt, cx)
+                    })),
+            )
     }
 }
 
@@ -471,4 +566,45 @@ fn decode_jwt_json(part: &str, name: JwtPart) -> Result<String, Str> {
         part: name,
         detail: err.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        B64_STANDARD, FORMATS, PaneLayout, decode_base64, decode_hex, decode_url, encode_hex,
+        format_at, format_index, pane_layout, split_jwt,
+    };
+    use gpui::px;
+
+    #[test]
+    fn tabs_select_each_format_in_order() {
+        for (index, (format, _)) in FORMATS.iter().enumerate() {
+            assert_eq!(format_at(index), *format);
+            assert_eq!(format_index(*format), index);
+        }
+    }
+
+    #[test]
+    fn existing_conversions_still_round_trip() {
+        assert_eq!(decode_base64(&B64_STANDARD, "ZG9kbw").unwrap(), "dodo");
+        assert_eq!(decode_url("dodo%20tool").unwrap(), "dodo tool");
+        assert_eq!(encode_hex(b"dodo"), "646f646f");
+        assert_eq!(decode_hex("64 6f 64 6f").unwrap(), "dodo");
+    }
+
+    #[test]
+    fn jwt_sections_are_header_payload_and_signature() {
+        let (header, payload, signature) =
+            split_jwt("eyJhbGciOiJub25lIn0.eyJzdWIiOiJkb2RvIn0.signature").unwrap();
+
+        assert_eq!(header, "{\n  \"alg\": \"none\"\n}");
+        assert_eq!(payload, "{\n  \"sub\": \"dodo\"\n}");
+        assert_eq!(signature, "signature");
+    }
+
+    #[test]
+    fn panes_stack_only_when_narrow() {
+        assert_eq!(pane_layout(px(640.)), PaneLayout::Horizontal);
+        assert_eq!(pane_layout(px(639.)), PaneLayout::Vertical);
+    }
 }
