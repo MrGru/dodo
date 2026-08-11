@@ -263,10 +263,11 @@ either/or settings are radio groups rather than dropdowns, whose `SelectState` w
 copy of the setting. Native remains the persisted default. Event Tap is the macOS-only alternative in
 `services/event_tap.rs`; Windows instead offers `Keyboard Hook`, a clearly-labelled no-install
 fallback that runs only while dodo does. Both direct-output fallbacks use the existing engine and
-never share transformation with Native TSF/InputMethodKit. `SettingsDocument::backend` is schema 4
-because a host that cannot understand Keyboard Hook must refuse the file rather than compose beside
-it. Event Tap retains its macOS-only accessibility/secure-input/feedback protections; the TSF
-installer has separate tested path data in `models/windows.rs` and is intentionally per-user. The
+never share transformation with Native TSF/InputMethodKit. `SettingsDocument::backend` is schema 4;
+the modifier-only language shortcut raised it to 5, because a host that cannot understand either
+must refuse the file rather than compose beside it. Event Tap retains its macOS-only
+accessibility/secure-input/feedback protections; the TSF installer has separate tested path data in
+`models/windows.rs` and is intentionally per-user. The
 Windows hook API has no normal password-field bit, so it passes secure-desktop and all other
 uncertain input through; `docs/windows-input-method.md` is explicit that this needs captain runtime
 testing. `dodo_ime_ipc::paths` now duplicates both the macOS and Windows data-directory rules and

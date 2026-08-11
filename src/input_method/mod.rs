@@ -272,9 +272,9 @@ impl InputMethod {
         });
     }
 
-    /// Replaces the shortcut only when it cannot consume ordinary typing.
+    /// Replaces the shortcut only when it cannot consume one ordinary key.
     pub fn set_language_switch(shortcut: LanguageSwitch, cx: &mut App) {
-        if shortcut.has_modifier() {
+        if shortcut.is_valid() {
             Self::edit(cx, |document| document.language_switch = shortcut);
         }
     }

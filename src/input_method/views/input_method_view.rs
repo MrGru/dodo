@@ -398,30 +398,68 @@ impl InputMethodView {
             })
     }
 
+    /// Keeps the label at the left while there is room, then wraps its bounded
+    /// control group below it instead of letting either column overlap.
+    fn language_switch_row(cx: &App) -> impl IntoElement {
+        h_flex()
+            .items_start()
+            .flex_wrap()
+            .gap_4()
+            .py_2()
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w(px(180.))
+                    .gap_1()
+                    .child(div().child(t(Str::InputMethodLanguageSwitch, cx)))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(Str::InputMethodLanguageSwitchDescription, cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(260.))
+                    .child(Self::language_switch_choice(cx)),
+            )
+    }
+
     fn language_switch_choice(cx: &App) -> impl IntoElement {
         let shortcut = InputMethod::language_switch(cx);
-        let selected = LanguageSwitchKey::ALL
-            .iter()
-            .position(|key| *key == shortcut.key);
+        let selected = shortcut
+            .key
+            .and_then(|key| {
+                LanguageSwitchKey::ALL
+                    .iter()
+                    .position(|candidate| *candidate == key)
+            })
+            .map(|index| index + 1);
         v_flex()
-            .items_end()
+            .w_full()
             .gap_2()
             .child(
                 RadioGroup::horizontal("input-method-language-switch-key")
                     .children(
-                        LanguageSwitchKey::ALL.map(|key| t(language_switch_key_label(key), cx)),
+                        std::iter::once(t(Str::InputMethodShortcutModifiersOnly, cx)).chain(
+                            LanguageSwitchKey::ALL.map(|key| t(language_switch_key_label(key), cx)),
+                        ),
                     )
                     .selected_index(selected)
                     .on_click(|ix: &usize, _, cx| {
-                        if let Some(key) = LanguageSwitchKey::ALL.get(*ix).copied() {
-                            let mut shortcut = InputMethod::language_switch(cx);
-                            shortcut.key = key;
-                            InputMethod::set_language_switch(shortcut, cx);
-                        }
+                        let mut shortcut = InputMethod::language_switch(cx);
+                        shortcut.key = ix
+                            .checked_sub(1)
+                            .and_then(|index| LanguageSwitchKey::ALL.get(index).copied());
+                        InputMethod::set_language_switch(shortcut, cx);
                     }),
             )
             .child(
                 h_flex()
+                    .w_full()
+                    .flex_wrap()
                     .gap_2()
                     .child(Self::shortcut_modifier(
                         ShortcutModifier::Control,
@@ -678,12 +716,7 @@ impl Render for InputMethodView {
                 Self::language_choice(cx),
                 cx,
             ))
-            .child(Self::row(
-                Str::InputMethodLanguageSwitch,
-                Str::InputMethodLanguageSwitchDescription,
-                Self::language_switch_choice(cx),
-                cx,
-            ));
+            .child(Self::language_switch_row(cx));
         #[cfg(target_os = "windows")]
         let root = root
             .when(InputMethod::backend(cx) == Backend::Native, |this| {

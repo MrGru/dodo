@@ -45,10 +45,10 @@ pub const SETTINGS_FILE: &str = "input-method.json";
 /// actively misread, and an added field with a `#[serde(default)]` is not one.
 ///
 /// Version 2 adds the selected input language. Version 3 adds the backend.
-/// Version 4 adds Windows' Keyboard Hook backend. A host that cannot understand
-/// a selected fallback must refuse the file and pass keys through; accepting it
-/// could put two transformers in one input path.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 4;
+/// Version 4 adds Windows' Keyboard Hook backend. Version 5 allows a
+/// modifier-only language shortcut; older hosts cannot read its null key and
+/// must refuse it rather than silently using a different shortcut.
+pub const SETTINGS_SCHEMA_VERSION: u32 = 5;
 
 /// How a key sequence becomes Vietnamese, as this file spells it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,7 +198,8 @@ impl LanguageSwitchKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct LanguageSwitch {
-    pub key: LanguageSwitchKey,
+    /// `None` cycles when the chosen modifiers are pressed together.
+    pub key: Option<LanguageSwitchKey>,
     pub control: bool,
     pub alt: bool,
     pub shift: bool,
@@ -215,7 +216,7 @@ impl Default for LanguageSwitch {
 impl LanguageSwitch {
     /// Control-Shift-Space is unlikely to type into an application by accident.
     pub const DEFAULT: Self = Self {
-        key: LanguageSwitchKey::Space,
+        key: Some(LanguageSwitchKey::Space),
         control: true,
         alt: false,
         shift: true,
@@ -223,15 +224,20 @@ impl LanguageSwitch {
         beep: false,
     };
 
-    /// Whether this is a safe shortcut rather than a plain typing key.
-    pub fn has_modifier(self) -> bool {
-        self.control || self.alt || self.shift || self.meta
+    /// Whether this cannot trigger on one ordinary key or modifier.
+    pub fn is_valid(self) -> bool {
+        usize::from(self.key.is_some())
+            + usize::from(self.control)
+            + usize::from(self.alt)
+            + usize::from(self.shift)
+            + usize::from(self.meta)
+            >= 2
     }
 
     /// Whether a normalized key press invokes the language switch.
     pub fn matches(self, event: &KeyEvent) -> bool {
-        self.has_modifier()
-            && self.key.matches(event)
+        self.is_valid()
+            && self.key.is_none_or(|key| key.matches(event))
             && self.control == event.modifiers.control
             && self.alt == event.modifiers.alt
             && self.shift == event.modifiers.shift
@@ -655,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_language_shortcut_requires_its_exact_modifiers_and_key() {
+    fn language_shortcuts_require_exact_modifiers_and_an_optional_key() {
         let shortcut = LanguageSwitch::default();
         assert!(
             shortcut.matches(&KeyEvent::character(' ').with_modifiers(Modifiers {
@@ -680,14 +686,35 @@ mod tests {
             }
             .matches(&KeyEvent::character(' '))
         );
+
+        let modifiers_only = LanguageSwitch {
+            key: None,
+            ..shortcut
+        };
+        assert!(modifiers_only.matches(
+            &KeyEvent::special(dodo_ime_core::Key::Other).with_modifiers(Modifiers {
+                control: true,
+                shift: true,
+                ..Modifiers::NONE
+            },)
+        ));
+        assert!(!modifiers_only.matches(
+            &KeyEvent::special(dodo_ime_core::Key::Other).with_modifiers(Modifiers {
+                control: true,
+                ..Modifiers::NONE
+            },)
+        ));
+        assert!(!modifiers_only.matches(
+            &KeyEvent::special(dodo_ime_core::Key::Other).with_modifiers(Modifiers::SHIFT,)
+        ));
     }
 
     #[test]
-    fn active_languages_and_the_shortcut_round_trip_without_changing_the_schema() {
+    fn active_languages_and_shortcuts_round_trip_and_keep_version_four_files_readable() {
         let document = SettingsDocument {
             active_languages: ActiveLanguages::from_languages(LanguageId::ALL).unwrap(),
             language_switch: LanguageSwitch {
-                key: LanguageSwitchKey::Enter,
+                key: Some(LanguageSwitchKey::Enter),
                 control: false,
                 alt: true,
                 shift: false,
@@ -701,9 +728,13 @@ mod tests {
         assert!(json.contains(r#""language_switch":{"key":"enter""#));
         assert_eq!(SettingsDocument::parse(json.as_bytes()).unwrap(), document);
 
-        let old = SettingsDocument::parse(br#"{"version":4,"language":"vi"}"#).unwrap();
+        let old = SettingsDocument::parse(
+            br#"{"version":4,"language":"vi","language_switch":{"key":"tab","control":true}}"#,
+        )
+        .unwrap();
         assert_eq!(old.active_languages, ActiveLanguages::default());
-        assert_eq!(old.language_switch, LanguageSwitch::default());
+        assert_eq!(old.language_switch.key, Some(LanguageSwitchKey::Tab));
+        assert!(old.language_switch.control);
         assert!(
             SettingsDocument::parse(br#"{"version":4,"active_languages":["en","en"]}"#).is_err()
         );
