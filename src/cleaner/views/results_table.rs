@@ -108,6 +108,97 @@ impl ResultsTableDelegate {
         self.selected_ids = selected_ids;
     }
 
+    /// Every row the header checkbox may bulk-select — the same
+    /// [`ItemCapability::MoveToTrash`] gate the per-row checkbox already
+    /// uses, so the header never offers to select a read-only row.
+    fn selectable_ids(&self) -> Vec<CleanableItemId> {
+        self.items
+            .iter()
+            .filter(|item| item.capabilities.contains(&ItemCapability::MoveToTrash))
+            .map(|item| item.id)
+            .collect()
+    }
+
+    /// The header checkbox: unchecked when nothing selectable is selected
+    /// (click selects every selectable row), checked when every selectable
+    /// row is (click clears), and a small hand-drawn indeterminate square —
+    /// `Checkbox` has no tri-state visual at this revision — in between
+    /// (click also selects the rest, the common "finish the selection"
+    /// convention). Empty when there is nothing selectable to bulk-act on.
+    fn render_header_select_cell(&self, cx: &App) -> AnyElement {
+        let selectable = self.selectable_ids();
+        if selectable.is_empty() {
+            return div().into_any_element();
+        }
+        let selected_count = selectable
+            .iter()
+            .filter(|id| self.selected_ids.contains(id))
+            .count();
+        let view = self.view.clone();
+
+        if selected_count == 0 {
+            h_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .child(
+                    Checkbox::new("cleaner-select-all")
+                        .checked(false)
+                        .tooltip(t(Str::CleanerSelectAll, cx))
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |view, cx| view.select_all_visible(cx));
+                        }),
+                )
+                .into_any_element()
+        } else if selected_count == selectable.len() {
+            h_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .child(
+                    Checkbox::new("cleaner-select-all")
+                        .checked(true)
+                        .tooltip(t(Str::CleanerDeselectAll, cx))
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |view, cx| view.deselect_all(cx));
+                        }),
+                )
+                .into_any_element()
+        } else {
+            h_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .id("cleaner-select-all-indeterminate")
+                        .w(px(14.))
+                        .h(px(14.))
+                        .rounded_sm()
+                        .bg(cx.theme().primary)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .tooltip(move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(t(Str::CleanerSelectAll, cx))
+                                .build(window, cx)
+                        })
+                        .child(
+                            div()
+                                .w(px(8.))
+                                .h(px(2.))
+                                .rounded_sm()
+                                .bg(cx.theme().primary_foreground),
+                        )
+                        .on_click(move |_, _, cx| {
+                            let _ = view.update(cx, |view, cx| view.select_all_visible(cx));
+                        }),
+                )
+                .into_any_element()
+        }
+    }
+
     fn render_select_cell(&self, item: &CleanableItem, cx: &App) -> AnyElement {
         if !item.capabilities.contains(&ItemCapability::MoveToTrash) {
             return div().into_any_element();
@@ -327,6 +418,21 @@ impl TableDelegate for ResultsTableDelegate {
 
     fn rows_count(&self, _cx: &App) -> usize {
         self.items.len()
+    }
+
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        if col_ix == 0 {
+            return self.render_header_select_cell(cx);
+        }
+        div()
+            .size_full()
+            .child(self.column(col_ix, cx).name.clone())
+            .into_any_element()
     }
 
     fn column(&self, col_ix: usize, cx: &App) -> Column {

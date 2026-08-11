@@ -1,180 +1,80 @@
 use std::collections::{BTreeMap, HashSet};
+use std::time::SystemTime;
 
 use crate::cleaner::core::category::{CleanerCategory, CleanerSection};
-use crate::cleaner::core::item::CleanableItemId;
+use crate::cleaner::core::item::{CleanableItem, CleanableItemId};
 use crate::cleaner::core::progress::ScanProgress;
 use crate::cleaner::core::report::{CategoryScanResult, CleanupReport, ScanCompleteness};
+use crate::cleaner::core::risk::ItemCapability;
+use crate::cleaner::core::scan_state::ScanState;
 use crate::cleaner::core::selection::selected_by_default_ids;
 
-/// Every state the panel can display. All nine already have a label in
-/// `views::CleanerView`; three of them cannot be reached yet, and each carries
-/// its own reason for that.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CleanerStatus {
-    Idle,
-    /// Entered once a scan gates on Full Disk Access — pending with
-    /// `core::permissions`, which has no implementation in round 1.
-    #[allow(dead_code)]
-    CheckingPermissions,
-    Scanning,
-    Cancelling,
-    PartiallyCompleted,
-    Completed,
-    /// Entered by the destructive cleanup path, which round 1 does not have.
-    #[allow(dead_code)]
-    Cleaning,
-    CompletedWithFailures,
-    /// Set by [`CleanerState::mark_failed`], for a scan that fails as a whole.
-    /// Round 1 cannot fail as a whole: a scanner error is per-category and
-    /// lands in `CompletedWithFailures` instead.
-    #[allow(dead_code)]
-    Failed,
-}
-
-pub struct CleanerState {
-    section: CleanerSection,
-    category: CleanerCategory,
-    status: CleanerStatus,
+/// Everything one category's own scan/selection/cleanup can be doing, kept
+/// apart from every other category's — see the module doc on
+/// [`CleanerState`] for why this is a map entry rather than a shared field.
+#[derive(Default)]
+pub struct CategoryState {
+    scan_state: ScanState,
     progress: Option<ScanProgress>,
-    results: BTreeMap<CleanerCategory, CategoryScanResult>,
+    /// The last completed scan's result. Deliberately *not* cleared by
+    /// [`CleanerState::begin_scan`] — a Rescan keeps the previous result on
+    /// screen (behind the scanning header) until the new one actually lands
+    /// in [`CleanerState::finish_scan`], never mixing the two.
+    result: Option<CategoryScanResult>,
+    /// Set only on [`ScanState::Failed`] — the scanner call itself returned
+    /// an error rather than a result (as opposed to
+    /// [`crate::cleaner::core::report::ScanCompleteness::Partial`], which is
+    /// a *successful* scan reporting that part of it was unreachable). Kept
+    /// as the diagnostic detail behind a friendly summary, per req #18: the
+    /// state itself (`Failed`) is what the UI leads with.
+    error: Option<String>,
     selected_items: HashSet<CleanableItemId>,
-    total_scanned_entries: u64,
-    estimated_reclaimable_bytes: u64,
+    /// Whether a cleanup run is in flight for this category. Orthogonal to
+    /// `scan_state`: cleaning never overwrites it, so a category can be
+    /// `Completed` (the scan) and cleaning (the destructive step) at once,
+    /// and the two are never confused with each other.
+    cleaning: bool,
     cleanup_report: Option<CleanupReport>,
+    started_at: Option<SystemTime>,
+    finished_at: Option<SystemTime>,
 }
 
-impl Default for CleanerState {
-    fn default() -> Self {
-        Self {
-            section: CleanerSection::SmartCare,
-            category: CleanerCategory::SystemJunk,
-            status: CleanerStatus::Idle,
-            progress: None,
-            results: BTreeMap::new(),
-            selected_items: HashSet::new(),
-            total_scanned_entries: 0,
-            estimated_reclaimable_bytes: 0,
-            cleanup_report: None,
-        }
-    }
-}
-
-impl CleanerState {
-    pub fn section(&self) -> CleanerSection {
-        self.section
-    }
-
-    pub fn category(&self) -> CleanerCategory {
-        self.category
-    }
-
-    pub fn status(&self) -> CleanerStatus {
-        self.status
+impl CategoryState {
+    pub fn scan_state(&self) -> ScanState {
+        self.scan_state
     }
 
     pub fn progress(&self) -> Option<&ScanProgress> {
         self.progress.as_ref()
     }
 
-    pub fn set_section(&mut self, section: CleanerSection) {
-        self.section = section;
-        if !CleanerCategory::categories_for(section).any(|category| category == self.category) {
-            self.category = CleanerCategory::categories_for(section)
-                .next()
-                .unwrap_or(CleanerCategory::SystemJunk);
-        }
+    pub fn result(&self) -> Option<&CategoryScanResult> {
+        self.result.as_ref()
     }
 
-    pub fn set_category(&mut self, category: CleanerCategory) {
-        self.section = category.section();
-        self.category = category;
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
-    pub fn begin_scan(&mut self) {
-        self.status = CleanerStatus::Scanning;
-        self.progress = None;
-        self.results.clear();
-        self.selected_items.clear();
-        self.total_scanned_entries = 0;
-        self.estimated_reclaimable_bytes = 0;
-        self.cleanup_report = None;
+    pub fn cleaning(&self) -> bool {
+        self.cleaning
     }
 
-    pub fn begin_cancelling(&mut self) {
-        if self.status == CleanerStatus::Scanning {
-            self.status = CleanerStatus::Cancelling;
-        }
+    pub fn cleanup_report(&self) -> Option<&CleanupReport> {
+        self.cleanup_report.as_ref()
     }
 
-    pub fn update_progress(&mut self, progress: ScanProgress) {
-        self.progress = Some(progress);
+    pub fn started_at(&self) -> Option<SystemTime> {
+        self.started_at
     }
 
-    pub fn push_result(&mut self, result: CategoryScanResult) {
-        self.total_scanned_entries += result.scanned_entries;
-        self.estimated_reclaimable_bytes += result.estimated_reclaimable_bytes;
-        self.selected_items
-            .extend(selected_by_default_ids(&result.items));
-        self.results.insert(result.category, result);
+    pub fn finished_at(&self) -> Option<SystemTime> {
+        self.finished_at
     }
 
-    pub fn finish_scan(&mut self, cancelled: bool, had_failures: bool) {
-        self.progress = None;
-        self.status = if cancelled {
-            CleanerStatus::PartiallyCompleted
-        } else if had_failures {
-            CleanerStatus::CompletedWithFailures
-        } else if self
-            .results
-            .values()
-            .any(|result| !matches!(result.completeness, ScanCompleteness::Complete))
-        {
-            CleanerStatus::PartiallyCompleted
-        } else {
-            CleanerStatus::Completed
-        };
-    }
-
-    /// Abandon the run entirely. Uncalled in round 1 for the reason given on
-    /// [`CleanerStatus::Failed`]: the only failures that exist are per-category
-    /// and are reported through `finish_scan(_, had_failures)`.
-    #[allow(dead_code)]
-    pub fn mark_failed(&mut self) {
-        self.progress = None;
-        self.status = CleanerStatus::Failed;
-    }
-
-    pub fn result_for(&self, category: CleanerCategory) -> Option<&CategoryScanResult> {
-        self.results.get(&category)
-    }
-
-    pub fn toggle_selected(&mut self, id: CleanableItemId) {
-        if !self.selected_items.remove(&id) {
-            self.selected_items.insert(id);
-        }
-    }
-
-    pub fn clear_selection_for(&mut self, category: CleanerCategory) {
-        if let Some(result) = self.results.get(&category) {
-            for item in &result.items {
-                self.selected_items.remove(&item.id);
-            }
-        }
-    }
-
-    pub fn select_safe_items_for(&mut self, category: CleanerCategory) {
-        if let Some(result) = self.results.get(&category) {
-            for item in &result.items {
-                if selected_by_default_ids(std::slice::from_ref(item)).contains(&item.id) {
-                    self.selected_items.insert(item.id);
-                }
-            }
-        }
-    }
-
-    pub fn selected_count_for(&self, category: CleanerCategory) -> usize {
-        self.results
-            .get(&category)
+    pub fn selected_count(&self) -> usize {
+        self.result
+            .as_ref()
             .map(|result| {
                 result
                     .items
@@ -185,9 +85,23 @@ impl CleanerState {
             .unwrap_or(0)
     }
 
-    pub fn selected_ids_for(&self, category: CleanerCategory) -> Vec<CleanableItemId> {
-        self.results
-            .get(&category)
+    pub fn selected_reclaimable_bytes(&self) -> u64 {
+        self.result
+            .as_ref()
+            .map(|result| {
+                result
+                    .items
+                    .iter()
+                    .filter(|item| self.selected_items.contains(&item.id))
+                    .map(|item| item.logical_size)
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+
+    pub fn selected_ids(&self) -> Vec<CleanableItemId> {
+        self.result
+            .as_ref()
             .map(|result| {
                 result
                     .items
@@ -199,219 +113,553 @@ impl CleanerState {
             .unwrap_or_default()
     }
 
-    pub fn begin_cleaning(&mut self) {
-        self.status = CleanerStatus::Cleaning;
-        self.cleanup_report = None;
-    }
-
-    pub fn finish_cleaning(&mut self, report: CleanupReport) {
-        for success in &report.successes {
-            self.selected_items.remove(&success.id);
-            for result in self.results.values_mut() {
-                result.items.retain(|item| item.id != success.id);
-            }
-        }
-        self.estimated_reclaimable_bytes = self
-            .results
-            .values()
+    /// The full items behind [`Self::selected_ids`], for handing straight to
+    /// the cleanup pipeline (`macos::cleanup::cleanup_items` and friends).
+    pub fn selected_items(&self) -> Vec<CleanableItem> {
+        self.result
+            .as_ref()
             .map(|result| {
                 result
                     .items
                     .iter()
-                    .map(|item| item.logical_size)
-                    .sum::<u64>()
+                    .filter(|item| self.selected_items.contains(&item.id))
+                    .cloned()
+                    .collect()
             })
-            .sum();
-        self.cleanup_report = Some(report.clone());
-        self.status = if report.failures.is_empty() {
-            CleanerStatus::Completed
-        } else {
-            CleanerStatus::CompletedWithFailures
-        };
+            .unwrap_or_default()
+    }
+}
+
+/// Every category's own scan/selection state, plus the sidebar's navigation
+/// state — kept as three independent axes on purpose (the ticket's own
+/// architectural rule): which category is on screen
+/// ([`Self::selected_category`]), which sections are expanded
+/// ([`Self::expanded_sections`]), and what each category's own scan/selection
+/// is doing ([`Self::categories`]). None of the three is derived from
+/// another: selecting a category never touches expansion, expanding a
+/// section never touches any category's scan, and switching category never
+/// touches — or even reads — any other category's [`CategoryState`].
+pub struct CleanerState {
+    selected_category: CleanerCategory,
+    expanded_sections: HashSet<CleanerSection>,
+    categories: BTreeMap<CleanerCategory, CategoryState>,
+}
+
+impl Default for CleanerState {
+    fn default() -> Self {
+        Self {
+            selected_category: CleanerCategory::ALL[0],
+            expanded_sections: CleanerSection::ALL.into_iter().collect(),
+            categories: CleanerCategory::ALL
+                .into_iter()
+                .map(|category| (category, CategoryState::default()))
+                .collect(),
+        }
+    }
+}
+
+impl CleanerState {
+    pub fn selected_category(&self) -> CleanerCategory {
+        self.selected_category
     }
 
-    /// Removes one item from a category's results and from the current
-    /// selection, without a rescan and without going through the cleanup
-    /// pipeline. Used by "Keep" (Phase 10): once the ignore list has been
-    /// told to remember the path (`views::cleaner_view::CleanerView::mark_kept`),
-    /// the item disappears from view immediately rather than waiting for the
-    /// next scan to leave it out.
+    pub fn set_selected_category(&mut self, category: CleanerCategory) {
+        self.selected_category = category;
+    }
+
+    pub fn is_section_expanded(&self, section: CleanerSection) -> bool {
+        self.expanded_sections.contains(&section)
+    }
+
+    pub fn toggle_section_expanded(&mut self, section: CleanerSection) {
+        if !self.expanded_sections.remove(&section) {
+            self.expanded_sections.insert(section);
+        }
+    }
+
+    pub fn category(&self, category: CleanerCategory) -> &CategoryState {
+        // Every `CleanerCategory::ALL` entry is seeded in `default()` and
+        // nothing ever removes one, so this is always present.
+        self.categories
+            .get(&category)
+            .expect("every CleanerCategory has a seeded CategoryState")
+    }
+
+    fn category_mut(&mut self, category: CleanerCategory) -> &mut CategoryState {
+        self.categories
+            .get_mut(&category)
+            .expect("every CleanerCategory has a seeded CategoryState")
+    }
+
+    pub fn begin_scan(&mut self, category: CleanerCategory) {
+        let state = self.category_mut(category);
+        state.scan_state = ScanState::Scanning;
+        state.progress = None;
+        state.cleanup_report = None;
+        state.started_at = Some(SystemTime::now());
+        state.finished_at = None;
+        // `result` and `selected_items` are deliberately untouched — see the
+        // field doc on `CategoryState::result`.
+    }
+
+    pub fn begin_cancelling(&mut self, category: CleanerCategory) {
+        let state = self.category_mut(category);
+        if state.scan_state == ScanState::Scanning {
+            state.scan_state = ScanState::Cancelling;
+        }
+    }
+
+    pub fn update_progress(&mut self, category: CleanerCategory, progress: ScanProgress) {
+        self.category_mut(category).progress = Some(progress);
+    }
+
+    /// Ends this category's scan. `result` is `None` when the scan was
+    /// cancelled or errored before producing one; otherwise it replaces
+    /// whatever the previous scan left and the selection resets to that
+    /// result's own defaults — never a mix of old selection and new items.
+    pub fn finish_scan(
+        &mut self,
+        category: CleanerCategory,
+        result: Option<CategoryScanResult>,
+        cancelled: bool,
+        error: Option<String>,
+    ) {
+        let had_error = error.is_some();
+        let state = self.category_mut(category);
+        state.progress = None;
+        state.finished_at = Some(SystemTime::now());
+        state.error = error;
+        match result {
+            Some(result) => {
+                let partial = matches!(result.completeness, ScanCompleteness::Partial { .. });
+                let has_warnings = !result.warnings.is_empty();
+                state.scan_state =
+                    ScanState::from_outcome(cancelled, had_error, partial, has_warnings);
+                state.selected_items = selected_by_default_ids(&result.items);
+                state.result = Some(result);
+            }
+            None => {
+                state.scan_state = ScanState::from_outcome(cancelled, had_error, false, false);
+            }
+        }
+    }
+
+    pub fn toggle_selected(&mut self, category: CleanerCategory, id: CleanableItemId) {
+        let state = self.category_mut(category);
+        if !state.selected_items.remove(&id) {
+            state.selected_items.insert(id);
+        }
+    }
+
+    pub fn select_safe_items(&mut self, category: CleanerCategory) {
+        let state = self.category_mut(category);
+        if let Some(result) = state.result.as_ref() {
+            state
+                .selected_items
+                .extend(selected_by_default_ids(&result.items));
+        }
+    }
+
+    pub fn clear_selection(&mut self, category: CleanerCategory) {
+        self.category_mut(category).selected_items.clear();
+    }
+
+    /// Every row the header checkbox is allowed to select in bulk: items
+    /// carrying [`ItemCapability::MoveToTrash`], the same capability the
+    /// per-row checkbox already gates on (`views::results_table`). A row
+    /// with no such capability (read-only informational rows) never gets
+    /// bulk-selected, matching what the per-row checkbox already refuses.
+    pub fn select_all(&mut self, category: CleanerCategory) {
+        let state = self.category_mut(category);
+        if let Some(result) = state.result.as_ref() {
+            state.selected_items = result
+                .items
+                .iter()
+                .filter(|item| item.capabilities.contains(&ItemCapability::MoveToTrash))
+                .map(|item| item.id)
+                .collect();
+        }
+    }
+
+    pub fn begin_cleaning(&mut self, category: CleanerCategory) {
+        let state = self.category_mut(category);
+        state.cleaning = true;
+        state.cleanup_report = None;
+    }
+
+    pub fn finish_cleaning(&mut self, category: CleanerCategory, report: CleanupReport) {
+        let state = self.category_mut(category);
+        state.cleaning = false;
+        for success in &report.successes {
+            state.selected_items.remove(&success.id);
+            if let Some(result) = state.result.as_mut() {
+                result.items.retain(|item| item.id != success.id);
+            }
+        }
+        state.cleanup_report = Some(report);
+    }
+
+    /// Removes one item from a category's result and selection, without a
+    /// rescan and without going through the cleanup pipeline. Used by "Keep"
+    /// (`views::cleaner_view::CleanerView::mark_kept`): once the ignore list
+    /// has recorded the path, the item disappears from view immediately
+    /// rather than waiting for the next scan to leave it out.
     pub fn remove_item(&mut self, category: CleanerCategory, id: CleanableItemId) {
-        if let Some(result) = self.results.get_mut(&category) {
+        let state = self.category_mut(category);
+        if let Some(result) = state.result.as_mut() {
             result.items.retain(|item| item.id != id);
         }
-        self.selected_items.remove(&id);
-    }
-
-    pub fn cleanup_report(&self) -> Option<&CleanupReport> {
-        self.cleanup_report.as_ref()
-    }
-
-    pub fn total_scanned_entries(&self) -> u64 {
-        self.total_scanned_entries
-    }
-
-    pub fn estimated_reclaimable_bytes(&self) -> u64 {
-        self.estimated_reclaimable_bytes
+        state.selected_items.remove(&id);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::cleaner::core::category::{CleanerCategory, CleanerSection};
+    use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata};
     use crate::cleaner::core::progress::{ScanPhase, ScanProgress};
-    use crate::cleaner::core::report::{CategoryScanResult, ScanCompleteness};
-    use crate::cleaner::state::{CleanerState, CleanerStatus};
+    use crate::cleaner::core::report::{CategoryScanResult, PartialScanReason, ScanCompleteness};
+    use crate::cleaner::core::risk::{ItemCapability, RiskLevel, SelectionPolicy};
+    use crate::cleaner::core::scan_state::ScanState;
+    use crate::cleaner::state::CleanerState;
 
-    #[test]
-    fn section_switch_moves_to_the_first_category_in_that_section() {
-        let mut state = CleanerState::default();
-        state.set_category(CleanerCategory::SystemJunk);
-        state.set_section(CleanerSection::Applications);
-
-        assert_eq!(state.section(), CleanerSection::Applications);
-        assert_eq!(state.category(), CleanerCategory::InstalledApps);
-    }
-
-    #[test]
-    fn scan_lifecycle_transitions_and_accumulates_totals() {
-        let mut state = CleanerState::default();
-        state.begin_scan();
-        assert_eq!(state.status(), CleanerStatus::Scanning);
-
-        state.update_progress(ScanProgress {
-            category: CleanerCategory::SystemJunk,
-            phase: ScanPhase::Traversing,
-            current_path: None,
-            scanned_entries: 10,
-            discovered_items: 2,
-            discovered_bytes: 2048,
-        });
-        assert!(state.progress().is_some());
-
-        state.push_result(CategoryScanResult {
-            category: CleanerCategory::SystemJunk,
-            items: Vec::new(),
-            scanned_entries: 10,
-            estimated_reclaimable_bytes: 2048,
-            warnings: Vec::new(),
-            completeness: ScanCompleteness::Complete,
-        });
-        state.finish_scan(false, false);
-
-        assert_eq!(state.status(), CleanerStatus::Completed);
-        assert!(state.progress().is_none());
-        assert_eq!(state.total_scanned_entries(), 10);
-        assert_eq!(state.estimated_reclaimable_bytes(), 2048);
-    }
-
-    #[test]
-    fn cancellation_sets_partially_completed() {
-        let mut state = CleanerState::default();
-        state.begin_scan();
-        state.begin_cancelling();
-        assert_eq!(state.status(), CleanerStatus::Cancelling);
-
-        state.finish_scan(true, false);
-        assert_eq!(state.status(), CleanerStatus::PartiallyCompleted);
-    }
-
-    #[test]
-    fn partial_results_set_partially_completed_without_runtime_failures() {
-        let mut state = CleanerState::default();
-        state.begin_scan();
-        state.push_result(CategoryScanResult {
-            category: CleanerCategory::UserCache,
-            items: Vec::new(),
-            scanned_entries: 0,
-            estimated_reclaimable_bytes: 0,
-            warnings: Vec::new(),
-            completeness: ScanCompleteness::Partial {
-                skipped_roots: vec!["/tmp/missing".into()],
-                reason: crate::cleaner::core::report::PartialScanReason::RootUnavailable,
-            },
-        });
-
-        state.finish_scan(false, false);
-        assert_eq!(state.status(), CleanerStatus::PartiallyCompleted);
-    }
-
-    #[test]
-    fn selected_by_default_items_are_tracked_and_can_be_cleared() {
-        let mut state = CleanerState::default();
-        state.push_result(CategoryScanResult {
-            category: CleanerCategory::UserCache,
-            items: vec![crate::cleaner::core::item::CleanableItem {
-                id: crate::cleaner::core::item::CleanableItemId(1),
-                category: CleanerCategory::UserCache,
-                group: None,
-                display_name: "Cache".into(),
-                path: "/tmp/cache".into(),
-                logical_size: 1,
-                allocated_size: None,
-                modified_at: None,
-                last_accessed_at: None,
-                risk: crate::cleaner::core::risk::RiskLevel::SafeRecreatable,
-                selection_policy: crate::cleaner::core::risk::SelectionPolicy::SelectedByDefault,
-                capabilities: Vec::new(),
-                explanation: String::new(),
-                warnings: Vec::new(),
-                metadata: crate::cleaner::core::item::ItemMetadata::Generic,
-            }],
-            scanned_entries: 1,
-            estimated_reclaimable_bytes: 1,
-            warnings: Vec::new(),
-            completeness: ScanCompleteness::Complete,
-        });
-
-        assert_eq!(state.selected_count_for(CleanerCategory::UserCache), 1);
-        state.clear_selection_for(CleanerCategory::UserCache);
-        assert_eq!(state.selected_count_for(CleanerCategory::UserCache), 0);
-    }
-
-    #[test]
-    fn remove_item_hides_it_immediately_without_a_rescan() {
-        use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata};
-        use crate::cleaner::core::risk::{RiskLevel, SelectionPolicy};
-
-        let mut state = CleanerState::default();
-        let item = CleanableItem {
-            id: CleanableItemId(7),
-            category: CleanerCategory::OrphanedFiles,
+    fn sample_item(id: u64, category: CleanerCategory, risk: RiskLevel) -> CleanableItem {
+        CleanableItem {
+            id: CleanableItemId(id),
+            category,
             group: None,
-            display_name: "Orphan".into(),
-            path: "/tmp/orphan".into(),
+            display_name: format!("item-{id}"),
+            path: format!("/tmp/item-{id}").into(),
             logical_size: 10,
             allocated_size: None,
             modified_at: None,
             last_accessed_at: None,
-            risk: RiskLevel::ReviewRecommended,
-            selection_policy: SelectionPolicy::SelectedByDefault,
-            capabilities: Vec::new(),
+            risk,
+            selection_policy: match risk {
+                RiskLevel::SafeRecreatable => SelectionPolicy::SelectedByDefault,
+                _ => SelectionPolicy::NotSelectedByDefault,
+            },
+            capabilities: vec![ItemCapability::MoveToTrash],
             explanation: String::new(),
             warnings: Vec::new(),
             metadata: ItemMetadata::Generic,
-        };
-        state.push_result(CategoryScanResult {
-            category: CleanerCategory::OrphanedFiles,
-            items: vec![item],
-            scanned_entries: 1,
-            estimated_reclaimable_bytes: 10,
+        }
+    }
+
+    fn complete_result(category: CleanerCategory, items: Vec<CleanableItem>) -> CategoryScanResult {
+        CategoryScanResult {
+            category,
+            estimated_reclaimable_bytes: items.iter().map(|item| item.logical_size).sum(),
+            scanned_entries: items.len() as u64,
+            items,
             warnings: Vec::new(),
             completeness: ScanCompleteness::Complete,
-        });
-        assert_eq!(state.selected_count_for(CleanerCategory::OrphanedFiles), 1);
+        }
+    }
 
-        state.remove_item(CleanerCategory::OrphanedFiles, CleanableItemId(7));
+    #[test]
+    fn expanding_one_section_does_not_affect_another() {
+        let mut state = CleanerState::default();
+        // All three start expanded (the mockup's default), so collapse one
+        // first to make the independence observable.
+        state.toggle_section_expanded(CleanerSection::Cleanup);
+        assert!(!state.is_section_expanded(CleanerSection::Cleanup));
+        assert!(state.is_section_expanded(CleanerSection::Advanced));
 
-        assert_eq!(state.selected_count_for(CleanerCategory::OrphanedFiles), 0);
+        state.toggle_section_expanded(CleanerSection::Advanced);
+        assert!(!state.is_section_expanded(CleanerSection::Advanced));
+        assert!(
+            !state.is_section_expanded(CleanerSection::Cleanup),
+            "collapsing Advanced must not re-expand Cleanup"
+        );
+        assert!(state.is_section_expanded(CleanerSection::Applications));
+    }
+
+    #[test]
+    fn selecting_a_category_does_not_alter_expansion_state() {
+        let mut state = CleanerState::default();
+        state.toggle_section_expanded(CleanerSection::Advanced);
+        state.set_selected_category(CleanerCategory::DockerCache);
+
+        assert_eq!(state.selected_category(), CleanerCategory::DockerCache);
+        assert!(!state.is_section_expanded(CleanerSection::Advanced));
+        assert!(state.is_section_expanded(CleanerSection::Cleanup));
+    }
+
+    #[test]
+    fn switching_category_does_not_lose_scan_results() {
+        let mut state = CleanerState::default();
+        state.begin_scan(CleanerCategory::SystemJunk);
+        state.finish_scan(
+            CleanerCategory::SystemJunk,
+            Some(complete_result(
+                CleanerCategory::SystemJunk,
+                vec![sample_item(
+                    1,
+                    CleanerCategory::SystemJunk,
+                    RiskLevel::SafeRecreatable,
+                )],
+            )),
+            false,
+            None,
+        );
+
+        state.set_selected_category(CleanerCategory::DockerCache);
+        state.set_selected_category(CleanerCategory::SystemJunk);
+
         assert!(
             state
-                .result_for(CleanerCategory::OrphanedFiles)
+                .category(CleanerCategory::SystemJunk)
+                .result()
+                .is_some()
+        );
+        assert_eq!(
+            state.category(CleanerCategory::SystemJunk).scan_state(),
+            ScanState::Completed
+        );
+    }
+
+    #[test]
+    fn two_categories_can_be_scanning_at_once() {
+        let mut state = CleanerState::default();
+        state.begin_scan(CleanerCategory::SystemJunk);
+        state.begin_scan(CleanerCategory::DockerCache);
+
+        assert_eq!(
+            state.category(CleanerCategory::SystemJunk).scan_state(),
+            ScanState::Scanning
+        );
+        assert_eq!(
+            state.category(CleanerCategory::DockerCache).scan_state(),
+            ScanState::Scanning
+        );
+    }
+
+    #[test]
+    fn cancelling_one_category_does_not_cancel_another() {
+        let mut state = CleanerState::default();
+        state.begin_scan(CleanerCategory::SystemJunk);
+        state.begin_scan(CleanerCategory::DockerCache);
+
+        state.begin_cancelling(CleanerCategory::SystemJunk);
+
+        assert_eq!(
+            state.category(CleanerCategory::SystemJunk).scan_state(),
+            ScanState::Cancelling
+        );
+        assert_eq!(
+            state.category(CleanerCategory::DockerCache).scan_state(),
+            ScanState::Scanning,
+            "cancelling System Junk must not touch Docker Cache's own scan"
+        );
+    }
+
+    #[test]
+    fn select_safe_never_selects_a_non_safe_item() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::UserCache;
+        let safe = sample_item(1, category, RiskLevel::SafeRecreatable);
+        let risky = sample_item(2, category, RiskLevel::ReviewRecommended);
+        state.finish_scan(
+            category,
+            Some(complete_result(category, vec![safe, risky])),
+            false,
+            None,
+        );
+        state.clear_selection(category);
+
+        state.select_safe_items(category);
+
+        let selected = state.category(category).selected_ids();
+        assert_eq!(selected, vec![CleanableItemId(1)]);
+    }
+
+    #[test]
+    fn selected_count_and_reclaimable_bytes_are_correct() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::UserCache;
+        state.finish_scan(
+            category,
+            Some(complete_result(
+                category,
+                vec![
+                    sample_item(1, category, RiskLevel::SafeRecreatable),
+                    sample_item(2, category, RiskLevel::SafeRecreatable),
+                ],
+            )),
+            false,
+            None,
+        );
+
+        assert_eq!(state.category(category).selected_count(), 2);
+        assert_eq!(state.category(category).selected_reclaimable_bytes(), 20);
+    }
+
+    #[test]
+    fn header_select_all_only_selects_items_with_move_to_trash() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::UserCache;
+        let mut read_only = sample_item(2, category, RiskLevel::SafeRecreatable);
+        read_only.capabilities = vec![ItemCapability::CopyPath];
+        state.finish_scan(
+            category,
+            Some(complete_result(
+                category,
+                vec![
+                    sample_item(1, category, RiskLevel::SafeRecreatable),
+                    read_only,
+                ],
+            )),
+            false,
+            None,
+        );
+        state.clear_selection(category);
+
+        state.select_all(category);
+
+        assert_eq!(
+            state.category(category).selected_ids(),
+            vec![CleanableItemId(1)]
+        );
+    }
+
+    #[test]
+    fn a_cancelled_scan_does_not_appear_completed() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::SystemJunk;
+        state.begin_scan(category);
+        state.begin_cancelling(category);
+        state.finish_scan(category, None, true, None);
+
+        assert_eq!(state.category(category).scan_state(), ScanState::Cancelled);
+    }
+
+    #[test]
+    fn a_failed_scan_does_not_appear_completed() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::SystemJunk;
+        state.begin_scan(category);
+        state.finish_scan(category, None, false, Some("boom".to_string()));
+
+        assert_eq!(state.category(category).scan_state(), ScanState::Failed);
+    }
+
+    #[test]
+    fn a_fresh_scan_replaces_stale_results_rather_than_mixing_them() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::SystemJunk;
+        state.finish_scan(
+            category,
+            Some(complete_result(
+                category,
+                vec![sample_item(1, category, RiskLevel::SafeRecreatable)],
+            )),
+            false,
+            None,
+        );
+
+        // A rescan starts: the old result must stay put until the new one
+        // actually lands (req #20) — not disappear mid-scan.
+        state.begin_scan(category);
+        assert!(state.category(category).result().is_some());
+
+        state.finish_scan(
+            category,
+            Some(complete_result(
+                category,
+                vec![sample_item(2, category, RiskLevel::SafeRecreatable)],
+            )),
+            false,
+            None,
+        );
+
+        let result = state.category(category).result().expect("has a result");
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].id, CleanableItemId(2));
+    }
+
+    #[test]
+    fn permission_denied_scans_are_partially_completed() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::MailFiles;
+        state.finish_scan(
+            category,
+            Some(CategoryScanResult {
+                category,
+                items: Vec::new(),
+                scanned_entries: 0,
+                estimated_reclaimable_bytes: 0,
+                warnings: Vec::new(),
+                completeness: ScanCompleteness::Partial {
+                    skipped_roots: vec!["/tmp/mail".into()],
+                    reason: PartialScanReason::PermissionDenied,
+                },
+            }),
+            false,
+            None,
+        );
+
+        assert_eq!(
+            state.category(category).scan_state(),
+            ScanState::PartiallyCompleted
+        );
+    }
+
+    #[test]
+    fn remove_item_hides_it_immediately_without_a_rescan() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::OrphanedFiles;
+        state.finish_scan(
+            category,
+            Some(complete_result(
+                category,
+                vec![sample_item(7, category, RiskLevel::ReviewRecommended)],
+            )),
+            false,
+            None,
+        );
+        assert_eq!(state.category(category).selected_count(), 0);
+
+        state.remove_item(category, CleanableItemId(7));
+
+        assert!(
+            state
+                .category(category)
+                .result()
                 .expect("category still has a result")
                 .items
                 .is_empty(),
             "the kept item must be gone from the visible results"
+        );
+    }
+
+    #[test]
+    fn progress_updates_are_scoped_to_their_own_category() {
+        let mut state = CleanerState::default();
+        state.begin_scan(CleanerCategory::SystemJunk);
+        state.update_progress(
+            CleanerCategory::SystemJunk,
+            ScanProgress {
+                category: CleanerCategory::SystemJunk,
+                phase: ScanPhase::Traversing,
+                current_path: None,
+                scanned_entries: 10,
+                discovered_items: 2,
+                discovered_bytes: 2048,
+            },
+        );
+
+        assert!(
+            state
+                .category(CleanerCategory::SystemJunk)
+                .progress()
+                .is_some()
+        );
+        assert!(
+            state
+                .category(CleanerCategory::DockerCache)
+                .progress()
+                .is_none()
         );
     }
 }

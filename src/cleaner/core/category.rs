@@ -1,6 +1,5 @@
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Ord, PartialOrd)]
 pub enum CleanerSection {
-    SmartCare,
     Cleanup,
     Applications,
     Advanced,
@@ -25,8 +24,7 @@ pub enum CleanerCategory {
 }
 
 impl CleanerSection {
-    pub const ALL: [CleanerSection; 4] = [
-        CleanerSection::SmartCare,
+    pub const ALL: [CleanerSection; 3] = [
         CleanerSection::Cleanup,
         CleanerSection::Applications,
         CleanerSection::Advanced,

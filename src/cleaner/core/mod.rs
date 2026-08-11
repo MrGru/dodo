@@ -16,5 +16,6 @@ pub mod risk;
 pub mod safety;
 pub mod scan_context;
 pub mod scan_root;
+pub mod scan_state;
 pub mod scanner;
 pub mod selection;

@@ -121,24 +121,16 @@ pub enum Str {
     CleanerTitle,
 
     // Cleaner.
-    CleanerSidebarTitle,
     CleanerUnsupportedPlatform,
     CleanerScan,
     CleanerCancelScan,
-    CleanerEstimatedReclaimable,
-    CleanerEntriesScanned,
     CleanerNoResultsYet,
-    CleanerStatusProgress,
-    CleanerStatusIdle,
-    CleanerStatusCheckingPermissions,
     CleanerStatusScanning,
     CleanerStatusCancelling,
     CleanerStatusPartial,
     CleanerStatusCompleted,
     CleanerStatusCleaning,
-    CleanerStatusCompletedWithFailures,
     CleanerStatusFailed,
-    CleanerSectionSmartCare,
     CleanerSectionCleanup,
     CleanerSectionApplications,
     CleanerSectionAdvanced,
@@ -1246,9 +1238,7 @@ pub enum Str {
     CleanerSelectItem,
     CleanerDeselectItem,
     CleanerSelectSafeItems,
-    CleanerClearSelection,
     CleanerCleanSelected,
-    CleanerSelectedCount(usize),
     CleanerCleanupReport,
     CleanerCleanupConfirmTitle,
     CleanerCleanupConfirmMessage {
@@ -1259,15 +1249,7 @@ pub enum Str {
     CleanerCleanupFailureCount(usize),
     CleanerPermissionTitle,
     CleanerPermissionExplanation,
-    CleanerPermissionRecheck,
     CleanerPermissionOpenSettings,
-    CleanerPermissionRevealApp,
-    CleanerPermissionUnknown,
-    CleanerPermissionChecking,
-    CleanerPermissionGranted,
-    CleanerPermissionDenied,
-    CleanerPermissionRestricted,
-    CleanerPermissionRequiresRestart,
     CleanerPartialPermissionDenied,
     CleanerPartialRootUnavailable,
     CleanerPartialCancelled,
@@ -1482,6 +1464,33 @@ pub enum Str {
         allow(dead_code, reason = "Windows-only input-method copy.")
     )]
     InputMethodUninstalling,
+
+    // Cleaner UX/state refactor — appended rather than slotted in beside the
+    // strings they replace, so no existing `position()` slot is renumbered.
+    CleanerScanDescription,
+    CleanerEntriesScannedCount(u64),
+    CleanerBytesDiscovered(String),
+    CleanerReclaimableAmount(String),
+    CleanerItemsFound(usize),
+    CleanerSafeItemsCount(usize),
+    CleanerWarningCount(usize),
+    CleanerSelectedSummary {
+        count: usize,
+        size: String,
+    },
+    CleanerCleanCount {
+        count: usize,
+        size: String,
+    },
+    CleanerScanWarningsSummary(usize),
+    CleanerScanWarningsShowDetails,
+    CleanerScanWarningsHideDetails,
+    CleanerRescan,
+    CleanerSelectAll,
+    CleanerDeselectAll,
+    CleanerPermissionNotNow,
+    CleanerStatusCompletedWithWarnings,
+    CleanerStatusCancelled,
 }
 
 impl Str {
@@ -1555,8 +1564,6 @@ impl Str {
             (Str::CleanerTitle, Language::English) => "Cleaner".into(),
             (Str::CleanerTitle, Language::Vietnamese) => "Dọn dẹp".into(),
 
-            (Str::CleanerSidebarTitle, Language::English) => "Cleaner sections".into(),
-            (Str::CleanerSidebarTitle, Language::Vietnamese) => "Mục dọn dẹp".into(),
             (Str::CleanerUnsupportedPlatform, Language::English) => {
                 "Cleaner is currently available on macOS. Windows and Linux support will be added in future versions.".into()
             }
@@ -1567,29 +1574,11 @@ impl Str {
             (Str::CleanerScan, Language::Vietnamese) => "Quét".into(),
             (Str::CleanerCancelScan, Language::English) => "Cancel".into(),
             (Str::CleanerCancelScan, Language::Vietnamese) => "Huỷ".into(),
-            (Str::CleanerEstimatedReclaimable, Language::English) => {
-                "Estimated reclaimable".into()
-            }
-            (Str::CleanerEstimatedReclaimable, Language::Vietnamese) => {
-                "Dung lượng thu hồi ước tính".into()
-            }
-            (Str::CleanerEntriesScanned, Language::English) => "Entries scanned".into(),
-            (Str::CleanerEntriesScanned, Language::Vietnamese) => "Mục đã quét".into(),
             (Str::CleanerNoResultsYet, Language::English) => {
                 "No scan results for this category yet.".into()
             }
             (Str::CleanerNoResultsYet, Language::Vietnamese) => {
                 "Chưa có kết quả quét cho danh mục này.".into()
-            }
-            (Str::CleanerStatusProgress, Language::English) => "Progress".into(),
-            (Str::CleanerStatusProgress, Language::Vietnamese) => "Tiến độ".into(),
-            (Str::CleanerStatusIdle, Language::English) => "Idle".into(),
-            (Str::CleanerStatusIdle, Language::Vietnamese) => "Sẵn sàng".into(),
-            (Str::CleanerStatusCheckingPermissions, Language::English) => {
-                "Checking permissions".into()
-            }
-            (Str::CleanerStatusCheckingPermissions, Language::Vietnamese) => {
-                "Đang kiểm tra quyền".into()
             }
             (Str::CleanerStatusScanning, Language::English) => "Scanning".into(),
             (Str::CleanerStatusScanning, Language::Vietnamese) => "Đang quét".into(),
@@ -1601,18 +1590,8 @@ impl Str {
             (Str::CleanerStatusCompleted, Language::Vietnamese) => "Hoàn tất".into(),
             (Str::CleanerStatusCleaning, Language::English) => "Cleaning".into(),
             (Str::CleanerStatusCleaning, Language::Vietnamese) => "Đang dọn dẹp".into(),
-            (Str::CleanerStatusCompletedWithFailures, Language::English) => {
-                "Completed with failures".into()
-            }
-            (Str::CleanerStatusCompletedWithFailures, Language::Vietnamese) => {
-                "Hoàn tất kèm lỗi".into()
-            }
             (Str::CleanerStatusFailed, Language::English) => "Failed".into(),
             (Str::CleanerStatusFailed, Language::Vietnamese) => "Thất bại".into(),
-            (Str::CleanerSectionSmartCare, Language::English) => "Smart Care".into(),
-            (Str::CleanerSectionSmartCare, Language::Vietnamese) => {
-                "Dọn dẹp thông minh".into()
-            }
             (Str::CleanerSectionCleanup, Language::English) => "Cleanup".into(),
             (Str::CleanerSectionCleanup, Language::Vietnamese) => "Dọn dẹp".into(),
             (Str::CleanerSectionApplications, Language::English) => "Applications".into(),
@@ -1713,19 +1692,9 @@ impl Str {
             (Str::CleanerSelectSafeItems, Language::Vietnamese) => {
                 "Chọn mục an toàn".into()
             }
-            (Str::CleanerClearSelection, Language::English) => "Clear selection".into(),
-            (Str::CleanerClearSelection, Language::Vietnamese) => {
-                "Xoá chọn".into()
-            }
             (Str::CleanerCleanSelected, Language::English) => "Clean selected".into(),
             (Str::CleanerCleanSelected, Language::Vietnamese) => {
                 "Dọn mục đã chọn".into()
-            }
-            (Str::CleanerSelectedCount(count), Language::English) => {
-                format!("{count} selected").into()
-            }
-            (Str::CleanerSelectedCount(count), Language::Vietnamese) => {
-                format!("Đã chọn {count} mục").into()
             }
             (Str::CleanerCleanupReport, Language::English) => "Cleanup report".into(),
             (Str::CleanerCleanupReport, Language::Vietnamese) => {
@@ -1770,57 +1739,11 @@ impl Str {
             (Str::CleanerPermissionExplanation, Language::Vietnamese) => {
                 "Một số danh mục Cleaner cần Toàn quyền truy cập ổ đĩa để kiểm tra an toàn dữ liệu macOS được bảo vệ.".into()
             }
-            (Str::CleanerPermissionRecheck, Language::English) => "Recheck".into(),
-            (Str::CleanerPermissionRecheck, Language::Vietnamese) => {
-                "Kiểm tra lại".into()
-            }
             (Str::CleanerPermissionOpenSettings, Language::English) => {
                 "Open settings".into()
             }
             (Str::CleanerPermissionOpenSettings, Language::Vietnamese) => {
                 "Mở cài đặt".into()
-            }
-            (Str::CleanerPermissionRevealApp, Language::English) => {
-                "Reveal Dodo app".into()
-            }
-            (Str::CleanerPermissionRevealApp, Language::Vietnamese) => {
-                "Hiện ứng dụng Dodo".into()
-            }
-            (Str::CleanerPermissionUnknown, Language::English) => {
-                "Permission state: unknown".into()
-            }
-            (Str::CleanerPermissionUnknown, Language::Vietnamese) => {
-                "Trạng thái quyền: chưa rõ".into()
-            }
-            (Str::CleanerPermissionChecking, Language::English) => {
-                "Permission state: checking".into()
-            }
-            (Str::CleanerPermissionChecking, Language::Vietnamese) => {
-                "Trạng thái quyền: đang kiểm tra".into()
-            }
-            (Str::CleanerPermissionGranted, Language::English) => {
-                "Permission state: granted".into()
-            }
-            (Str::CleanerPermissionGranted, Language::Vietnamese) => {
-                "Trạng thái quyền: đã cấp".into()
-            }
-            (Str::CleanerPermissionDenied, Language::English) => {
-                "Permission state: denied".into()
-            }
-            (Str::CleanerPermissionDenied, Language::Vietnamese) => {
-                "Trạng thái quyền: bị từ chối".into()
-            }
-            (Str::CleanerPermissionRestricted, Language::English) => {
-                "Permission state: restricted".into()
-            }
-            (Str::CleanerPermissionRestricted, Language::Vietnamese) => {
-                "Trạng thái quyền: bị hạn chế".into()
-            }
-            (Str::CleanerPermissionRequiresRestart, Language::English) => {
-                "Permission state: requires restart".into()
-            }
-            (Str::CleanerPermissionRequiresRestart, Language::Vietnamese) => {
-                "Trạng thái quyền: cần khởi động lại".into()
             }
             (Str::CleanerPartialPermissionDenied, Language::English) => {
                 "Some locations were skipped because permission was denied.".into()
@@ -5069,6 +4992,88 @@ impl Str {
             (Str::InputMethodBracketShortcutsDescription, Language::Vietnamese) => {
                 "Trong Telex, [ và ] gõ ơ và ư — cách duy nhất để gõ uơ (thuở, huơ).".into()
             }
+            (Str::CleanerScanDescription, Language::English) => {
+                "Scan this category for files that can be safely removed.".into()
+            }
+            (Str::CleanerScanDescription, Language::Vietnamese) => {
+                "Quét mục này để tìm các tệp có thể xoá an toàn.".into()
+            }
+            (Str::CleanerEntriesScannedCount(count), Language::English) => {
+                format!("{count} entries scanned").into()
+            }
+            (Str::CleanerEntriesScannedCount(count), Language::Vietnamese) => {
+                format!("Đã quét {count} mục").into()
+            }
+            (Str::CleanerBytesDiscovered(size), Language::English) => {
+                format!("{size} discovered").into()
+            }
+            (Str::CleanerBytesDiscovered(size), Language::Vietnamese) => {
+                format!("Đã tìm thấy {size}").into()
+            }
+            (Str::CleanerReclaimableAmount(size), Language::English) => {
+                format!("{size} reclaimable").into()
+            }
+            (Str::CleanerReclaimableAmount(size), Language::Vietnamese) => {
+                format!("Có thể giải phóng {size}").into()
+            }
+            (Str::CleanerItemsFound(count), Language::English) => format!("{count} items").into(),
+            (Str::CleanerItemsFound(count), Language::Vietnamese) => format!("{count} mục").into(),
+            (Str::CleanerSafeItemsCount(count), Language::English) => {
+                format!("{count} safe").into()
+            }
+            (Str::CleanerSafeItemsCount(count), Language::Vietnamese) => {
+                format!("{count} an toàn").into()
+            }
+            (Str::CleanerWarningCount(count), Language::English) => {
+                let word = if count == 1 { "warning" } else { "warnings" };
+                format!("{count} {word}").into()
+            }
+            (Str::CleanerWarningCount(count), Language::Vietnamese) => {
+                format!("{count} cảnh báo").into()
+            }
+            (Str::CleanerSelectedSummary { count, size }, Language::English) => {
+                format!("{count} selected · {size}").into()
+            }
+            (Str::CleanerSelectedSummary { count, size }, Language::Vietnamese) => {
+                format!("Đã chọn {count} · {size}").into()
+            }
+            (Str::CleanerCleanCount { count, size }, Language::English) => {
+                format!("Clean {count} items · {size}").into()
+            }
+            (Str::CleanerCleanCount { count, size }, Language::Vietnamese) => {
+                format!("Xoá {count} mục · {size}").into()
+            }
+            (Str::CleanerScanWarningsSummary(count), Language::English) => {
+                let word = if count == 1 { "location" } else { "locations" };
+                format!("{count} {word} could not be scanned").into()
+            }
+            (Str::CleanerScanWarningsSummary(count), Language::Vietnamese) => {
+                format!("{count} vị trí không thể quét").into()
+            }
+            (Str::CleanerScanWarningsShowDetails, Language::English) => "Show details".into(),
+            (Str::CleanerScanWarningsShowDetails, Language::Vietnamese) => {
+                "Xem chi tiết".into()
+            }
+            (Str::CleanerScanWarningsHideDetails, Language::English) => "Hide details".into(),
+            (Str::CleanerScanWarningsHideDetails, Language::Vietnamese) => "Ẩn chi tiết".into(),
+            (Str::CleanerRescan, Language::English) => "Rescan".into(),
+            (Str::CleanerRescan, Language::Vietnamese) => "Quét lại".into(),
+            (Str::CleanerSelectAll, Language::English) => "Select all".into(),
+            (Str::CleanerSelectAll, Language::Vietnamese) => "Chọn tất cả".into(),
+            (Str::CleanerDeselectAll, Language::English) => "Deselect all".into(),
+            (Str::CleanerDeselectAll, Language::Vietnamese) => "Bỏ chọn tất cả".into(),
+            (Str::CleanerPermissionNotNow, Language::English) => "Not now".into(),
+            (Str::CleanerPermissionNotNow, Language::Vietnamese) => {
+                "Không phải lúc này".into()
+            }
+            (Str::CleanerStatusCompletedWithWarnings, Language::English) => {
+                "Completed with warnings".into()
+            }
+            (Str::CleanerStatusCompletedWithWarnings, Language::Vietnamese) => {
+                "Hoàn tất có cảnh báo".into()
+            }
+            (Str::CleanerStatusCancelled, Language::English) => "Cancelled".into(),
+            (Str::CleanerStatusCancelled, Language::Vietnamese) => "Đã hủy".into(),
         }
     }
 }
@@ -6080,24 +6085,16 @@ mod tests {
             // above: a new tool must not renumber every existing entry, even
             // though its `Str` variants sit near the top of the enum.
             plain(Str::CleanerTitle),
-            plain(Str::CleanerSidebarTitle),
             plain(Str::CleanerUnsupportedPlatform),
             plain(Str::CleanerScan),
             plain(Str::CleanerCancelScan),
-            plain(Str::CleanerEstimatedReclaimable),
-            plain(Str::CleanerEntriesScanned),
             plain(Str::CleanerNoResultsYet),
-            plain(Str::CleanerStatusProgress),
-            plain(Str::CleanerStatusIdle),
-            plain(Str::CleanerStatusCheckingPermissions),
             plain(Str::CleanerStatusScanning),
             plain(Str::CleanerStatusCancelling),
             plain(Str::CleanerStatusPartial),
             plain(Str::CleanerStatusCompleted),
             plain(Str::CleanerStatusCleaning),
-            plain(Str::CleanerStatusCompletedWithFailures),
             plain(Str::CleanerStatusFailed),
-            plain(Str::CleanerSectionSmartCare),
             plain(Str::CleanerSectionCleanup),
             plain(Str::CleanerSectionApplications),
             plain(Str::CleanerSectionAdvanced),
@@ -6123,9 +6120,7 @@ mod tests {
             plain(Str::CleanerSelectItem),
             plain(Str::CleanerDeselectItem),
             plain(Str::CleanerSelectSafeItems),
-            plain(Str::CleanerClearSelection),
             plain(Str::CleanerCleanSelected),
-            with(Str::CleanerSelectedCount(NUMBER), &[NUMBER_TEXT]),
             plain(Str::CleanerCleanupReport),
             plain(Str::CleanerCleanupConfirmTitle),
             with(
@@ -6139,15 +6134,7 @@ mod tests {
             with(Str::CleanerCleanupFailureCount(NUMBER), &[NUMBER_TEXT]),
             plain(Str::CleanerPermissionTitle),
             plain(Str::CleanerPermissionExplanation),
-            plain(Str::CleanerPermissionRecheck),
             plain(Str::CleanerPermissionOpenSettings),
-            plain(Str::CleanerPermissionRevealApp),
-            plain(Str::CleanerPermissionUnknown),
-            plain(Str::CleanerPermissionChecking),
-            plain(Str::CleanerPermissionGranted),
-            plain(Str::CleanerPermissionDenied),
-            plain(Str::CleanerPermissionRestricted),
-            plain(Str::CleanerPermissionRequiresRestart),
             plain(Str::CleanerPartialPermissionDenied),
             plain(Str::CleanerPartialRootUnavailable),
             plain(Str::CleanerPartialCancelled),
@@ -6319,6 +6306,42 @@ mod tests {
             plain(Str::RuntimeStopping),
             plain(Str::RuntimeBinaryNotFound),
             plain(Str::RuntimeActionUnsupported),
+            // Cleaner UX/state refactor — appended for the same reason the
+            // block above is: a new string must not renumber every existing
+            // one.
+            plain(Str::CleanerScanDescription),
+            with(
+                Str::CleanerEntriesScannedCount(NUMBER as u64),
+                &[NUMBER_TEXT],
+            ),
+            with(Str::CleanerBytesDiscovered(DETAIL.into()), &[DETAIL]),
+            with(Str::CleanerReclaimableAmount(DETAIL.into()), &[DETAIL]),
+            with(Str::CleanerItemsFound(NUMBER), &[NUMBER_TEXT]),
+            with(Str::CleanerSafeItemsCount(NUMBER), &[NUMBER_TEXT]),
+            with(Str::CleanerWarningCount(NUMBER), &[NUMBER_TEXT]),
+            with(
+                Str::CleanerSelectedSummary {
+                    count: NUMBER,
+                    size: DETAIL.into(),
+                },
+                &[NUMBER_TEXT, DETAIL],
+            ),
+            with(
+                Str::CleanerCleanCount {
+                    count: NUMBER,
+                    size: DETAIL.into(),
+                },
+                &[NUMBER_TEXT, DETAIL],
+            ),
+            with(Str::CleanerScanWarningsSummary(NUMBER), &[NUMBER_TEXT]),
+            plain(Str::CleanerScanWarningsShowDetails),
+            plain(Str::CleanerScanWarningsHideDetails),
+            plain(Str::CleanerRescan),
+            plain(Str::CleanerSelectAll),
+            plain(Str::CleanerDeselectAll),
+            plain(Str::CleanerPermissionNotNow),
+            plain(Str::CleanerStatusCompletedWithWarnings),
+            plain(Str::CleanerStatusCancelled),
         ]
     }
 
@@ -6378,7 +6401,6 @@ mod tests {
             Str::JwtPartNotBase64 { .. } => 49,
             Str::JwtPartNotJson { .. } => 50,
             Str::JwtPartNotRenderable { .. } => 51,
-
             Str::ApiExplorerTitle => 52,
             Str::Collections => 53,
             Str::NoCollections => 54,
@@ -6492,7 +6514,6 @@ mod tests {
             Str::HttpTlsFailure(_) => 162,
             Str::HttpBodyNotText(_) => 163,
             Str::HttpUnexpected(_) => 164,
-
             Str::ImportCollection => 165,
             Str::NewCollection => 166,
             Str::NewFolder => 167,
@@ -6525,7 +6546,6 @@ mod tests {
             Str::HtmlPreviewNote => 194,
             Str::NoCookies => 195,
             Str::NoCookiesHint => 196,
-
             Str::ToggleAllRows => 197,
             Str::EditModeTable => 198,
             Str::EditModeBulk => 199,
@@ -6537,7 +6557,6 @@ mod tests {
             Str::TemplateAssertStatus => 205,
             Str::TemplateLogResponse => 206,
             Str::TemplateExtractField => 207,
-
             Str::Docker => 208,
             Str::Containers => 209,
             Str::Images => 210,
@@ -6628,7 +6647,6 @@ mod tests {
             Str::DockerViewLogs => 295,
             Str::DockerOpenTerminal => 296,
             Str::DockerComingSoonLabel => 297,
-
             Str::DockerDetails => 298,
             Str::DockerRawJson => 299,
             Str::DockerDetailErrorTitle => 300,
@@ -6670,7 +6688,6 @@ mod tests {
             Str::IncompleteFileFields(_) => 336,
             Str::HttpFileUnreadable { .. } => 337,
             Str::HttpFileTooLarge { .. } => 338,
-
             Str::NoEnvironment => 339,
             Str::SelectEnvironment => 340,
             Str::ManageEnvironments => 341,
@@ -6753,7 +6770,6 @@ mod tests {
             Str::TestsFailedCount(_) => 418,
             Str::TestsErroredCount(_) => 419,
             Str::TestsDropped(_) => 420,
-
             Str::CodeTargetCurl => 421,
             Str::CodeTargetFetch => 422,
             Str::CodeTargetAxios => 423,
@@ -6762,7 +6778,6 @@ mod tests {
             Str::GenerateCodeSecretsWithheld(_) => 426,
             Str::GenerateCodeSecretsRevealed => 427,
             Str::GenerateCodeRevealSecrets => 428,
-
             Str::CheckForUpdates => 429,
             Str::SoftwareUpdate => 430,
             Str::UpdateChecking => 431,
@@ -6803,7 +6818,6 @@ mod tests {
             Str::UpdateErrorSize { .. } => 466,
             Str::UpdateErrorInstall(_) => 467,
             Str::UpdateErrorIo(_) => 468,
-
             Str::DatabaseTitle => 469,
             Str::DbConnections => 470,
             Str::DbNewConnection => 471,
@@ -7029,7 +7043,6 @@ mod tests {
             Str::DbUriInvalidPort(_) => 691,
             Str::DbUriMissingFile => 692,
             Str::DbUriInvalidEscape => 693,
-
             Str::QuickNavigation => 694,
             Str::QuickNavEnabled => 695,
             Str::QuickNavEnabledDescription => 696,
@@ -7051,195 +7064,194 @@ mod tests {
             Str::QuickNavCreatedConnection(_) => 712,
             Str::QuickNavConnectionsLoading => 713,
             Str::CleanerTitle => 714,
-            Str::CleanerSidebarTitle => 715,
-            Str::CleanerUnsupportedPlatform => 716,
-            Str::CleanerScan => 717,
-            Str::CleanerCancelScan => 718,
-            Str::CleanerEstimatedReclaimable => 719,
-            Str::CleanerEntriesScanned => 720,
-            Str::CleanerNoResultsYet => 721,
-            Str::CleanerStatusProgress => 722,
-            Str::CleanerStatusIdle => 723,
-            Str::CleanerStatusCheckingPermissions => 724,
-            Str::CleanerStatusScanning => 725,
-            Str::CleanerStatusCancelling => 726,
-            Str::CleanerStatusPartial => 727,
-            Str::CleanerStatusCompleted => 728,
-            Str::CleanerStatusCleaning => 729,
-            Str::CleanerStatusCompletedWithFailures => 730,
-            Str::CleanerStatusFailed => 731,
-            Str::CleanerSectionSmartCare => 732,
-            Str::CleanerSectionCleanup => 733,
-            Str::CleanerSectionApplications => 734,
-            Str::CleanerSectionAdvanced => 735,
-            Str::CleanerCategorySystemJunk => 736,
-            Str::CleanerCategoryUserCache => 737,
-            Str::CleanerCategoryMailFiles => 738,
-            Str::CleanerCategoryTrashBins => 739,
-            Str::CleanerCategoryLargeOldFiles => 740,
-            Str::CleanerCategoryInstalledApps => 741,
-            Str::CleanerCategoryOrphanedFiles => 742,
-            Str::CleanerCategoryAiApps => 743,
-            Str::CleanerCategoryXcodeJunk => 744,
-            Str::CleanerCategoryHomebrewCache => 745,
-            Str::CleanerCategoryNodeToolingCache => 746,
-            Str::CleanerCategoryDockerCache => 747,
-            Str::CleanerCategoryUniversalBinaries => 748,
-            Str::CleanerCategoryLanguageFiles => 749,
-            Str::CleanerWarnings => 750,
-            Str::CleanerPath => 751,
-            Str::CleanerExplanation => 752,
-            Str::CleanerCopyPath => 753,
-            Str::CleanerRevealInFinder => 754,
-            Str::CleanerSelectItem => 755,
-            Str::CleanerDeselectItem => 756,
-            Str::CleanerSelectSafeItems => 757,
-            Str::CleanerClearSelection => 758,
-            Str::CleanerCleanSelected => 759,
-            Str::CleanerSelectedCount(_) => 760,
-            Str::CleanerCleanupReport => 761,
-            Str::CleanerCleanupConfirmTitle => 762,
-            Str::CleanerCleanupConfirmMessage { .. } => 763,
-            Str::CleanerCleanupSuccessCount(_) => 764,
-            Str::CleanerCleanupFailureCount(_) => 765,
-            Str::CleanerPermissionTitle => 766,
-            Str::CleanerPermissionExplanation => 767,
-            Str::CleanerPermissionRecheck => 768,
-            Str::CleanerPermissionOpenSettings => 769,
-            Str::CleanerPermissionRevealApp => 770,
-            Str::CleanerPermissionUnknown => 771,
-            Str::CleanerPermissionChecking => 772,
-            Str::CleanerPermissionGranted => 773,
-            Str::CleanerPermissionDenied => 774,
-            Str::CleanerPermissionRestricted => 775,
-            Str::CleanerPermissionRequiresRestart => 776,
-            Str::CleanerPartialPermissionDenied => 777,
-            Str::CleanerPartialRootUnavailable => 778,
-            Str::CleanerPartialCancelled => 779,
-            Str::CleanerPartialUnsupported => 780,
-            Str::CleanerBeginUninstallReview => 781,
-            Str::CleanerUninstallReviewTitle { .. } => 782,
-            Str::CleanerUninstallLoading => 783,
-            Str::CleanerUninstallRefusedProtected => 784,
-            Str::CleanerUninstallRefusedNotApplication => 785,
-            Str::CleanerUninstallRelatedFilesHeader => 786,
-            Str::CleanerUninstallNoRelatedFiles => 787,
-            Str::CleanerUninstallDestinationNote => 788,
-            Str::CleanerUninstallScanOnlyBadge => 789,
-            Str::CleanerUninstallMoveToTrash => 790,
-            Str::CleanerUninstallClose => 791,
-            Str::CleanerConfidenceConfirmed => 792,
-            Str::CleanerConfidenceHigh => 793,
-            Str::CleanerConfidenceMedium => 794,
-            Str::CleanerConfidenceLow => 795,
-            Str::CleanerConfidenceSharedOrUnsafe => 796,
-            Str::CleanerKeepItem => 797,
-            Str::CleanerIgnoreStoreError(_) => 798,
-            Str::CleanerIgnoreStoreMissingVersion => 799,
-            Str::CleanerIgnoreStoreUnsupportedVersion { .. } => 800,
-            Str::CleanerDockerCleanupConfirmTitle => 801,
-            Str::CleanerDockerCleanupConfirmMessage { .. } => 802,
-            Str::SessionStorageProblem => 803,
-            Str::SessionStoreError(_) => 804,
-            Str::SessionStoreMissingVersion => 805,
-            Str::SessionStoreUnsupportedVersion { .. } => 806,
-            Str::Features => 807,
-            Str::FeaturesDescription => 808,
-            Str::FeatureShowInSidebar => 809,
-            Str::FeatureDragToReorder => 810,
-            Str::FeatureMoveUp => 811,
-            Str::FeatureMoveDown => 812,
-            Str::FeatureLastVisibleTool => 813,
-            Str::TrayOpenDodo => 814,
-            Str::TrayKeyboardInput => 815,
-            Str::TrayQuitDodo => 816,
-            Str::InputMethod => 817,
-            Str::InputMethodDescription => 818,
-            Str::InputMethodInstall => 819,
-            Str::InputMethodReinstall => 820,
-            Str::InputMethodInstalling => 821,
-            Str::InputMethodInstalled => 822,
-            Str::InputMethodInstalledNotActive(_) => 823,
-            Str::InputMethodNoBundle => 824,
-            Str::InputMethodCopyFailed(_) => 825,
-            Str::InputMethodInvalidSignature(_) => 826,
-            Str::InputMethodNeverAppeared(_) => 827,
-            Str::InputMethodStatus => 828,
-            Str::InputMethodNotInstalled => 829,
-            Str::InputMethodRunning(_) => 830,
-            Str::InputMethodInstalledIdle => 831,
-            Str::InputMethodSettingsPending => 832,
-            Str::InputMethodStorageProblem => 833,
-            Str::InputMethodStoreError(_) => 834,
-            Str::InputMethodStoreMissingVersion => 835,
-            Str::InputMethodStoreUnsupportedVersion { .. } => 836,
-            Str::InputMethodScheme => 837,
-            Str::InputMethodSchemeDescription => 838,
-            Str::InputMethodTelex => 839,
-            Str::InputMethodVni => 840,
-            Str::InputMethodTonePlacement => 841,
-            Str::InputMethodTonePlacementDescription => 842,
-            Str::InputMethodToneModern => 843,
-            Str::InputMethodToneTraditional => 844,
-            Str::InputMethodSpellCheck => 845,
-            Str::InputMethodSpellCheckDescription => 846,
-            Str::InputMethodBracketShortcuts => 847,
-            Str::InputMethodBracketShortcutsDescription => 848,
-            Str::InputMethodBackend => 849,
-            Str::InputMethodBackendDescription => 850,
-            Str::InputMethodNative => 851,
-            Str::InputMethodEventTap => 852,
-            Str::InputMethodEventTapStatus => 853,
-            Str::InputMethodEventTapInactive => 854,
-            Str::InputMethodEventTapWaitingForNative => 855,
-            Str::InputMethodEventTapNeedsAccessibility => 856,
-            Str::InputMethodEventTapRunning => 857,
-            Str::InputMethodEventTapFailed => 858,
-            Str::InputMethodWindowsDescription => 859,
-            Str::InputMethodWindowsLanguageDescription => 860,
-            Str::InputMethodNativeTsf => 861,
-            Str::InputMethodWindowsTsfStatus => 862,
-            Str::InputMethodWindowsTsfNotInstalled => 863,
-            Str::InputMethodWindowsTsfInstalled => 864,
-            Str::InputMethodWindowsTsfRemoved => 865,
-            Str::InputMethodWindowsTsfNoDll => 866,
-            Str::InputMethodWindowsTsfRegisterFailed(_) => 867,
-            Str::InputMethodWindowsTsfUnregisterFailed(_) => 868,
-            Str::InputMethodKeyboardHook => 869,
-            Str::InputMethodKeyboardHookStatus => 870,
-            Str::InputMethodKeyboardHookInactive => 871,
-            Str::InputMethodKeyboardHookRunning => 872,
-            Str::InputMethodKeyboardHookFailed => 873,
-            Str::InputMethodUninstall => 874,
-            Str::InputMethodUninstalling => 875,
-            Str::CleanerRevealInExplorer => 876,
-            Str::CleanerRevealInFileManager => 877,
-            Str::CleanerMoreActions => 878,
-            Str::CleanerColumnName => 879,
-            Str::CleanerColumnRisk => 880,
-            Str::CleanerColumnSize => 881,
-            Str::CleanerColumnActions => 882,
-            Str::CleanerRiskSafe => 883,
-            Str::CleanerRiskReview => 884,
-            Str::CleanerRiskUserData => 885,
-            Str::CleanerRiskAppChange => 886,
-            Str::CleanerRiskProtected => 887,
-
-            Str::Runtimes => 888,
-            Str::RuntimesDescription => 889,
-            Str::RuntimePodmanMachine => 890,
-            Str::RuntimeKubernetes => 891,
-            Str::RuntimeContainerd => 892,
-            Str::RuntimeStatusRunning => 893,
-            Str::RuntimeStatusStopped => 894,
-            Str::RuntimeStatusNotInstalled => 895,
-            Str::RuntimeStatusUnsupported => 896,
-            Str::RuntimeStatusUnknown => 897,
-            Str::RuntimeManagedExternally => 898,
-            Str::RuntimeStarting => 899,
-            Str::RuntimeStopping => 900,
-            Str::RuntimeBinaryNotFound => 901,
-            Str::RuntimeActionUnsupported => 902,
+            Str::CleanerUnsupportedPlatform => 715,
+            Str::CleanerScan => 716,
+            Str::CleanerCancelScan => 717,
+            Str::CleanerNoResultsYet => 718,
+            Str::CleanerStatusScanning => 719,
+            Str::CleanerStatusCancelling => 720,
+            Str::CleanerStatusPartial => 721,
+            Str::CleanerStatusCompleted => 722,
+            Str::CleanerStatusCleaning => 723,
+            Str::CleanerStatusFailed => 724,
+            Str::CleanerSectionCleanup => 725,
+            Str::CleanerSectionApplications => 726,
+            Str::CleanerSectionAdvanced => 727,
+            Str::CleanerCategorySystemJunk => 728,
+            Str::CleanerCategoryUserCache => 729,
+            Str::CleanerCategoryMailFiles => 730,
+            Str::CleanerCategoryTrashBins => 731,
+            Str::CleanerCategoryLargeOldFiles => 732,
+            Str::CleanerCategoryInstalledApps => 733,
+            Str::CleanerCategoryOrphanedFiles => 734,
+            Str::CleanerCategoryAiApps => 735,
+            Str::CleanerCategoryXcodeJunk => 736,
+            Str::CleanerCategoryHomebrewCache => 737,
+            Str::CleanerCategoryNodeToolingCache => 738,
+            Str::CleanerCategoryDockerCache => 739,
+            Str::CleanerCategoryUniversalBinaries => 740,
+            Str::CleanerCategoryLanguageFiles => 741,
+            Str::CleanerWarnings => 742,
+            Str::CleanerPath => 743,
+            Str::CleanerExplanation => 744,
+            Str::CleanerCopyPath => 745,
+            Str::CleanerRevealInFinder => 746,
+            Str::CleanerSelectItem => 747,
+            Str::CleanerDeselectItem => 748,
+            Str::CleanerSelectSafeItems => 749,
+            Str::CleanerCleanSelected => 750,
+            Str::CleanerCleanupReport => 751,
+            Str::CleanerCleanupConfirmTitle => 752,
+            Str::CleanerCleanupConfirmMessage { .. } => 753,
+            Str::CleanerCleanupSuccessCount(_) => 754,
+            Str::CleanerCleanupFailureCount(_) => 755,
+            Str::CleanerPermissionTitle => 756,
+            Str::CleanerPermissionExplanation => 757,
+            Str::CleanerPermissionOpenSettings => 758,
+            Str::CleanerPartialPermissionDenied => 759,
+            Str::CleanerPartialRootUnavailable => 760,
+            Str::CleanerPartialCancelled => 761,
+            Str::CleanerPartialUnsupported => 762,
+            Str::CleanerBeginUninstallReview => 763,
+            Str::CleanerUninstallReviewTitle { .. } => 764,
+            Str::CleanerUninstallLoading => 765,
+            Str::CleanerUninstallRefusedProtected => 766,
+            Str::CleanerUninstallRefusedNotApplication => 767,
+            Str::CleanerUninstallRelatedFilesHeader => 768,
+            Str::CleanerUninstallNoRelatedFiles => 769,
+            Str::CleanerUninstallDestinationNote => 770,
+            Str::CleanerUninstallScanOnlyBadge => 771,
+            Str::CleanerUninstallMoveToTrash => 772,
+            Str::CleanerUninstallClose => 773,
+            Str::CleanerConfidenceConfirmed => 774,
+            Str::CleanerConfidenceHigh => 775,
+            Str::CleanerConfidenceMedium => 776,
+            Str::CleanerConfidenceLow => 777,
+            Str::CleanerConfidenceSharedOrUnsafe => 778,
+            Str::CleanerKeepItem => 779,
+            Str::CleanerIgnoreStoreError(_) => 780,
+            Str::CleanerIgnoreStoreMissingVersion => 781,
+            Str::CleanerIgnoreStoreUnsupportedVersion { .. } => 782,
+            Str::CleanerDockerCleanupConfirmTitle => 783,
+            Str::CleanerDockerCleanupConfirmMessage { .. } => 784,
+            Str::SessionStorageProblem => 785,
+            Str::SessionStoreError(_) => 786,
+            Str::SessionStoreMissingVersion => 787,
+            Str::SessionStoreUnsupportedVersion { .. } => 788,
+            Str::Features => 789,
+            Str::FeaturesDescription => 790,
+            Str::FeatureShowInSidebar => 791,
+            Str::FeatureDragToReorder => 792,
+            Str::FeatureMoveUp => 793,
+            Str::FeatureMoveDown => 794,
+            Str::FeatureLastVisibleTool => 795,
+            Str::TrayOpenDodo => 796,
+            Str::TrayKeyboardInput => 797,
+            Str::TrayQuitDodo => 798,
+            Str::InputMethod => 799,
+            Str::InputMethodDescription => 800,
+            Str::InputMethodInstall => 801,
+            Str::InputMethodReinstall => 802,
+            Str::InputMethodInstalling => 803,
+            Str::InputMethodInstalled => 804,
+            Str::InputMethodInstalledNotActive(_) => 805,
+            Str::InputMethodNoBundle => 806,
+            Str::InputMethodCopyFailed(_) => 807,
+            Str::InputMethodInvalidSignature(_) => 808,
+            Str::InputMethodNeverAppeared(_) => 809,
+            Str::InputMethodStatus => 810,
+            Str::InputMethodNotInstalled => 811,
+            Str::InputMethodRunning(_) => 812,
+            Str::InputMethodInstalledIdle => 813,
+            Str::InputMethodSettingsPending => 814,
+            Str::InputMethodStorageProblem => 815,
+            Str::InputMethodStoreError(_) => 816,
+            Str::InputMethodStoreMissingVersion => 817,
+            Str::InputMethodStoreUnsupportedVersion { .. } => 818,
+            Str::InputMethodScheme => 819,
+            Str::InputMethodSchemeDescription => 820,
+            Str::InputMethodTelex => 821,
+            Str::InputMethodVni => 822,
+            Str::InputMethodTonePlacement => 823,
+            Str::InputMethodTonePlacementDescription => 824,
+            Str::InputMethodToneModern => 825,
+            Str::InputMethodToneTraditional => 826,
+            Str::InputMethodSpellCheck => 827,
+            Str::InputMethodSpellCheckDescription => 828,
+            Str::InputMethodBracketShortcuts => 829,
+            Str::InputMethodBracketShortcutsDescription => 830,
+            Str::InputMethodBackend => 831,
+            Str::InputMethodBackendDescription => 832,
+            Str::InputMethodNative => 833,
+            Str::InputMethodEventTap => 834,
+            Str::InputMethodEventTapStatus => 835,
+            Str::InputMethodEventTapInactive => 836,
+            Str::InputMethodEventTapWaitingForNative => 837,
+            Str::InputMethodEventTapNeedsAccessibility => 838,
+            Str::InputMethodEventTapRunning => 839,
+            Str::InputMethodEventTapFailed => 840,
+            Str::InputMethodWindowsDescription => 841,
+            Str::InputMethodWindowsLanguageDescription => 842,
+            Str::InputMethodNativeTsf => 843,
+            Str::InputMethodWindowsTsfStatus => 844,
+            Str::InputMethodWindowsTsfNotInstalled => 845,
+            Str::InputMethodWindowsTsfInstalled => 846,
+            Str::InputMethodWindowsTsfRemoved => 847,
+            Str::InputMethodWindowsTsfNoDll => 848,
+            Str::InputMethodWindowsTsfRegisterFailed(_) => 849,
+            Str::InputMethodWindowsTsfUnregisterFailed(_) => 850,
+            Str::InputMethodKeyboardHook => 851,
+            Str::InputMethodKeyboardHookStatus => 852,
+            Str::InputMethodKeyboardHookInactive => 853,
+            Str::InputMethodKeyboardHookRunning => 854,
+            Str::InputMethodKeyboardHookFailed => 855,
+            Str::InputMethodUninstall => 856,
+            Str::InputMethodUninstalling => 857,
+            Str::CleanerRevealInExplorer => 858,
+            Str::CleanerRevealInFileManager => 859,
+            Str::CleanerMoreActions => 860,
+            Str::CleanerColumnName => 861,
+            Str::CleanerColumnRisk => 862,
+            Str::CleanerColumnSize => 863,
+            Str::CleanerColumnActions => 864,
+            Str::CleanerRiskSafe => 865,
+            Str::CleanerRiskReview => 866,
+            Str::CleanerRiskUserData => 867,
+            Str::CleanerRiskAppChange => 868,
+            Str::CleanerRiskProtected => 869,
+            Str::Runtimes => 870,
+            Str::RuntimesDescription => 871,
+            Str::RuntimePodmanMachine => 872,
+            Str::RuntimeKubernetes => 873,
+            Str::RuntimeContainerd => 874,
+            Str::RuntimeStatusRunning => 875,
+            Str::RuntimeStatusStopped => 876,
+            Str::RuntimeStatusNotInstalled => 877,
+            Str::RuntimeStatusUnsupported => 878,
+            Str::RuntimeStatusUnknown => 879,
+            Str::RuntimeManagedExternally => 880,
+            Str::RuntimeStarting => 881,
+            Str::RuntimeStopping => 882,
+            Str::RuntimeBinaryNotFound => 883,
+            Str::RuntimeActionUnsupported => 884,
+            Str::CleanerScanDescription => 885,
+            Str::CleanerEntriesScannedCount(_) => 886,
+            Str::CleanerBytesDiscovered(_) => 887,
+            Str::CleanerReclaimableAmount(_) => 888,
+            Str::CleanerItemsFound(_) => 889,
+            Str::CleanerSafeItemsCount(_) => 890,
+            Str::CleanerWarningCount(_) => 891,
+            Str::CleanerSelectedSummary { .. } => 892,
+            Str::CleanerCleanCount { .. } => 893,
+            Str::CleanerScanWarningsSummary(_) => 894,
+            Str::CleanerScanWarningsShowDetails => 895,
+            Str::CleanerScanWarningsHideDetails => 896,
+            Str::CleanerRescan => 897,
+            Str::CleanerSelectAll => 898,
+            Str::CleanerDeselectAll => 899,
+            Str::CleanerPermissionNotNow => 900,
+            Str::CleanerStatusCompletedWithWarnings => 901,
+            Str::CleanerStatusCancelled => 902,
         }
     }
 

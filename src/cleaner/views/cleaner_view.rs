@@ -1,3 +1,4 @@
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -6,8 +7,11 @@ use gpui_component::WindowExt as _;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _};
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::progress::Progress;
+use gpui_component::spinner::Spinner;
 use gpui_component::table::{DataTable, TableState};
-use gpui_component::{ActiveTheme, Disableable as _, Icon, StyledExt as _, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
 
 use crate::app_icon::AppIcon;
 use crate::cleaner::core::cancellation::CancellationToken;
@@ -15,14 +19,15 @@ use crate::cleaner::core::category::{CleanerCategory, CleanerSection};
 use crate::cleaner::core::errors::{CleanupError, ScanError};
 use crate::cleaner::core::ignore::{IgnoredItemsDocument, path_signature};
 use crate::cleaner::core::item::{CleanableItem, CleanableItemId};
+#[cfg(target_os = "macos")]
 use crate::cleaner::core::permissions::{MacPermission, PermissionService, PermissionState};
 use crate::cleaner::core::progress::{ProgressSink, ScanProgress};
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 use crate::cleaner::core::report::CleanupReport;
-use crate::cleaner::core::report::{
-    CategoryScanResult, PartialScanReason, ScanCompleteness, ScanWarning,
-};
+use crate::cleaner::core::report::{CategoryScanResult, PartialScanReason, ScanCompleteness};
+use crate::cleaner::core::risk::SelectionPolicy;
 use crate::cleaner::core::scan_context::ScanContext;
+use crate::cleaner::core::scan_state::ScanState;
 use crate::cleaner::core::scanner::CleanerScanner;
 #[cfg(target_os = "macos")]
 use crate::cleaner::macos::applications::review as uninstall_review;
@@ -33,29 +38,11 @@ use crate::cleaner::macos::{cleanup, permissions, platform};
 use crate::cleaner::services::ignore_store::{
     DiskOrphanIgnoreStore, OrphanIgnoreStore, OrphanIgnoreStoreError,
 };
-use crate::cleaner::state::{CleanerState, CleanerStatus, default_scanners};
+use crate::cleaner::state::{CategoryState, CleanerState, default_scanners};
 use crate::cleaner::views::results_table::{ResultsTableDelegate, category_icon};
 #[cfg(target_os = "macos")]
 use crate::cleaner::views::uninstall_review_dialog;
 use crate::i18n::{Str, t};
-
-/// The pure decision behind the sidebar's single-open accordion: clicking
-/// `clicked` collapses everything when it was already the open one, else it
-/// becomes the only open one. Pulled out of `CleanerView::toggle_section` so
-/// this can be tested directly — a real click cannot be driven in this
-/// project's test setup, which has no way to host a `Root` (see
-/// `gpui-component-recipes`), so the GPUI wrapper around this has no test of
-/// its own and this is the whole coverage for the behaviour.
-fn next_expanded_section(
-    current: Option<CleanerSection>,
-    clicked: CleanerSection,
-) -> Option<CleanerSection> {
-    if current == Some(clicked) {
-        None
-    } else {
-        Some(clicked)
-    }
-}
 
 #[derive(Clone)]
 struct ChannelProgressSink {
@@ -69,17 +56,30 @@ impl ProgressSink for ChannelProgressSink {
 }
 
 pub struct CleanerView {
+    /// Navigation (which category/sections are showing) and every category's
+    /// own scan/selection/cleanup state — see the module doc on
+    /// [`crate::cleaner::state::CleanerState`] for why those stay three
+    /// independent axes rather than derived from one another.
     state: CleanerState,
     scanners: Vec<Arc<dyn CleanerScanner>>,
     #[cfg(target_os = "macos")]
     permission_service: Arc<dyn PermissionService>,
-    permission_state: PermissionState,
-    permission_task: Option<Task<()>>,
-    scan_task: Option<Task<()>>,
-    cleanup_task: Option<Task<()>>,
+    /// One entry per category currently scanning — inserting a second
+    /// category's entry never touches the first's. See `start_scan`/
+    /// `run_scan`.
+    scan_tasks: HashMap<CleanerCategory, Task<()>>,
+    cancellations: HashMap<CleanerCategory, CancellationToken>,
+    progress_rxs: HashMap<CleanerCategory, std::sync::mpsc::Receiver<ScanProgress>>,
+    /// A single timer loop that drains every live entry in `progress_rxs`
+    /// each tick, rather than one timer per category — cheaper, and still
+    /// fully independent per-category data (see `ensure_pump_running`).
     pump_task: Option<Task<()>>,
-    progress_rx: Option<std::sync::mpsc::Receiver<ScanProgress>>,
-    cancellation: Option<CancellationToken>,
+    cleanup_tasks: HashMap<CleanerCategory, Task<()>>,
+    /// The Full Disk Access probe kicked off *at Scan-click time* for a
+    /// category that needs it (req #16/#17) — never eagerly on `new`, and
+    /// never a permanent panel. Empty on every platform but macOS.
+    #[cfg(target_os = "macos")]
+    permission_check_tasks: HashMap<CleanerCategory, Task<()>>,
     /// Where the orphan-detection "keep" list lives; see
     /// `crate::cleaner::services::ignore_store`. Not `#[cfg(target_os = "macos")]`
     /// like `permission_service` — the store itself is plain JSON I/O with no
@@ -88,7 +88,7 @@ pub struct CleanerView {
     ignore_store: Arc<dyn OrphanIgnoreStore>,
     /// The loaded keep list, kept in memory so "Keep" does not need a
     /// load-modify-persist round trip through disk for every click.
-    ignored_paths: std::collections::BTreeSet<String>,
+    ignored_paths: BTreeSet<String>,
     ignore_load_task: Option<Task<()>>,
     /// What went wrong reading or writing `cleaner-ignored-items.json`, if
     /// anything. `None` in the ordinary case, including a first run with no
@@ -98,21 +98,10 @@ pub struct CleanerView {
     /// `results_table`'s module doc for why it holds a `WeakEntity` back to
     /// this view rather than the other way around.
     results_table: Entity<TableState<ResultsTableDelegate>>,
-    /// Which sidebar section's categories are currently showing, if any.
-    /// Purely a sidebar-accordion display concern — not `CleanerState`'s
-    /// `section`, which is "the section scanned when Smart Care runs" and
-    /// must keep its own value even while every section is collapsed.
-    expanded_section: Option<CleanerSection>,
-    /// Which categories `self.state.status()` actually describes: the scan's
-    /// targets (one category outside Smart Care, all of them inside it) or,
-    /// while cleaning, whichever categories the items being cleaned belong
-    /// to. `CleanerState::status` is a single field shared by every category
-    /// — without this, switching to a category outside that set (e.g. one
-    /// Smart Care hasn't reached yet, or one a single-category scan never
-    /// touched) would still read "Scanning"/"Completed" left over from
-    /// whatever run last touched the status field. Read only through
-    /// [`Self::displayed_status`].
-    active_run_categories: Vec<CleanerCategory>,
+    /// Which categories' warnings block is expanded to its raw diagnostic
+    /// detail. UI-only — not domain state, same footing as
+    /// `CleanerState::expanded_sections`.
+    expanded_warnings: HashSet<CleanerCategory>,
 }
 
 impl CleanerView {
@@ -125,30 +114,25 @@ impl CleanerView {
         let results_table = cx.new(|cx| {
             TableState::new(ResultsTableDelegate::new(this), window, cx).col_selectable(false)
         });
-        let state = CleanerState::default();
-        let expanded_section = Some(state.section());
         let mut view = Self {
-            state,
+            state: CleanerState::default(),
             scanners: default_scanners(),
             #[cfg(target_os = "macos")]
             permission_service: permissions::default_service(),
-            permission_state: PermissionState::Unknown,
-            permission_task: None,
-            scan_task: None,
-            cleanup_task: None,
+            scan_tasks: HashMap::new(),
+            cancellations: HashMap::new(),
+            progress_rxs: HashMap::new(),
             pump_task: None,
-            progress_rx: None,
-            cancellation: None,
+            cleanup_tasks: HashMap::new(),
+            #[cfg(target_os = "macos")]
+            permission_check_tasks: HashMap::new(),
             ignore_store: Arc::new(DiskOrphanIgnoreStore::new()),
-            ignored_paths: std::collections::BTreeSet::new(),
+            ignored_paths: BTreeSet::new(),
             ignore_load_task: None,
             ignore_store_error: None,
             results_table,
-            expanded_section,
-            active_run_categories: Vec::new(),
+            expanded_warnings: HashSet::new(),
         };
-        #[cfg(target_os = "macos")]
-        view.refresh_permission_state(cx);
         view.load_ignored_paths(cx);
         view
     }
@@ -163,79 +147,38 @@ impl CleanerView {
 
     /// Copies the active category's current items and selection into
     /// [`Self::results_table`]'s delegate. Called at the top of every
-    /// `render`, not gated behind a dirty flag: `render` itself only runs
-    /// when something already changed (a `cx.notify()` fired), and the copy
-    /// is a `Vec`/`HashSet` clone bounded by the active category's own item
-    /// count — cheap next to the GPUI element tree `DataTable` builds only
-    /// for the rows actually on screen. A dirty flag would risk a stale
-    /// table on the one call site someone forgets to set it.
+    /// `render`, not gated behind a dirty flag — see the original rationale
+    /// preserved from round 1: `render` itself only runs when something
+    /// already changed, and the copy is bounded by the active category's own
+    /// item count.
     fn sync_results_table(&mut self, cx: &mut Context<Self>) {
-        let category = self.state.category();
-        let items = self
-            .state
-            .result_for(category)
+        let category = self.state.selected_category();
+        let category_state = self.state.category(category);
+        let items = category_state
+            .result()
             .map(|result| result.items.clone())
             .unwrap_or_default();
-        let selected_ids: std::collections::HashSet<CleanableItemId> =
-            self.state.selected_ids_for(category).into_iter().collect();
+        let selected_ids: HashSet<CleanableItemId> =
+            category_state.selected_ids().into_iter().collect();
         self.results_table.update(cx, |table, cx| {
             table.delegate_mut().set(items, selected_ids);
             table.refresh(cx);
         });
     }
 
-    fn category_permission_requirement(category: CleanerCategory) -> Option<MacPermission> {
-        match category {
-            CleanerCategory::MailFiles | CleanerCategory::OrphanedFiles => {
-                Some(MacPermission::FullDiskAccess)
-            }
-            _ => None,
-        }
+    fn is_category_busy(&self, category: CleanerCategory) -> bool {
+        let state = self.state.category(category);
+        state.scan_state().is_active() || state.cleaning()
     }
 
     #[cfg(target_os = "macos")]
-    fn refresh_permission_state(&mut self, cx: &mut Context<Self>) {
-        if self.permission_task.is_some() {
-            return;
-        }
-        self.permission_state = PermissionState::Checking;
-        let service = self.permission_service.clone();
-        self.permission_task = Some(cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { service.check_full_disk_access() })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.permission_state = match result {
-                    Ok(state) => state,
-                    Err(_) => PermissionState::Unknown,
-                };
-                this.permission_task = None;
-                cx.notify();
-            });
-        }));
+    fn is_permission_check_pending(&self, category: CleanerCategory) -> bool {
+        self.permission_check_tasks.contains_key(&category)
     }
 
-    #[cfg(target_os = "macos")]
-    fn open_full_disk_access_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Err(error) = self.permission_service.open_full_disk_access_settings() {
-            window.open_alert_dialog(cx, move |alert, _, cx| {
-                alert
-                    .title(t(Str::CleanerStatusFailed, cx))
-                    .description(format!("{error:?}"))
-            });
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn reveal_application_bundle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Err(error) = self.permission_service.reveal_application_bundle() {
-            window.open_alert_dialog(cx, move |alert, _, cx| {
-                alert
-                    .title(t(Str::CleanerStatusFailed, cx))
-                    .description(format!("{error:?}"))
-            });
-        }
+    #[cfg(not(target_os = "macos"))]
+    fn is_permission_check_pending(&self, _category: CleanerCategory) -> bool {
+        false
     }
 
     /// Loads `cleaner-ignored-items.json` on the background executor. Called
@@ -301,204 +244,230 @@ impl CleanerView {
         .detach();
     }
 
-    /// A section header's click handler: standard single-open accordion
-    /// behaviour. Clicking the already-expanded section collapses it;
-    /// clicking any other section collapses whatever was open and expands
-    /// that one instead. Deliberately not the same thing as "which section
-    /// is active for scanning" — collapsing a section must not lose the
-    /// user's place in the main pane, so `self.expanded_section` is its own
-    /// field rather than being read off `self.state.section()`.
-    fn toggle_section(&mut self, section: CleanerSection, cx: &mut Context<Self>) {
-        self.expanded_section = next_expanded_section(self.expanded_section, section);
-        if self.expanded_section == Some(section) {
-            self.state.set_section(section);
+    fn set_selected_category(&mut self, category: CleanerCategory, cx: &mut Context<Self>) {
+        self.state.set_selected_category(category);
+        cx.notify();
+    }
+
+    /// Starts (or restarts) one category's scan. Never touches any other
+    /// category's `scan_tasks`/`cancellations`/`progress_rxs` entry — that
+    /// is what lets two categories scan at once (req #5/#23). A category
+    /// requiring Full Disk Access gets a contextual, click-time-only check
+    /// (req #16/#17) rather than a permanently rendered panel.
+    fn start_scan(
+        &mut self,
+        category: CleanerCategory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !Self::supported_platform() || self.is_category_busy(category) {
+            return;
         }
-        cx.notify();
-    }
-
-    fn set_category(&mut self, category: CleanerCategory, cx: &mut Context<Self>) {
-        self.state.set_category(category);
-        cx.notify();
-    }
-
-    fn start_scan(&mut self, cx: &mut Context<Self>) {
-        if !Self::supported_platform() || self.state.status() == CleanerStatus::Scanning {
+        if self.is_permission_check_pending(category) {
             return;
         }
 
-        let cancellation = CancellationToken::new();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let scanners = self.scanners.clone();
-        let targets = self.scan_targets();
-        let cancellation_for_scan = cancellation.clone();
+        let Some(scanner) = self
+            .scanners
+            .iter()
+            .find(|scanner| scanner.category() == category)
+            .cloned()
+        else {
+            self.state
+                .finish_scan(category, Some(Self::pending_result(category)), false, None);
+            cx.notify();
+            return;
+        };
+
         #[cfg(target_os = "macos")]
-        let permission_state = self.permission_state;
-        self.cancellation = Some(cancellation);
-        self.progress_rx = Some(rx);
-        self.active_run_categories.clone_from(&targets);
-        self.state.begin_scan();
+        {
+            if scanner
+                .required_permissions()
+                .contains(&MacPermission::FullDiskAccess)
+            {
+                self.check_permission_then_scan(category, scanner, window, cx);
+                return;
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = &window;
+        }
+        self.run_scan(category, scanner, cx);
+    }
+
+    /// Probes Full Disk Access on the background executor, then either
+    /// scans (Granted/Restricted/Unknown — the scanner's own per-root
+    /// handling already degrades gracefully, per req #16's last paragraph)
+    /// or shows a focused prompt (only on a clear Denied).
+    #[cfg(target_os = "macos")]
+    fn check_permission_then_scan(
+        &mut self,
+        category: CleanerCategory,
+        scanner: Arc<dyn CleanerScanner>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let service = self.permission_service.clone();
+        self.permission_check_tasks.insert(
+            category,
+            cx.spawn_in(window, async move |this, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { service.check_full_disk_access() })
+                    .await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.permission_check_tasks.remove(&category);
+                    if matches!(result, Ok(PermissionState::Denied)) {
+                        this.show_permission_prompt(window, cx);
+                    } else {
+                        this.run_scan(category, scanner, cx);
+                    }
+                });
+            }),
+        );
+    }
+
+    /// The contextual Full Disk Access prompt (req #16): a transient dialog
+    /// raised only when a scan actually needs the permission and it is
+    /// actually denied — never a panel occupying the main content area.
+    #[cfg(target_os = "macos")]
+    fn show_permission_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let service = self.permission_service.clone();
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let service = service.clone();
+            alert
+                .title(t(Str::CleanerPermissionTitle, cx))
+                .description(t(Str::CleanerPermissionExplanation, cx))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t(Str::CleanerPermissionOpenSettings, cx))
+                        .cancel_text(t(Str::CleanerPermissionNotNow, cx))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _, _cx| {
+                    let _ = service.open_full_disk_access_settings();
+                    true
+                })
+        });
+    }
+
+    fn run_scan(
+        &mut self,
+        category: CleanerCategory,
+        scanner: Arc<dyn CleanerScanner>,
+        cx: &mut Context<Self>,
+    ) {
+        let cancellation = CancellationToken::new();
+        let cancellation_for_scan = cancellation.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.cancellations.insert(category, cancellation);
+        self.progress_rxs.insert(category, rx);
+        self.state.begin_scan(category);
         cx.notify();
+        self.ensure_pump_running(cx);
 
-        self.pump_progress(cx);
-
-        self.scan_task = Some(cx.spawn(async move |this, cx| {
-            let scan_result = cx
+        let task = cx.spawn(async move |this, cx| {
+            let outcome = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut had_failures = false;
-                    let mut cancelled = false;
                     let context = ScanContext::new();
                     let sink = ChannelProgressSink { tx };
-                    let mut results = Vec::new();
-
-                    for category in targets {
-                        if cancellation_for_scan.is_cancelled() {
-                            cancelled = true;
-                            break;
-                        }
-                        let Some(scanner) = scanners
-                            .iter()
-                            .find(|scanner| scanner.category() == category)
-                            .cloned()
-                        else {
-                            results.push(Self::pending_result(category));
-                            continue;
-                        };
-                        #[cfg(target_os = "macos")]
-                        if scanner
-                            .required_permissions()
-                            .contains(&MacPermission::FullDiskAccess)
-                            && permission_state != PermissionState::Granted
-                        {
-                            results.push(CategoryScanResult {
-                                category,
-                                items: Vec::new(),
-                                scanned_entries: 0,
-                                estimated_reclaimable_bytes: 0,
-                                warnings: vec![ScanWarning {
-                                    message:
-                                        "Full Disk Access is required before this category can scan protected Mail or container data."
-                                            .into(),
-                                }],
-                                completeness: ScanCompleteness::Partial {
-                                    skipped_roots: Vec::new(),
-                                    reason: PartialScanReason::PermissionDenied,
-                                },
-                            });
-                            continue;
-                        }
-                        match scanner.scan(&context, &sink, &cancellation_for_scan) {
-                            Ok(result) => results.push(result),
-                            Err(ScanError::Cancelled) => {
-                                cancelled = true;
-                                results.push(CategoryScanResult {
-                                    category,
-                                    items: Vec::new(),
-                                    scanned_entries: 0,
-                                    estimated_reclaimable_bytes: 0,
-                                    warnings: vec![ScanWarning {
-                                        message: "Scan cancelled.".to_string(),
-                                    }],
-                                    completeness: ScanCompleteness::Partial {
-                                        skipped_roots: Vec::new(),
-                                        reason: PartialScanReason::Cancelled,
-                                    },
-                                });
-                                break;
-                            }
-                            Err(error) => {
-                                had_failures = true;
-                                results.push(CategoryScanResult {
-                                    category,
-                                    items: Vec::new(),
-                                    scanned_entries: 0,
-                                    estimated_reclaimable_bytes: 0,
-                                    warnings: vec![ScanWarning {
-                                        message: format!("{error:?}"),
-                                    }],
-                                    completeness: ScanCompleteness::Partial {
-                                        skipped_roots: Vec::new(),
-                                        reason: PartialScanReason::RootUnavailable,
-                                    },
-                                });
-                            }
-                        }
+                    match scanner.scan(&context, &sink, &cancellation_for_scan) {
+                        Ok(result) => (Some(result), false, None),
+                        Err(ScanError::Cancelled) => (None, true, None),
+                        Err(error) => (None, false, Some(format!("{error:?}"))),
                     }
-
-                    (results, cancelled, had_failures)
                 })
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                let (results, cancelled, had_failures) = scan_result;
-                for result in results {
-                    this.state.push_result(result);
-                }
-                this.state.finish_scan(cancelled, had_failures);
-                this.cancellation = None;
-                this.scan_task = None;
+                let (result, cancelled, error) = outcome;
+                this.state.finish_scan(category, result, cancelled, error);
+                this.cancellations.remove(&category);
+                this.progress_rxs.remove(&category);
+                this.scan_tasks.remove(&category);
                 cx.notify();
             });
-        }));
+        });
+        self.scan_tasks.insert(category, task);
     }
 
-    fn pump_progress(&mut self, cx: &mut Context<Self>) {
+    /// A single background loop that drains every category's progress
+    /// channel each tick, rather than one timer per category. Stops itself
+    /// once `progress_rxs` is empty, so it costs nothing while nothing is
+    /// scanning, and one category finishing early never stops another's
+    /// updates from still being pumped.
+    fn ensure_pump_running(&mut self, cx: &mut Context<Self>) {
+        if self.pump_task.is_some() {
+            return;
+        }
         self.pump_task = Some(cx.spawn(async move |this, cx| {
             loop {
-                let done = this
+                let has_active = this
                     .update(cx, |this, cx| {
                         let mut updated = false;
-                        if let Some(rx) = this.progress_rx.as_ref() {
-                            while let Ok(progress) = rx.try_recv() {
-                                this.state.update_progress(progress);
-                                updated = true;
+                        let categories: Vec<CleanerCategory> =
+                            this.progress_rxs.keys().copied().collect();
+                        for category in categories {
+                            if let Some(rx) = this.progress_rxs.get(&category) {
+                                while let Ok(progress) = rx.try_recv() {
+                                    this.state.update_progress(category, progress);
+                                    updated = true;
+                                }
                             }
                         }
                         if updated {
                             cx.notify();
                         }
-
-                        this.scan_task.is_none()
-                            && matches!(
-                                this.state.status(),
-                                CleanerStatus::Completed
-                                    | CleanerStatus::PartiallyCompleted
-                                    | CleanerStatus::CompletedWithFailures
-                                    | CleanerStatus::Failed
-                            )
+                        !this.progress_rxs.is_empty()
                     })
-                    .unwrap_or(true);
+                    .unwrap_or(false);
 
-                if done {
+                if !has_active {
                     break;
                 }
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(120))
                     .await;
             }
+            let _ = this.update(cx, |this, _cx| {
+                this.pump_task = None;
+            });
         }));
     }
 
-    fn cancel_scan(&mut self, cx: &mut Context<Self>) {
-        if let Some(cancellation) = self.cancellation.as_ref() {
+    fn cancel_scan(&mut self, category: CleanerCategory, cx: &mut Context<Self>) {
+        if let Some(cancellation) = self.cancellations.get(&category) {
             cancellation.cancel();
-            self.state.begin_cancelling();
+            self.state.begin_cancelling(category);
             cx.notify();
         }
     }
 
     pub(super) fn toggle_selected(&mut self, id: CleanableItemId, cx: &mut Context<Self>) {
-        self.state.toggle_selected(id);
+        self.state
+            .toggle_selected(self.state.selected_category(), id);
         cx.notify();
     }
 
-    fn select_safe_items(&mut self, cx: &mut Context<Self>) {
-        self.state.select_safe_items_for(self.state.category());
+    /// The results table's header checkbox, unchecked or indeterminate:
+    /// selects every selectable row in the active category. See
+    /// `CleanerState::select_all` for the `MoveToTrash` gate.
+    pub(super) fn select_all_visible(&mut self, cx: &mut Context<Self>) {
+        self.state.select_all(self.state.selected_category());
         cx.notify();
     }
 
-    fn clear_selection(&mut self, cx: &mut Context<Self>) {
-        self.state.clear_selection_for(self.state.category());
+    /// The results table's header checkbox, fully checked: clears the whole
+    /// selection for the active category.
+    pub(super) fn deselect_all(&mut self, cx: &mut Context<Self>) {
+        self.state.clear_selection(self.state.selected_category());
+        cx.notify();
+    }
+
+    fn select_safe_items(&mut self, category: CleanerCategory, cx: &mut Context<Self>) {
+        self.state.select_safe_items(category);
         cx.notify();
     }
 
@@ -531,7 +500,7 @@ impl CleanerView {
         if selected.is_empty() {
             return;
         }
-        let is_docker = self.state.category() == CleanerCategory::DockerCache;
+        let is_docker = self.state.selected_category() == CleanerCategory::DockerCache;
         let count = selected.len();
         let size = Self::format_bytes(selected.iter().map(|item| item.logical_size).sum());
         let view = cx.entity();
@@ -596,24 +565,23 @@ impl CleanerView {
         self.run_cleanup(items, cx);
     }
 
+    /// Cleans exactly the category the items belong to (every caller hands
+    /// this a single-category list) and never touches any other category's
+    /// `cleaning`/`cleanup_report` — a cleanup running for one category never
+    /// blocks scanning or viewing another.
     fn run_cleanup(&mut self, items: Vec<CleanableItem>, cx: &mut Context<Self>) {
-        if self.cleanup_task.is_some() || items.is_empty() {
+        let Some(category) = items.first().map(|item| item.category) else {
+            return;
+        };
+        if self.cleanup_tasks.contains_key(&category) {
             return;
         }
-        self.active_run_categories = items
-            .iter()
-            .map(|item| item.category)
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        self.state.begin_cleaning();
+        self.state.begin_cleaning(category);
         cx.notify();
 
-        let is_docker = items
-            .iter()
-            .all(|item| item.category == CleanerCategory::DockerCache);
+        let is_docker = category == CleanerCategory::DockerCache;
 
-        self.cleanup_task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let report = cx
                 .background_executor()
                 .spawn(async move {
@@ -652,11 +620,12 @@ impl CleanerView {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                this.state.finish_cleaning(report);
-                this.cleanup_task = None;
+                this.state.finish_cleaning(category, report);
+                this.cleanup_tasks.remove(&category);
                 cx.notify();
             });
-        }));
+        });
+        self.cleanup_tasks.insert(category, task);
     }
 
     pub(super) fn begin_uninstall_review(
@@ -669,7 +638,8 @@ impl CleanerView {
         {
             let other_apps = self
                 .state
-                .result_for(CleanerCategory::InstalledApps)
+                .category(CleanerCategory::InstalledApps)
+                .result()
                 .map(|result| {
                     result
                         .items
@@ -684,33 +654,10 @@ impl CleanerView {
         }
     }
 
-    fn categories_for_section(section: CleanerSection) -> Vec<CleanerCategory> {
-        if section == CleanerSection::SmartCare {
-            CleanerCategory::ALL.to_vec()
-        } else {
-            CleanerCategory::categories_for(section).collect()
-        }
-    }
-
     fn selected_items_for_active_category(&self) -> Vec<CleanableItem> {
-        let selected_ids = self.state.selected_ids_for(self.state.category());
-        let Some(result) = self.state.result_for(self.state.category()) else {
-            return Vec::new();
-        };
-        result
-            .items
-            .iter()
-            .filter(|item| selected_ids.contains(&item.id))
-            .cloned()
-            .collect()
-    }
-
-    fn scan_targets(&self) -> Vec<CleanerCategory> {
-        if self.state.section() == CleanerSection::SmartCare {
-            CleanerCategory::ALL.to_vec()
-        } else {
-            vec![self.state.category()]
-        }
+        self.state
+            .category(self.state.selected_category())
+            .selected_items()
     }
 
     /// `pub(super)` rather than private: the uninstall review dialog
@@ -731,34 +678,19 @@ impl CleanerView {
         }
     }
 
-    /// `self.state.status()` filtered through [`Self::active_run_categories`]:
-    /// `Idle` for a category the current or last run never touched, the real
-    /// status otherwise. See the field doc for why this indirection exists.
-    fn displayed_status(&self) -> CleanerStatus {
-        if self.active_run_categories.contains(&self.state.category()) {
-            self.state.status()
-        } else {
-            CleanerStatus::Idle
-        }
-    }
-
-    fn status_label(status: CleanerStatus) -> Str {
-        match status {
-            CleanerStatus::Idle => Str::CleanerStatusIdle,
-            CleanerStatus::CheckingPermissions => Str::CleanerStatusCheckingPermissions,
-            CleanerStatus::Scanning => Str::CleanerStatusScanning,
-            CleanerStatus::Cancelling => Str::CleanerStatusCancelling,
-            CleanerStatus::PartiallyCompleted => Str::CleanerStatusPartial,
-            CleanerStatus::Completed => Str::CleanerStatusCompleted,
-            CleanerStatus::Cleaning => Str::CleanerStatusCleaning,
-            CleanerStatus::CompletedWithFailures => Str::CleanerStatusCompletedWithFailures,
-            CleanerStatus::Failed => Str::CleanerStatusFailed,
-        }
+    /// "· 2.4s" beside the completed summary's stat chips (req #8's "scan
+    /// duration if useful") — `None` when either timestamp is missing (a
+    /// category that has never finished a scan) or the clock went backwards
+    /// (never trusted over a zero/negative duration).
+    fn scan_duration_label(state: &CategoryState) -> Option<String> {
+        let started = state.started_at()?;
+        let finished = state.finished_at()?;
+        let duration = finished.duration_since(started).ok()?;
+        Some(format!("· {:.1}s", duration.as_secs_f64()))
     }
 
     fn section_label(section: CleanerSection) -> Str {
         match section {
-            CleanerSection::SmartCare => Str::CleanerSectionSmartCare,
             CleanerSection::Cleanup => Str::CleanerSectionCleanup,
             CleanerSection::Applications => Str::CleanerSectionApplications,
             CleanerSection::Advanced => Str::CleanerSectionAdvanced,
@@ -767,7 +699,6 @@ impl CleanerView {
 
     fn section_icon(section: CleanerSection) -> AppIcon {
         match section {
-            CleanerSection::SmartCare => AppIcon::ChartPie,
             CleanerSection::Cleanup => AppIcon::Trash,
             CleanerSection::Applications => AppIcon::LayoutDashboard,
             CleanerSection::Advanced => AppIcon::Sliders,
@@ -821,24 +752,13 @@ impl CleanerView {
             items: Vec::new(),
             scanned_entries: 0,
             estimated_reclaimable_bytes: 0,
-            warnings: vec![ScanWarning {
+            warnings: vec![crate::cleaner::core::report::ScanWarning {
                 message: "This category is planned but not implemented yet.".to_string(),
             }],
             completeness: ScanCompleteness::Partial {
                 skipped_roots: Vec::new(),
                 reason: PartialScanReason::UnsupportedEnvironment,
             },
-        }
-    }
-
-    fn permission_state_label(state: PermissionState) -> Str {
-        match state {
-            PermissionState::Unknown => Str::CleanerPermissionUnknown,
-            PermissionState::Checking => Str::CleanerPermissionChecking,
-            PermissionState::Granted => Str::CleanerPermissionGranted,
-            PermissionState::Denied => Str::CleanerPermissionDenied,
-            PermissionState::Restricted => Str::CleanerPermissionRestricted,
-            PermissionState::RequiresRestart => Str::CleanerPermissionRequiresRestart,
         }
     }
 
@@ -856,7 +776,9 @@ impl CleanerView {
     /// The colour scheme for one sidebar row (section header or category).
     /// `active` gets a tinted rest background on top of the same
     /// hover/press tint everything else gets, so a selected row still reads
-    /// as "more selected" on hover rather than losing its highlight.
+    /// as "more selected" on hover rather than losing its highlight. No
+    /// left border here — the accent colour, background tint and bold text
+    /// alone carry "selected" (req #3).
     fn sidebar_row_variant(cx: &App, active: bool) -> ButtonCustomVariant {
         let base = ButtonCustomVariant::new(cx)
             .hover(cx.theme().primary.opacity(0.08))
@@ -868,16 +790,43 @@ impl CleanerView {
         }
     }
 
-    /// One accordion group in the sidebar: the section's own header row,
-    /// followed by its categories only while `self.expanded_section` names
-    /// this section — see [`Self::toggle_section`] for why that is tracked
-    /// separately from `self.state.section()`.
+    /// The compact per-category indicator in the sidebar (req #4): a
+    /// `Spinner` while scanning/cancelling, a small check/warning/error glyph
+    /// once there is an outcome to show, nothing for a category that has
+    /// never been scanned or whose scan was cancelled outright.
+    fn render_scan_state_glyph(&self, category: CleanerCategory, cx: &App) -> AnyElement {
+        match self.state.category(category).scan_state() {
+            ScanState::Scanning | ScanState::Cancelling => {
+                Spinner::new().xsmall().into_any_element()
+            }
+            ScanState::Completed => Icon::new(AppIcon::CircleCheck)
+                .size_3()
+                .text_color(cx.theme().success.opacity(0.7))
+                .into_any_element(),
+            ScanState::CompletedWithWarnings | ScanState::PartiallyCompleted => {
+                Icon::new(AppIcon::AlertTriangle)
+                    .size_3()
+                    .text_color(cx.theme().warning)
+                    .into_any_element()
+            }
+            ScanState::Failed => Icon::new(AppIcon::CircleX)
+                .size_3()
+                .text_color(cx.theme().danger)
+                .into_any_element(),
+            ScanState::NotScanned | ScanState::Cancelled => div().into_any_element(),
+        }
+    }
+
+    /// One tree group in the sidebar: the section's own header row, then —
+    /// independently of every other section — its categories only while
+    /// `CleanerState::is_section_expanded` says this section is expanded
+    /// (req #2: each section owns its own expanded/collapsed bit).
     fn render_section_group(
         &self,
         section: CleanerSection,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let expanded = self.expanded_section == Some(section);
+        let expanded = self.state.is_section_expanded(section);
         let accent_color = if expanded {
             cx.theme().primary
         } else {
@@ -887,9 +836,6 @@ impl CleanerView {
             Button::new(format!("cleaner-section-{section:?}"))
                 .custom(Self::sidebar_row_variant(cx, expanded))
                 .w_full()
-                .when(expanded, |btn| {
-                    btn.border_l_2().border_color(cx.theme().primary)
-                })
                 .child(
                     h_flex()
                         .w_full()
@@ -928,15 +874,15 @@ impl CleanerView {
                         ),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.toggle_section(section, cx);
+                    this.state.toggle_section_expanded(section);
+                    cx.notify();
                 }))
                 .into_any_element(),
         ];
 
         if expanded {
             rows.extend(
-                Self::categories_for_section(section)
-                    .into_iter()
+                CleanerCategory::categories_for(section)
                     .map(|category| self.render_category_row(category, cx)),
             );
         }
@@ -945,7 +891,7 @@ impl CleanerView {
     }
 
     fn render_category_row(&self, category: CleanerCategory, cx: &mut Context<Self>) -> AnyElement {
-        let active = self.state.category() == category;
+        let active = self.state.selected_category() == category;
         let accent_color = if active {
             cx.theme().primary
         } else {
@@ -954,33 +900,578 @@ impl CleanerView {
         Button::new(format!("cleaner-category-{category:?}"))
             .custom(Self::sidebar_row_variant(cx, active))
             .w_full()
-            .when(active, |btn| {
-                btn.border_l_2().border_color(cx.theme().primary)
-            })
             .child(
                 h_flex()
                     .w_full()
                     .items_center()
+                    .justify_between()
                     .gap_2()
                     .pl_6()
                     .child(
-                        Icon::new(category_icon(category))
-                            .size_4()
-                            .flex_shrink_0()
-                            .text_color(accent_color),
-                    )
-                    .child(
-                        div()
+                        h_flex()
                             .min_w_0()
-                            .truncate()
-                            .text_color(accent_color)
-                            .when(active, |div| div.font_bold())
-                            .child(t(Self::category_label(category), cx)),
-                    ),
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Icon::new(category_icon(category))
+                                    .size_4()
+                                    .flex_shrink_0()
+                                    .text_color(accent_color),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(accent_color)
+                                    .when(active, |div| div.font_bold())
+                                    .child(t(Self::category_label(category), cx)),
+                            ),
+                    )
+                    .child(self.render_scan_state_glyph(category, cx)),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.set_category(category, cx);
+                this.set_selected_category(category, cx);
             }))
+            .into_any_element()
+    }
+
+    /// Layer 2/3 of the main pane (req #25): which of the pre-scan empty
+    /// state, the scanning panel or the completed summary + results is
+    /// shown is entirely a function of `ScanState` — never inferred from a
+    /// warning string or an `Option` combination.
+    fn render_category_body(
+        &self,
+        category: CleanerCategory,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = self.state.category(category);
+        match state.scan_state() {
+            ScanState::NotScanned => self.render_empty_state(category, cx),
+            _ => self.render_scanned_body(category, state, cx),
+        }
+    }
+
+    /// The pre-scan empty state (req #6): no result table, no zeroed
+    /// counters, no disabled Clean button — just what this category is and
+    /// a single `Scan` action.
+    fn render_empty_state(&self, category: CleanerCategory, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .child(
+                Icon::new(category_icon(category))
+                    .size_8()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .child(
+                div()
+                    .font_bold()
+                    .text_lg()
+                    .child(t(Self::category_label(category), cx)),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .max_w(px(360.))
+                    .text_center()
+                    .child(t(Str::CleanerScanDescription, cx)),
+            )
+            .child(
+                Button::new("cleaner-scan")
+                    .primary()
+                    .label(t(Str::CleanerScan, cx))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.start_scan(category, window, cx)
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn render_scanned_body(
+        &self,
+        category: CleanerCategory,
+        state: &CategoryState,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let top = match state.scan_state() {
+            ScanState::Scanning | ScanState::Cancelling => {
+                self.render_scanning_panel(category, state, cx)
+            }
+            _ => self.render_summary_panel(category, state, cx),
+        };
+
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .gap_3()
+            .child(top)
+            .when(state.cleaning(), |container| {
+                container.child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(Spinner::new().xsmall())
+                        .child(t(Str::CleanerStatusCleaning, cx)),
+                )
+            })
+            .when_some(state.error(), |container, message| {
+                container.child(self.render_error_block(category, message, cx))
+            })
+            .when_some(state.result(), |container, result| {
+                let mut container = container;
+                if let Some(label) = Self::completeness_label(&result.completeness) {
+                    container = container.child(
+                        div()
+                            .rounded(cx.theme().radius)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().warning.opacity(0.08))
+                            .px_3()
+                            .py_2()
+                            .text_sm()
+                            .child(t(label, cx)),
+                    );
+                }
+                if !result.warnings.is_empty() {
+                    container = container.child(self.render_warnings_block(category, result, cx));
+                }
+                container
+            })
+            .when_some(state.cleanup_report(), |container, report| {
+                container.child(self.render_cleanup_report_block(report, cx))
+            })
+            .when(state.result().is_some(), |container| {
+                container.child(self.render_results_area(category, cx))
+            })
+            .into_any_element()
+    }
+
+    /// The scanning header (req #7): an indeterminate progress indicator —
+    /// none of dodo's scanners know their total work ahead of time, so a
+    /// fake percentage is never shown — plus a running entries/bytes count
+    /// and a Cancel action that only exists while a scan can still be
+    /// cancelled.
+    fn render_scanning_panel(
+        &self,
+        category: CleanerCategory,
+        state: &CategoryState,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let cancelling = state.scan_state() == ScanState::Cancelling;
+        v_flex()
+            .gap_2()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .p_3()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Spinner::new().xsmall())
+                    .child(div().font_bold().child(t(
+                        if cancelling {
+                            Str::CleanerStatusCancelling
+                        } else {
+                            Str::CleanerStatusScanning
+                        },
+                        cx,
+                    ))),
+            )
+            .child(Progress::new("cleaner-scan-progress").loading(true))
+            .when_some(state.progress(), |this, progress| {
+                this.child(
+                    h_flex()
+                        .gap_3()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t(
+                            Str::CleanerEntriesScannedCount(progress.scanned_entries),
+                            cx,
+                        ))
+                        .child(t(
+                            Str::CleanerBytesDiscovered(Self::format_bytes(
+                                progress.discovered_bytes,
+                            )),
+                            cx,
+                        )),
+                )
+            })
+            .child(
+                h_flex().justify_end().child(
+                    Button::new("cleaner-cancel")
+                        .ghost()
+                        .disabled(cancelling)
+                        .label(t(Str::CleanerCancelScan, cx))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.cancel_scan(category, cx)),
+                        ),
+                ),
+            )
+            .into_any_element()
+    }
+
+    /// The completed/partial/cancelled/failed summary header (req #8): a
+    /// state glyph and label, compact stat chips when there is a result to
+    /// summarize, and a Rescan action — never selection controls, which
+    /// belong to the results table (req #9).
+    fn render_summary_panel(
+        &self,
+        category: CleanerCategory,
+        state: &CategoryState,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (icon, icon_color, label) = match state.scan_state() {
+            ScanState::Completed => (
+                AppIcon::CircleCheck,
+                cx.theme().success,
+                Str::CleanerStatusCompleted,
+            ),
+            ScanState::CompletedWithWarnings => (
+                AppIcon::AlertTriangle,
+                cx.theme().warning,
+                Str::CleanerStatusCompletedWithWarnings,
+            ),
+            ScanState::PartiallyCompleted => (
+                AppIcon::AlertTriangle,
+                cx.theme().warning,
+                Str::CleanerStatusPartial,
+            ),
+            ScanState::Cancelled => (
+                AppIcon::CircleX,
+                cx.theme().muted_foreground,
+                Str::CleanerStatusCancelled,
+            ),
+            ScanState::Failed
+            | ScanState::NotScanned
+            | ScanState::Scanning
+            | ScanState::Cancelling => (
+                AppIcon::CircleX,
+                cx.theme().danger,
+                Str::CleanerStatusFailed,
+            ),
+        };
+        let result = state.result();
+        let safe_count = result
+            .map(|result| {
+                result
+                    .items
+                    .iter()
+                    .filter(|item| {
+                        matches!(item.selection_policy, SelectionPolicy::SelectedByDefault)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        let items_count = result.map(|result| result.items.len()).unwrap_or(0);
+        let reclaimable = result
+            .map(|result| result.estimated_reclaimable_bytes)
+            .unwrap_or(0);
+        let warnings_count = result.map(|result| result.warnings.len()).unwrap_or(0);
+        let is_busy = self.is_category_busy(category) || self.is_permission_check_pending(category);
+
+        v_flex()
+            .gap_2()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .p_3()
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(icon).size_4().text_color(icon_color))
+                            .child(div().font_bold().child(t(label, cx))),
+                    )
+                    .child(
+                        Button::new("cleaner-rescan")
+                            .ghost()
+                            .disabled(is_busy)
+                            .label(t(Str::CleanerRescan, cx))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.start_scan(category, window, cx)
+                            })),
+                    ),
+            )
+            .when(result.is_some(), |this| {
+                this.child(
+                    h_flex()
+                        .gap_4()
+                        .text_sm()
+                        .child(t(
+                            Str::CleanerReclaimableAmount(Self::format_bytes(reclaimable)),
+                            cx,
+                        ))
+                        .child(t(Str::CleanerItemsFound(items_count), cx))
+                        .child(t(Str::CleanerSafeItemsCount(safe_count), cx))
+                        .when(warnings_count > 0, |row| {
+                            row.child(t(Str::CleanerWarningCount(warnings_count), cx))
+                        })
+                        .when_some(Self::scan_duration_label(state), |row, duration| {
+                            row.child(
+                                div()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(duration),
+                            )
+                        }),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// The friendly failure summary (req #18) for [`ScanState::Failed`]: the
+    /// state itself is what leads, and the raw `format!("{error:?}")` detail
+    /// (`CategoryState::error`) stays available but collapsed rather than
+    /// shown directly.
+    fn render_error_block(
+        &self,
+        category: CleanerCategory,
+        message: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let expanded = self.expanded_warnings.contains(&category);
+        v_flex()
+            .gap_1()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().danger.opacity(0.08))
+            .p_2()
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Icon::new(AppIcon::CircleX)
+                                    .size_4()
+                                    .text_color(cx.theme().danger),
+                            )
+                            .child(div().text_sm().child(t(Str::CleanerStatusFailed, cx))),
+                    )
+                    .child(
+                        Button::new("cleaner-error-toggle")
+                            .ghost()
+                            .xsmall()
+                            .label(t(
+                                if expanded {
+                                    Str::CleanerScanWarningsHideDetails
+                                } else {
+                                    Str::CleanerScanWarningsShowDetails
+                                },
+                                cx,
+                            ))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.expanded_warnings.remove(&category) {
+                                    this.expanded_warnings.insert(category);
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .when(expanded, |this| {
+                this.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(message.to_string()),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// The friendly warnings summary (req #18): a count and a collapsed-by-
+    /// -default expander, never a raw `format!("{error:?}")` string leading
+    /// the display — the diagnostic detail is still there, one click away.
+    fn render_warnings_block(
+        &self,
+        category: CleanerCategory,
+        result: &CategoryScanResult,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let expanded = self.expanded_warnings.contains(&category);
+        v_flex()
+            .gap_1()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().warning.opacity(0.08))
+            .p_2()
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Icon::new(AppIcon::AlertTriangle)
+                                    .size_4()
+                                    .text_color(cx.theme().warning),
+                            )
+                            .child(div().text_sm().child(t(
+                                Str::CleanerScanWarningsSummary(result.warnings.len()),
+                                cx,
+                            ))),
+                    )
+                    .child(
+                        Button::new("cleaner-warnings-toggle")
+                            .ghost()
+                            .xsmall()
+                            .label(t(
+                                if expanded {
+                                    Str::CleanerScanWarningsHideDetails
+                                } else {
+                                    Str::CleanerScanWarningsShowDetails
+                                },
+                                cx,
+                            ))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.expanded_warnings.remove(&category) {
+                                    this.expanded_warnings.insert(category);
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .when(expanded, |this| {
+                this.child(
+                    div()
+                        .font_bold()
+                        .text_sm()
+                        .child(t(Str::CleanerWarnings, cx)),
+                )
+                .children(result.warnings.iter().map(|warning| {
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(warning.message.clone())
+                }))
+            })
+            .into_any_element()
+    }
+
+    fn render_cleanup_report_block(
+        &self,
+        report: &crate::cleaner::core::report::CleanupReport,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        v_flex()
+            .gap_1()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .p_2()
+            .child(div().font_bold().child(t(Str::CleanerCleanupReport, cx)))
+            .child(div().text_sm().child(t(
+                Str::CleanerCleanupSuccessCount(report.successes.len()),
+                cx,
+            )))
+            .child(div().text_sm().child(t(
+                Str::CleanerCleanupFailureCount(report.failures.len()),
+                cx,
+            )))
+            .when(!report.failures.is_empty(), |list| {
+                list.children(report.failures.iter().map(|failure| {
+                    div().text_sm().text_color(cx.theme().danger).child(format!(
+                        "{}: {}",
+                        failure.path.display(),
+                        Self::cleanup_error_text(&failure.error)
+                    ))
+                }))
+            })
+            .into_any_element()
+    }
+
+    /// Layer 3 (req #25/#9-#13): the selection toolbar lives directly above
+    /// the table it acts on, and the table body is the only thing that
+    /// scrolls — the toolbar above it stays put, standing in for a sticky
+    /// action bar without any extra scroll tracking (req #12).
+    fn render_results_area(&self, category: CleanerCategory, cx: &mut Context<Self>) -> AnyElement {
+        let category_state = self.state.category(category);
+        let selected_count = category_state.selected_count();
+        let selected_bytes = category_state.selected_reclaimable_bytes();
+        let is_busy = self.is_category_busy(category);
+
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .gap_2()
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                Button::new("cleaner-select-safe")
+                                    .ghost()
+                                    .disabled(is_busy)
+                                    .label(t(Str::CleanerSelectSafeItems, cx))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.select_safe_items(category, cx)
+                                    })),
+                            )
+                            .when(selected_count > 0, |row| {
+                                row.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(t(
+                                            Str::CleanerSelectedSummary {
+                                                count: selected_count,
+                                                size: Self::format_bytes(selected_bytes),
+                                            },
+                                            cx,
+                                        )),
+                                )
+                            }),
+                    )
+                    .child(
+                        Button::new("cleaner-clean-selected")
+                            .when(selected_count > 0, |btn| btn.danger())
+                            .when(selected_count == 0, |btn| btn.ghost())
+                            .disabled(is_busy || selected_count == 0)
+                            .label(if selected_count > 0 {
+                                t(
+                                    Str::CleanerCleanCount {
+                                        count: selected_count,
+                                        size: Self::format_bytes(selected_bytes),
+                                    },
+                                    cx,
+                                )
+                            } else {
+                                t(Str::CleanerCleanSelected, cx)
+                            })
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.confirm_cleanup(window, cx)),
+                            ),
+                    ),
+            )
+            .child(
+                div().flex_1().min_h_0().child(
+                    DataTable::new(&self.results_table)
+                        .stripe(true)
+                        .bordered(true),
+                ),
+            )
             .into_any_element()
     }
 }
@@ -988,13 +1479,7 @@ impl CleanerView {
 impl Render for CleanerView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_results_table(cx);
-        let is_scanning = matches!(
-            self.state.status(),
-            CleanerStatus::Scanning | CleanerStatus::Cancelling
-        );
-        let is_cleaning = self.state.status() == CleanerStatus::Cleaning;
-        let is_busy = is_scanning || is_cleaning || self.cleanup_task.is_some();
-        let selected_count = self.state.selected_count_for(self.state.category());
+        let category = self.state.selected_category();
 
         v_flex()
             .size_full()
@@ -1019,19 +1504,11 @@ impl Render for CleanerView {
                         .size_full()
                         .gap_4()
                         .child(
-                            v_flex()
-                                .w(px(240.))
-                                .h_full()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .font_bold()
-                                        .text_sm()
-                                        .child(t(Str::CleanerSidebarTitle, cx)),
-                                )
-                                .children(CleanerSection::ALL.into_iter().flat_map(|section| {
-                                    self.render_section_group(section, cx)
-                                })),
+                            v_flex().w(px(240.)).h_full().gap_1().children(
+                                CleanerSection::ALL
+                                    .into_iter()
+                                    .flat_map(|section| self.render_section_group(section, cx)),
+                            ),
                         )
                         .child(
                             v_flex()
@@ -1041,80 +1518,14 @@ impl Render for CleanerView {
                                 .gap_3()
                                 .child(
                                     h_flex()
-                                        .justify_between()
-                                        .items_center()
-                                        .child(div().font_bold().child(t(
-                                            Self::category_label(self.state.category()),
-                                            cx,
-                                        )))
-                                        .child(
-                                            h_flex()
-                                                .gap_2()
-                                                .child(
-                                                    Button::new("cleaner-scan")
-                                                        .primary()
-                                                        .disabled(is_busy)
-                                                        .label(t(Str::CleanerScan, cx))
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.start_scan(cx)
-                                                        })),
-                                                )
-                                                .child(
-                                                    Button::new("cleaner-cancel")
-                                                        .ghost()
-                                                        .disabled(!is_scanning)
-                                                        .label(t(Str::CleanerCancelScan, cx))
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.cancel_scan(cx)
-                                                        })),
-                                                ),
-                                        ),
-                                )
-                                .child(
-                                    h_flex()
                                         .items_center()
                                         .gap_2()
-                                        .child(
-                                            Button::new("cleaner-select-safe")
-                                                .ghost()
-                                                .disabled(is_busy)
-                                                .label(t(Str::CleanerSelectSafeItems, cx))
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.select_safe_items(cx)
-                                                })),
-                                        )
-                                        .child(
-                                            Button::new("cleaner-clear-selection")
-                                                .ghost()
-                                                .disabled(is_busy || selected_count == 0)
-                                                .label(t(Str::CleanerClearSelection, cx))
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.clear_selection(cx)
-                                                })),
-                                        )
-                                        .child(
-                                            Button::new("cleaner-clean-selected")
-                                                .danger()
-                                                .disabled(is_busy || selected_count == 0)
-                                                .label(t(Str::CleanerCleanSelected, cx))
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.confirm_cleanup(window, cx)
-                                                })),
-                                        )
+                                        .child(Icon::new(category_icon(category)).size_4())
                                         .child(
                                             div()
-                                                .text_sm()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(t(
-                                                    Str::CleanerSelectedCount(selected_count),
-                                                    cx,
-                                                )),
+                                                .font_bold()
+                                                .child(t(Self::category_label(category), cx)),
                                         ),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(t(Self::status_label(self.displayed_status()), cx)),
                                 )
                                 .when_some(self.ignore_store_error.as_ref(), |this, error| {
                                     this.child(
@@ -1124,353 +1535,9 @@ impl Render for CleanerView {
                                             .child(t(error.message(), cx)),
                                     )
                                 })
-                                .when(
-                                    Self::category_permission_requirement(self.state.category())
-                                        == Some(MacPermission::FullDiskAccess),
-                                    |this| {
-                                        this.child(
-                                            v_flex()
-                                                .gap_1()
-                                                .rounded(cx.theme().radius)
-                                                .border_1()
-                                                .border_color(cx.theme().border)
-                                                .bg(cx.theme().warning.opacity(0.08))
-                                                .p_2()
-                                                .child(
-                                                    div()
-                                                        .font_bold()
-                                                        .child(t(
-                                                            Str::CleanerPermissionTitle,
-                                                            cx,
-                                                        )),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .child(t(
-                                                            Str::CleanerPermissionExplanation,
-                                                            cx,
-                                                        )),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .text_color(
-                                                            cx.theme().muted_foreground,
-                                                        )
-                                                        .child(t(
-                                                            Self::permission_state_label(
-                                                                self.permission_state,
-                                                            ),
-                                                            cx,
-                                                        )),
-                                                )
-                                                .child(
-                                                    h_flex()
-                                                        .gap_2()
-                                                        .child(
-                                                            Button::new(
-                                                                "cleaner-permission-recheck",
-                                                            )
-                                                            .ghost()
-                                                            .label(t(
-                                                                Str::CleanerPermissionRecheck,
-                                                                cx,
-                                                            ))
-                                                            .on_click(cx.listener(
-                                                                |this, _, _, cx| {
-                                                                    #[cfg(target_os = "macos")]
-                                                                    this.refresh_permission_state(cx);
-                                                                },
-                                                            )),
-                                                        )
-                                                        .child(
-                                                            Button::new(
-                                                                "cleaner-permission-settings",
-                                                            )
-                                                            .ghost()
-                                                            .label(t(
-                                                                Str::CleanerPermissionOpenSettings,
-                                                                cx,
-                                                            ))
-                                                            .on_click(cx.listener(
-                                                                |this, _, window, cx| {
-                                                                    #[cfg(target_os = "macos")]
-                                                                    this.open_full_disk_access_settings(
-                                                                        window, cx,
-                                                                    );
-                                                                },
-                                                            )),
-                                                        )
-                                                        .child(
-                                                            Button::new(
-                                                                "cleaner-permission-reveal-app",
-                                                            )
-                                                            .ghost()
-                                                            .label(t(
-                                                                Str::CleanerPermissionRevealApp,
-                                                                cx,
-                                                            ))
-                                                            .on_click(cx.listener(
-                                                                |this, _, window, cx| {
-                                                                    #[cfg(target_os = "macos")]
-                                                                    this.reveal_application_bundle(
-                                                                        window, cx,
-                                                                    );
-                                                                },
-                                                            )),
-                                                        ),
-                                                ),
-                                        )
-                                    },
-                                )
-                                .when(
-                                    is_scanning
-                                        && self
-                                            .active_run_categories
-                                            .contains(&self.state.category()),
-                                    |this| {
-                                    // Only this category's own scan may draw here: a scan
-                                    // running for a different category (started before the
-                                    // user navigated away) must not bleed its loading bar or
-                                    // progress into whichever category happens to be on screen.
-                                    let own_progress = self
-                                        .state
-                                        .progress()
-                                        .filter(|progress| progress.category == self.state.category());
-                                    this.child(
-                                        v_flex()
-                                            .gap_1()
-                                            .child(Progress::new("cleaner-scan-progress").loading(true))
-                                            .when_some(own_progress, |this, progress| {
-                                                this.child(
-                                                    h_flex()
-                                                        .items_center()
-                                                        .gap_2()
-                                                        .text_sm()
-                                                        .child(format!(
-                                                            "{} · {} · {}",
-                                                            t(Str::CleanerStatusProgress, cx),
-                                                            progress.scanned_entries,
-                                                            progress.discovered_items,
-                                                        ))
-                                                        .child(
-                                                            // Fixed height + horizontal scroll
-                                                            // instead of letting a long path
-                                                            // reflow (and jump) the row.
-                                                            div()
-                                                                .id("cleaner-scan-progress-path")
-                                                                .flex_1()
-                                                                .min_w_0()
-                                                                .h(px(20.))
-                                                                .overflow_x_scroll()
-                                                                .whitespace_nowrap()
-                                                                .text_color(
-                                                                    cx.theme().muted_foreground,
-                                                                )
-                                                                .child(
-                                                                    progress
-                                                                        .current_path
-                                                                        .as_ref()
-                                                                        .map(|path| {
-                                                                            path.display().to_string()
-                                                                        })
-                                                                        .unwrap_or_default(),
-                                                                ),
-                                                        ),
-                                                )
-                                            }),
-                                    )
-                                })
-                                .child({
-                                    // `CleanerState::{estimated_reclaimable_bytes,
-                                    // total_scanned_entries}` are running sums across every
-                                    // category scanned in this run (all of them, once Smart
-                                    // Care is done) — showing those here would put User
-                                    // Cache's numbers on the System Junk page just because
-                                    // both were part of the same run. This category's own
-                                    // result is what belongs on its own page.
-                                    let own_result = self.state.result_for(self.state.category());
-                                    h_flex()
-                                        .gap_4()
-                                        .child(div().child(format!(
-                                            "{}: {}",
-                                            t(Str::CleanerEstimatedReclaimable, cx),
-                                            Self::format_bytes(
-                                                own_result
-                                                    .map(|result| result.estimated_reclaimable_bytes)
-                                                    .unwrap_or(0)
-                                            )
-                                        )))
-                                        .child(div().child(format!(
-                                            "{}: {}",
-                                            t(Str::CleanerEntriesScanned, cx),
-                                            own_result
-                                                .map(|result| result.scanned_entries)
-                                                .unwrap_or(0)
-                                        )))
-                                })
-                                .when_some(
-                                    self.state.cleanup_report().filter(|_| {
-                                        self.active_run_categories.contains(&self.state.category())
-                                    }),
-                                    |this, report| {
-                                    this.child(
-                                        v_flex()
-                                            .gap_1()
-                                            .rounded(cx.theme().radius)
-                                            .border_1()
-                                            .border_color(cx.theme().border)
-                                            .p_2()
-                                            .child(
-                                                div()
-                                                    .font_bold()
-                                                    .child(t(Str::CleanerCleanupReport, cx)),
-                                            )
-                                            .child(div().text_sm().child(t(
-                                                Str::CleanerCleanupSuccessCount(
-                                                    report.successes.len(),
-                                                ),
-                                                cx,
-                                            )))
-                                            .child(div().text_sm().child(t(
-                                                Str::CleanerCleanupFailureCount(
-                                                    report.failures.len(),
-                                                ),
-                                                cx,
-                                            )))
-                                            .when(!report.failures.is_empty(), |list| {
-                                                list.children(report.failures.iter().map(
-                                                    |failure| {
-                                                        div()
-                                                            .text_sm()
-                                                            .text_color(cx.theme().danger)
-                                                            .child(format!(
-                                                                "{}: {}",
-                                                                failure.path.display(),
-                                                                Self::cleanup_error_text(
-                                                                    &failure.error
-                                                                )
-                                                            ))
-                                                    },
-                                                ))
-                                            }),
-                                    )
-                                })
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .gap_2()
-                                        .when_some(
-                                            self.state.result_for(self.state.category()),
-                                            |container, result| {
-                                                container
-                                                    .when_some(
-                                                        Self::completeness_label(
-                                                            &result.completeness,
-                                                        ),
-                                                        |list, label| {
-                                                            list.child(
-                                                                div()
-                                                                    .rounded(cx.theme().radius)
-                                                                    .border_1()
-                                                                    .border_color(
-                                                                        cx.theme().border,
-                                                                    )
-                                                                    .bg(
-                                                                        cx.theme()
-                                                                            .warning
-                                                                            .opacity(0.08),
-                                                                    )
-                                                                    .px_3()
-                                                                    .py_2()
-                                                                    .child(t(label, cx)),
-                                                            )
-                                                        },
-                                                    )
-                                                    .when(!result.warnings.is_empty(), |list| {
-                                                        list.child(
-                                                            v_flex()
-                                                                .gap_1()
-                                                                .child(
-                                                                    div()
-                                                                        .font_bold()
-                                                                        .child(t(
-                                                                            Str::CleanerWarnings,
-                                                                            cx,
-                                                                        )),
-                                                                )
-                                                                .children(
-                                                                    result.warnings.iter().map(
-                                                                        |warning| {
-                                                                            div()
-                                                                                .text_sm()
-                                                                                .text_color(
-                                                                                    cx.theme()
-                                                                                        .muted_foreground,
-                                                                                )
-                                                                                .child(
-                                                                                    warning
-                                                                                        .message
-                                                                                        .clone(),
-                                                                                )
-                                                                        },
-                                                                    ),
-                                                                ),
-                                                        )
-                                                    })
-                                            },
-                                        )
-                                        .child(
-                                            div().flex_1().min_h_0().child(
-                                                DataTable::new(&self.results_table)
-                                                    .stripe(true)
-                                                    .bordered(true),
-                                            ),
-                                        ),
-                                ),
+                                .child(self.render_category_body(category, cx)),
                         ),
                 )
             })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::next_expanded_section;
-    use crate::cleaner::core::category::CleanerSection;
-
-    #[test]
-    fn clicking_a_closed_section_opens_only_that_one() {
-        assert_eq!(
-            next_expanded_section(None, CleanerSection::Cleanup),
-            Some(CleanerSection::Cleanup)
-        );
-        assert_eq!(
-            next_expanded_section(Some(CleanerSection::SmartCare), CleanerSection::Cleanup),
-            Some(CleanerSection::Cleanup),
-            "opening a different section must replace whatever was open, not add to it"
-        );
-    }
-
-    #[test]
-    fn clicking_the_already_open_section_closes_it() {
-        assert_eq!(
-            next_expanded_section(Some(CleanerSection::Advanced), CleanerSection::Advanced),
-            None
-        );
-    }
-
-    #[test]
-    fn a_second_click_on_the_same_section_after_it_reopens_elsewhere_still_toggles() {
-        // The exact sequence the bug report described: open Cleanup, open
-        // Advanced (Cleanup implicitly closes), then click Advanced again —
-        // it must close, not require a third, different section first.
-        let mut expanded = next_expanded_section(None, CleanerSection::Cleanup);
-        expanded = next_expanded_section(expanded, CleanerSection::Advanced);
-        assert_eq!(expanded, Some(CleanerSection::Advanced));
-        expanded = next_expanded_section(expanded, CleanerSection::Advanced);
-        assert_eq!(expanded, None);
     }
 }
