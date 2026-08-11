@@ -76,7 +76,7 @@ use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt as _;
 use gpui::{App, BorrowAppContext as _, Global, QuitMode, Subscription, Task, WeakEntity};
 use tray_icon::menu::MenuEvent;
-use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::{TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::layout::Layout;
 use crate::tray::menu::{TrayCommand, TrayMenu};
@@ -232,7 +232,7 @@ pub fn attach_layout(layout: WeakEntity<Layout>, cx: &mut App) {
 /// One event from either of the two global channels `tray-icon` owns.
 enum Signal {
     Menu(MenuEvent),
-    Tray(TrayIconEvent),
+    Tray,
 }
 
 /// Builds the tray icon and returns whether it is usable.
@@ -258,9 +258,9 @@ pub fn init(cx: &mut App) -> bool {
         // macOS paints this template mark from its alpha. Windows ignores the
         // flag and uses the same bitmap normally.
         .with_icon_as_template(true)
-        // A left click restores Dodo; the native context menu remains on a
-        // right click and still includes the equivalent Open Dodo command.
-        .with_menu_on_left_click(false);
+        // Match a right click: both buttons open the native menu. The explicit
+        // Open Dodo command remains the only tray action that shows a window.
+        .with_menu_on_left_click(true);
 
     match icon::render(language, cx) {
         Ok(icon) => builder = builder.with_icon(icon),
@@ -337,8 +337,8 @@ fn install_event_handlers() -> UnboundedReceiver<Signal> {
         let _ = menu_sender.unbounded_send(Signal::Menu(event));
     }));
 
-    TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
-        let _ = sender.unbounded_send(Signal::Tray(event));
+    TrayIconEvent::set_event_handler(Some(move |_event: TrayIconEvent| {
+        let _ = sender.unbounded_send(Signal::Tray);
     }));
 
     receiver
@@ -368,26 +368,11 @@ async fn drain(mut receiver: UnboundedReceiver<Signal>, cx: &mut gpui::AsyncApp)
                     TrayCommand::Quit => cx.quit(),
                 });
             }
-            Signal::Tray(event) if opens_dodo(&event) => cx.update(open_dodo),
-            Signal::Tray(_) => {}
+            // Native clicks open the attached menu; only an explicit menu
+            // command may show or focus the application window.
+            Signal::Tray => {}
         }
     }
-}
-
-/// A normal left-button release, or Windows' matching double click, restores
-/// the one window. Right clicks keep opening the native context menu.
-fn opens_dodo(event: &TrayIconEvent) -> bool {
-    matches!(
-        event,
-        TrayIconEvent::Click {
-            button: MouseButton::Left,
-            button_state: MouseButtonState::Up,
-            ..
-        } | TrayIconEvent::DoubleClick {
-            button: MouseButton::Left,
-            ..
-        }
-    )
 }
 
 /// Shows dodo's window and brings it to the front.
@@ -455,25 +440,5 @@ mod tests {
             restored_language(None, LanguageId::Vietnamese),
             LanguageId::Vietnamese,
         );
-    }
-
-    #[test]
-    fn only_a_completed_left_click_opens_dodo() {
-        let event = |button, button_state| TrayIconEvent::Click {
-            id: tray_icon::TrayIconId::new("dodo"),
-            position: Default::default(),
-            rect: Default::default(),
-            button,
-            button_state,
-        };
-        assert!(opens_dodo(&event(MouseButton::Left, MouseButtonState::Up)));
-        assert!(!opens_dodo(&event(
-            MouseButton::Left,
-            MouseButtonState::Down
-        )));
-        assert!(!opens_dodo(&event(
-            MouseButton::Right,
-            MouseButtonState::Up
-        )));
     }
 }
