@@ -186,8 +186,8 @@ impl ApiExplorer {
             .w_full()
             .min_w_0()
             .items_center()
-            .gap_2()
-            .px_2()
+            .gap_1()
+            .px_1()
             // A divider above the strip separates it from the status row, and
             // the existing one below separates it from the response pane.
             .border_t_1()

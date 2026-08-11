@@ -220,7 +220,8 @@ impl ApiExplorer {
     ) -> impl IntoElement {
         let id = node.id;
         let is_container = node.is_container();
-        let icon = node_icon(node, expanded);
+        let icon = node_icon(node, depth, expanded);
+        let method = node.snapshot().map(|snapshot| snapshot.method);
         let name = node.name.clone();
         let indent = px(8. + depth as f32 * 14.);
 
@@ -251,12 +252,24 @@ impl ApiExplorer {
                 // Requests line up with a container's chevron column.
                 div().w(px(20.)).flex_shrink_0().into_any_element()
             })
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(Icon::new(icon).size(px(14.))),
-            )
+            .when_some(icon, |this, icon| {
+                this.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(Icon::new(icon).size(px(14.))),
+                )
+            })
+            .when_some(method, |this, method| {
+                this.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .font_bold()
+                        .text_color(method.color(cx))
+                        .child(method.as_str()),
+                )
+            })
             .child(
                 div()
                     .id(("node-name", id as usize))
@@ -265,6 +278,10 @@ impl ApiExplorer {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .cursor_pointer()
+                    .when(
+                        depth == 0 && matches!(node.kind, NodeKind::Collection),
+                        |this| this.font_bold(),
+                    )
                     .child(name)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if is_container {
@@ -299,6 +316,8 @@ impl ApiExplorer {
                 .justify_start()
                 .child(
                     h_flex()
+                        .w_full()
+                        .justify_start()
                         .gap_2()
                         .items_center()
                         .child(Icon::new(icon).size(px(13.)))
@@ -375,17 +394,38 @@ fn node_matches(node: &Node, query: &str) -> bool {
         || node.children.iter().any(|child| node_matches(child, query))
 }
 
-/// The icon for a node: an open/closed folder for containers, a file for a
-/// saved request.
-fn node_icon(node: &Node, expanded: bool) -> AppIcon {
+/// The icon for a node: root collections are named headings, folders remain
+/// folders, and saved requests are files.
+fn node_icon(node: &Node, depth: usize, expanded: bool) -> Option<AppIcon> {
     match node.kind {
-        NodeKind::Collection | NodeKind::Folder => {
-            if expanded {
-                AppIcon::FolderOpen
-            } else {
-                AppIcon::Folder
-            }
+        NodeKind::Collection if depth == 0 => None,
+        NodeKind::Collection | NodeKind::Folder => Some(if expanded {
+            AppIcon::FolderOpen
+        } else {
+            AppIcon::Folder
+        }),
+        NodeKind::Request(_) => Some(AppIcon::File),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::node_icon;
+    use crate::api_explorer::models::collection::{Node, NodeKind};
+
+    fn node(kind: NodeKind) -> Node {
+        Node {
+            id: 0,
+            name: String::new(),
+            kind,
+            children: Vec::new(),
+            expanded: true,
         }
-        NodeKind::Request(_) => AppIcon::File,
+    }
+
+    #[test]
+    fn root_collections_are_text_headings_but_folders_keep_their_icons() {
+        assert!(node_icon(&node(NodeKind::Collection), 0, true).is_none());
+        assert!(node_icon(&node(NodeKind::Folder), 1, true).is_some());
     }
 }

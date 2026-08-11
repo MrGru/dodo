@@ -4,7 +4,10 @@
 //! unsaved dot, and a close button; the `+` at the end opens another.
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{Context, IntoElement, ParentElement as _, Styled as _, div, px};
+use gpui::{
+    Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Styled as _,
+    div, px,
+};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex};
@@ -28,6 +31,13 @@ impl ApiExplorer {
                 let name = state.request.display_name(cx);
 
                 Tab::new()
+                    .on_mouse_down(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _, _, cx| {
+                            this.close_tab(index, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
                     // The method label and close button otherwise sit flush
                     // against the tab's edges; a little horizontal padding gives
                     // each tab room to breathe.
@@ -75,11 +85,11 @@ impl ApiExplorer {
                     .selected_index(active)
                     .children(tabs)
                     .suffix(
-                        // Centered in a square slot the height of the tab strip,
-                        // so the `+` sits in the middle of its cell rather than
-                        // hard against the last tab.
+                        // Match the tab strip's height so the control stays
+                        // centered with the tabs rather than its own square.
                         h_flex()
-                            .size(px(28.))
+                            .h_full()
+                            .px_1()
                             .items_center()
                             .justify_center()
                             .child(

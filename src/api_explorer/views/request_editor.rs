@@ -266,7 +266,7 @@ impl ApiExplorer {
         h_flex()
             .w_full()
             .min_w_0()
-            .px_2()
+            .px_1()
             .overflow_hidden()
             // A divider above the strip separates it from the request bar, and
             // the existing one below separates it from the pane.

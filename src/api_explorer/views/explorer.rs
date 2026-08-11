@@ -669,6 +669,15 @@ impl ApiExplorer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(index) = tab_index_for_node(
+            self.tabs.iter().map(|tab| tab.read(cx).request.origin_node),
+            id,
+        ) {
+            self.ui.active_tab = index;
+            cx.notify();
+            return;
+        }
+
         let opened = self
             .collections
             .tree()
@@ -1163,26 +1172,31 @@ impl ApiExplorer {
             .min_w_0()
             .child(self.render_tab_strip(cx))
             .child(
-                v_resizable("api-explorer-rows")
-                    .with_state(&self.ui.inner_split)
-                    // The request pane has no fixed size, so it grows to fill
-                    // whatever the response pane leaves — the request is the
-                    // pane being edited before a response exists, and each of
-                    // its tabs fills the height rather than a fixed stub.
-                    .child(
-                        resizable_panel()
-                            .size_range(REQUEST_MIN_HEIGHT..px(1200.))
-                            .child(self.render_request_editor(window, cx)),
-                    )
-                    // The response pane is the sized one: it opens at a sensible
-                    // default and holds it, so a response arriving does not
-                    // reshuffle the split, and the divider is still draggable.
-                    .child(
-                        resizable_panel()
-                            .size(RESPONSE_HEIGHT)
-                            .size_range(px(120.)..px(1200.))
-                            .child(self.render_response_viewer(cx)),
-                    ),
+                // The request-tab strip above stays outside this clipped,
+                // resizable region, so it remains visible while a pane scrolls
+                // or the response divider is dragged upward.
+                div().flex_1().min_h_0().child(
+                    v_resizable("api-explorer-rows")
+                        .with_state(&self.ui.inner_split)
+                        // The request pane has no fixed size, so it grows to fill
+                        // whatever the response pane leaves — the request is the
+                        // pane being edited before a response exists, and each of
+                        // its tabs fills the height rather than a fixed stub.
+                        .child(
+                            resizable_panel()
+                                .size_range(REQUEST_MIN_HEIGHT..px(1200.))
+                                .child(self.render_request_editor(window, cx)),
+                        )
+                        // The response pane is the sized one: it opens at a sensible
+                        // default and holds it, so a response arriving does not
+                        // reshuffle the split, and the divider is still draggable.
+                        .child(
+                            resizable_panel()
+                                .size(RESPONSE_HEIGHT)
+                                .size_range(px(120.)..px(1200.))
+                                .child(self.render_response_viewer(cx)),
+                        ),
+                ),
             )
             .into_any_element()
     }
@@ -1253,10 +1267,29 @@ fn is_pristine(tab: &Entity<RequestTabState>, url: &str, cx: &App) -> bool {
     state.request.name.is_none() && !state.request.dirty && url.trim().is_empty()
 }
 
+/// The index of the tab opened from collection node `id`.
+fn tab_index_for_node(
+    origins: impl IntoIterator<Item = Option<NodeId>>,
+    id: NodeId,
+) -> Option<usize> {
+    origins.into_iter().position(|origin| origin == Some(id))
+}
+
 /// The name of node `id` if it is somewhere in this subtree.
 fn find_name(node: &crate::api_explorer::models::collection::Node, id: NodeId) -> Option<String> {
     if node.id == id {
         return Some(node.name.clone());
     }
     node.children.iter().find_map(|child| find_name(child, id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tab_index_for_node;
+
+    #[test]
+    fn finds_the_existing_tab_for_a_collection_request() {
+        assert_eq!(tab_index_for_node([None, Some(7), Some(9)], 7), Some(1));
+        assert_eq!(tab_index_for_node([None, Some(7), Some(9)], 8), None);
+    }
 }
