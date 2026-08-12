@@ -38,6 +38,7 @@ use crate::cleaner::services::ignore_store::{
     DiskOrphanIgnoreStore, OrphanIgnoreStore, OrphanIgnoreStoreError,
 };
 use crate::cleaner::state::{CategoryState, CleanerState, default_scanners};
+use crate::cleaner::views::results_sync::{ResultsSync, ResultsSyncKey, ResultsSyncPlan};
 use crate::cleaner::views::results_table::{ResultsTableDelegate, category_icon};
 #[cfg(target_os = "macos")]
 use crate::cleaner::views::uninstall_review_dialog;
@@ -89,6 +90,10 @@ pub struct CleanerView {
     /// `results_table`'s module doc for why it holds a `WeakEntity` back to
     /// this view rather than the other way around.
     results_table: Entity<TableState<ResultsTableDelegate>>,
+    /// What [`Self::results_table`]'s delegate was last filled from, so a
+    /// frame that changed nothing does not re-copy the whole result into it.
+    /// See `views::results_sync` for the measurements behind that.
+    results_sync: ResultsSync,
     /// Which categories' warnings block is expanded to its raw diagnostic
     /// detail. UI-only — not domain state, same footing as
     /// `CleanerState::expanded_sections`.
@@ -122,6 +127,7 @@ impl CleanerView {
             ignore_load_task: None,
             ignore_store_error: None,
             results_table,
+            results_sync: ResultsSync::default(),
             expanded_warnings: HashSet::new(),
         };
         view.load_ignored_paths(cx);
@@ -137,24 +143,51 @@ impl CleanerView {
     }
 
     /// Copies the active category's current items and selection into
-    /// [`Self::results_table`]'s delegate. Called at the top of every
-    /// `render`, not gated behind a dirty flag — see the original rationale
-    /// preserved from round 1: `render` itself only runs when something
-    /// already changed, and the copy is bounded by the active category's own
-    /// item count.
+    /// [`Self::results_table`]'s delegate — but only the part of it that
+    /// actually changed since the last frame.
+    ///
+    /// Round 1's version copied everything at the top of every `render`, on
+    /// the reasoning that `render` only runs when something already changed.
+    /// That reasoning does not hold: the results table is a *child view*, so
+    /// its own scrolling and hovering re-render this view, as does any
+    /// ancestor's redraw, as does a scan-progress tick every 120 ms while a
+    /// rescan keeps the previous result on screen. None of those change a
+    /// single row, and the copy is a deep clone of every item including its
+    /// icon payload. `views::results_sync` carries the measurements and the
+    /// decision table; here we only carry out what it decides.
     fn sync_results_table(&mut self, cx: &mut Context<Self>) {
         let category = self.state.selected_category();
         let category_state = self.state.category(category);
-        let items = category_state
-            .result()
-            .map(|result| result.items.clone())
-            .unwrap_or_default();
-        let selected_ids: HashSet<CleanableItemId> =
-            category_state.selected_ids().into_iter().collect();
-        self.results_table.update(cx, |table, cx| {
-            table.delegate_mut().set(category, items, selected_ids);
-            table.refresh(cx);
-        });
+        let key = ResultsSyncKey::of(category, category_state);
+        match self.results_sync.plan(key) {
+            ResultsSyncPlan::UpToDate => {}
+            ResultsSyncPlan::SelectionOnly => {
+                let selected_ids: HashSet<CleanableItemId> =
+                    category_state.selected_ids().into_iter().collect();
+                self.results_table.update(cx, |table, _cx| {
+                    table.delegate_mut().set_selection(selected_ids);
+                });
+            }
+            ResultsSyncPlan::Everything => {
+                let items = category_state
+                    .result()
+                    .map(|result| result.items.clone())
+                    .unwrap_or_default();
+                let selected_ids: HashSet<CleanableItemId> =
+                    category_state.selected_ids().into_iter().collect();
+                // `refresh` here and not in the other arms: it rebuilds the
+                // column groups, and the column set is what the *category*
+                // decides (`ResultsTableDelegate::shows_selection`). Header
+                // labels come from `render_th` every frame either way. Its
+                // one visible side effect is that a column the user dragged
+                // now keeps its width until the rows change, where the
+                // per-frame call used to undo the drag on the next frame.
+                self.results_table.update(cx, |table, cx| {
+                    table.delegate_mut().set(category, items, selected_ids);
+                    table.refresh(cx);
+                });
+            }
+        }
     }
 
     fn is_category_busy(&self, category: CleanerCategory) -> bool {

@@ -37,6 +37,20 @@ pub struct CategoryState {
     cleanup_report: Option<CleanupReport>,
     started_at: Option<SystemTime>,
     finished_at: Option<SystemTime>,
+    /// Bumped by every mutation that changes what [`Self::result`]'s items
+    /// *are* — a finished scan replacing them, a cleanup or a "Keep"
+    /// removing one. Deliberately **not** bumped by anything that merely
+    /// changes how the scan is going (`begin_scan`, `update_progress`,
+    /// `begin_cleaning`), because the items on screen are unchanged then:
+    /// this is the identity `views::results_sync` compares to decide whether
+    /// the results grid needs a fresh copy of the whole vector, and a
+    /// rescan's progress ticks must not force one. Starts at 0 on a
+    /// category that has never held a result.
+    result_revision: u64,
+    /// Bumped by every mutation of `selected_items`. Separate from
+    /// [`Self::result_revision`] so ticking one checkbox on a 50,000-item
+    /// result re-copies the selection alone and never the items.
+    selection_revision: u64,
 }
 
 impl CategoryState {
@@ -70,6 +84,16 @@ impl CategoryState {
 
     pub fn finished_at(&self) -> Option<SystemTime> {
         self.finished_at
+    }
+
+    /// See the field docs: these two are the whole reason the results grid
+    /// can tell "the same result, drawn again" from "a different result".
+    pub fn result_revision(&self) -> u64 {
+        self.result_revision
+    }
+
+    pub fn selection_revision(&self) -> u64 {
+        self.selection_revision
     }
 
     pub fn selected_count(&self) -> usize {
@@ -237,6 +261,8 @@ impl CleanerState {
                     ScanState::from_outcome(cancelled, had_error, partial, has_warnings);
                 state.selected_items = selected_by_default_ids(&result.items);
                 state.result = Some(result);
+                state.result_revision += 1;
+                state.selection_revision += 1;
             }
             None => {
                 state.scan_state = ScanState::from_outcome(cancelled, had_error, false, false);
@@ -249,6 +275,7 @@ impl CleanerState {
         if !state.selected_items.remove(&id) {
             state.selected_items.insert(id);
         }
+        state.selection_revision += 1;
     }
 
     pub fn select_safe_items(&mut self, category: CleanerCategory) {
@@ -258,10 +285,13 @@ impl CleanerState {
                 .selected_items
                 .extend(selected_by_default_ids(&result.items));
         }
+        state.selection_revision += 1;
     }
 
     pub fn clear_selection(&mut self, category: CleanerCategory) {
-        self.category_mut(category).selected_items.clear();
+        let state = self.category_mut(category);
+        state.selected_items.clear();
+        state.selection_revision += 1;
     }
 
     /// Every row the header checkbox is allowed to select in bulk: items
@@ -279,6 +309,7 @@ impl CleanerState {
                 .map(|item| item.id)
                 .collect();
         }
+        state.selection_revision += 1;
     }
 
     pub fn begin_cleaning(&mut self, category: CleanerCategory) {
@@ -290,6 +321,10 @@ impl CleanerState {
     pub fn finish_cleaning(&mut self, category: CleanerCategory, report: CleanupReport) {
         let state = self.category_mut(category);
         state.cleaning = false;
+        if !report.successes.is_empty() {
+            state.result_revision += 1;
+            state.selection_revision += 1;
+        }
         for success in &report.successes {
             state.selected_items.remove(&success.id);
             if let Some(result) = state.result.as_mut() {
@@ -310,6 +345,8 @@ impl CleanerState {
             result.items.retain(|item| item.id != id);
         }
         state.selected_items.remove(&id);
+        state.result_revision += 1;
+        state.selection_revision += 1;
     }
 }
 
@@ -318,7 +355,9 @@ mod tests {
     use crate::cleaner::core::category::{CleanerCategory, CleanerSection};
     use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata};
     use crate::cleaner::core::progress::{ScanPhase, ScanProgress};
-    use crate::cleaner::core::report::{CategoryScanResult, PartialScanReason, ScanCompleteness};
+    use crate::cleaner::core::report::{
+        CategoryScanResult, CleanupItemSuccess, CleanupReport, PartialScanReason, ScanCompleteness,
+    };
     use crate::cleaner::core::risk::{ItemCapability, RiskLevel, SelectionPolicy};
     use crate::cleaner::core::scan_state::ScanState;
     use crate::cleaner::state::CleanerState;
@@ -631,6 +670,210 @@ mod tests {
                 .is_empty(),
             "the kept item must be gone from the visible results"
         );
+    }
+
+    /// The two revisions are what `views::results_sync` compares to decide
+    /// whether the results grid needs a fresh deep copy of the whole result.
+    /// Every assertion below is really a statement about that: what must
+    /// force a re-copy, and — the expensive half — what must not.
+    #[test]
+    fn a_scan_in_flight_never_bumps_the_result_revision() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::UserCache;
+        state.finish_scan(
+            category,
+            Some(complete_result(
+                category,
+                vec![sample_item(1, category, RiskLevel::SafeRecreatable)],
+            )),
+            false,
+            None,
+        );
+        let after_scan = state.category(category).result_revision();
+
+        // A rescan keeps the previous result on screen, so nothing the scan
+        // does before it lands changes a single row.
+        state.begin_scan(category);
+        state.update_progress(
+            category,
+            ScanProgress {
+                category,
+                phase: ScanPhase::Traversing,
+                current_path: None,
+                scanned_entries: 5_000,
+                discovered_items: 12,
+                discovered_bytes: 4096,
+            },
+        );
+        state.begin_cancelling(category);
+        state.begin_cleaning(category);
+
+        assert_eq!(state.category(category).result_revision(), after_scan);
+    }
+
+    #[test]
+    fn a_landed_result_bumps_both_revisions_and_a_barren_one_bumps_neither() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::SystemJunk;
+        let before = (
+            state.category(category).result_revision(),
+            state.category(category).selection_revision(),
+        );
+
+        state.finish_scan(
+            category,
+            Some(complete_result(
+                category,
+                vec![sample_item(1, category, RiskLevel::SafeRecreatable)],
+            )),
+            false,
+            None,
+        );
+        let landed = (
+            state.category(category).result_revision(),
+            state.category(category).selection_revision(),
+        );
+        assert!(landed.0 > before.0 && landed.1 > before.1);
+
+        // Cancelled and failed scans replace no item and reset no selection.
+        state.finish_scan(category, None, true, None);
+        state.finish_scan(category, None, false, Some("boom".to_string()));
+        assert_eq!(
+            (
+                state.category(category).result_revision(),
+                state.category(category).selection_revision()
+            ),
+            landed
+        );
+    }
+
+    #[test]
+    fn selection_changes_bump_only_the_selection_revision() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::UserCache;
+        state.finish_scan(
+            category,
+            Some(complete_result(
+                category,
+                vec![
+                    sample_item(1, category, RiskLevel::SafeRecreatable),
+                    sample_item(2, category, RiskLevel::ReviewRecommended),
+                ],
+            )),
+            false,
+            None,
+        );
+        let result_revision = state.category(category).result_revision();
+        let mut selection_revision = state.category(category).selection_revision();
+
+        for change in [
+            CleanerState::clear_selection as fn(&mut CleanerState, CleanerCategory),
+            CleanerState::select_all,
+            CleanerState::select_safe_items,
+        ] {
+            change(&mut state, category);
+            assert!(
+                state.category(category).selection_revision() > selection_revision,
+                "every selection change must be visible to the results grid"
+            );
+            selection_revision = state.category(category).selection_revision();
+            assert_eq!(
+                state.category(category).result_revision(),
+                result_revision,
+                "ticking rows must never force a re-copy of the items"
+            );
+        }
+
+        state.toggle_selected(category, CleanableItemId(2));
+        assert!(state.category(category).selection_revision() > selection_revision);
+        assert_eq!(state.category(category).result_revision(), result_revision);
+    }
+
+    #[test]
+    fn removing_an_item_bumps_the_result_revision() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::OrphanedFiles;
+        state.finish_scan(
+            category,
+            Some(complete_result(
+                category,
+                vec![sample_item(7, category, RiskLevel::ReviewRecommended)],
+            )),
+            false,
+            None,
+        );
+        let before = state.category(category).result_revision();
+
+        state.remove_item(category, CleanableItemId(7));
+
+        assert!(state.category(category).result_revision() > before);
+    }
+
+    #[test]
+    fn a_cleanup_that_removed_rows_bumps_the_result_revision() {
+        let mut state = CleanerState::default();
+        let category = CleanerCategory::UserCache;
+        state.finish_scan(
+            category,
+            Some(complete_result(
+                category,
+                vec![sample_item(1, category, RiskLevel::SafeRecreatable)],
+            )),
+            false,
+            None,
+        );
+        let before = state.category(category).result_revision();
+
+        state.begin_cleaning(category);
+        assert_eq!(
+            state.category(category).result_revision(),
+            before,
+            "starting a cleanup removes no row"
+        );
+
+        state.finish_cleaning(
+            category,
+            CleanupReport {
+                successes: vec![CleanupItemSuccess {
+                    id: CleanableItemId(1),
+                    path: "/tmp/item-1".into(),
+                    trashed_path: None,
+                    logical_size: 10,
+                }],
+                failures: Vec::new(),
+                estimated_reclaimed_bytes: 10,
+            },
+        );
+
+        assert!(state.category(category).result_revision() > before);
+        assert!(
+            state
+                .category(category)
+                .result()
+                .expect("result kept")
+                .items
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn one_categorys_revisions_are_not_anothers() {
+        let mut state = CleanerState::default();
+        let scanned = CleanerCategory::UserCache;
+        let untouched = CleanerCategory::DockerCache;
+        state.finish_scan(
+            scanned,
+            Some(complete_result(
+                scanned,
+                vec![sample_item(1, scanned, RiskLevel::SafeRecreatable)],
+            )),
+            false,
+            None,
+        );
+        state.toggle_selected(scanned, CleanableItemId(1));
+
+        assert_eq!(state.category(untouched).result_revision(), 0);
+        assert_eq!(state.category(untouched).selection_revision(), 0);
     }
 
     #[test]

@@ -106,7 +106,9 @@ impl ResultsTableDelegate {
     }
 
     /// Replaces what the grid shows. The caller (`CleanerView::render`, via
-    /// `sync_results_table`) follows this with `TableState::refresh`.
+    /// `sync_results_table`) follows this with `TableState::refresh`, and
+    /// only calls it when the *items* actually changed — see
+    /// `super::results_sync`.
     pub fn set(
         &mut self,
         category: CleanerCategory,
@@ -115,6 +117,13 @@ impl ResultsTableDelegate {
     ) {
         self.category = category;
         self.items = items;
+        self.selected_ids = selected_ids;
+    }
+
+    /// Replaces which rows are ticked, leaving the rows themselves (and
+    /// their icon payloads) exactly where they are. Ticking one checkbox on
+    /// a large result must not cost a re-copy of the whole result.
+    pub fn set_selection(&mut self, selected_ids: HashSet<CleanableItemId>) {
         self.selected_ids = selected_ids;
     }
 
@@ -540,17 +549,20 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(item) = self.items.get(row_ix).cloned() else {
+        // Borrowed, never cloned: this runs once per visible cell per frame,
+        // and a `CleanableItem` carries an application's whole TIFF icon —
+        // cloning it six times a row, sixty times a second, is pure copying.
+        let Some(item) = self.items.get(row_ix) else {
             return div().into_any_element();
         };
         let col_ix = col_ix + (!self.shows_selection()) as usize;
         match col_ix {
-            0 => self.render_select_cell(&item, cx),
-            1 => self.render_name_cell(&item, cx),
-            2 => self.render_risk_cell(&item, cx),
-            3 => self.render_size_cell(&item, cx),
-            4 => self.render_path_cell(&item, cx),
-            5 => self.render_actions_cell(&item, cx),
+            0 => self.render_select_cell(item, cx),
+            1 => self.render_name_cell(item, cx),
+            2 => self.render_risk_cell(item, cx),
+            3 => self.render_size_cell(item, cx),
+            4 => self.render_path_cell(item, cx),
+            5 => self.render_actions_cell(item, cx),
             _ => div().into_any_element(),
         }
     }
