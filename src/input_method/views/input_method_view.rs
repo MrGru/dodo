@@ -91,17 +91,31 @@ pub struct InputMethodView {
     held: ShortcutModifiers,
     /// Whether the last attempt pressed something no host could match.
     unsupported_key: bool,
+    /// Cancels recording when the field loses focus. Held because a
+    /// [`Subscription`] stops the moment it is dropped, and a field left saying
+    /// "press a combination…" while the keyboard has gone somewhere else is a
+    /// lie the user has no way to correct.
+    _blur: Subscription,
 }
 
 impl InputMethodView {
     /// Takes `window` it does not use, because every tool's constructor has this
     /// signature and `Layout::new` calls them all the same way.
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let recorder = cx.focus_handle();
+        let blur = cx.on_focus_out(&recorder, window, |this, _, _, cx| {
+            if this.recording {
+                this.recording = false;
+                this.held = ShortcutModifiers::NONE;
+                cx.notify();
+            }
+        });
         Self {
-            recorder: cx.focus_handle(),
+            recorder,
             recording: false,
             held: ShortcutModifiers::NONE,
             unsupported_key: false,
+            _blur: blur,
         }
     }
 
@@ -545,6 +559,7 @@ impl InputMethodView {
         {
             return Some(Str::InputMethodShortcutNeedsEventTap);
         }
+        #[cfg(not(target_os = "macos"))]
         let _ = cx;
         None
     }
@@ -1071,9 +1086,18 @@ mod tests {
     /// A printing key is refused rather than stored, because the host is handed
     /// what the key *types* and `⌥Z` types `Ω`. The row says so out loud instead
     /// of saving a shortcut that would never fire.
+    ///
+    /// The four modifier names are refused here too, and for a different
+    /// reason: gpui *synthesizes* a key-down for a single modifier tapped on its
+    /// own, so `⇧` alone arrives at the recorder twice — once as that keystroke
+    /// and once as the release. Neither may store it, because a shortcut of one
+    /// modifier fires on the way into every `⌘C`. `modifiers_recorded` is where
+    /// a two-modifier combination is captured instead.
     #[test]
     fn a_printing_key_is_never_recorded() {
-        for name in ["a", "z", "1", "f5", "ç", ""] {
+        for name in [
+            "a", "z", "1", "f5", "ç", "", "shift", "control", "alt", "platform", "function",
+        ] {
             assert_eq!(recordable_key(name), None, "{name:?}");
         }
     }

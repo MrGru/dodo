@@ -120,7 +120,11 @@ account:
 8. Record `Ctrl+Shift` on its own (hold both, then release). Confirm it
    switches under both backends, that the modifiers still reach applications —
    `Ctrl+C` in Notepad still copies — and that turning Beep on sounds once per
-   switch.
+   switch. Whether TSF delivers a bare modifier to `OnKeyDown` at all is the
+   open question here; `keymap::key_event` names them, but only this step can
+   say whether the host is asked. If Native TSF does not switch and Keyboard
+   Hook does, that is the answer and it matches the macOS bundle's known
+   limitation in `macos-input-method.md` §8a.
 
 No Windows runtime typing, registration, profile visibility, secure-context
 behaviour, or release-archive run has been verified from the Mac development
