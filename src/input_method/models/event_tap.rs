@@ -9,7 +9,7 @@
 
 use dodo_ime_core::core::truncate_graphemes;
 use dodo_ime_core::{
-    EngineAction, Key, KeyEvent, LanguageEngine as _, LanguageId, OutputMode, VietnameseConfig,
+    EngineAction, Key, KeyEvent, LanguageEngine as _, OutputMode, VietnameseConfig,
     VietnameseEngine,
 };
 use dodo_ime_ipc::settings::Backend;
@@ -39,14 +39,20 @@ pub enum EventTapStatus {
 }
 
 /// The next lifecycle state before the platform service touches CoreGraphics.
+///
+/// The selected *language* is deliberately not an argument. The tap owns the
+/// language-switch shortcut while it is running, so a tap that stopped whenever
+/// English was selected could never switch back — the shortcut would work in
+/// one direction and look broken in the other. It keeps observing keys in every
+/// language and stops only *transforming* them; `models::live_switch` is where
+/// that distinction lives.
 pub fn desired_status(
     backend: Backend,
-    language: LanguageId,
     native_is_live: bool,
     settings_applied: bool,
     accessibility_trusted: bool,
 ) -> EventTapStatus {
-    if backend != Backend::EventTap || language != LanguageId::Vietnamese {
+    if backend != Backend::EventTap {
         EventTapStatus::Inactive
     } else if native_is_live && !settings_applied {
         EventTapStatus::WaitingForNative
@@ -86,6 +92,9 @@ pub enum TapEvent {
     },
     /// Any physical mouse-down can move the focus or caret.
     MouseDown,
+    /// A modifier went down or up. It types nothing, so the only thing it can
+    /// mean to this host is a modifier-only language switch.
+    ModifiersChanged,
     TapDisabled,
     Other,
 }
@@ -99,6 +108,13 @@ pub enum Handling {
     PassThrough,
     /// Consume the matching physical key-up after its key-down was replaced.
     Suppress,
+    /// Offer a bare modifier change to the language switch, then return the
+    /// event unchanged either way.
+    ///
+    /// It is never consumed. Swallowing a modifier transition would leave every
+    /// application believing the key is still held, and the switch itself needs
+    /// no more than to have seen it.
+    OfferShortcut,
     /// Re-enable once for CoreGraphics' explicit disabled notification.
     RecoverTap,
 }
@@ -111,12 +127,17 @@ pub fn handling(event: TapEvent, secure_input: bool) -> Handling {
         TapEvent::KeyUp { suppress: false } | TapEvent::MouseDown | TapEvent::Other => {
             Handling::PassThrough
         }
+        TapEvent::ModifiersChanged if !secure_input => Handling::OfferShortcut,
+        TapEvent::ModifiersChanged => Handling::PassThrough,
         TapEvent::KeyDown { autorepeat } if !secure_input => Handling::ProcessKey { autorepeat },
         TapEvent::KeyDown { .. } => Handling::PassThrough,
     }
 }
 
 /// Passed-through events that leave the end cursor or focused target unknown.
+///
+/// A modifier transition is not one of them: `⇧` in the middle of a word is how
+/// a capital letter is typed, and ending the syllable there would break Telex.
 pub fn invalidates_composer(event: TapEvent) -> bool {
     matches!(
         event,
@@ -550,60 +571,36 @@ mod tests {
         plan.delete_before * 2 + usize::from(plan.insert.is_some()) * 2
     }
 
+    /// The selection is the only thing that decides ownership. A tap that also
+    /// stopped on the selected language could not switch back out of English.
     #[test]
     fn only_the_selected_backend_can_own_transformation() {
         assert_eq!(
-            desired_status(
-                Backend::Native,
-                dodo_ime_core::LanguageId::Vietnamese,
-                false,
-                false,
-                true
-            ),
+            desired_status(Backend::Native, false, false, true),
             EventTapStatus::Inactive
         );
         assert_eq!(
-            desired_status(
-                Backend::EventTap,
-                dodo_ime_core::LanguageId::English,
-                false,
-                false,
-                true
-            ),
+            desired_status(Backend::KeyboardHook, false, false, true),
             EventTapStatus::Inactive
         );
         assert_eq!(
-            desired_status(
-                Backend::EventTap,
-                dodo_ime_core::LanguageId::Vietnamese,
-                true,
-                false,
-                true,
-            ),
+            desired_status(Backend::EventTap, false, false, true),
+            EventTapStatus::Running
+        );
+        assert_eq!(
+            desired_status(Backend::EventTap, true, false, true),
             EventTapStatus::WaitingForNative
         );
     }
 
     #[test]
     fn accessibility_request_is_once_and_a_returning_user_can_start_the_tap() {
-        let untrusted = desired_status(
-            Backend::EventTap,
-            dodo_ime_core::LanguageId::Vietnamese,
-            false,
-            false,
-            false,
-        );
+        let untrusted = desired_status(Backend::EventTap, false, false, false);
         assert_eq!(untrusted, EventTapStatus::NeedsAccessibility);
         assert!(super::should_request_accessibility(untrusted, false));
         assert!(!super::should_request_accessibility(untrusted, true));
         assert_eq!(
-            desired_status(
-                Backend::EventTap,
-                dodo_ime_core::LanguageId::Vietnamese,
-                false,
-                false,
-                true,
-            ),
+            desired_status(Backend::EventTap, false, false, true),
             EventTapStatus::Running
         );
     }
@@ -637,6 +634,21 @@ mod tests {
         assert_eq!(handling(TapEvent::MouseDown, false), Handling::PassThrough);
         assert!(invalidates_composer(TapEvent::MouseDown));
         assert_eq!(handling(TapEvent::TapDisabled, false), Handling::RecoverTap);
+
+        // A modifier transition reaches the language switch and nothing else,
+        // and a secure field keeps even that.
+        assert_eq!(
+            handling(TapEvent::ModifiersChanged, false),
+            Handling::OfferShortcut
+        );
+        assert_eq!(
+            handling(TapEvent::ModifiersChanged, true),
+            Handling::PassThrough
+        );
+        assert!(
+            !invalidates_composer(TapEvent::ModifiersChanged),
+            "Shift for a capital letter must not end the syllable"
+        );
     }
 
     #[test]

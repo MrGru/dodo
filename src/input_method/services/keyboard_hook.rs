@@ -5,27 +5,42 @@
 //! shortcut, key-up, secure-desktop-uncertain, and untranslatable input all go
 //! unchanged to the next hook. It never logs, persists, transmits, or exposes a
 //! keystroke.
+//!
+//! # It owns the language switch while it runs
+//!
+//! The TSF DLL re-reads the settings before every key and passes through while
+//! this backend is selected, so the shortcut has to be answered here or nowhere
+//! — which is what used to happen. The hook therefore stays installed in *every*
+//! language, matches the shortcut before anything else, and only then asks
+//! whether the key should reach the Vietnamese engine.
+//! `models::live_switch` is that rule and `models::keyboard_hook::key_event` is
+//! the virtual-key table, both of them pure so they are tested on hosts that
+//! cannot compile this file.
 
 use std::collections::HashSet;
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use dodo_ime_core::{Key, LanguageEngine as _, Modifiers, VietnameseConfig, VietnameseEngine};
+use dodo_ime_core::{Key, LanguageEngine as _, LanguageId, VietnameseConfig, VietnameseEngine};
+use dodo_ime_ipc::settings::SettingsDocument;
+use futures_channel::mpsc::UnboundedSender;
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyboardLayout, GetKeyboardState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
     KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, HC_ACTION, HHOOK,
-    KBDLLHOOKSTRUCT, LLKHF_INJECTED, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    KBDLLHOOKSTRUCT, LLKHF_INJECTED, MB_OK, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
     WM_KEYDOWN, WM_KEYUP,
 };
 
 use crate::input_method::models::direct_output::OutputPlan;
 use crate::input_method::models::keyboard_hook::{
-    Handling, HookEvent, KeyboardHookStatus, handling,
+    Handling, HookEvent, KeyboardHookStatus, handling, key_event as windows_key_event, modifiers,
 };
+use crate::input_method::models::live_switch::LiveSwitch;
 
 const SYNTHETIC_EVENT_TAG: usize = 0x444f_444f_5748_4f4f;
 
@@ -45,14 +60,28 @@ pub struct KeyboardHook {
 
 struct State {
     engine: VietnameseEngine,
+    /// The language switch as this listener currently understands it.
+    switch: LiveSwitch,
+    /// Where a cycle performed on the callback path is reported.
+    language_changes: UnboundedSender<LanguageId>,
     pressed: HashSet<u32>,
     status: KeyboardHookStatus,
 }
 
 impl KeyboardHook {
-    pub fn start(config: VietnameseConfig) -> Result<Self, StartError> {
+    /// Installs the hook.
+    ///
+    /// It takes the whole settings document rather than a
+    /// [`VietnameseConfig`]: the hook answers the language switch as well as
+    /// Vietnamese, and the two must never be configured from different reads.
+    pub fn start(
+        document: SettingsDocument,
+        language_changes: UnboundedSender<LanguageId>,
+    ) -> Result<Self, StartError> {
         let state = Arc::new(Mutex::new(State {
-            engine: VietnameseEngine::new(direct_config(config)),
+            engine: VietnameseEngine::new(direct_config(document.vietnamese.to_config())),
+            switch: LiveSwitch::new(&document),
+            language_changes,
             pressed: HashSet::new(),
             status: KeyboardHookStatus::Running,
         }));
@@ -81,11 +110,16 @@ impl KeyboardHook {
             .unwrap_or(KeyboardHookStatus::Failed)
     }
 
-    /// Applies a setting after the hook was deliberately stopped for its write.
-    /// This method remains fail-safe if a caller later reuses a live hook.
-    pub fn reconfigure(&self, config: VietnameseConfig) {
+    /// Applies new settings to the one live hook.
+    ///
+    /// This is what makes a recorded shortcut live without a restart, and it
+    /// replaces rather than adds: `SetWindowsHookExW` is never called a second
+    /// time, so no listener is left behind still matching the combination that
+    /// was recorded over.
+    pub fn reconfigure(&self, document: SettingsDocument) {
         if let Ok(mut state) = self.state.lock() {
-            state.engine = VietnameseEngine::new(direct_config(config));
+            state.engine = VietnameseEngine::new(direct_config(document.vietnamese.to_config()));
+            state.switch.adopt(&document);
             state.pressed.clear();
         }
     }
@@ -154,7 +188,31 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         let _ = state.engine.reset();
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     };
-    if key.key == Key::Other {
+    // The shortcut is answered before the engine sees anything, and before the
+    // selected language is consulted — that ordering is what lets it switch
+    // *out* of a language with no engine as well as into one. A repeat is
+    // ignored so a held shortcut cycles once.
+    let cycled = (!repeat).then(|| state.switch.cycle(&key)).flatten();
+    if let Some(cycled) = cycled {
+        let _ = state.engine.reset();
+        let _ = state.language_changes.unbounded_send(cycled.language);
+        if cycled.beep {
+            // The same call the Native TSF host makes, so the two backends
+            // sound identical. `MB_OK` is the system default sound.
+            unsafe { MessageBeep(MB_OK) };
+        }
+        // A modifier-only shortcut must still reach applications, or every one
+        // of them believes the key is held. Only a real key is swallowed.
+        if key.key == Key::Modifier {
+            return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
+        }
+        return 1;
+    }
+    if !state.switch.transforms() {
+        let _ = state.engine.reset();
+        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
+    }
+    if key.key == Key::Other || key.key == Key::Modifier {
         let _ = state.engine.reset();
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
@@ -230,13 +288,16 @@ fn key_event(event: &KBDLLHOOKSTRUCT) -> Option<dodo_ime_core::KeyEvent> {
         _ => return None,
     };
     let active = |vk: u16| keyboard[vk as usize] & 0x80 != 0;
-    let modifiers = Modifiers {
-        shift: active(VK_SHIFT),
-        control: active(VK_CONTROL),
-        alt: active(VK_MENU),
-        meta: active(VK_LWIN) || active(VK_RWIN),
-    };
-    Some(windows_key_event(event.vkCode, text, modifiers))
+    Some(windows_key_event(
+        event.vkCode,
+        text,
+        modifiers(
+            active(VK_CONTROL),
+            active(VK_MENU),
+            active(VK_SHIFT),
+            active(VK_LWIN) || active(VK_RWIN),
+        ),
+    ))
 }
 
 fn one_character(units: &[u16]) -> Option<char> {
@@ -246,42 +307,6 @@ fn one_character(units: &[u16]) -> Option<char> {
     let mut characters = text.chars();
     let character = characters.next()?;
     (characters.next().is_none() && !character.is_control()).then_some(character)
-}
-
-fn windows_key_event(
-    vkey: u32,
-    text: Option<char>,
-    modifiers: Modifiers,
-) -> dodo_ime_core::KeyEvent {
-    let key = match vkey {
-        0x08 => Key::Backspace,
-        0x09 => Key::Tab,
-        0x0d => Key::Enter,
-        0x1b => Key::Escape,
-        0x20 => Key::Space,
-        0x21 => Key::PageUp,
-        0x22 => Key::PageDown,
-        0x23 => Key::End,
-        0x24 => Key::Home,
-        0x25 => Key::ArrowLeft,
-        0x26 => Key::ArrowUp,
-        0x27 => Key::ArrowRight,
-        0x28 => Key::ArrowDown,
-        0x2e => Key::Delete,
-        _ if text.is_some() => Key::Character,
-        _ => Key::Other,
-    };
-    dodo_ime_core::KeyEvent {
-        key,
-        text: if key == Key::Space {
-            Some(' ')
-        } else if key == Key::Character {
-            text
-        } else {
-            None
-        },
-        modifiers,
-    }
 }
 
 fn send_output(plan: &OutputPlan) -> bool {

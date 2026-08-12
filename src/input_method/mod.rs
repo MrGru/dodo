@@ -71,6 +71,8 @@ use dodo_ime_ipc::settings::{
     Backend, LanguageSwitch, SETTINGS_SCHEMA_VERSION, SettingsDocument, VietnameseSettings,
 };
 use dodo_ime_ipc::status::StatusDocument;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use futures_channel::mpsc::{UnboundedSender, unbounded};
 use gpui::{App, AsyncApp, BorrowAppContext as _, Global, Task};
 
 use crate::i18n::Str;
@@ -121,6 +123,17 @@ pub struct InputMethod {
     save: Option<Task<()>>,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     language_changes: Option<Task<()>>,
+    /// Cycles performed by a dodo-owned key listener, on their way back to this
+    /// document.
+    ///
+    /// The listener has already switched its own copy, so the key after the
+    /// shortcut is typed in the new language; this task is what makes the file,
+    /// the tray and the pane agree. It is a channel and not a direct call
+    /// because the listener runs inside a raw OS callback with no `App`.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    switch_requests: Option<Task<()>>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    switch_sender: UnboundedSender<LanguageId>,
     #[cfg(target_os = "macos")]
     installing: Option<Task<()>>,
     /// Held only while Event Tap owns transformation. Dropping it detaches the
@@ -148,7 +161,12 @@ pub struct InputMethod {
 impl Global for InputMethod {}
 
 impl InputMethod {
-    fn new(store: Arc<dyn InputMethodStore>) -> InputMethod {
+    fn new(
+        store: Arc<dyn InputMethodStore>,
+        #[cfg(any(target_os = "macos", target_os = "windows"))] switch_sender: UnboundedSender<
+            LanguageId,
+        >,
+    ) -> InputMethod {
         InputMethod {
             document: SettingsDocument::default(),
             store,
@@ -160,6 +178,10 @@ impl InputMethod {
             save: None,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             language_changes: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            switch_requests: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            switch_sender,
             #[cfg(target_os = "macos")]
             installing: None,
             #[cfg(target_os = "macos")]
@@ -274,10 +296,17 @@ impl InputMethod {
         });
     }
 
-    /// Replaces the shortcut only when it cannot consume one ordinary key.
-    pub fn set_language_switch(shortcut: LanguageSwitch, cx: &mut App) {
-        if shortcut.is_valid() {
-            Self::edit(cx, |document| document.language_switch = shortcut);
+    /// Records a replacement shortcut, or keeps the previous one.
+    ///
+    /// Refusing an invalid combination here rather than storing it is what makes
+    /// "the field shows what will happen" true: a shortcut that could fire while
+    /// typing is never written, so the recorder never displays one that the
+    /// listeners would go on to ignore. Everything else — replacing the live
+    /// listener's copy, persisting, notifying the native hosts, repainting — is
+    /// [`edit`](Self::edit)'s single ordered path.
+    pub fn set_language_switch(switch: LanguageSwitch, cx: &mut App) {
+        if switch.is_valid() {
+            Self::edit(cx, |document| document.language_switch = switch);
         }
     }
 
@@ -355,17 +384,38 @@ impl InputMethod {
                 return;
             }
 
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let changing_owner = next.backend != state.document.backend;
             #[cfg(target_os = "windows")]
-            {
-                // Every setting write creates a conservative gap. The native
-                // host re-reads the completed file before each key; starting a
-                // hook before that write would let two owners see one key.
+            if changing_owner {
+                // Handing transformation over creates a conservative gap. The
+                // native host re-reads the completed file before each key, so
+                // starting a hook before that write would let two owners see
+                // one key. A change that does not move ownership keeps the one
+                // live hook and re-reads it below instead.
                 state.keyboard_hook = None;
                 state.keyboard_hook_status = KeyboardHookStatus::Inactive;
             }
             state.document = SettingsDocument::next_from(&state.document, next);
             let store = state.store.clone();
             let document = state.document;
+            // Before the write, not after it. A recorded shortcut has to be the
+            // live one on the next keystroke, and a listener that waited for the
+            // background write to land is exactly the "the UI changed but
+            // nothing switches" gap this replaces. There is one listener and it
+            // is *replaced*, never joined by a second, so the previous shortcut
+            // stops matching in the same instant.
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            if !changing_owner {
+                #[cfg(target_os = "macos")]
+                if let Some(tap) = &state.event_tap {
+                    tap.reconfigure(document);
+                }
+                #[cfg(target_os = "windows")]
+                if let Some(hook) = &state.keyboard_hook {
+                    hook.reconfigure(document);
+                }
+            }
 
             state.save = Some(cx.spawn(async move |cx| {
                 let written = cx
@@ -634,7 +684,6 @@ impl InputMethod {
             // and the native hand-off.
             let desired = desired_status(
                 state.document.backend,
-                state.document.language,
                 native_live,
                 settings_applied,
                 services::event_tap::accessibility_trusted(),
@@ -657,9 +706,11 @@ impl InputMethod {
                 EventTapStatus::Running | EventTapStatus::Failed => {}
             }
 
-            let config = state.document.vietnamese.to_config();
+            // One tap, reconfigured. Starting a second while the first is held
+            // would leave two listeners answering one key — the old shortcut
+            // among them.
             if let Some(tap) = &state.event_tap {
-                tap.reconfigure(config);
+                tap.reconfigure(state.document);
                 state.event_tap_status = tap.status();
                 return;
             }
@@ -669,7 +720,11 @@ impl InputMethod {
             if request_accessibility {
                 state.event_tap_accessibility_requested = true;
             }
-            match services::event_tap::EventTap::start(config, request_accessibility) {
+            match services::event_tap::EventTap::start(
+                state.document,
+                state.switch_sender.clone(),
+                request_accessibility,
+            ) {
                 Ok(tap) => {
                     state.event_tap_status = tap.status();
                     state.event_tap = Some(tap);
@@ -792,15 +847,22 @@ impl InputMethod {
             return;
         }
         cx.update_global::<InputMethod, _>(|state, _| {
-            if hook_status(state.document.backend, state.document.language, true)
-                != KeyboardHookStatus::Running
-            {
+            if hook_status(state.document.backend, true) != KeyboardHookStatus::Running {
                 state.keyboard_hook = None;
                 state.keyboard_hook_status = KeyboardHookStatus::Inactive;
                 return;
             }
-            let config = state.document.vietnamese.to_config();
-            match services::keyboard_hook::KeyboardHook::start(config) {
+            // One hook, reconfigured — `SetWindowsHookExW` twice would install
+            // two, and the first would still be matching the replaced shortcut.
+            if let Some(hook) = &state.keyboard_hook {
+                hook.reconfigure(state.document);
+                state.keyboard_hook_status = hook.status();
+                return;
+            }
+            match services::keyboard_hook::KeyboardHook::start(
+                state.document,
+                state.switch_sender.clone(),
+            ) {
                 Ok(hook) => {
                     state.keyboard_hook_status = hook.status();
                     state.keyboard_hook = Some(hook);
@@ -854,7 +916,13 @@ fn system_ops() -> Option<Box<dyn services::installer::InstallOps>> {
 /// Registers the global. Called from `main` after `gpui_component::init`, like
 /// every other `init`.
 pub fn init(cx: &mut App) {
-    cx.set_global(InputMethod::new(Arc::new(DiskInputMethodStore::new())));
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let (switch_sender, mut switch_requests) = unbounded();
+    cx.set_global(InputMethod::new(
+        Arc::new(DiskInputMethodStore::new()),
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        switch_sender,
+    ));
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         let mut receiver = services::notify::language_changes();
@@ -863,7 +931,18 @@ pub fn init(cx: &mut App) {
                 InputMethod::refresh_status(cx).await;
             }
         });
-        cx.update_global::<InputMethod, _>(|state, _| state.language_changes = Some(task));
+        // A dodo-owned listener cycled the language. It is already typing that
+        // way; this is what writes it down, and `set_language` refuses one the
+        // user has since switched off.
+        let switch_task = cx.spawn(async move |cx| {
+            while let Some(language) = switch_requests.next().await {
+                cx.update(|cx| InputMethod::set_language(language, cx));
+            }
+        });
+        cx.update_global::<InputMethod, _>(|state, _| {
+            state.language_changes = Some(task);
+            state.switch_requests = Some(switch_task);
+        });
     }
 }
 
@@ -917,12 +996,20 @@ mod tests {
     use dodo_ime_ipc::status::StatusDocument;
     use std::sync::Arc;
 
+    fn state(store: Arc<InMemoryInputMethodStore>) -> InputMethod {
+        InputMethod::new(
+            store,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            futures_channel::mpsc::unbounded().0,
+        )
+    }
+
     /// The revision bookkeeping, without a frame: it is the state layer's own
     /// rule and the only thing that can say "your settings have not arrived yet".
     #[test]
     fn a_change_bumps_the_revision_and_an_identical_write_does_not() {
         let store = Arc::new(InMemoryInputMethodStore::default());
-        let mut state = InputMethod::new(store.clone());
+        let mut state = state(store.clone());
 
         let first = SettingsDocument::next(
             &state.document,
@@ -964,7 +1051,7 @@ mod tests {
     #[test]
     fn applied_is_a_comparison_of_revisions_and_not_of_settings() {
         let store = Arc::new(InMemoryInputMethodStore::default());
-        let mut state = InputMethod::new(store);
+        let mut state = state(store);
 
         state.document = SettingsDocument {
             version: dodo_ime_ipc::settings::SETTINGS_SCHEMA_VERSION,
@@ -1001,7 +1088,7 @@ mod tests {
     #[test]
     fn the_installed_flag_follows_the_outcome_and_never_goes_backwards() {
         let store = Arc::new(InMemoryInputMethodStore::default());
-        let mut state = InputMethod::new(store);
+        let mut state = state(store);
         assert!(!state.installed);
 
         state.installed = state.installed

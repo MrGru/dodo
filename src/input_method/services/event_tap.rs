@@ -4,11 +4,26 @@
 //! client, so it rewrites the short current syllable with tagged synthetic
 //! events. Tagged events pass this callback unchanged, which prevents feedback
 //! loops. No event text is logged, persisted, transmitted, or exposed.
+//!
+//! # It owns the language switch while it runs
+//!
+//! Nothing else can. The InputMethodKit bundle is passing everything through
+//! while this backend is selected, so the shortcut has to be answered here or
+//! it is answered nowhere — which is exactly what used to happen. The tap
+//! therefore stays attached in *every* language, watches for the shortcut
+//! first, and only then asks whether the key should reach the Vietnamese
+//! engine. `models::live_switch` is the whole of that rule; this file adds the
+//! two CoreGraphics facts it needs — `FlagsChanged` is in the mask so a
+//! modifier-only shortcut is observable, and a matched modifier transition is
+//! still returned unchanged so no application is left believing a key is held.
 
 use std::cell::{Cell, RefCell};
 use std::ptr::{NonNull, null_mut};
 
-use dodo_ime_core::VietnameseConfig;
+use dodo_ime_core::{Key, KeyEvent, LanguageId, Modifiers};
+use dodo_ime_ipc::settings::SettingsDocument;
+use futures_channel::mpsc::UnboundedSender;
+use objc2_app_kit::NSBeep;
 use objc2_core_foundation::{
     CFBoolean, CFDictionary, CFMachPort, CFRetained, CFRunLoop, CFRunLoopMode, CFRunLoopSource,
     CFString, kCFRunLoopCommonModes,
@@ -23,6 +38,7 @@ use crate::input_method::models::event_tap::{
     DirectComposer, EventTapStatus, Handling, TapEvent, handling, invalidates_composer,
     is_synthetic_event, synthetic_event_tag,
 };
+use crate::input_method::models::live_switch::LiveSwitch;
 
 const DELETE_KEY_CODE: u16 = 0x33;
 const MAX_INPUT_UNICODE_UNITS: usize = 8;
@@ -62,8 +78,16 @@ pub struct EventTap {
 
 impl EventTap {
     /// Creates and enables an editable session event tap.
+    ///
+    /// It takes the whole settings document rather than a
+    /// [`VietnameseConfig`]: the tap answers the language switch as well as
+    /// Vietnamese, and the two must never be configured from different reads.
+    /// `language_changes` is how a cycle performed inside the CoreGraphics
+    /// callback reaches the state layer — the callback has no `App` and must
+    /// not block, so it sends and returns.
     pub fn start(
-        config: VietnameseConfig,
+        document: SettingsDocument,
+        language_changes: UnboundedSender<LanguageId>,
         request_accessibility: bool,
     ) -> Result<EventTap, StartError> {
         if !accessibility_trusted() {
@@ -74,7 +98,7 @@ impl EventTap {
         }
 
         let mode = common_modes().ok_or(StartError::NoRunLoop)?;
-        let mut state = Box::new(State::new(config));
+        let mut state = Box::new(State::new(document, language_changes));
         let user_info = (&mut *state as *mut State).cast();
         let mask = event_mask();
         // SAFETY: `callback` matches CoreGraphics' declared callback type, and
@@ -119,10 +143,13 @@ impl EventTap {
     ///
     /// Direct output is already in the focused document, so resetting is safer
     /// than attempting an out-of-band rewrite with no original event to pair.
-    pub fn reconfigure(&self, config: VietnameseConfig) {
-        if let Ok(mut composer) = self.state.composer.try_borrow_mut() {
-            composer.reconfigure(config);
-        }
+    ///
+    /// This is what makes a recorded shortcut live without a restart, and it
+    /// replaces rather than adds: there is one tap and one [`LiveSwitch`], so
+    /// the combination that was recorded over stops matching in the same call
+    /// the replacement starts matching.
+    pub fn reconfigure(&self, document: SettingsDocument) {
+        self.state.reconfigure(document);
     }
 
     pub fn status(&self) -> EventTapStatus {
@@ -143,6 +170,10 @@ impl Drop for EventTap {
 
 struct State {
     composer: RefCell<DirectComposer>,
+    /// The language switch as this listener currently understands it.
+    switch: RefCell<LiveSwitch>,
+    /// Where a cycle performed on the callback path is reported.
+    language_changes: UnboundedSender<LanguageId>,
     synthetic_tag: i64,
     /// Key-up events matching a replaced physical key-down. A bitset avoids a
     /// callback-path allocation while preserving real down/up pairs.
@@ -155,15 +186,56 @@ struct State {
 }
 
 impl State {
-    fn new(config: VietnameseConfig) -> State {
+    fn new(document: SettingsDocument, language_changes: UnboundedSender<LanguageId>) -> State {
         State {
-            composer: RefCell::new(DirectComposer::new(config)),
+            composer: RefCell::new(DirectComposer::new(document.vietnamese.to_config())),
+            switch: RefCell::new(LiveSwitch::new(&document)),
+            language_changes,
             synthetic_tag: synthetic_event_tag(std::process::id()),
             suppressed_key_ups: Cell::new(0),
             target_process: Cell::new(None),
             tap: Cell::new(None),
             status: Cell::new(EventTapStatus::Running),
         }
+    }
+
+    fn reconfigure(&self, document: SettingsDocument) {
+        if let Ok(mut switch) = self.switch.try_borrow_mut() {
+            switch.adopt(&document);
+        }
+        if let Ok(mut composer) = self.composer.try_borrow_mut() {
+            composer.reconfigure(document.vietnamese.to_config());
+        }
+    }
+
+    /// Cycles the language when this press is the shortcut, and says whether
+    /// the key must be swallowed.
+    ///
+    /// A failed borrow answers "not the shortcut", which is the same thing the
+    /// composer does when it is re-entered: a key reaching the application is
+    /// always safer than one that disappears.
+    fn cycle(&self, event: &KeyEvent) -> bool {
+        let Ok(mut switch) = self.switch.try_borrow_mut() else {
+            return false;
+        };
+        let Some(cycled) = switch.cycle(event) else {
+            return false;
+        };
+        drop(switch);
+        // The syllable in flight belonged to the language being left.
+        self.reset();
+        let _ = self.language_changes.unbounded_send(cycled.language);
+        if cycled.beep {
+            NSBeep();
+        }
+        true
+    }
+
+    /// Whether the Vietnamese engine should see keys at all right now.
+    fn transforms(&self) -> bool {
+        self.switch
+            .try_borrow()
+            .is_ok_and(|switch| switch.transforms())
     }
 
     fn reset(&self) {
@@ -252,10 +324,16 @@ impl State {
 ///
 /// Mouse movement and scrolling are deliberately absent: they cannot prove a
 /// caret change and would put avoidable traffic on the callback path.
+/// `FlagsChanged` is in this mask and no mouse-moved or scroll event is.
+///
+/// The modifier transitions are what make a modifier-only shortcut observable
+/// at all — CoreGraphics reports a bare `⇧` as `FlagsChanged` and never as a
+/// key-down — and they are the *only* thing this host reads them for.
 fn event_mask() -> u64 {
     [
         CGEventType::KeyDown,
         CGEventType::KeyUp,
+        CGEventType::FlagsChanged,
         CGEventType::LeftMouseDown,
         CGEventType::RightMouseDown,
         CGEventType::OtherMouseDown,
@@ -267,6 +345,7 @@ fn event_mask() -> u64 {
 fn classify_tap_event(event_type: CGEventType, autorepeat: bool) -> TapEvent {
     match event_type {
         CGEventType::KeyDown => TapEvent::KeyDown { autorepeat },
+        CGEventType::FlagsChanged => TapEvent::ModifiersChanged,
         CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown => {
             TapEvent::MouseDown
         }
@@ -350,13 +429,21 @@ unsafe extern "C-unwind" fn callback(
         )
     };
 
-    let secure_input = matches!(tap_event, TapEvent::KeyDown { .. }) && secure_input_enabled();
+    let secure_input = matches!(
+        tap_event,
+        TapEvent::KeyDown { .. } | TapEvent::ModifiersChanged
+    ) && secure_input_enabled();
     match handling(tap_event, secure_input) {
         Handling::PassThrough => {
             state.reset_after_pass_through(tap_event);
             event_ptr
         }
         Handling::Suppress => null_mut(),
+        Handling::OfferShortcut => {
+            state.cycle(&modifier_event(CGEvent::flags(Some(event))));
+            // Always the original: see `Handling::OfferShortcut`.
+            event_ptr
+        }
         Handling::RecoverTap => {
             // A disabled tap leaves the cursor and focus unknown, so no
             // committed-word snapshot can safely survive recovery.
@@ -366,11 +453,11 @@ unsafe extern "C-unwind" fn callback(
             state.recover();
             event_ptr
         }
-        Handling::ProcessKey { .. } => transform(state, event),
+        Handling::ProcessKey { autorepeat } => transform(state, event, autorepeat),
     }
 }
 
-fn transform(state: &State, event: &CGEvent) -> *mut CGEvent {
+fn transform(state: &State, event: &CGEvent, autorepeat: bool) -> *mut CGEvent {
     let original = event as *const CGEvent as *mut CGEvent;
     let Ok(key_code) = u16::try_from(CGEvent::integer_value_field(
         Some(event),
@@ -384,6 +471,20 @@ fn transform(state: &State, event: &CGEvent) -> *mut CGEvent {
         key_code,
         CGEvent::flags(Some(event)),
     );
+
+    // The shortcut is answered before the engine sees anything, and before the
+    // selected language is consulted — that ordering is what lets it switch
+    // *out* of a language with no engine as well as into one. A repeat is
+    // ignored so a held shortcut cycles once.
+    if !autorepeat && state.cycle(&key) {
+        // The key-down is being swallowed, so its key-up must be too.
+        state.suppress_key_up(key_code);
+        return null_mut();
+    }
+    if !state.transforms() {
+        state.reset();
+        return original;
+    }
 
     let Ok(mut composer) = state.composer.try_borrow_mut() else {
         return original;
@@ -547,26 +648,44 @@ fn tag_event(event: &CGEvent, tag: i64) {
 
 /// The same macOS normalisation the native host uses, kept local because dodo
 /// must not link the InputMethodKit bundle just to obtain a key adapter.
-fn key_event(text: Option<char>, key_code: u16, flags: CGEventFlags) -> dodo_ime_core::KeyEvent {
-    use dodo_ime_core::{Key, KeyEvent, Modifiers};
-
+/// The four command modifiers, out of a CoreGraphics flag mask.
+fn modifiers(flags: CGEventFlags) -> Modifiers {
     const SHIFT: u64 = 1 << 17;
     const CONTROL: u64 = 1 << 18;
     const OPTION: u64 = 1 << 19;
     const COMMAND: u64 = 1 << 20;
 
-    let modifiers = Modifiers {
+    Modifiers {
         shift: flags.0 & SHIFT != 0,
         control: flags.0 & CONTROL != 0,
         alt: flags.0 & OPTION != 0,
         meta: flags.0 & COMMAND != 0,
-    };
+    }
+}
+
+/// A `FlagsChanged` event as the shared vocabulary spells it.
+///
+/// The key code is not read. Which modifier moved does not matter — only which
+/// ones are now held, because that is what a modifier-only shortcut is.
+fn modifier_event(flags: CGEventFlags) -> KeyEvent {
+    KeyEvent {
+        key: Key::Modifier,
+        text: None,
+        modifiers: modifiers(flags),
+    }
+}
+
+fn key_event(text: Option<char>, key_code: u16, flags: CGEventFlags) -> KeyEvent {
     let key = match key_code {
         0x24 | 0x4c => Key::Enter,
         0x30 => Key::Tab,
         0x31 => Key::Space,
         0x33 => Key::Backspace,
         0x35 => Key::Escape,
+        // The eight modifier key codes, as `crates/dodo-ime-macos/src/keymap.rs`
+        // names them. They reach this table only through a `FlagsChanged`
+        // event, and their sole reading is a modifier-only language switch.
+        0x36 | 0x37 | 0x38 | 0x3a | 0x3b | 0x3c | 0x3d | 0x3e => Key::Modifier,
         0x75 => Key::Delete,
         0x73 => Key::Home,
         0x74 => Key::PageUp,
@@ -600,7 +719,7 @@ fn key_event(text: Option<char>, key_code: u16, flags: CGEventFlags) -> dodo_ime
                     | Key::ArrowDown
             )
         }),
-        modifiers,
+        modifiers: modifiers(flags),
     }
 }
 
@@ -624,10 +743,31 @@ mod tests {
     use super::{
         DELETE_KEY_CODE, DirectComposer, MAX_REPLACEMENT_UNICODE_UNITS, OutputPlan, State,
         SyntheticEventDescriptor, callback, classify_tap_event, event_mask, key_event,
-        single_character, synthetic_event_descriptors, tag_event,
+        modifier_event, single_character, synthetic_event_descriptors, tag_event,
     };
-    use dodo_ime_core::{Key, KeyEvent, Modifiers, VietnameseConfig};
-    use objc2_core_graphics::{CGEvent, CGEventField, CGEventType};
+    use dodo_ime_core::{ActiveLanguages, Key, KeyEvent, LanguageId, Modifiers, VietnameseConfig};
+    use dodo_ime_ipc::settings::{
+        LanguageSwitch, SettingsDocument, Shortcut, ShortcutKey, ShortcutModifiers,
+    };
+    use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGEventType};
+
+    /// A tap state with no channel reader, which is all the composition tests
+    /// need: an unbounded send to a dropped receiver simply fails.
+    fn typing_state() -> State {
+        State::new(
+            SettingsDocument {
+                language: LanguageId::Vietnamese,
+                ..SettingsDocument::default()
+            },
+            futures_channel::mpsc::unbounded().0,
+        )
+    }
+
+    /// The mask bit and flag values CoreGraphics uses for the four modifiers.
+    const FLAG_SHIFT: u64 = 1 << 17;
+    const FLAG_CONTROL: u64 = 1 << 18;
+    const FLAG_OPTION: u64 = 1 << 19;
+    const FLAG_COMMAND: u64 = 1 << 20;
 
     fn press(state: &State, document: &mut String, event: KeyEvent) {
         let plan = state.composer.borrow_mut().process(event);
@@ -642,6 +782,119 @@ mod tests {
                 document.push(key);
             }
         }
+    }
+
+    /// The whole point of this round, at the layer that used to have no answer
+    /// at all: the tap owns the shortcut, replaces it in place, and cycles only
+    /// the enabled languages.
+    #[test]
+    fn the_tap_switches_language_on_the_recorded_shortcut_and_never_on_the_replaced_one() {
+        let (sender, mut received) = futures_channel::mpsc::unbounded();
+        let document = SettingsDocument {
+            language: LanguageId::English,
+            active_languages: ActiveLanguages::from_languages(LanguageId::ALL).unwrap(),
+            ..SettingsDocument::default()
+        };
+        let state = State::new(document, sender);
+        assert!(!state.transforms(), "English types through");
+
+        // `⌃⇧Space`, the default, arrives as a key-down.
+        let control_shift_space =
+            key_event(Some(' '), 0x31, CGEventFlags(FLAG_CONTROL | FLAG_SHIFT));
+        assert!(state.cycle(&control_shift_space));
+        assert_eq!(received.try_recv().unwrap(), LanguageId::Vietnamese);
+        assert!(state.transforms());
+
+        // Record `⌥Space` over it. One listener, reconfigured.
+        let replacement = SettingsDocument {
+            language: LanguageId::Vietnamese,
+            active_languages: ActiveLanguages::from_languages(LanguageId::ALL).unwrap(),
+            language_switch: LanguageSwitch {
+                shortcut: Shortcut {
+                    modifiers: ShortcutModifiers {
+                        alt: true,
+                        ..ShortcutModifiers::NONE
+                    },
+                    key: ShortcutKey::Space,
+                },
+                beep: false,
+            },
+            ..SettingsDocument::default()
+        };
+        state.reconfigure(replacement);
+        assert!(
+            !state.cycle(&control_shift_space),
+            "the replaced shortcut must be inert without restarting the tap"
+        );
+        assert!(state.cycle(&key_event(Some(' '), 0x31, CGEventFlags(FLAG_OPTION))));
+        assert_eq!(received.try_recv().unwrap(), LanguageId::Japanese);
+        assert!(!state.transforms(), "Japanese has no engine here");
+        assert!(state.cycle(&key_event(Some(' '), 0x31, CGEventFlags(FLAG_OPTION))));
+        assert_eq!(received.try_recv().unwrap(), LanguageId::English);
+    }
+
+    /// A modifier-only shortcut is only reachable through `FlagsChanged`, so
+    /// the mask, the key-code table and the flag reading all have to agree.
+    #[test]
+    fn a_modifier_only_shortcut_fires_from_a_flags_changed_event() {
+        let mask = event_mask();
+        assert_ne!(
+            mask & (1_u64 << CGEventType::FlagsChanged.0),
+            0,
+            "without this bit a bare modifier is never delivered"
+        );
+        assert_eq!(
+            classify_tap_event(CGEventType::FlagsChanged, false),
+            crate::input_method::models::event_tap::TapEvent::ModifiersChanged
+        );
+
+        let (sender, mut received) = futures_channel::mpsc::unbounded();
+        let state = State::new(
+            SettingsDocument {
+                language_switch: LanguageSwitch {
+                    shortcut: Shortcut {
+                        modifiers: ShortcutModifiers {
+                            control: true,
+                            shift: true,
+                            ..ShortcutModifiers::NONE
+                        },
+                        key: ShortcutKey::Modifiers,
+                    },
+                    beep: false,
+                },
+                ..SettingsDocument::default()
+            },
+            sender,
+        );
+
+        // Control down, then Shift: only the press completing the set fires.
+        assert!(!state.cycle(&modifier_event(CGEventFlags(FLAG_CONTROL))));
+        assert!(state.cycle(&modifier_event(CGEventFlags(FLAG_CONTROL | FLAG_SHIFT))));
+        assert_eq!(received.try_recv().unwrap(), LanguageId::Vietnamese);
+        // Releasing them is two more transitions and neither fires again.
+        assert!(!state.cycle(&modifier_event(CGEventFlags(FLAG_CONTROL))));
+        assert!(!state.cycle(&modifier_event(CGEventFlags(0))));
+        assert!(received.try_recv().is_err(), "no second switch");
+
+        // Command is `meta`, not one of the other three.
+        assert_eq!(
+            modifier_event(CGEventFlags(FLAG_COMMAND)).modifiers,
+            Modifiers {
+                meta: true,
+                ..Modifiers::NONE
+            }
+        );
+        assert_eq!(
+            modifier_event(CGEventFlags(FLAG_OPTION)).modifiers,
+            Modifiers {
+                alt: true,
+                ..Modifiers::NONE
+            }
+        );
+        assert_eq!(
+            key_event(None, 0x3b, CGEventFlags(FLAG_CONTROL)).key,
+            Key::Modifier
+        );
     }
 
     #[test]
@@ -663,7 +916,7 @@ mod tests {
             assert_eq!(mask & (1_u64 << event.0), 0, "{event:?}");
         }
 
-        let state = State::new(VietnameseConfig::default());
+        let state = typing_state();
         let mut document = String::new();
         for key in "ddee ".chars() {
             press(&state, &mut document, KeyEvent::character(key));
@@ -689,7 +942,7 @@ mod tests {
 
     #[test]
     fn target_process_change_resets_a_reopenable_word() {
-        let state = State::new(VietnameseConfig::default());
+        let state = typing_state();
         assert!(!state.reset_if_target_changed(Some(1)));
         assert!(!state.reset_if_target_changed(Some(1)));
 
@@ -705,7 +958,7 @@ mod tests {
 
     #[test]
     fn a_tagged_callback_cannot_reset_the_physical_target_or_composition() {
-        let state = State::new(VietnameseConfig::default());
+        let state = typing_state();
         assert!(!state.reset_if_target_changed(Some(1)));
         assert!(
             state
