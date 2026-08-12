@@ -51,6 +51,16 @@ producer lands: `core::safety` now has a real `validate_path` and a moved-to-tra
 (`macos::cleanup::cleanup_items`), so its allow is already gone. `core::permissions` is still the
 one whole-module allow marking an area that does not exist at all yet.
 
+**"`render` only runs when something changed" is false in gpui, and it cost the Cleaner its frame
+rate.** A dirty view marks its whole *ancestor* path dirty, and an ancestor re-rendering sets
+`Window::refreshing`, which bypasses the element cache for every *descendant* — so a child view
+scrolling, a 120 ms progress tick, or a redraw anywhere above re-runs a view's `render` with
+nothing of its own changed. Any `render` that copies a whole collection is therefore paying that
+copy per frame, however well the rows themselves are virtualized: `src/cleaner/views/results_sync.rs`
+is the fix, the measurements and the decision table, and is the pattern to copy — stamp a revision
+where the data is mutated, compare it before re-copying. Cheap `render` bodies are not an
+optimisation in dodo; they are the contract.
+
 **dodo persists ten things across restarts, and reads an eleventh another process writes**, all
 under `data_dir()` (`src/paths.rs`) and each
 behind a trait so the state layer never learns where they live: `collections.json`

@@ -136,7 +136,10 @@ picks it on macOS and returns an empty vector on every other platform.
 - **Result-table virtualization has since landed** — this section's earlier "not done" entry is
   stale. `src/cleaner/views/results_table.rs` is a `TableDelegate` driving
   `gpui_component::table::DataTable`, so only rows inside the scroll viewport are built each frame;
-  its module doc is the authority.
+  its module doc is the authority. Virtualizing the rows was not on its own enough to make a large
+  result cheap to *display*: the view also handed the delegate a fresh deep clone of the entire
+  result every frame, which `src/cleaner/views/results_sync.rs` now does only when the result or
+  the selection actually changed. Read that module before adding any other per-`render` copy.
 - **No "export scan report to a local file"** action yet, though it's in the ticket's required
   interactions list.
 

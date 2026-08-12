@@ -225,10 +225,17 @@
   - ~~**No result-table virtualization.**~~ **Done in a later pass** — the migration this entry
     described as future work has landed: `src/cleaner/views/results_table.rs` is the `TableDelegate`
     driving `gpui_component::table::DataTable`, which builds only the rows inside the current scroll
-    viewport, so the large-item-count categories this entry worried about (System Junk, Large & Old
-    Files, User Cache) no longer cost per-frame work proportional to their result size. That module's
-    doc comment is the authority; this entry is kept, struck through, only so the Phase 17 list stays
-    readable against its own history.
+    viewport. That module's doc comment is the authority; this entry is kept, struck through, only
+    so the Phase 17 list stays readable against its own history.
+
+    **Virtualized rows were not the whole cost, and this entry claimed they were.** Until
+    `src/cleaner/views/results_sync.rs` landed, `CleanerView::sync_results_table` deep-cloned the
+    whole active result — every item, and for application rows the whole TIFF icon payload — into
+    the delegate at the top of *every* `render`, however few rows the grid then drew. So the
+    large-item-count categories named here (System Junk, Large & Old Files, User Cache) did still
+    cost per-frame work proportional to their result size, and the icon-carrying ones (Installed
+    Apps, Universal Binaries) cost it proportional to their icon bytes too. That module doc holds
+    the measurements and the fix.
   - **No `tracing` spans.** dodo has no `tracing`/`log` crate anywhere in the codebase (`grep -n
     '^tracing\|^log = ' Cargo.toml` returns nothing); adding one solely for the ticket's suggested
     span names (`cleaner.smart_care`, `cleaner.category_scan`, etc.) would introduce a new
