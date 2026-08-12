@@ -44,6 +44,12 @@ struct TraversalCtx<'a> {
     cancellation: &'a CancellationToken,
 }
 
+struct ReadDirFrame {
+    path: PathBuf,
+    depth: usize,
+    entries: fs::ReadDir,
+}
+
 pub fn scan_root(
     root: &ScanRoot,
     category: CleanerCategory,
@@ -103,6 +109,203 @@ pub fn scan_root(
         scanned_entries,
         warnings,
     })
+}
+
+/// Streams `EveryFile` roots with a metadata predicate, retaining only
+/// matching files. `scan_root` remains the unfiltered path for callers that
+/// need every file.
+pub(crate) fn scan_matching_files(
+    root: &ScanRoot,
+    category: CleanerCategory,
+    progress: &dyn ProgressSink,
+    cancellation: &CancellationToken,
+    matches: impl Fn(u64, Option<SystemTime>) -> bool,
+) -> Result<RootScanResult, ScanError> {
+    scan_matching_files_with_frame_observer(root, category, progress, cancellation, matches, |_| {})
+}
+
+fn scan_matching_files_with_frame_observer(
+    root: &ScanRoot,
+    category: CleanerCategory,
+    progress: &dyn ProgressSink,
+    cancellation: &CancellationToken,
+    matches: impl Fn(u64, Option<SystemTime>) -> bool,
+    mut observe_frame_count: impl FnMut(usize),
+) -> Result<RootScanResult, ScanError> {
+    let metadata =
+        fs::symlink_metadata(&root.path).map_err(|err| map_root_error(root.path.clone(), err))?;
+    if metadata.file_type().is_symlink() {
+        return Err(ScanError::InvalidMetadata(root.path.clone()));
+    }
+
+    let mut reporter = ProgressReporter::new(category);
+    reporter.report(progress, ScanPhase::DiscoveringRoots, None, 0, 0, 0);
+
+    let ctx = TraversalCtx {
+        root,
+        root_device: device_id(&metadata),
+        category,
+        progress,
+        cancellation,
+    };
+    let mut warnings = Vec::new();
+    let mut scanned_entries = 0;
+    let mut discovered_bytes = 0;
+    let entries = scan_matching_every_file(
+        &ctx,
+        &mut reporter,
+        &mut scanned_entries,
+        &mut discovered_bytes,
+        &mut warnings,
+        &matches,
+        &mut observe_frame_count,
+    )?;
+
+    reporter.report(
+        progress,
+        ScanPhase::Completed,
+        Some(root.path.clone()),
+        scanned_entries,
+        scanned_entries,
+        discovered_bytes,
+    );
+
+    Ok(RootScanResult {
+        root: root.path.clone(),
+        entries,
+        scanned_entries,
+        warnings,
+    })
+}
+
+fn scan_matching_every_file<M, O>(
+    ctx: &TraversalCtx,
+    reporter: &mut ProgressReporter,
+    scanned_entries: &mut u64,
+    discovered_bytes: &mut u64,
+    warnings: &mut Vec<ScanWarning>,
+    matches: &M,
+    observe_frame_count: &mut O,
+) -> Result<Vec<AggregatedEntry>, ScanError>
+where
+    M: Fn(u64, Option<SystemTime>) -> bool,
+    O: FnMut(usize),
+{
+    let root = ctx.root;
+    let mut entries = Vec::new();
+    let mut seen_inodes = HashSet::new();
+    let mut frames: Vec<ReadDirFrame> = Vec::new();
+    let mut next_path = Some((root.path.clone(), 0usize));
+
+    loop {
+        if ctx.cancellation.is_cancelled() {
+            return Err(ScanError::Cancelled);
+        }
+
+        let (path, depth) = if let Some(path) = next_path.take() {
+            path
+        } else {
+            let (depth, child) = match frames.last_mut() {
+                Some(frame) => (frame.depth + 1, frame.entries.next()),
+                None => break,
+            };
+            match child {
+                Some(Ok(child)) => {
+                    let path = child.path();
+                    if should_skip_name(path.as_path(), root.include_hidden) {
+                        continue;
+                    }
+                    (path, depth)
+                }
+                Some(Err(err)) => {
+                    let path = &frames.last().expect("frame remains while reading").path;
+                    warnings.push(ScanWarning {
+                        message: format!("Failed to enumerate {}: {err}", path.display()),
+                    });
+                    continue;
+                }
+                None => {
+                    frames.pop();
+                    continue;
+                }
+            }
+        };
+
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                warnings.push(ScanWarning {
+                    message: format!("Failed to inspect {}: {err}", path.display()),
+                });
+                continue;
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            warnings.push(ScanWarning {
+                message: format!("Skipped symlink {}", path.display()),
+            });
+            continue;
+        }
+        if metadata.is_file() {
+            if let Some(identity) = hard_link_identity(&metadata)
+                && !seen_inodes.insert(identity)
+            {
+                continue;
+            }
+            *scanned_entries += 1;
+            *discovered_bytes += metadata.len();
+            let modified_at = metadata.modified().ok();
+            reporter.report(
+                ctx.progress,
+                ScanPhase::Traversing,
+                Some(path.clone()),
+                *scanned_entries,
+                *scanned_entries - 1,
+                *discovered_bytes,
+            );
+            if matches(metadata.len(), modified_at) {
+                entries.push(AggregatedEntry {
+                    path,
+                    logical_size: metadata.len(),
+                    modified_at,
+                    scanned_entries: 1,
+                });
+            }
+            continue;
+        }
+        if metadata.is_dir() {
+            if root.max_depth.is_some_and(|max_depth| depth >= max_depth) {
+                continue;
+            }
+            if !same_filesystem(
+                ctx.root_device,
+                device_id(&metadata),
+                root.cross_filesystems,
+            ) {
+                warnings.push(ScanWarning {
+                    message: format!("Skipped mounted volume at {}", path.display()),
+                });
+                continue;
+            }
+            let entries_in_directory = match fs::read_dir(&path) {
+                Ok(entries) => entries,
+                Err(err) => {
+                    warnings.push(ScanWarning {
+                        message: format!("Failed to read {}: {err}", path.display()),
+                    });
+                    continue;
+                }
+            };
+            frames.push(ReadDirFrame {
+                path,
+                depth,
+                entries: entries_in_directory,
+            });
+            observe_frame_count(frames.len());
+        }
+    }
+    let _ = ctx.category;
+    Ok(entries)
 }
 
 fn scan_immediate_children(
@@ -532,12 +735,13 @@ mod tests {
 
     use crate::cleaner::core::cancellation::CancellationToken;
     use crate::cleaner::core::category::CleanerCategory;
+    use crate::cleaner::core::errors::ScanError;
     use crate::cleaner::core::fs::scan_root;
-    use crate::cleaner::core::progress::{ProgressSink, ScanProgress};
+    use crate::cleaner::core::progress::{ProgressSink, ScanPhase, ScanProgress};
     use crate::cleaner::core::risk::RiskLevel;
     use crate::cleaner::core::scan_root::{AggregateMode, ScanRoot};
 
-    use super::same_filesystem;
+    use super::{same_filesystem, scan_matching_files, scan_matching_files_with_frame_observer};
 
     struct RecordingSink(Arc<Mutex<Vec<ScanProgress>>>);
 
@@ -596,6 +800,90 @@ mod tests {
         }
     }
 
+    fn every_file_root(path: std::path::PathBuf) -> ScanRoot {
+        ScanRoot {
+            aggregate_mode: AggregateMode::EveryFile,
+            ..whole_root(path)
+        }
+    }
+
+    #[test]
+    fn matching_files_streams_a_wide_tree_without_retaining_fresh_files() {
+        const FRESH_FILE_COUNT: usize = 512;
+        const CANDIDATE_SIZE: u64 = 101 * 1024 * 1024;
+
+        let temp = std::env::temp_dir().join(format!(
+            "dodo-cleaner-fs-matching-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let wide = temp.join("wide");
+        fs::create_dir_all(&wide).expect("creates wide directory");
+        for index in 0..FRESH_FILE_COUNT {
+            fs::write(wide.join(format!("fresh-{index}")), b"x").expect("writes fresh file");
+        }
+        let candidate = temp.join("sparse-large.bin");
+        fs::File::create(&candidate)
+            .and_then(|file| file.set_len(CANDIDATE_SIZE))
+            .expect("creates sparse candidate");
+        let root = every_file_root(temp.clone());
+
+        let generic = scan_root(
+            &root,
+            CleanerCategory::LargeOldFiles,
+            &RecordingSink(Arc::new(Mutex::new(Vec::new()))),
+            &CancellationToken::new(),
+        )
+        .expect("generic scan still retains every file");
+        assert_eq!(generic.scanned_entries, (FRESH_FILE_COUNT + 1) as u64);
+        assert_eq!(generic.entries.len(), FRESH_FILE_COUNT + 1);
+
+        let progress = Arc::new(Mutex::new(Vec::new()));
+        let mut max_frame_count = 0;
+        let matching = scan_matching_files_with_frame_observer(
+            &root,
+            CleanerCategory::LargeOldFiles,
+            &RecordingSink(progress.clone()),
+            &CancellationToken::new(),
+            |size, _| size >= CANDIDATE_SIZE,
+            |frame_count| max_frame_count = max_frame_count.max(frame_count),
+        )
+        .expect("streams matching files");
+
+        assert_eq!(matching.scanned_entries, (FRESH_FILE_COUNT + 1) as u64);
+        assert_eq!(matching.entries.len(), 1);
+        assert_eq!(matching.entries[0].path, candidate);
+        assert_eq!(max_frame_count, 2, "one frame per directory depth");
+        let completed = progress
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .find(|event| event.phase == ScanPhase::Completed)
+            .cloned()
+            .expect("reports completion");
+        assert_eq!(completed.scanned_entries, (FRESH_FILE_COUNT + 1) as u64);
+        assert_eq!(completed.discovered_items, (FRESH_FILE_COUNT + 1) as u64);
+        assert_eq!(
+            completed.discovered_bytes,
+            CANDIDATE_SIZE + FRESH_FILE_COUNT as u64
+        );
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        assert!(matches!(
+            scan_matching_files(
+                &root,
+                CleanerCategory::LargeOldFiles,
+                &RecordingSink(Arc::new(Mutex::new(Vec::new()))),
+                &cancellation,
+                |size, _| size >= CANDIDATE_SIZE,
+            ),
+            Err(ScanError::Cancelled)
+        ));
+
+        fs::remove_dir_all(&temp).expect("removes temp tree");
+    }
+
     #[test]
     #[cfg(unix)]
     fn a_hard_linked_file_is_only_counted_once() {
@@ -619,6 +907,25 @@ mod tests {
         assert_eq!(result.entries.len(), 1);
         assert_eq!(result.entries[0].logical_size, 150);
         assert_eq!(result.scanned_entries, 2);
+
+        let matching = scan_matching_files(
+            &every_file_root(temp.clone()),
+            CleanerCategory::UserCache,
+            &RecordingSink(Arc::new(Mutex::new(Vec::new()))),
+            &CancellationToken::new(),
+            |_, _| true,
+        )
+        .expect("scans matching files");
+        assert_eq!(matching.entries.len(), 2);
+        assert_eq!(matching.scanned_entries, 2);
+        assert_eq!(
+            matching
+                .entries
+                .iter()
+                .map(|entry| entry.logical_size)
+                .sum::<u64>(),
+            150
+        );
 
         fs::remove_dir_all(&temp).expect("removes temp tree");
     }

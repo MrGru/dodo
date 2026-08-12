@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 use crate::cleaner::core::cancellation::CancellationToken;
 use crate::cleaner::core::category::CleanerCategory;
 use crate::cleaner::core::errors::ScanError;
-use crate::cleaner::core::fs::scan_root;
+use crate::cleaner::core::fs::scan_matching_files;
 use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata, LargeFileMetadata};
 use crate::cleaner::core::permissions::MacPermission;
 use crate::cleaner::core::progress::{ProgressSink, ScanPhase, ScanProgress};
@@ -77,19 +77,17 @@ impl CleanerScanner for LargeOldFilesScanner {
             if cancellation.is_cancelled() {
                 return Err(ScanError::Cancelled);
             }
-            match scan_root(
+            match scan_matching_files(
                 &root,
                 CleanerCategory::LargeOldFiles,
                 progress,
                 cancellation,
+                |size, modified_at| qualifies(size, modified_at, context.started_at),
             ) {
                 Ok(result) => {
                     scanned_entries += result.scanned_entries;
                     warnings.extend(result.warnings);
                     for entry in result.entries {
-                        if !qualifies(entry.logical_size, entry.modified_at, context.started_at) {
-                            continue;
-                        }
                         let extension = entry
                             .path
                             .extension()
@@ -255,7 +253,9 @@ mod tests {
         let old = downloads.join("old.txt");
         let large = downloads.join("large.bin");
         fs::write(&old, b"old").expect("writes old file");
-        fs::write(&large, vec![0u8; (101 * 1024 * 1024) as usize]).expect("writes large file");
+        fs::File::create(&large)
+            .and_then(|file| file.set_len(101 * 1024 * 1024))
+            .expect("creates sparse large file");
 
         let scanner = LargeOldFilesScanner::with_roots(vec![ScanRoot {
             path: PathBuf::from("~/Downloads"),
@@ -280,6 +280,67 @@ mod tests {
             .expect("scans");
 
         assert_eq!(result.items.len(), 2);
+        assert_eq!(result.items[0].display_name, "large.bin");
+        assert_eq!(result.items[1].display_name, "old.txt");
+        assert!(result.warnings.is_empty());
+        fs::remove_dir_all(&temp).expect("removes temp tree");
+    }
+
+    #[test]
+    fn scanner_displays_only_qualifying_sparse_file() {
+        const FRESH_FILE_COUNT: usize = 128;
+        const CANDIDATE_SIZE: u64 = 101 * 1024 * 1024;
+
+        let temp = std::env::temp_dir().join(format!(
+            "dodo-cleaner-large-old-matching-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let downloads = temp.join("Downloads");
+        fs::create_dir_all(&downloads).expect("creates downloads");
+        for index in 0..FRESH_FILE_COUNT {
+            fs::write(downloads.join(format!("fresh-{index}")), b"x").expect("writes fresh file");
+        }
+        let candidate = downloads.join("sparse-large.bin");
+        fs::File::create(&candidate)
+            .and_then(|file| file.set_len(CANDIDATE_SIZE))
+            .expect("creates sparse candidate");
+        let skipped_link = downloads.join("skipped-link");
+        std::os::unix::fs::symlink(&candidate, &skipped_link).expect("creates symlink");
+
+        let scanner = LargeOldFilesScanner::with_roots(vec![ScanRoot {
+            path: PathBuf::from("~/Downloads"),
+            max_depth: None,
+            follow_symlinks: false,
+            cross_filesystems: false,
+            include_hidden: false,
+            aggregate_mode: AggregateMode::EveryFile,
+            permission: None,
+            risk: crate::cleaner::core::risk::RiskLevel::UserData,
+        }]);
+        let result = scanner
+            .scan(
+                &ScanContext {
+                    started_at: SystemTime::now(),
+                    user_home: Some(temp.clone()),
+                },
+                &RecordingSink(Arc::new(Mutex::new(Vec::new()))),
+                &CancellationToken::new(),
+            )
+            .expect("scans");
+
+        assert_eq!(result.scanned_entries, (FRESH_FILE_COUNT + 1) as u64);
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].display_name, "sparse-large.bin");
+        assert_eq!(result.items[0].path, candidate);
+        assert_eq!(result.items[0].logical_size, CANDIDATE_SIZE);
+        assert_eq!(result.estimated_reclaimable_bytes, CANDIDATE_SIZE);
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(
+            result.warnings[0].message,
+            format!("Skipped symlink {}", skipped_link.display())
+        );
+
         fs::remove_dir_all(&temp).expect("removes temp tree");
     }
 }

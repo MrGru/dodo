@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 use crate::cleaner::core::cancellation::CancellationToken;
 use crate::cleaner::core::category::CleanerCategory;
 use crate::cleaner::core::errors::ScanError;
-use crate::cleaner::core::fs::scan_root;
+use crate::cleaner::core::fs::scan_matching_files;
 use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata, LargeFileMetadata};
 use crate::cleaner::core::permissions::MacPermission;
 use crate::cleaner::core::progress::{ProgressSink, ScanPhase, ScanProgress};
@@ -61,19 +61,17 @@ impl CleanerScanner for LargeOldFilesScanner {
             if cancellation.is_cancelled() {
                 return Err(ScanError::Cancelled);
             }
-            match scan_root(
+            match scan_matching_files(
                 &root,
                 CleanerCategory::LargeOldFiles,
                 progress,
                 cancellation,
+                |size, modified_at| qualifies(size, modified_at, context.started_at),
             ) {
                 Ok(result) => {
                     scanned_entries += result.scanned_entries;
                     warnings.extend(result.warnings);
                     for entry in result.entries {
-                        if !qualifies(entry.logical_size, entry.modified_at, context.started_at) {
-                            continue;
-                        }
                         let extension = entry
                             .path
                             .extension()
