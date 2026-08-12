@@ -1505,10 +1505,6 @@ pub enum Str {
     InputMethodLanguageDescription,
     InputMethodLanguageSwitch,
     InputMethodLanguageSwitchDescription,
-    InputMethodShortcutControl,
-    InputMethodShortcutAlt,
-    InputMethodShortcutShift,
-    InputMethodShortcutMeta,
     InputMethodShortcutBeep,
     InputMethodShortcutSpace,
     InputMethodShortcutEnter,
@@ -1521,6 +1517,19 @@ pub enum Str {
         count: u64,
         size: String,
     },
+    InputMethodShortcutRecording,
+    InputMethodShortcutUnsupportedKey,
+    InputMethodShortcutNeedsEventTap,
+    InputMethodShortcutBackspace,
+    InputMethodShortcutDelete,
+    InputMethodShortcutHome,
+    InputMethodShortcutEnd,
+    InputMethodShortcutPageUp,
+    InputMethodShortcutPageDown,
+    InputMethodShortcutArrowLeft,
+    InputMethodShortcutArrowRight,
+    InputMethodShortcutArrowUp,
+    InputMethodShortcutArrowDown,
 }
 
 impl Str {
@@ -4822,21 +4831,49 @@ impl Str {
                 "Chuyển ngôn ngữ".into()
             }
             (Str::InputMethodLanguageSwitchDescription, Language::English) => {
-                "Cycles active languages. Select at least two keys; modifiers alone are valid. A base key and sound are optional.".into()
+                "Cycles the enabled languages. Click the shortcut, then press the combination you want.".into()
             }
             (Str::InputMethodLanguageSwitchDescription, Language::Vietnamese) => {
-                "Luân chuyển các ngôn ngữ đang bật. Chọn ít nhất hai phím; chỉ phím bổ trợ cũng hợp lệ. Phím chính và âm báo là tùy chọn.".into()
+                "Luân chuyển các ngôn ngữ đang bật. Nhấp vào phím tắt rồi nhấn tổ hợp phím bạn muốn.".into()
             }
-            (Str::InputMethodShortcutControl, Language::English) => "Control".into(),
-            (Str::InputMethodShortcutControl, Language::Vietnamese) => "Phím Control".into(),
-            (Str::InputMethodShortcutAlt, Language::English) => "Alt".into(),
-            (Str::InputMethodShortcutAlt, Language::Vietnamese) => "Phím Alt".into(),
-            (Str::InputMethodShortcutShift, Language::English) => "Shift".into(),
-            (Str::InputMethodShortcutShift, Language::Vietnamese) => "Phím Shift".into(),
-            (Str::InputMethodShortcutMeta, Language::English) => "Command / Windows".into(),
-            (Str::InputMethodShortcutMeta, Language::Vietnamese) => {
-                "Phím Command / Windows".into()
+            (Str::InputMethodShortcutRecording, Language::English) => {
+                "Press a combination…".into()
             }
+            (Str::InputMethodShortcutRecording, Language::Vietnamese) => {
+                "Nhấn tổ hợp phím…".into()
+            }
+            (Str::InputMethodShortcutUnsupportedKey, Language::English) => {
+                "That key cannot be recorded. Hold a modifier and press a key that types nothing, or hold two modifiers on their own.".into()
+            }
+            (Str::InputMethodShortcutUnsupportedKey, Language::Vietnamese) => {
+                "Không ghi được phím đó. Hãy giữ một phím bổ trợ rồi nhấn một phím không gõ ra chữ, hoặc giữ riêng hai phím bổ trợ.".into()
+            }
+            (Str::InputMethodShortcutNeedsEventTap, Language::English) => {
+                "Native Input Method never sees a modifier-only shortcut. Select Event Tap, or record a combination that ends in another key.".into()
+            }
+            (Str::InputMethodShortcutNeedsEventTap, Language::Vietnamese) => {
+                "Bộ gõ hệ thống không nhận tổ hợp chỉ gồm phím bổ trợ. Hãy chọn Event Tap, hoặc ghi tổ hợp kết thúc bằng một phím khác.".into()
+            }
+            (Str::InputMethodShortcutBackspace, Language::English) => "Backspace".into(),
+            (Str::InputMethodShortcutBackspace, Language::Vietnamese) => "Phím xóa lùi".into(),
+            (Str::InputMethodShortcutDelete, Language::English) => "Delete".into(),
+            (Str::InputMethodShortcutDelete, Language::Vietnamese) => "Phím xóa tới".into(),
+            (Str::InputMethodShortcutHome, Language::English) => "Home".into(),
+            (Str::InputMethodShortcutHome, Language::Vietnamese) => "Phím Home".into(),
+            (Str::InputMethodShortcutEnd, Language::English) => "End".into(),
+            (Str::InputMethodShortcutEnd, Language::Vietnamese) => "Phím End".into(),
+            (Str::InputMethodShortcutPageUp, Language::English) => "Page Up".into(),
+            (Str::InputMethodShortcutPageUp, Language::Vietnamese) => "Phím lên trang".into(),
+            (Str::InputMethodShortcutPageDown, Language::English) => "Page Down".into(),
+            (Str::InputMethodShortcutPageDown, Language::Vietnamese) => "Phím xuống trang".into(),
+            (Str::InputMethodShortcutArrowLeft, Language::English) => "Left".into(),
+            (Str::InputMethodShortcutArrowLeft, Language::Vietnamese) => "Mũi tên trái".into(),
+            (Str::InputMethodShortcutArrowRight, Language::English) => "Right".into(),
+            (Str::InputMethodShortcutArrowRight, Language::Vietnamese) => "Mũi tên phải".into(),
+            (Str::InputMethodShortcutArrowUp, Language::English) => "Up".into(),
+            (Str::InputMethodShortcutArrowUp, Language::Vietnamese) => "Mũi tên lên".into(),
+            (Str::InputMethodShortcutArrowDown, Language::English) => "Down".into(),
+            (Str::InputMethodShortcutArrowDown, Language::Vietnamese) => "Mũi tên xuống".into(),
             (Str::InputMethodShortcutBeep, Language::English) => "Beep".into(),
             (Str::InputMethodShortcutBeep, Language::Vietnamese) => "Âm báo".into(),
             (Str::InputMethodShortcutSpace, Language::English) => "Space".into(),
@@ -6457,10 +6494,6 @@ mod tests {
             plain(Str::InputMethodLanguageDescription),
             plain(Str::InputMethodLanguageSwitch),
             plain(Str::InputMethodLanguageSwitchDescription),
-            plain(Str::InputMethodShortcutControl),
-            plain(Str::InputMethodShortcutAlt),
-            plain(Str::InputMethodShortcutShift),
-            plain(Str::InputMethodShortcutMeta),
             plain(Str::InputMethodShortcutBeep),
             plain(Str::InputMethodShortcutSpace),
             plain(Str::InputMethodShortcutEnter),
@@ -6475,6 +6508,19 @@ mod tests {
                 },
                 &[NUMBER_TEXT, DETAIL],
             ),
+            plain(Str::InputMethodShortcutRecording),
+            plain(Str::InputMethodShortcutUnsupportedKey),
+            plain(Str::InputMethodShortcutNeedsEventTap),
+            plain(Str::InputMethodShortcutBackspace),
+            plain(Str::InputMethodShortcutDelete),
+            plain(Str::InputMethodShortcutHome),
+            plain(Str::InputMethodShortcutEnd),
+            plain(Str::InputMethodShortcutPageUp),
+            plain(Str::InputMethodShortcutPageDown),
+            plain(Str::InputMethodShortcutArrowLeft),
+            plain(Str::InputMethodShortcutArrowRight),
+            plain(Str::InputMethodShortcutArrowUp),
+            plain(Str::InputMethodShortcutArrowDown),
         ]
     }
 
@@ -7394,18 +7440,27 @@ mod tests {
             Str::InputMethodLanguageDescription => 909,
             Str::InputMethodLanguageSwitch => 910,
             Str::InputMethodLanguageSwitchDescription => 911,
-            Str::InputMethodShortcutControl => 912,
-            Str::InputMethodShortcutAlt => 913,
-            Str::InputMethodShortcutShift => 914,
-            Str::InputMethodShortcutMeta => 915,
-            Str::InputMethodShortcutBeep => 916,
-            Str::InputMethodShortcutSpace => 917,
-            Str::InputMethodShortcutEnter => 918,
-            Str::InputMethodShortcutTab => 919,
-            Str::InputMethodShortcutEscape => 920,
-            Str::CleanerEmptyTrash => 921,
-            Str::CleanerEmptyTrashConfirmTitle => 922,
-            Str::CleanerEmptyTrashConfirmMessage { .. } => 923,
+            Str::InputMethodShortcutBeep => 912,
+            Str::InputMethodShortcutSpace => 913,
+            Str::InputMethodShortcutEnter => 914,
+            Str::InputMethodShortcutTab => 915,
+            Str::InputMethodShortcutEscape => 916,
+            Str::CleanerEmptyTrash => 917,
+            Str::CleanerEmptyTrashConfirmTitle => 918,
+            Str::CleanerEmptyTrashConfirmMessage { .. } => 919,
+            Str::InputMethodShortcutRecording => 920,
+            Str::InputMethodShortcutUnsupportedKey => 921,
+            Str::InputMethodShortcutNeedsEventTap => 922,
+            Str::InputMethodShortcutBackspace => 923,
+            Str::InputMethodShortcutDelete => 924,
+            Str::InputMethodShortcutHome => 925,
+            Str::InputMethodShortcutEnd => 926,
+            Str::InputMethodShortcutPageUp => 927,
+            Str::InputMethodShortcutPageDown => 928,
+            Str::InputMethodShortcutArrowLeft => 929,
+            Str::InputMethodShortcutArrowRight => 930,
+            Str::InputMethodShortcutArrowUp => 931,
+            Str::InputMethodShortcutArrowDown => 932,
         }
     }
 

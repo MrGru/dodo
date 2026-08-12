@@ -155,10 +155,11 @@ pub fn key_event(text: &str, key_code: u16, flags: u64) -> KeyEvent {
 #[cfg(test)]
 mod tests {
     use super::{
-        FLAG_COMMAND, FLAG_CONTROL, FLAG_OPTION, FLAG_SHIFT, VK_CONTROL, VK_RIGHT_SHIFT, key_event,
-        modifiers, single_char,
+        FLAG_COMMAND, FLAG_CONTROL, FLAG_OPTION, FLAG_SHIFT, VK_CONTROL, VK_RIGHT_SHIFT, VK_SPACE,
+        key_event, modifiers, single_char,
     };
     use dodo_ime_core::{Key, Modifiers};
+    use dodo_ime_ipc::settings::{Shortcut, ShortcutKey, ShortcutModifiers};
 
     /// `NSEventModifierFlagCapsLock` (1 << 16) and
     /// `NSEventModifierFlagFunction` (1 << 23), which arrive on real events and
@@ -190,6 +191,44 @@ mod tests {
             event.modifiers.is_plain(),
             "Fn and NumericPad must not read as a command modifier"
         );
+    }
+
+    /// Command is `meta` and Option is `alt`, which is how one recorded
+    /// shortcut means the same hand shape on Windows. Getting the two the wrong
+    /// way round would make `⌘Space` fire on `⌥Space`.
+    #[test]
+    fn command_and_option_reach_a_shortcut_as_meta_and_alt() {
+        let space = |modifiers| Shortcut {
+            modifiers,
+            key: ShortcutKey::Space,
+        };
+        let meta = space(ShortcutModifiers {
+            meta: true,
+            ..ShortcutModifiers::NONE
+        });
+        let alt = space(ShortcutModifiers {
+            alt: true,
+            ..ShortcutModifiers::NONE
+        });
+        let with_command = key_event(" ", VK_SPACE, FLAG_COMMAND);
+        let with_option = key_event(" ", VK_SPACE, FLAG_OPTION);
+        assert!(meta.matches(&with_command));
+        assert!(!meta.matches(&with_option));
+        assert!(alt.matches(&with_option));
+        assert!(!alt.matches(&with_command));
+
+        // A modifier-only shortcut is matched from the identity this table
+        // gives a bare modifier key. Whether InputMethodKit ever *delivers*
+        // one is a different question, answered in `controller`'s event mask.
+        let control_shift = Shortcut {
+            modifiers: ShortcutModifiers {
+                control: true,
+                shift: true,
+                ..ShortcutModifiers::NONE
+            },
+            key: ShortcutKey::Modifiers,
+        };
+        assert!(control_shift.matches(&key_event("", VK_RIGHT_SHIFT, FLAG_CONTROL | FLAG_SHIFT)));
     }
 
     #[test]

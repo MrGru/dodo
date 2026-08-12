@@ -35,10 +35,12 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::radio::RadioGroup;
 use gpui_component::switch::Switch;
-use gpui_component::{ActiveTheme, Disableable as _, StyledExt as _, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable as _, Selectable as _, StyledExt as _, h_flex, v_flex,
+};
 
 use dodo_ime_core::LanguageId;
-use dodo_ime_ipc::settings::{Backend, LanguageSwitchKey, Scheme, Tone};
+use dodo_ime_ipc::settings::{Backend, Scheme, Shortcut, ShortcutKey, ShortcutModifiers, Tone};
 
 use crate::i18n::{Str, t};
 use crate::input_method::InputMethod;
@@ -55,16 +57,40 @@ use crate::input_method::models::windows::{
     WindowsInstall, WindowsInstallFailure, WindowsInstallOutcome,
 };
 
-/// The Input method pane. A unit struct rather than one with fields — see the
-/// module docs for why holding anything here would be a defect rather than an
-/// optimisation.
-pub struct InputMethodView;
+/// The key context the recorder claims while it is capturing.
+///
+/// It exists so the field is a dispatch target of its own; nothing binds an
+/// action to it, because a recorder that let a key binding win would record the
+/// binding's effect instead of the key.
+const RECORDER_CONTEXT: &str = "InputMethodShortcutRecorder";
+
+/// The Input method pane.
+///
+/// Every *setting* is still read from [`InputMethod`] in `render` — see the
+/// module docs. The three fields here are not settings: they are what the
+/// recorder is doing right now, which nothing outside this view can observe and
+/// nothing needs to survive a restart.
+pub struct InputMethodView {
+    /// Where key and modifier events arrive while recording.
+    recorder: FocusHandle,
+    recording: bool,
+    /// The largest modifier set seen since recording began, which is what a
+    /// modifier-only shortcut is committed from when they are all released.
+    held: ShortcutModifiers,
+    /// Whether the last attempt pressed something no host could match.
+    unsupported_key: bool,
+}
 
 impl InputMethodView {
     /// Takes `window` it does not use, because every tool's constructor has this
     /// signature and `Layout::new` calls them all the same way.
-    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
-        Self
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self {
+            recorder: cx.focus_handle(),
+            recording: false,
+            held: ShortcutModifiers::NONE,
+            unsupported_key: false,
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -400,7 +426,7 @@ impl InputMethodView {
 
     /// Keeps the label at the left while there is room, then wraps its bounded
     /// control group below it instead of letting either column overlap.
-    fn language_switch_row(cx: &App) -> impl IntoElement {
+    fn language_switch_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .items_start()
             .flex_wrap()
@@ -423,100 +449,188 @@ impl InputMethodView {
                 div()
                     .flex_1()
                     .min_w(px(260.))
-                    .child(Self::language_switch_choice(cx)),
+                    .child(self.language_switch_choice(cx)),
             )
     }
 
-    fn language_switch_choice(cx: &App) -> impl IntoElement {
-        let shortcut = InputMethod::language_switch(cx);
+    /// The recorder field, the beep switch, and whatever the last recording
+    /// attempt has to say.
+    fn language_switch_choice(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let switch = InputMethod::language_switch(cx);
+        let label: SharedString = if self.recording {
+            t(Str::InputMethodShortcutRecording, cx)
+        } else {
+            shortcut_display(switch.shortcut, cx).into()
+        };
         v_flex()
             .w_full()
             .gap_2()
             .child(
-                h_flex().w_full().flex_wrap().gap_2().children(
-                    LanguageSwitchKey::ALL
-                        .map(|key| Self::shortcut_key(key, language_switch_key_label(key), cx)),
-                ),
-            )
-            .child(
                 h_flex()
                     .w_full()
                     .flex_wrap()
-                    .gap_2()
-                    .child(Self::shortcut_modifier(
-                        ShortcutModifier::Control,
-                        Str::InputMethodShortcutControl,
-                        cx,
-                    ))
-                    .child(Self::shortcut_modifier(
-                        ShortcutModifier::Alt,
-                        Str::InputMethodShortcutAlt,
-                        cx,
-                    ))
-                    .child(Self::shortcut_modifier(
-                        ShortcutModifier::Shift,
-                        Str::InputMethodShortcutShift,
-                        cx,
-                    ))
-                    .child(Self::shortcut_modifier(
-                        ShortcutModifier::Meta,
-                        Str::InputMethodShortcutMeta,
-                        cx,
-                    ))
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            // The focus handle is what makes this a recorder
+                            // rather than a button: gpui delivers key and
+                            // modifier events to the focused element, and with
+                            // nothing focused the dispatch path is the window
+                            // root, which carries none of them here.
+                            .track_focus(&self.recorder)
+                            .key_context(RECORDER_CONTEXT)
+                            .on_key_down(cx.listener(Self::key_recorded))
+                            .on_modifiers_changed(cx.listener(Self::modifiers_recorded))
+                            .child(
+                                Button::new("input-method-language-switch-recorder")
+                                    .outline()
+                                    .selected(self.recording)
+                                    .label(label)
+                                    .on_click(cx.listener(Self::start_recording)),
+                            ),
+                    )
                     .child(
                         h_flex()
                             .items_center()
                             .gap_1()
                             .child(
                                 Switch::new("input-method-language-switch-beep")
-                                    .checked(shortcut.beep)
+                                    .checked(switch.beep)
                                     .on_click(|checked: &bool, _, cx| {
-                                        let mut shortcut = InputMethod::language_switch(cx);
-                                        shortcut.beep = *checked;
-                                        InputMethod::set_language_switch(shortcut, cx);
+                                        let mut switch = InputMethod::language_switch(cx);
+                                        switch.beep = *checked;
+                                        InputMethod::set_language_switch(switch, cx);
                                     }),
                             )
                             .child(div().text_sm().child(t(Str::InputMethodShortcutBeep, cx))),
                     ),
             )
+            .when_some(self.recorder_hint(cx), |this, hint| {
+                this.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t(hint, cx)),
+                )
+            })
     }
 
-    fn shortcut_key(key: LanguageSwitchKey, label: Str, cx: &App) -> impl IntoElement {
-        let selected = InputMethod::language_switch(cx).key == Some(key);
-        h_flex()
-            .items_center()
-            .gap_1()
-            .child(
-                Switch::new(format!("input-method-language-switch-key-{key:?}"))
-                    .checked(selected)
-                    .on_click(move |checked: &bool, _, cx| {
-                        let mut shortcut = InputMethod::language_switch(cx);
-                        shortcut.key = checked.then_some(key);
-                        InputMethod::set_language_switch(shortcut, cx);
-                    }),
-            )
-            .child(div().text_sm().child(t(label, cx)))
+    /// What the row has to say beneath the field, if anything.
+    ///
+    /// The macOS caveat is not a nicety. `recognizedEvents:` in the
+    /// InputMethodKit bundle is `NSEventMaskKeyDown` alone, so a bare modifier
+    /// press never reaches it and a modifier-only shortcut is simply never
+    /// delivered — the recorder would otherwise show a setting that does
+    /// nothing, which is the exact failure this round exists to end.
+    fn recorder_hint(&self, cx: &App) -> Option<Str> {
+        if self.unsupported_key {
+            return Some(Str::InputMethodShortcutUnsupportedKey);
+        }
+        #[cfg(target_os = "macos")]
+        if InputMethod::backend(cx) == Backend::Native
+            && InputMethod::language_switch(cx).shortcut.key == ShortcutKey::Modifiers
+        {
+            return Some(Str::InputMethodShortcutNeedsEventTap);
+        }
+        let _ = cx;
+        None
     }
 
-    fn shortcut_modifier(modifier: ShortcutModifier, label: Str, cx: &App) -> impl IntoElement {
-        let shortcut = InputMethod::language_switch(cx);
-        h_flex()
-            .items_center()
-            .gap_1()
-            .child(
-                Switch::new(format!(
-                    "input-method-language-switch-modifier-{}",
-                    modifier.id()
-                ))
-                .checked(modifier.enabled(shortcut))
-                .disabled(modifier.is_required(shortcut))
-                .on_click(move |checked: &bool, _, cx| {
-                    let mut shortcut = InputMethod::language_switch(cx);
-                    modifier.set(&mut shortcut, *checked);
-                    InputMethod::set_language_switch(shortcut, cx);
-                }),
-            )
-            .child(div().text_sm().child(t(label, cx)))
+    fn start_recording(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.recording = true;
+        self.unsupported_key = false;
+        self.held = ShortcutModifiers::NONE;
+        self.recorder.focus(window, cx);
+        cx.notify();
+    }
+
+    fn stop_recording(&mut self, cx: &mut Context<Self>) {
+        self.recording = false;
+        self.held = ShortcutModifiers::NONE;
+        cx.notify();
+    }
+
+    /// One key press while recording.
+    ///
+    /// Escape with nothing held cancels, because a recorder with no way out
+    /// would trap the keyboard; Escape *with* modifiers is an ordinary
+    /// recordable combination and is recorded.
+    fn key_recorded(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.recording {
+            return;
+        }
+        cx.stop_propagation();
+        if event.is_held {
+            return;
+        }
+        let modifiers = recorded_modifiers(&event.keystroke.modifiers);
+        if event.keystroke.key == "escape" && modifiers == ShortcutModifiers::NONE {
+            self.unsupported_key = false;
+            self.stop_recording(cx);
+            return;
+        }
+        // A key arrived, so the modifiers were a prefix and not the shortcut.
+        self.held = ShortcutModifiers::NONE;
+        match recordable_key(&event.keystroke.key).map(|key| Shortcut { modifiers, key }) {
+            Some(shortcut) if shortcut.is_valid() => {
+                self.unsupported_key = false;
+                self.record(shortcut, cx);
+            }
+            _ => {
+                self.unsupported_key = true;
+                cx.notify();
+            }
+        }
+    }
+
+    /// Modifier presses while recording, which are how a modifier-only shortcut
+    /// is captured.
+    ///
+    /// gpui reports the whole modifier set on every change, so the high-water
+    /// mark is what the user held: `⌃` then `⌃⇧` then `⌃` then nothing records
+    /// `⌃⇧`. Committing on the way *down* instead would make `⌃⌥⇧` impossible
+    /// to record, since `⌃⌥` would already have been taken.
+    fn modifiers_recorded(
+        &mut self,
+        event: &ModifiersChangedEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.recording {
+            return;
+        }
+        let modifiers = recorded_modifiers(&event.modifiers);
+        if modifiers.count() >= self.held.count() {
+            self.held = modifiers;
+            cx.notify();
+            return;
+        }
+        if modifiers != ShortcutModifiers::NONE {
+            return;
+        }
+        let shortcut = Shortcut {
+            modifiers: self.held,
+            key: ShortcutKey::Modifiers,
+        };
+        self.held = ShortcutModifiers::NONE;
+        if shortcut.is_valid() {
+            self.unsupported_key = false;
+            self.record(shortcut, cx);
+        } else {
+            // One modifier tapped on its own. Keep recording rather than
+            // storing something that would fire on every `⌘C`.
+            self.unsupported_key = true;
+            cx.notify();
+        }
+    }
+
+    /// The one place a recorded combination becomes the live shortcut.
+    fn record(&mut self, shortcut: Shortcut, cx: &mut Context<Self>) {
+        let mut switch = InputMethod::language_switch(cx);
+        switch.shortcut = shortcut;
+        InputMethod::set_language_switch(switch, cx);
+        self.stop_recording(cx);
     }
 
     #[cfg(target_os = "windows")]
@@ -622,53 +736,6 @@ impl InputMethodView {
     }
 }
 
-#[derive(Clone, Copy)]
-enum ShortcutModifier {
-    Control,
-    Alt,
-    Shift,
-    Meta,
-}
-
-impl ShortcutModifier {
-    fn id(self) -> &'static str {
-        match self {
-            Self::Control => "control",
-            Self::Alt => "alt",
-            Self::Shift => "shift",
-            Self::Meta => "meta",
-        }
-    }
-
-    fn enabled(self, shortcut: dodo_ime_ipc::settings::LanguageSwitch) -> bool {
-        match self {
-            Self::Control => shortcut.control,
-            Self::Alt => shortcut.alt,
-            Self::Shift => shortcut.shift,
-            Self::Meta => shortcut.meta,
-        }
-    }
-
-    fn is_required(self, shortcut: dodo_ime_ipc::settings::LanguageSwitch) -> bool {
-        self.enabled(shortcut)
-            && shortcut.key.is_none()
-            && [Self::Control, Self::Alt, Self::Shift, Self::Meta]
-                .into_iter()
-                .filter(|modifier| modifier.enabled(shortcut))
-                .count()
-                == 2
-    }
-
-    fn set(self, shortcut: &mut dodo_ime_ipc::settings::LanguageSwitch, enabled: bool) {
-        match self {
-            Self::Control => shortcut.control = enabled,
-            Self::Alt => shortcut.alt = enabled,
-            Self::Shift => shortcut.shift = enabled,
-            Self::Meta => shortcut.meta = enabled,
-        }
-    }
-}
-
 /// Keyboard input languages are endonyms, as in the macOS tray menu; translating
 /// them would make the identifier less recognizable to the person selecting it.
 fn language_label(language: LanguageId) -> &'static str {
@@ -679,13 +746,110 @@ fn language_label(language: LanguageId) -> &'static str {
     }
 }
 
-fn language_switch_key_label(key: LanguageSwitchKey) -> Str {
-    match key {
-        LanguageSwitchKey::Space => Str::InputMethodShortcutSpace,
-        LanguageSwitchKey::Enter => Str::InputMethodShortcutEnter,
-        LanguageSwitchKey::Tab => Str::InputMethodShortcutTab,
-        LanguageSwitchKey::Escape => Str::InputMethodShortcutEscape,
+/// gpui's modifier set in the shared vocabulary.
+///
+/// `platform` is the one field worth naming: gpui calls Command and the Windows
+/// key by that name, `dodo_ime_core::Modifiers` calls the same physical key
+/// `meta`, and every host normalizes into the latter. Mapping it here is what
+/// makes a shortcut recorded on macOS mean the same hand shape on Windows.
+fn recorded_modifiers(modifiers: &Modifiers) -> ShortcutModifiers {
+    ShortcutModifiers {
+        control: modifiers.control,
+        alt: modifiers.alt,
+        shift: modifiers.shift,
+        meta: modifiers.platform,
     }
+}
+
+/// The shortcut key a gpui keystroke names, or `None` for one no input-method
+/// host could recognise again.
+///
+/// A printing key is deliberately absent; `dodo_ime_ipc::settings::ShortcutKey`
+/// carries the reason. Everything here is a name gpui produces for a key that
+/// types nothing, so the refusal is about the host contract and not about this
+/// table being short.
+fn recordable_key(key: &str) -> Option<ShortcutKey> {
+    Some(match key {
+        "space" => ShortcutKey::Space,
+        "enter" => ShortcutKey::Enter,
+        "tab" => ShortcutKey::Tab,
+        "escape" => ShortcutKey::Escape,
+        "backspace" => ShortcutKey::Backspace,
+        "delete" => ShortcutKey::Delete,
+        "home" => ShortcutKey::Home,
+        "end" => ShortcutKey::End,
+        "pageup" => ShortcutKey::PageUp,
+        "pagedown" => ShortcutKey::PageDown,
+        "left" => ShortcutKey::ArrowLeft,
+        "right" => ShortcutKey::ArrowRight,
+        "up" => ShortcutKey::ArrowUp,
+        "down" => ShortcutKey::ArrowDown,
+        _ => return None,
+    })
+}
+
+/// The shortcut as a keyboard shows it.
+///
+/// The modifier part is untranslated on purpose, for the reason
+/// [`language_label`] gives about endonyms: `⌃⌥⇧⌘` and `Ctrl`/`Alt`/`Shift`/
+/// `Win` are what is printed on the key the person is being asked to press, and
+/// a translated name would be a worse identifier than the keycap. The base key
+/// keeps its `Str`, which is where a language does have something to say.
+fn shortcut_display(shortcut: Shortcut, cx: &App) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(5);
+    for (held, symbol) in [
+        (shortcut.modifiers.control, MODIFIER_CONTROL),
+        (shortcut.modifiers.alt, MODIFIER_ALT),
+        (shortcut.modifiers.shift, MODIFIER_SHIFT),
+        (shortcut.modifiers.meta, MODIFIER_META),
+    ] {
+        if held {
+            parts.push(symbol.to_owned());
+        }
+    }
+    if let Some(key) = shortcut_key_label(shortcut.key) {
+        parts.push(t(key, cx).to_string());
+    }
+    parts.join(" ")
+}
+
+/// macOS prints the four modifiers as glyphs on the keys themselves.
+#[cfg(target_os = "macos")]
+const MODIFIER_CONTROL: &str = "⌃";
+#[cfg(target_os = "macos")]
+const MODIFIER_ALT: &str = "⌥";
+#[cfg(target_os = "macos")]
+const MODIFIER_SHIFT: &str = "⇧";
+#[cfg(target_os = "macos")]
+const MODIFIER_META: &str = "⌘";
+#[cfg(not(target_os = "macos"))]
+const MODIFIER_CONTROL: &str = "Ctrl";
+#[cfg(not(target_os = "macos"))]
+const MODIFIER_ALT: &str = "Alt";
+#[cfg(not(target_os = "macos"))]
+const MODIFIER_SHIFT: &str = "Shift";
+#[cfg(not(target_os = "macos"))]
+const MODIFIER_META: &str = "Win";
+
+/// `None` for the modifier-only shortcut, whose modifiers are the whole label.
+fn shortcut_key_label(key: ShortcutKey) -> Option<Str> {
+    Some(match key {
+        ShortcutKey::Modifiers => return None,
+        ShortcutKey::Space => Str::InputMethodShortcutSpace,
+        ShortcutKey::Enter => Str::InputMethodShortcutEnter,
+        ShortcutKey::Tab => Str::InputMethodShortcutTab,
+        ShortcutKey::Escape => Str::InputMethodShortcutEscape,
+        ShortcutKey::Backspace => Str::InputMethodShortcutBackspace,
+        ShortcutKey::Delete => Str::InputMethodShortcutDelete,
+        ShortcutKey::Home => Str::InputMethodShortcutHome,
+        ShortcutKey::End => Str::InputMethodShortcutEnd,
+        ShortcutKey::PageUp => Str::InputMethodShortcutPageUp,
+        ShortcutKey::PageDown => Str::InputMethodShortcutPageDown,
+        ShortcutKey::ArrowLeft => Str::InputMethodShortcutArrowLeft,
+        ShortcutKey::ArrowRight => Str::InputMethodShortcutArrowRight,
+        ShortcutKey::ArrowUp => Str::InputMethodShortcutArrowUp,
+        ShortcutKey::ArrowDown => Str::InputMethodShortcutArrowDown,
+    })
 }
 
 impl Render for InputMethodView {
@@ -726,7 +890,7 @@ impl Render for InputMethodView {
                 Self::language_choice(cx),
                 cx,
             ))
-            .child(Self::language_switch_row(cx));
+            .child(self.language_switch_row(cx));
         #[cfg(target_os = "windows")]
         let root = root
             .when(InputMethod::backend(cx) == Backend::Native, |this| {
@@ -766,5 +930,141 @@ impl Render for InputMethodView {
                     cx,
                 )),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{recordable_key, recorded_modifiers, shortcut_key_label};
+    use dodo_ime_ipc::settings::{Shortcut, ShortcutKey, ShortcutModifiers};
+    use gpui::Modifiers;
+
+    /// gpui's `platform` is Command on macOS and the Windows key on Windows, and
+    /// both must land in `meta` — the field every host normalizes into. A
+    /// shortcut recorded on one platform is then the same document on the other.
+    #[test]
+    fn command_and_the_windows_key_are_both_recorded_as_meta() {
+        assert_eq!(
+            recorded_modifiers(&Modifiers {
+                platform: true,
+                ..Modifiers::none()
+            }),
+            ShortcutModifiers {
+                meta: true,
+                ..ShortcutModifiers::NONE
+            }
+        );
+        assert_eq!(
+            recorded_modifiers(&Modifiers {
+                alt: true,
+                ..Modifiers::none()
+            }),
+            ShortcutModifiers {
+                alt: true,
+                ..ShortcutModifiers::NONE
+            },
+            "Option and Alt are one field, and it is not meta"
+        );
+        assert_eq!(
+            recorded_modifiers(&Modifiers {
+                control: true,
+                shift: true,
+                ..Modifiers::none()
+            }),
+            ShortcutModifiers {
+                control: true,
+                shift: true,
+                ..ShortcutModifiers::NONE
+            }
+        );
+        // Function is not a command modifier and must not become one.
+        assert_eq!(
+            recorded_modifiers(&Modifiers {
+                function: true,
+                ..Modifiers::none()
+            }),
+            ShortcutModifiers::NONE
+        );
+    }
+
+    /// Every key the recorder accepts must be one a host can name again, and
+    /// every key a shortcut can hold must be recordable. The two directions
+    /// together are what stop a stored shortcut that never fires.
+    #[test]
+    fn the_recorder_and_the_shortcut_vocabulary_agree() {
+        let mut recorded = Vec::new();
+        for name in [
+            "space",
+            "enter",
+            "tab",
+            "escape",
+            "backspace",
+            "delete",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+            "left",
+            "right",
+            "up",
+            "down",
+        ] {
+            let key = recordable_key(name).unwrap_or_else(|| panic!("{name} is not recordable"));
+            assert!(shortcut_key_label(key).is_some(), "{name} has no label");
+            recorded.push(key);
+        }
+        for key in ShortcutKey::ALL {
+            // The modifier-only shortcut is recorded from a modifier release,
+            // not from a key name, and its label is its modifiers.
+            if key == ShortcutKey::Modifiers {
+                assert_eq!(shortcut_key_label(key), None);
+                continue;
+            }
+            assert!(recorded.contains(&key), "{key:?} cannot be recorded");
+        }
+    }
+
+    /// A printing key is refused rather than stored, because the host is handed
+    /// what the key *types* and `⌥Z` types `Ω`. The row says so out loud instead
+    /// of saving a shortcut that would never fire.
+    #[test]
+    fn a_printing_key_is_never_recorded() {
+        for name in ["a", "z", "1", "f5", "ç", ""] {
+            assert_eq!(recordable_key(name), None, "{name:?}");
+        }
+    }
+
+    /// The recorder never stores a combination that could fire while typing,
+    /// which is the same rule the file's parser applies to a stored one.
+    #[test]
+    fn a_recorded_combination_must_be_a_valid_shortcut() {
+        let space = recordable_key("space").unwrap();
+        assert!(
+            !Shortcut {
+                modifiers: ShortcutModifiers::NONE,
+                key: space,
+            }
+            .is_valid()
+        );
+        assert!(
+            !Shortcut {
+                modifiers: ShortcutModifiers {
+                    shift: true,
+                    ..ShortcutModifiers::NONE
+                },
+                key: space,
+            }
+            .is_valid()
+        );
+        assert!(
+            Shortcut {
+                modifiers: recorded_modifiers(&Modifiers {
+                    platform: true,
+                    ..Modifiers::none()
+                }),
+                key: space,
+            }
+            .is_valid()
+        );
     }
 }

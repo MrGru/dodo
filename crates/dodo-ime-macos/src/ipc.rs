@@ -307,9 +307,10 @@ mod observer {
 mod tests {
     use super::{BUNDLE_VERSION, LIVE, Live, adopt_from, config, language, report_into, revision};
     use crate::{DEFAULT_CONFIG, Session};
-    use dodo_ime_core::{InputScheme, KeyEvent, LanguageId, TonePlacement};
+    use dodo_ime_core::{InputScheme, KeyEvent, LanguageId, Modifiers, TonePlacement};
     use dodo_ime_ipc::settings::{
-        Backend, SETTINGS_FILE, Scheme, SettingsDocument, Tone, VietnameseSettings,
+        Backend, LanguageSwitch, SETTINGS_FILE, Scheme, SettingsDocument, Shortcut, ShortcutKey,
+        ShortcutModifiers, Tone, VietnameseSettings,
     };
     use dodo_ime_ipc::status::{STATUS_FILE, StatusDocument};
 
@@ -404,6 +405,96 @@ mod tests {
 
     /// A file from a newer dodo. The bundle keeps typing, on its defaults, and
     /// reports revision 0 so dodo can tell that its settings did *not* arrive.
+    /// The reload replaces the live shortcut rather than adding to it. A bundle
+    /// that kept answering the previous combination is the failure this whole
+    /// round is about, and here it is pinned at the host that already had the
+    /// reload path.
+    #[test]
+    fn a_reloaded_shortcut_replaces_the_live_one_without_restarting_the_bundle() {
+        let _held = Held::take();
+        let dir = scratch("shortcut-reload");
+        let path = dir.join(SETTINGS_FILE);
+        SettingsDocument::default().write(&path).unwrap();
+        adopt_from(&dir);
+
+        let old_press = KeyEvent::character(' ').with_modifiers(Modifiers {
+            control: true,
+            shift: true,
+            ..Modifiers::NONE
+        });
+        assert!(super::language_switch().matches(&old_press));
+        assert!(!super::language_switch().beep);
+
+        let replacement = SettingsDocument {
+            revision: 1,
+            language_switch: LanguageSwitch {
+                shortcut: Shortcut {
+                    modifiers: ShortcutModifiers {
+                        meta: true,
+                        ..ShortcutModifiers::NONE
+                    },
+                    key: ShortcutKey::Space,
+                },
+                beep: true,
+            },
+            ..SettingsDocument::default()
+        };
+        replacement.write(&path).unwrap();
+        adopt_from(&dir);
+
+        assert!(
+            !super::language_switch().matches(&old_press),
+            "the replaced shortcut must be inert"
+        );
+        assert!(
+            super::language_switch().matches(&KeyEvent::character(' ').with_modifiers(Modifiers {
+                meta: true,
+                ..Modifiers::NONE
+            }))
+        );
+        assert!(super::language_switch().beep);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cycling walks exactly the enabled languages, in menu order, and wraps.
+    #[test]
+    fn the_native_switch_cycles_only_the_enabled_languages() {
+        let _held = Held::take();
+        let dir = scratch("cycle");
+        let path = dir.join(SETTINGS_FILE);
+
+        for languages in [
+            vec![LanguageId::English, LanguageId::Vietnamese],
+            LanguageId::ALL.to_vec(),
+        ] {
+            let expected: Vec<LanguageId> = languages
+                .iter()
+                .copied()
+                .skip(1)
+                .chain(languages.iter().copied().take(1))
+                .collect();
+            SettingsDocument {
+                language: languages[0],
+                active_languages: dodo_ime_core::ActiveLanguages::from_languages(
+                    languages.iter().copied(),
+                )
+                .unwrap(),
+                ..SettingsDocument::default()
+            }
+            .write(&path)
+            .unwrap();
+            adopt_from(&dir);
+
+            let cycled: Vec<LanguageId> = (0..languages.len())
+                .filter_map(|_| super::cycle_language().map(|(language, _)| language))
+                .collect();
+            assert_eq!(cycled, expected, "{languages:?}");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_refused_file_leaves_a_working_input_method() {
         let _held = Held::take();

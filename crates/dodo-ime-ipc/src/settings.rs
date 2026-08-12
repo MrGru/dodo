@@ -27,7 +27,7 @@
 //!   [`VietnameseSettings::to_config`] supplies the native default.
 
 use dodo_ime_core::{
-    ActiveLanguages, InputScheme, Key, KeyEvent, LanguageId, OutputMode, TonePlacement,
+    ActiveLanguages, InputScheme, Key, KeyEvent, LanguageId, Modifiers, OutputMode, TonePlacement,
     VietnameseConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -47,8 +47,10 @@ pub const SETTINGS_FILE: &str = "input-method.json";
 /// Version 2 adds the selected input language. Version 3 adds the backend.
 /// Version 4 adds Windows' Keyboard Hook backend. Version 5 briefly allowed a
 /// modifier-only language shortcut. Version 6 forced a base key. Version 7
-/// restores optional base keys and migrates that forced default back.
-pub const SETTINGS_SCHEMA_VERSION: u32 = 7;
+/// restores optional base keys and migrates that forced default back. Version 8
+/// records the language switch as a generic [`Shortcut`] instead of four
+/// modifier flags beside one of four base keys.
+pub const SETTINGS_SCHEMA_VERSION: u32 = 8;
 
 /// How a key sequence becomes Vietnamese, as this file spells it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,50 +163,210 @@ impl Backend {
     }
 }
 
-/// The non-printing key that changes the selected keyboard language.
+/// One modifier's presence in a recorded shortcut.
 ///
-/// These identities are stable on both macOS and Windows, unlike a physical
-/// letter key under Control or Option.
+/// `meta` is Command on macOS and the Windows key on Windows, exactly as
+/// [`Modifiers`] defines it. Every host normalizes into that vocabulary before
+/// anything here is consulted, so one recorded shortcut means the same physical
+/// hand shape on both platforms and no caller has to know which it is running
+/// on. Caps lock is absent for the same reason it is absent from [`Modifiers`]:
+/// the host has already applied it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LanguageSwitchKey {
-    #[default]
-    Space,
-    Enter,
-    Tab,
-    Escape,
-}
-
-impl LanguageSwitchKey {
-    pub const ALL: [LanguageSwitchKey; 4] = [
-        LanguageSwitchKey::Space,
-        LanguageSwitchKey::Enter,
-        LanguageSwitchKey::Tab,
-        LanguageSwitchKey::Escape,
-    ];
-
-    fn matches(self, event: &KeyEvent) -> bool {
-        matches!(
-            (self, event.key),
-            (LanguageSwitchKey::Space, Key::Space)
-                | (LanguageSwitchKey::Enter, Key::Enter)
-                | (LanguageSwitchKey::Tab, Key::Tab)
-                | (LanguageSwitchKey::Escape, Key::Escape)
-        )
-    }
-}
-
-/// The shared shortcut that cycles the enabled input languages.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct LanguageSwitch {
-    /// An optional non-modifier key. Without one, the selected modifiers are
-    /// the complete shortcut.
-    pub key: Option<LanguageSwitchKey>,
+#[serde(default, rename_all = "kebab-case")]
+pub struct ShortcutModifiers {
     pub control: bool,
     pub alt: bool,
     pub shift: bool,
     pub meta: bool,
+}
+
+impl ShortcutModifiers {
+    pub const NONE: ShortcutModifiers = ShortcutModifiers {
+        control: false,
+        alt: false,
+        shift: false,
+        meta: false,
+    };
+
+    /// The modifiers held during one normalized press.
+    pub fn of(modifiers: Modifiers) -> ShortcutModifiers {
+        ShortcutModifiers {
+            control: modifiers.control,
+            alt: modifiers.alt,
+            shift: modifiers.shift,
+            meta: modifiers.meta,
+        }
+    }
+
+    /// How many modifier keys this holds.
+    pub fn count(self) -> usize {
+        usize::from(self.control)
+            + usize::from(self.alt)
+            + usize::from(self.shift)
+            + usize::from(self.meta)
+    }
+
+    /// Whether one of the three modifiers that make a press a *command* rather
+    /// than typing is held.
+    ///
+    /// Shift is deliberately not one of them, for the reason
+    /// [`Modifiers::is_plain`] gives: it selects which character a key types
+    /// and the host has already applied it, so `⇧Space` still types a space and
+    /// a shortcut built from it would eat one.
+    pub fn has_command(self) -> bool {
+        self.control || self.alt || self.meta
+    }
+
+    /// Exact equality, never containment: `⌃⇧Space` must not fire on
+    /// `⌃⌥⇧Space`, which is a different shortcut the user may have bound.
+    fn matches(self, modifiers: Modifiers) -> bool {
+        self == ShortcutModifiers::of(modifiers)
+    }
+}
+
+/// The key half of a recorded shortcut.
+///
+/// This is the engine's non-printing [`Key`] set plus
+/// [`ShortcutKey::Modifiers`], which says the recorded modifiers *are* the whole
+/// shortcut. Adding a key is one variant here and one arm in
+/// [`ShortcutKey::engine_key`]; nothing else in the flow names a key at all.
+///
+/// # Why a printing key is not in this list
+///
+/// A [`KeyEvent`] carries what a key *types*, deliberately, so that Telex works
+/// on every keyboard layout — and it carries no physical key code, deliberately,
+/// for the same reason. Under Option, macOS types `Ω` for the key labelled `Z`
+/// and hands the host exactly that, so `⌥Z` recorded from a settings window
+/// could not be recognised again by the input method. That is a property of the
+/// host contract and not something this file can normalize away, so the
+/// recorder refuses a printing key rather than storing one that silently never
+/// fires.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShortcutKey {
+    /// The recorded modifiers are the complete shortcut, and it fires on the
+    /// press that completes them.
+    #[default]
+    Modifiers,
+    Space,
+    Enter,
+    Tab,
+    Escape,
+    Backspace,
+    Delete,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    ArrowDown,
+}
+
+impl ShortcutKey {
+    pub const ALL: [ShortcutKey; 15] = [
+        ShortcutKey::Modifiers,
+        ShortcutKey::Space,
+        ShortcutKey::Enter,
+        ShortcutKey::Tab,
+        ShortcutKey::Escape,
+        ShortcutKey::Backspace,
+        ShortcutKey::Delete,
+        ShortcutKey::Home,
+        ShortcutKey::End,
+        ShortcutKey::PageUp,
+        ShortcutKey::PageDown,
+        ShortcutKey::ArrowLeft,
+        ShortcutKey::ArrowRight,
+        ShortcutKey::ArrowUp,
+        ShortcutKey::ArrowDown,
+    ];
+
+    /// The engine key this records. The mapping is total in both directions,
+    /// which is what lets [`ShortcutKey::of`] answer "can this press be
+    /// recorded" without a second table.
+    pub fn engine_key(self) -> Key {
+        match self {
+            ShortcutKey::Modifiers => Key::Modifier,
+            ShortcutKey::Space => Key::Space,
+            ShortcutKey::Enter => Key::Enter,
+            ShortcutKey::Tab => Key::Tab,
+            ShortcutKey::Escape => Key::Escape,
+            ShortcutKey::Backspace => Key::Backspace,
+            ShortcutKey::Delete => Key::Delete,
+            ShortcutKey::Home => Key::Home,
+            ShortcutKey::End => Key::End,
+            ShortcutKey::PageUp => Key::PageUp,
+            ShortcutKey::PageDown => Key::PageDown,
+            ShortcutKey::ArrowLeft => Key::ArrowLeft,
+            ShortcutKey::ArrowRight => Key::ArrowRight,
+            ShortcutKey::ArrowUp => Key::ArrowUp,
+            ShortcutKey::ArrowDown => Key::ArrowDown,
+        }
+    }
+
+    /// The shortcut key one engine key records as, or `None` for a key no
+    /// shortcut may be built from — a printing key, or one no host names.
+    pub fn of(key: Key) -> Option<ShortcutKey> {
+        ShortcutKey::ALL
+            .into_iter()
+            .find(|candidate| candidate.engine_key() == key)
+    }
+}
+
+/// A recorded key combination, independent of the host that observed it.
+///
+/// This is the whole shortcut vocabulary: a set of modifiers and one key. There
+/// is no list of blessed combinations anywhere, and nothing counts keys for its
+/// own sake — see [`Shortcut::is_valid`] for the one rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Shortcut {
+    #[serde(default)]
+    pub modifiers: ShortcutModifiers,
+    #[serde(default)]
+    pub key: ShortcutKey,
+}
+
+impl Shortcut {
+    /// Control-Shift-Space is unlikely to type into an application by accident.
+    pub const DEFAULT: Shortcut = Shortcut {
+        modifiers: ShortcutModifiers {
+            control: true,
+            alt: false,
+            shift: true,
+            meta: false,
+        },
+        key: ShortcutKey::Space,
+    };
+
+    /// Whether this combination cannot fire while someone is simply typing.
+    ///
+    /// It is one rule and not a shape: **a command modifier must be held**, so
+    /// no shortcut can consume a key an application would otherwise receive as
+    /// input. A modifier-only shortcut needs a second modifier on top of that,
+    /// because a single one fires the moment it goes down — before the letter
+    /// of every ordinary `⌘C` the user meant.
+    pub fn is_valid(self) -> bool {
+        self.modifiers.has_command()
+            && (self.key != ShortcutKey::Modifiers || self.modifiers.count() >= 2)
+    }
+
+    /// Whether a normalized key press invokes this shortcut.
+    pub fn matches(self, event: &KeyEvent) -> bool {
+        self.is_valid()
+            && event.key == self.key.engine_key()
+            && self.modifiers.matches(event.modifiers)
+    }
+}
+
+/// The shared shortcut that cycles the enabled input languages, and whether it
+/// says so out loud.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct LanguageSwitch {
+    pub shortcut: Shortcut,
     pub beep: bool,
 }
 
@@ -215,45 +377,52 @@ impl Default for LanguageSwitch {
 }
 
 impl LanguageSwitch {
-    /// Control-Shift-Space is unlikely to type into an application by accident.
-    pub const DEFAULT: Self = Self {
-        key: Some(LanguageSwitchKey::Space),
-        control: true,
-        alt: false,
-        shift: true,
-        meta: false,
+    pub const DEFAULT: LanguageSwitch = LanguageSwitch {
+        shortcut: Shortcut::DEFAULT,
         beep: false,
     };
 
-    /// Whether the shortcut needs at least two physical keys to avoid accidental
-    /// switches. They may both be modifiers.
     pub fn is_valid(self) -> bool {
-        usize::from(self.key.is_some())
-            + usize::from(self.control)
-            + usize::from(self.alt)
-            + usize::from(self.shift)
-            + usize::from(self.meta)
-            >= 2
+        self.shortcut.is_valid()
     }
 
     /// Whether a normalized key press invokes the language switch.
     pub fn matches(self, event: &KeyEvent) -> bool {
-        self.is_valid()
-            && match self.key {
-                Some(key) => key.matches(event),
-                None => event.key == Key::Modifier,
-            }
-            && self.control == event.modifiers.control
-            && self.alt == event.modifiers.alt
-            && self.shift == event.modifiers.shift
-            && self.meta == event.modifiers.meta
+        self.shortcut.matches(event)
     }
 }
 
+/// The base key a document written by version 7 or earlier could name.
+///
+/// Kept only so those files keep working: `null` there meant "the modifiers are
+/// the whole shortcut", which is now [`ShortcutKey::Modifiers`].
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum LegacyKey {
+    Space,
+    Enter,
+    Tab,
+    Escape,
+}
+
+impl From<LegacyKey> for ShortcutKey {
+    fn from(key: LegacyKey) -> ShortcutKey {
+        match key {
+            LegacyKey::Space => ShortcutKey::Space,
+            LegacyKey::Enter => ShortcutKey::Enter,
+            LegacyKey::Tab => ShortcutKey::Tab,
+            LegacyKey::Escape => ShortcutKey::Escape,
+        }
+    }
+}
+
+/// Both spellings of the shortcut at once: version 8's nested `shortcut`, and
+/// the flat modifier flags every earlier version wrote.
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "kebab-case", default)]
 struct LanguageSwitchWire {
-    key: Option<LanguageSwitchKey>,
+    shortcut: Option<Shortcut>,
+    key: Option<LegacyKey>,
     control: bool,
     alt: bool,
     shift: bool,
@@ -264,18 +433,25 @@ struct LanguageSwitchWire {
 impl<'de> Deserialize<'de> for LanguageSwitch {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let wire = LanguageSwitchWire::deserialize(deserializer)?;
-        let shortcut = Self {
-            key: wire.key,
-            control: wire.control,
-            alt: wire.alt,
-            shift: wire.shift,
-            meta: wire.meta,
+        let switch = LanguageSwitch {
+            shortcut: wire.shortcut.unwrap_or(Shortcut {
+                modifiers: ShortcutModifiers {
+                    control: wire.control,
+                    alt: wire.alt,
+                    shift: wire.shift,
+                    meta: wire.meta,
+                },
+                key: wire.key.map_or(ShortcutKey::Modifiers, ShortcutKey::from),
+            }),
             beep: wire.beep,
         };
-        Ok(if shortcut.is_valid() {
-            shortcut
+        // A shortcut that could fire while typing is not repaired field by
+        // field: there is no way to guess which half the user meant, and the
+        // default is the one answer that is safe in every application.
+        Ok(if switch.is_valid() {
+            switch
         } else {
-            Self::DEFAULT
+            LanguageSwitch::DEFAULT
         })
     }
 }
@@ -450,20 +626,8 @@ impl SettingsDocument {
         // Version 6 was emitted only by the brief base-key migration. Its
         // forced default is the one shape that can return to the modifier-only
         // shortcut version 5 originally stored.
-        if self.version == 6
-            && matches!(
-                self.language_switch,
-                LanguageSwitch {
-                    key: Some(LanguageSwitchKey::Space),
-                    control: true,
-                    alt: false,
-                    shift: true,
-                    meta: false,
-                    ..
-                }
-            )
-        {
-            self.language_switch.key = None;
+        if self.version == 6 && self.language_switch.shortcut == Shortcut::DEFAULT {
+            self.language_switch.shortcut.key = ShortcutKey::Modifiers;
         }
     }
 
@@ -528,8 +692,8 @@ mod language {
 #[cfg(test)]
 mod tests {
     use super::{
-        Backend, LanguageSwitch, LanguageSwitchKey, SETTINGS_SCHEMA_VERSION, Scheme,
-        SettingsDocument, Tone, VietnameseSettings,
+        Backend, LanguageSwitch, SETTINGS_SCHEMA_VERSION, Scheme, SettingsDocument, Shortcut,
+        ShortcutKey, ShortcutModifiers, Tone, VietnameseSettings,
     };
     use crate::document::IpcError;
     use dodo_ime_core::{
@@ -723,34 +887,173 @@ mod tests {
         assert!(SettingsDocument::parse(br#"{"version":2,"language":"ko"}"#).is_err());
     }
 
+    /// The wire spelling of every shortcut key, pinned. `rename_all` derives
+    /// these from the variant names, so a rename that looked like tidying would
+    /// otherwise silently stop a months-old bundle recognising the shortcut.
     #[test]
-    fn modifier_only_shortcuts_require_two_modifiers_and_fire_on_the_last_one() {
-        let shortcut = LanguageSwitch {
-            key: None,
-            control: true,
-            alt: false,
-            shift: true,
-            meta: false,
-            beep: false,
-        };
-        let complete = KeyEvent::special(dodo_ime_core::Key::Modifier).with_modifiers(Modifiers {
+    fn every_shortcut_key_has_a_pinned_wire_spelling() {
+        let expected = [
+            "modifiers",
+            "space",
+            "enter",
+            "tab",
+            "escape",
+            "backspace",
+            "delete",
+            "home",
+            "end",
+            "page-up",
+            "page-down",
+            "arrow-left",
+            "arrow-right",
+            "arrow-up",
+            "arrow-down",
+        ];
+        for (key, code) in ShortcutKey::ALL.into_iter().zip(expected) {
+            assert_eq!(serde_json::to_string(&key).unwrap(), format!("\"{code}\""));
+            assert_eq!(
+                serde_json::from_str::<ShortcutKey>(&format!("\"{code}\"")).unwrap(),
+                key
+            );
+        }
+        // Every recordable key round-trips through the engine's vocabulary, so
+        // a host that can name the key can always match the shortcut.
+        for key in ShortcutKey::ALL {
+            assert_eq!(ShortcutKey::of(key.engine_key()), Some(key), "{key:?}");
+        }
+        assert_eq!(ShortcutKey::of(dodo_ime_core::Key::Character), None);
+        assert_eq!(ShortcutKey::of(dodo_ime_core::Key::Other), None);
+    }
+
+    /// The one validity rule, stated as the thing it protects: a shortcut may
+    /// never fire while someone is typing.
+    #[test]
+    fn a_shortcut_is_valid_only_when_it_cannot_fire_on_ordinary_typing() {
+        let command_and_key = Shortcut::DEFAULT;
+        assert!(command_and_key.is_valid());
+
+        for key in ShortcutKey::ALL {
+            let bare = Shortcut {
+                modifiers: ShortcutModifiers::NONE,
+                key,
+            };
+            assert!(!bare.is_valid(), "{key:?} with no modifier");
+            let shift_only = Shortcut {
+                modifiers: ShortcutModifiers {
+                    shift: true,
+                    ..ShortcutModifiers::NONE
+                },
+                key,
+            };
+            assert!(!shift_only.is_valid(), "{key:?} under Shift alone");
+        }
+
+        // One modifier is enough beside a key, and never enough on its own.
+        assert!(
+            Shortcut {
+                modifiers: ShortcutModifiers {
+                    meta: true,
+                    ..ShortcutModifiers::NONE
+                },
+                key: ShortcutKey::Space,
+            }
+            .is_valid()
+        );
+        assert!(
+            !Shortcut {
+                modifiers: ShortcutModifiers {
+                    control: true,
+                    ..ShortcutModifiers::NONE
+                },
+                key: ShortcutKey::Modifiers,
+            }
+            .is_valid()
+        );
+        assert!(
+            Shortcut {
+                modifiers: ShortcutModifiers {
+                    control: true,
+                    shift: true,
+                    ..ShortcutModifiers::NONE
+                },
+                key: ShortcutKey::Modifiers,
+            }
+            .is_valid()
+        );
+    }
+
+    /// Recording a replacement must make the previous shortcut inert, with no
+    /// second listener left believing in it.
+    #[test]
+    fn a_replacement_shortcut_leaves_the_previous_one_inert() {
+        let old = LanguageSwitch::DEFAULT;
+        let old_press = KeyEvent::character(' ').with_modifiers(Modifiers {
             control: true,
             shift: true,
             ..Modifiers::NONE
         });
-        assert!(shortcut.is_valid());
-        assert!(shortcut.matches(&complete));
-        assert!(
-            !shortcut.matches(
-                &KeyEvent::special(dodo_ime_core::Key::Modifier).with_modifiers(Modifiers {
+        assert!(old.matches(&old_press));
+
+        let replacement = LanguageSwitch {
+            shortcut: Shortcut {
+                modifiers: ShortcutModifiers {
+                    meta: true,
+                    ..ShortcutModifiers::NONE
+                },
+                key: ShortcutKey::Space,
+            },
+            beep: true,
+        };
+        let new_press = KeyEvent::character(' ').with_modifiers(Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        });
+        assert!(!replacement.matches(&old_press), "the old shortcut is gone");
+        assert!(replacement.matches(&new_press));
+        assert!(!replacement.matches(&KeyEvent::character(' ')));
+    }
+
+    /// Exact modifiers, never containment: a superset is a different shortcut
+    /// somebody may have bound, and an unrelated key held with the same
+    /// modifiers must not switch a second time.
+    #[test]
+    fn modifier_only_shortcuts_fire_on_the_press_that_completes_them() {
+        let switch = LanguageSwitch {
+            shortcut: Shortcut {
+                modifiers: ShortcutModifiers {
                     control: true,
-                    ..Modifiers::NONE
-                })
-            ),
+                    shift: true,
+                    ..ShortcutModifiers::NONE
+                },
+                key: ShortcutKey::Modifiers,
+            },
+            beep: false,
+        };
+        let modifier =
+            |modifiers| KeyEvent::special(dodo_ime_core::Key::Modifier).with_modifiers(modifiers);
+        assert!(switch.matches(&modifier(Modifiers {
+            control: true,
+            shift: true,
+            ..Modifiers::NONE
+        })));
+        assert!(
+            !switch.matches(&modifier(Modifiers {
+                control: true,
+                ..Modifiers::NONE
+            })),
             "Control alone must not switch"
         );
         assert!(
-            !shortcut.matches(
+            !switch.matches(&modifier(Modifiers {
+                control: true,
+                shift: true,
+                alt: true,
+                ..Modifiers::NONE
+            })),
+            "a superset is a different shortcut"
+        );
+        assert!(
+            !switch.matches(
                 &KeyEvent::special(dodo_ime_core::Key::Other).with_modifiers(Modifiers {
                     control: true,
                     shift: true,
@@ -759,17 +1062,46 @@ mod tests {
             ),
             "an unrelated key held with the shortcut must not switch again"
         );
-        let one_modifier = LanguageSwitch {
-            shift: false,
-            ..shortcut
+    }
+
+    /// `meta` is one identity with two names, and this is where the two
+    /// platforms are held to it: a shortcut recorded with Command on macOS is
+    /// the same document a Windows host reads as the Windows key, and Option
+    /// and Alt are likewise one field.
+    #[test]
+    fn command_and_windows_are_one_modifier_and_option_and_alt_are_another() {
+        let meta = Shortcut {
+            modifiers: ShortcutModifiers {
+                meta: true,
+                ..ShortcutModifiers::NONE
+            },
+            key: ShortcutKey::Space,
         };
-        assert!(!one_modifier.is_valid());
-        assert!(!one_modifier.matches(
-            &KeyEvent::special(dodo_ime_core::Key::Modifier).with_modifiers(Modifiers {
-                control: true,
-                ..Modifiers::NONE
-            })
-        ));
+        let alt = Shortcut {
+            modifiers: ShortcutModifiers {
+                alt: true,
+                ..ShortcutModifiers::NONE
+            },
+            key: ShortcutKey::Space,
+        };
+        // What each host's keymap produces, spelled out as the normalized
+        // event rather than as the platform's own flag.
+        let with_meta = KeyEvent::special(dodo_ime_core::Key::Space).with_modifiers(Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        });
+        let with_alt = KeyEvent::special(dodo_ime_core::Key::Space).with_modifiers(Modifiers {
+            alt: true,
+            ..Modifiers::NONE
+        });
+        assert!(meta.matches(&with_meta));
+        assert!(!meta.matches(&with_alt));
+        assert!(alt.matches(&with_alt));
+        assert!(!alt.matches(&with_meta));
+
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains(r#""meta":true"#), "{json}");
+        assert_eq!(serde_json::from_str::<Shortcut>(&json).unwrap(), meta);
     }
 
     #[test]
@@ -778,38 +1110,70 @@ mod tests {
             br#"{"version":6,"language_switch":{"key":"space","control":true,"shift":true,"beep":true}}"#,
         )
         .unwrap();
-        assert_eq!(document.language_switch.key, None);
-        assert!(document.language_switch.control);
-        assert!(document.language_switch.shift);
+        assert_eq!(
+            document.language_switch.shortcut.key,
+            ShortcutKey::Modifiers
+        );
+        assert!(document.language_switch.shortcut.modifiers.control);
+        assert!(document.language_switch.shortcut.modifiers.shift);
         assert!(document.language_switch.beep);
     }
 
     #[test]
-    fn active_languages_and_shortcuts_round_trip_and_keep_version_four_files_readable() {
+    fn active_languages_and_shortcuts_round_trip_and_keep_legacy_files_readable() {
         let document = SettingsDocument {
             active_languages: ActiveLanguages::from_languages(LanguageId::ALL).unwrap(),
             language_switch: LanguageSwitch {
-                key: Some(LanguageSwitchKey::Enter),
-                control: false,
-                alt: true,
-                shift: false,
-                meta: false,
+                shortcut: Shortcut {
+                    modifiers: ShortcutModifiers {
+                        alt: true,
+                        ..ShortcutModifiers::NONE
+                    },
+                    key: ShortcutKey::ArrowRight,
+                },
                 beep: true,
             },
             ..SettingsDocument::default()
         };
         let json = serde_json::to_string(&document).unwrap();
         assert!(json.contains(r#""active_languages":["en","vi","ja"]"#));
-        assert!(json.contains(r#""language_switch":{"key":"enter""#));
+        assert!(json.contains(r#""key":"arrow-right""#), "{json}");
         assert_eq!(SettingsDocument::parse(json.as_bytes()).unwrap(), document);
 
-        let old = SettingsDocument::parse(
+        // Version 4's flat spelling, and version 7's modifier-only `null`.
+        let flat = SettingsDocument::parse(
             br#"{"version":4,"language":"vi","language_switch":{"key":"tab","control":true}}"#,
         )
         .unwrap();
-        assert_eq!(old.active_languages, ActiveLanguages::default());
-        assert_eq!(old.language_switch.key, Some(LanguageSwitchKey::Tab));
-        assert!(old.language_switch.control);
+        assert_eq!(flat.active_languages, ActiveLanguages::default());
+        assert_eq!(flat.language_switch.shortcut.key, ShortcutKey::Tab);
+        assert!(flat.language_switch.shortcut.modifiers.control);
+
+        let modifier_only = SettingsDocument::parse(
+            br#"{"version":7,"language_switch":{"key":null,"control":true,"alt":true,"beep":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            modifier_only.language_switch.shortcut,
+            Shortcut {
+                modifiers: ShortcutModifiers {
+                    control: true,
+                    alt: true,
+                    ..ShortcutModifiers::NONE
+                },
+                key: ShortcutKey::Modifiers,
+            }
+        );
+        assert!(modifier_only.language_switch.beep);
+
+        // A stored shortcut that could fire while typing becomes the default
+        // rather than being half-honoured.
+        assert_eq!(
+            SettingsDocument::parse(br#"{"version":7,"language_switch":{"key":"space"}}"#)
+                .unwrap()
+                .language_switch,
+            LanguageSwitch::DEFAULT
+        );
         assert!(
             SettingsDocument::parse(br#"{"version":4,"active_languages":["en","en"]}"#).is_err()
         );

@@ -83,8 +83,75 @@ pub fn key_event(vkey: u32, text: Option<char>, modifiers: Modifiers) -> KeyEven
 
 #[cfg(test)]
 mod tests {
-    use super::{VK_BACK, VK_CONTROL, VK_LEFT, VK_SPACE, key_event, one_character};
+    use super::{
+        VK_BACK, VK_CONTROL, VK_LEFT, VK_LWIN, VK_MENU, VK_SPACE, key_event, one_character,
+    };
     use dodo_ime_core::{Key, Modifiers};
+    use dodo_ime_ipc::settings::{Shortcut, ShortcutKey, ShortcutModifiers};
+
+    /// The Windows key is `meta` — the same field macOS fills from Command —
+    /// and Alt is `alt`, the same field it fills from Option. One recorded
+    /// shortcut therefore means one hand shape on both platforms.
+    #[test]
+    fn the_windows_key_is_meta_and_alt_is_alt() {
+        let space = |modifiers| Shortcut {
+            modifiers,
+            key: ShortcutKey::Space,
+        };
+        let meta = space(ShortcutModifiers {
+            meta: true,
+            ..ShortcutModifiers::NONE
+        });
+        let alt = space(ShortcutModifiers {
+            alt: true,
+            ..ShortcutModifiers::NONE
+        });
+        let with_windows = key_event(
+            VK_SPACE,
+            Some(' '),
+            Modifiers {
+                meta: true,
+                ..Modifiers::NONE
+            },
+        );
+        let with_alt = key_event(
+            VK_SPACE,
+            Some(' '),
+            Modifiers {
+                alt: true,
+                ..Modifiers::NONE
+            },
+        );
+        assert!(meta.matches(&with_windows));
+        assert!(!meta.matches(&with_alt));
+        assert!(alt.matches(&with_alt));
+        assert!(!alt.matches(&with_windows));
+
+        // Every key that can hold a shortcut has the identity this table gives
+        // it, including the bare modifiers a modifier-only shortcut needs.
+        for vkey in [VK_CONTROL, VK_MENU, VK_LWIN] {
+            assert_eq!(key_event(vkey, None, Modifiers::NONE).key, Key::Modifier);
+        }
+        assert!(
+            Shortcut {
+                modifiers: ShortcutModifiers {
+                    control: true,
+                    shift: true,
+                    ..ShortcutModifiers::NONE
+                },
+                key: ShortcutKey::Modifiers,
+            }
+            .matches(&key_event(
+                VK_CONTROL,
+                None,
+                Modifiers {
+                    control: true,
+                    shift: true,
+                    ..Modifiers::NONE
+                }
+            ))
+        );
+    }
 
     #[test]
     fn identity_and_layout_text_keep_their_separate_jobs() {

@@ -192,6 +192,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A recorded shortcut has to survive a restart, which is the half of this
+    /// flow no in-memory listener can prove.
+    #[test]
+    fn a_recorded_shortcut_reloads_exactly_as_it_was_recorded() {
+        let dir = scratch("shortcut-reload");
+        let store = DiskInputMethodStore::at(dir.clone());
+
+        let recorded = dodo_ime_ipc::settings::LanguageSwitch {
+            shortcut: dodo_ime_ipc::settings::Shortcut {
+                modifiers: dodo_ime_ipc::settings::ShortcutModifiers {
+                    control: true,
+                    shift: true,
+                    ..dodo_ime_ipc::settings::ShortcutModifiers::NONE
+                },
+                key: dodo_ime_ipc::settings::ShortcutKey::Modifiers,
+            },
+            beep: true,
+        };
+        let document = SettingsDocument::next_from(
+            &SettingsDocument::default(),
+            SettingsDocument {
+                language_switch: recorded,
+                ..SettingsDocument::default()
+            },
+        );
+        store.persist_settings(&document).unwrap();
+
+        let reloaded = store.load_settings().unwrap();
+        assert_eq!(reloaded.language_switch, recorded);
+        assert_ne!(
+            reloaded.language_switch,
+            dodo_ime_ipc::settings::LanguageSwitch::DEFAULT,
+            "the reload must not quietly fall back to the default"
+        );
+        assert_eq!(reloaded, document);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The version rule, at dodo's end: a file from a newer dodo is refused
     /// rather than half-read, and the user is told which version it was.
     #[test]
