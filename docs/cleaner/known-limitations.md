@@ -222,15 +222,13 @@
 - Non-macOS support is intentionally unavailable and shown as such in UI.
 - **Cross-cutting hardening gaps (Phase 17)** — all 14 scanner categories exist and are
   fmt/clippy/test clean, but the following are deliberately not done this pass:
-  - **No result-table virtualization.** Every category renders its full item list eagerly inside a
-    scrollable container (`cleaner_view.rs`). `gpui_component::table::DataTable` — the virtualized,
-    delegate-driven table `src/database/` and `src/api_explorer/` already use — is the concrete
-    migration target for a future pass; it was not attempted here because it means rewriting every
-    category's row rendering (checkboxes, per-item action buttons, risk badges, warnings) behind a
-    `TableDelegate`, a change large and central enough to deserve its own dedicated, carefully-tested
-    pass rather than a late addition to a broad hardening phase. Practical risk is concentrated in
-    categories that can return large item counts on a real machine — System Junk, Large & Old Files,
-    User Cache — not the app-indexed categories, which are bounded by how many `.app` bundles exist.
+  - ~~**No result-table virtualization.**~~ **Done in a later pass** — the migration this entry
+    described as future work has landed: `src/cleaner/views/results_table.rs` is the `TableDelegate`
+    driving `gpui_component::table::DataTable`, which builds only the rows inside the current scroll
+    viewport, so the large-item-count categories this entry worried about (System Junk, Large & Old
+    Files, User Cache) no longer cost per-frame work proportional to their result size. That module's
+    doc comment is the authority; this entry is kept, struck through, only so the Phase 17 list stays
+    readable against its own history.
   - **No `tracing` spans.** dodo has no `tracing`/`log` crate anywhere in the codebase (`grep -n
     '^tracing\|^log = ' Cargo.toml` returns nothing); adding one solely for the ticket's suggested
     span names (`cleaner.smart_care`, `cleaner.category_scan`, etc.) would introduce a new
@@ -258,5 +256,5 @@
 
 These limitations are intentional: the implementation now covers all 14 ticket categories with shared
 traversal, selection, Finder reveal, and Trash/Docker-CLI cleanup groundwork; what remains (Phase 16's
-real mutation, and Phase 17's virtualization/tracing/benchmarking items above) is scoped and documented
-rather than silently skipped.
+real mutation, and Phase 17's tracing/benchmarking items above — virtualization is done) is scoped and
+documented rather than silently skipped.

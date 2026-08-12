@@ -33,8 +33,10 @@ Cleaner is wired as a top-level tool in:
 3. Smart Care scans every category; other sections scan only the selected category.
 4. Registered scanners run on the background executor via
    [`CleanerScanner`](../../src/cleaner/core/scanner.rs) — never the UI thread.
-5. Progress events stream through a channel pump into incremental, batched UI updates (never one
-   `cx.notify()` per file).
+5. Progress reaches the UI through a per-category capacity-one, latest-wins slot
+   (`core::progress::LatestProgress`) that one shared 120 ms pump takes from — at most one update
+   applied per category per tick, never one `cx.notify()` per file. A scan's result, cancellation
+   and error never travel that way; they are the background task's return value.
 6. Category results accumulate into summary fields and per-category result panels.
 7. A category with no registered scanner surfaces an explicit partial "coming later" result rather
    than a fake success — moot now that all 14 categories have one, but the mechanism stays in place
@@ -48,8 +50,10 @@ Cleaner is wired as a top-level tool in:
 ## Concurrency strategy
 
 - Background work runs off the UI thread via `cx.background_executor()`.
-- Progress is throttled in the filesystem engine (`core::fs::ProgressReporter`, ~8/sec) and batched
-  again in the UI pump — no per-file `cx.notify()` flood.
+- Progress is throttled in the filesystem engine (`core::fs::ProgressReporter`, ~8/sec) and coalesced
+  again at the UI boundary — no per-file `cx.notify()` flood, and no queue that can grow behind a
+  busy UI thread. Only the newest update per category survives; an intermediate one is dropped on
+  purpose.
 - Cancellation uses a shared `CancellationToken`, checked before each root, before descending into a
   directory, and before each external process call.
 - No one-task-per-file fan-out anywhere.
@@ -129,13 +133,10 @@ picks it on macOS and returns an empty vector on every other platform.
   Cleaner's benefit would be a new cross-cutting dependency with no existing subscriber to consume it
   usefully, and the ticket's own benchmarking asks (worker-count sweeps, sequential-vs-parallel
   comparisons) need a real-hardware run to mean anything regardless.
-- **No result-table virtualization yet.** Every category's result list renders eagerly inside a
-  scrollable container (`cleaner_view.rs`), not through `gpui_component::table::DataTable` — the
-  virtualized, delegate-driven table `src/database/` and `src/api_explorer/` already use for exactly
-  this problem. Migrating Cleaner's result list (checkboxes, per-row action buttons, risk badges,
-  warnings) to that delegate pattern is a real UI rewrite touching every category's rendering, judged
-  too large and too risky to fold into this hardening pass; see `docs/cleaner/known-limitations.md`
-  for the concrete migration target.
+- **Result-table virtualization has since landed** — this section's earlier "not done" entry is
+  stale. `src/cleaner/views/results_table.rs` is a `TableDelegate` driving
+  `gpui_component::table::DataTable`, so only rows inside the scroll viewport are built each frame;
+  its module doc is the authority.
 - **No "export scan report to a local file"** action yet, though it's in the ticket's required
   interactions list.
 

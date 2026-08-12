@@ -20,7 +20,7 @@ use crate::cleaner::core::ignore::{IgnoredItemsDocument, path_signature};
 use crate::cleaner::core::item::{CleanableItem, CleanableItemId};
 #[cfg(target_os = "macos")]
 use crate::cleaner::core::permissions::{MacPermission, PermissionService, PermissionState};
-use crate::cleaner::core::progress::{ProgressSink, ScanProgress};
+use crate::cleaner::core::progress::LatestProgress;
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 use crate::cleaner::core::report::CleanupReport;
 use crate::cleaner::core::report::{CategoryScanResult, PartialScanReason, ScanCompleteness};
@@ -43,17 +43,6 @@ use crate::cleaner::views::results_table::{ResultsTableDelegate, category_icon};
 use crate::cleaner::views::uninstall_review_dialog;
 use crate::i18n::{Str, t};
 
-#[derive(Clone)]
-struct ChannelProgressSink {
-    tx: std::sync::mpsc::Sender<ScanProgress>,
-}
-
-impl ProgressSink for ChannelProgressSink {
-    fn report(&self, progress: ScanProgress) {
-        let _ = self.tx.send(progress);
-    }
-}
-
 pub struct CleanerView {
     /// Navigation (which category/sections are showing) and every category's
     /// own scan/selection/cleanup state — see the module doc on
@@ -68,10 +57,13 @@ pub struct CleanerView {
     /// `run_scan`.
     scan_tasks: HashMap<CleanerCategory, Task<()>>,
     cancellations: HashMap<CleanerCategory, CancellationToken>,
-    progress_rxs: HashMap<CleanerCategory, std::sync::mpsc::Receiver<ScanProgress>>,
-    /// A single timer loop that drains every live entry in `progress_rxs`
-    /// each tick, rather than one timer per category — cheaper, and still
-    /// fully independent per-category data (see `ensure_pump_running`).
+    /// One capacity-one, latest-wins slot per scanning category — see
+    /// [`LatestProgress`] for why an intermediate update may be dropped and
+    /// why a scan's own outcome never travels this way.
+    progress_slots: HashMap<CleanerCategory, Arc<LatestProgress>>,
+    /// A single timer loop that takes each live slot's latest update each
+    /// tick, rather than one timer per category — cheaper, and still fully
+    /// independent per-category data (see `ensure_pump_running`).
     pump_task: Option<Task<()>>,
     cleanup_tasks: HashMap<CleanerCategory, Task<()>>,
     /// The Full Disk Access probe kicked off *at Scan-click time* for a
@@ -120,7 +112,7 @@ impl CleanerView {
             permission_service: permissions::default_service(),
             scan_tasks: HashMap::new(),
             cancellations: HashMap::new(),
-            progress_rxs: HashMap::new(),
+            progress_slots: HashMap::new(),
             pump_task: None,
             cleanup_tasks: HashMap::new(),
             #[cfg(target_os = "macos")]
@@ -249,7 +241,7 @@ impl CleanerView {
     }
 
     /// Starts (or restarts) one category's scan. Never touches any other
-    /// category's `scan_tasks`/`cancellations`/`progress_rxs` entry — that
+    /// category's `scan_tasks`/`cancellations`/`progress_slots` entry — that
     /// is what lets two categories scan at once (req #5/#23). A category
     /// requiring Full Disk Access gets a contextual, click-time-only check
     /// (req #16/#17) rather than a permanently rendered panel.
@@ -359,9 +351,10 @@ impl CleanerView {
     ) {
         let cancellation = CancellationToken::new();
         let cancellation_for_scan = cancellation.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let sink = Arc::new(LatestProgress::new());
+        let sink_for_scan = sink.clone();
         self.cancellations.insert(category, cancellation);
-        self.progress_rxs.insert(category, rx);
+        self.progress_slots.insert(category, sink);
         self.state.begin_scan(category);
         cx.notify();
         self.ensure_pump_running(cx);
@@ -371,8 +364,7 @@ impl CleanerView {
                 .background_executor()
                 .spawn(async move {
                     let context = ScanContext::new();
-                    let sink = ChannelProgressSink { tx };
-                    match scanner.scan(&context, &sink, &cancellation_for_scan) {
+                    match scanner.scan(&context, sink_for_scan.as_ref(), &cancellation_for_scan) {
                         Ok(result) => (Some(result), false, None),
                         Err(ScanError::Cancelled) => (None, true, None),
                         Err(error) => (None, false, Some(format!("{error:?}"))),
@@ -384,7 +376,7 @@ impl CleanerView {
                 let (result, cancelled, error) = outcome;
                 this.state.finish_scan(category, result, cancelled, error);
                 this.cancellations.remove(&category);
-                this.progress_rxs.remove(&category);
+                this.progress_slots.remove(&category);
                 this.scan_tasks.remove(&category);
                 cx.notify();
             });
@@ -392,9 +384,9 @@ impl CleanerView {
         self.scan_tasks.insert(category, task);
     }
 
-    /// A single background loop that drains every category's progress
-    /// channel each tick, rather than one timer per category. Stops itself
-    /// once `progress_rxs` is empty, so it costs nothing while nothing is
+    /// A single background loop that takes each category's latest progress
+    /// each tick, rather than one timer per category. Stops itself once
+    /// `progress_slots` is empty, so it costs nothing while nothing is
     /// scanning, and one category finishing early never stops another's
     /// updates from still being pumped.
     fn ensure_pump_running(&mut self, cx: &mut Context<Self>) {
@@ -405,21 +397,10 @@ impl CleanerView {
             loop {
                 let has_active = this
                     .update(cx, |this, cx| {
-                        let mut updated = false;
-                        let categories: Vec<CleanerCategory> =
-                            this.progress_rxs.keys().copied().collect();
-                        for category in categories {
-                            if let Some(rx) = this.progress_rxs.get(&category) {
-                                while let Ok(progress) = rx.try_recv() {
-                                    this.state.update_progress(category, progress);
-                                    updated = true;
-                                }
-                            }
-                        }
-                        if updated {
+                        if apply_latest_progress(&mut this.state, &this.progress_slots) {
                             cx.notify();
                         }
-                        !this.progress_rxs.is_empty()
+                        !this.progress_slots.is_empty()
                     })
                     .unwrap_or(false);
 
@@ -1645,5 +1626,171 @@ impl Render for CleanerView {
                         ),
                 )
             })
+    }
+}
+
+/// One pump tick: applies **at most one** update per category and returns
+/// whether anything changed. This is the bound on catch-up — a pump that was
+/// starved for a second does the same amount of work as one that ticked on
+/// time, because a scanner that reported a thousand times in between left one
+/// update behind, not a thousand (see [`LatestProgress`]).
+///
+/// A free function rather than a method so it can be driven straight from a
+/// plain [`CleanerState`] in tests, with no window and no frame.
+fn apply_latest_progress(
+    state: &mut CleanerState,
+    slots: &HashMap<CleanerCategory, Arc<LatestProgress>>,
+) -> bool {
+    let mut updated = false;
+    for (category, slot) in slots {
+        if let Some(progress) = slot.take() {
+            state.update_progress(*category, progress);
+            updated = true;
+        }
+    }
+    updated
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+
+    use super::apply_latest_progress;
+    use crate::cleaner::core::category::CleanerCategory;
+    use crate::cleaner::core::progress::{LatestProgress, ProgressSink, ScanPhase, ScanProgress};
+    use crate::cleaner::state::CleanerState;
+
+    use std::collections::HashMap;
+
+    fn progress(category: CleanerCategory, scanned_entries: u64) -> ScanProgress {
+        ScanProgress {
+            category,
+            phase: ScanPhase::Traversing,
+            current_path: None,
+            scanned_entries,
+            discovered_items: scanned_entries / 10,
+            discovered_bytes: scanned_entries * 1024,
+        }
+    }
+
+    /// The catch-up bound: a pump tick that arrives after a flood costs one
+    /// apply per category, not one per report, and lands the newest value.
+    #[test]
+    fn a_pump_tick_applies_at_most_one_update_per_category() {
+        let categories = [
+            CleanerCategory::SystemJunk,
+            CleanerCategory::UserCache,
+            CleanerCategory::LargeOldFiles,
+        ];
+        let slots: HashMap<_, _> = categories
+            .iter()
+            .map(|category| (*category, Arc::new(LatestProgress::new())))
+            .collect();
+
+        for step in 1..=5_000u64 {
+            for category in categories {
+                slots[&category].report(progress(category, step));
+            }
+        }
+        for category in categories {
+            assert_eq!(slots[&category].pending(), 1);
+        }
+
+        let mut state = CleanerState::default();
+        for category in categories {
+            state.begin_scan(category);
+        }
+        assert!(apply_latest_progress(&mut state, &slots));
+        for category in categories {
+            assert_eq!(
+                state.category(category).progress(),
+                Some(&progress(category, 5_000)),
+                "the tick must land the newest report, not an intermediate one"
+            );
+            assert_eq!(slots[&category].pending(), 0);
+        }
+
+        // A second tick with nothing new reports no change, so `cx.notify()`
+        // is not called for a frame that would draw the same thing.
+        assert!(!apply_latest_progress(&mut state, &slots));
+    }
+
+    /// One category's flood never delays or overwrites another's update —
+    /// the per-category slot is what keeps the two independent.
+    #[test]
+    fn categories_do_not_share_a_slot() {
+        let mut slots = HashMap::new();
+        slots.insert(CleanerCategory::SystemJunk, Arc::new(LatestProgress::new()));
+        slots.insert(CleanerCategory::UserCache, Arc::new(LatestProgress::new()));
+
+        for step in 1..=100u64 {
+            slots[&CleanerCategory::SystemJunk].report(progress(CleanerCategory::SystemJunk, step));
+        }
+        slots[&CleanerCategory::UserCache].report(progress(CleanerCategory::UserCache, 7));
+
+        let mut state = CleanerState::default();
+        state.begin_scan(CleanerCategory::SystemJunk);
+        state.begin_scan(CleanerCategory::UserCache);
+        assert!(apply_latest_progress(&mut state, &slots));
+
+        assert_eq!(
+            state.category(CleanerCategory::SystemJunk).progress(),
+            Some(&progress(CleanerCategory::SystemJunk, 100))
+        );
+        assert_eq!(
+            state.category(CleanerCategory::UserCache).progress(),
+            Some(&progress(CleanerCategory::UserCache, 7))
+        );
+    }
+
+    /// A producer flooding from its own thread while the pump ticks never
+    /// leaves more than one update pending, and every report is accounted
+    /// for: applied, coalesced away, or still pending — never queued.
+    #[test]
+    fn a_concurrent_flood_stays_bounded_while_the_pump_ticks() {
+        const REPORTS: u64 = 50_000;
+        let category = CleanerCategory::UserCache;
+        let slot = Arc::new(LatestProgress::new());
+        let producer_slot = slot.clone();
+        let done = Arc::new(AtomicBool::new(false));
+        let producer_done = done.clone();
+
+        let producer = thread::spawn(move || {
+            for step in 1..=REPORTS {
+                producer_slot.report(progress(CleanerCategory::UserCache, step));
+            }
+            producer_done.store(true, Ordering::Release);
+        });
+
+        let mut slots = HashMap::new();
+        slots.insert(category, slot.clone());
+        let mut state = CleanerState::default();
+        state.begin_scan(category);
+        let mut applied = 0u64;
+        loop {
+            let finished = done.load(Ordering::Acquire);
+            if apply_latest_progress(&mut state, &slots) {
+                applied += 1;
+            }
+            assert!(
+                slot.pending() <= 1,
+                "the slot must never hold more than one pending update"
+            );
+            if finished {
+                break;
+            }
+        }
+        producer.join().expect("producer thread finishes");
+
+        // Conservation: every report either reached the state, was coalesced
+        // away by a newer one, or is the single one still pending. Nothing
+        // was queued, so catch-up never grew with the flood.
+        assert_eq!(applied + slot.coalesced() + slot.pending() as u64, REPORTS);
+        assert!(
+            applied < REPORTS,
+            "a flood this size must have coalesced something"
+        );
     }
 }
