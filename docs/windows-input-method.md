@@ -53,16 +53,23 @@ listed. Do not delete unrelated CLSID keys or run an installer/registry cleaner.
 
 ## Keyboard Hook fallback
 
-Select **Keyboard Hook**. It needs no install or Windows setting change, but
-it starts only while dodo is running and Dodo's keyboard input language is
-Vietnamese. Closing dodo, selecting Native TSF, changing language away from
-Vietnamese, or a failed settings write drops the hook deterministically.
+Select **Keyboard Hook**. It needs no install or Windows setting change, but it
+starts only while dodo is running. Closing dodo, selecting Native TSF, or a
+failed settings write drops the hook deterministically. It is **not** dropped
+when the selected language leaves Vietnamese: while it runs it owns the
+language-switch shortcut, and a hook that stopped in English could never switch
+back. In a language with no engine it observes the shortcut and passes
+everything else through.
 
 The hook processes only one known plain key-down. It passes key-up, repeat,
-shortcut, injected, dead-key/ligature, unknown, and error paths unchanged. Its
-own `SendInput` output carries a private extra-info tag and is ignored on
-re-entry. It never busy-loops and `Drop` calls `UnhookWindowsHookEx` before
-releasing callback state.
+shortcut, injected, dead-key/ligature, unknown, and error paths unchanged, and
+a matched modifier-only shortcut is passed on as well — swallowing a modifier
+would leave every application believing the key is held. Its own `SendInput`
+output carries a private extra-info tag and is ignored on re-entry. It never
+busy-loops and `Drop` calls `UnhookWindowsHookEx` before releasing callback
+state. Recording a new shortcut reconfigures the one live hook rather than
+installing a second, so the combination that was recorded over stops matching
+immediately and without a restart.
 
 Windows' low-level-hook callback does **not** reveal whether a normal foreground
 text field is a password field. It therefore passes secure-desktop/foreground
@@ -103,6 +110,17 @@ account:
    stops transformation.
 5. Switch between both backends repeatedly, then press Uninstall and confirm
    TSF disappears while Keyboard Hook still needs no cleanup.
+6. On the Input method pane, click the language-switch field and press
+   `Ctrl+Shift+Space`; the field should read `Ctrl Shift Space`. In Notepad,
+   confirm it cycles the enabled languages under **both** backends, that a
+   language with no engine types through, and that it still switches back.
+7. Record `Alt+Space` over it. Confirm `Ctrl+Shift+Space` no longer switches
+   anything — with no restart — and that `Alt+Space` does. Restart dodo and
+   confirm the recorded shortcut is still `Alt Space`.
+8. Record `Ctrl+Shift` on its own (hold both, then release). Confirm it
+   switches under both backends, that the modifiers still reach applications —
+   `Ctrl+C` in Notepad still copies — and that turning Beep on sounds once per
+   switch.
 
 No Windows runtime typing, registration, profile visibility, secure-context
 behaviour, or release-archive run has been verified from the Mac development

@@ -267,15 +267,29 @@ the whole surface: backend choice, status, install button and the four engine se
 pane and nowhere else, so no control is reachable twice. That makes `View::InputMethod` the **first
 platform-conditional tool**, so `View::ALL` is written out twice and every `match` on `View` carries
 a `cfg` arm; the row draws `AppIcon::Keyboard`, deliberately not the globe, which is the API
-Explorer's. The pane holds **no state at all** — `Layout::new` builds it before
+Explorer's. The pane holds **no setting at all** — `Layout::new` builds it before
 `input_method::load` has read the file, so every control reads the global in `render` and the two
 either/or settings are radio groups rather than dropdowns, whose `SelectState` would be a second
-copy of the setting. Native remains the persisted default. Event Tap is the macOS-only alternative in
-`services/event_tap.rs`; Windows instead offers `Keyboard Hook`, a clearly-labelled no-install
-fallback that runs only while dodo does. Both direct-output fallbacks use the existing engine and
-never share transformation with Native TSF/InputMethodKit. `SettingsDocument::backend` is schema 4;
-the modifier-only language shortcut is schema 7: version 6's forced base key was reverted, with
-its forced Control-Shift-Space default migrated back to Control-Shift. Event Tap retains its macOS-only
+copy of the setting; the shortcut recorder's three fields are the exception that proves it, holding
+only what the user is *doing*. Native remains the persisted default. Event Tap is the macOS-only
+alternative in `services/event_tap.rs`; Windows instead offers `Keyboard Hook`, a clearly-labelled
+no-install fallback that runs only while dodo does. Both direct-output fallbacks use the existing
+engine and never share transformation with Native TSF/InputMethodKit.
+**Whichever backend is selected owns the language switch**, because the others are passing every key
+through — so both fallbacks stay attached in *every* language (a listener that stopped in English
+could never switch back), answer the shortcut before the engine sees anything, and are
+**reconfigured, never joined by a second**, which is what makes a recorded shortcut live on the next
+keystroke and the replaced one inert. `models/live_switch.rs` is that rule, pure and tested
+everywhere; a cycle performed inside an OS callback returns to the state layer over an mpsc channel
+because a callback has no `App`. The switch is `Shortcut { modifiers, key }` at
+`SettingsDocument::language_switch`, **schema 8** (`backend` was 4), where `key` is the engine's
+non-printing key set plus `Modifiers`; validity is one rule — a command modifier must be held — and
+never a count or a fixed shape. **A printing key is not in the vocabulary and never will be**: a host
+is handed what a key *types*, so `⌥Z` arrives as `Ω` and could not be matched again. **The macOS
+Native host cannot see a modifier-only shortcut at all** — `recognizedEvents:` is
+`NSEventMaskKeyDown` and `FlagsChanged` reaches only `handleEvent:client:` — so the pane says to use
+Event Tap; `docs/macos-input-method.md` §8a is the authority and §9 owns the fix.
+Event Tap retains its macOS-only
 accessibility/secure-input/feedback protections; the TSF installer has separate tested path data in
 `models/windows.rs` and is intentionally per-user. The
 Windows hook API has no normal password-field bit, so it passes secure-desktop and all other

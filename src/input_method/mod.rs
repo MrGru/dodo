@@ -27,6 +27,19 @@
 //! they create no observer; when selected, the state layer makes the native host
 //! pass through before starting the fallback.
 //!
+//! # The language switch has one owner at a time, and it is whoever owns keys
+//!
+//! Whichever backend is selected answers the shortcut, because the others are
+//! passing every key through. That is not a detail of the fallbacks: while Event
+//! Tap or Keyboard Hook is selected, the native host contributes nothing, so a
+//! fallback that ignored the shortcut left it working nowhere. They therefore
+//! stay attached in **every** selected language — [`models::live_switch`] holds
+//! the distinction between observing a key and transforming it — and
+//! [`InputMethod::edit`] hands each one the whole document before the write, so
+//! a shortcut recorded in the pane is live on the next keystroke and the one it
+//! replaced is inert. A cycle performed inside an OS callback returns over
+//! `switch_sender`; `input-method.json` is still the only place it is recorded.
+//!
 //! # Where the state is
 //!
 //! [`InputMethod`] is a `Global`, for the reason `Session` and `Updater` are: read

@@ -6,7 +6,7 @@
 //! there is no control a user can reach from two places and no second answer to
 //! "where do I set my input scheme".
 //!
-//! # It holds no state, on purpose
+//! # It holds no *setting*, on purpose
 //!
 //! Every control reads [`InputMethod`] in `render` and writes it on click. There
 //! is no `SelectState`, no cached settings and nothing to keep in step, which
@@ -21,6 +21,13 @@
 //! the dropdowns the settings page used: a dropdown owns an `Entity<SelectState>`
 //! whose selected row is a second copy of the setting, and the copy is what would
 //! drift.
+//!
+//! The shortcut recorder is the one thing here with fields, and it is the
+//! exception that proves the rule: what it holds is *what the user is doing right
+//! now* — a focus handle, whether it is capturing, the modifiers held so far —
+//! and none of that is a setting. The shortcut itself is still read from
+//! [`InputMethod`] every frame, and the recorded combination goes straight to
+//! [`InputMethod::set_language_switch`] without being kept here first.
 //!
 //! # Backend ownership stays outside this view
 //!
@@ -57,12 +64,17 @@ use crate::input_method::models::windows::{
     WindowsInstall, WindowsInstallFailure, WindowsInstallOutcome,
 };
 
-/// The key context the recorder claims while it is capturing.
+/// The key context the recorder claims **while it is capturing**, and gpui
+/// components' own name for a focused text field.
 ///
-/// It exists so the field is a dispatch target of its own; nothing binds an
-/// action to it, because a recorder that let a key binding win would record the
-/// binding's effect instead of the key.
-const RECORDER_CONTEXT: &str = "InputMethodShortcutRecorder";
+/// Claiming it is what stops a recorded keystroke also *doing* something.
+/// `quick_nav::NORMAL_MODE` is `Dodo && !Input` and gpui evaluates `!` against
+/// the whole dispatch path, so while this sits on the path every quick-navigation
+/// binding declines — `⌘V` records as an unsupported key instead of pasting the
+/// clipboard into a tool, and `Esc` reaches this view's own handler rather than
+/// `LeaveInsertMode`. It is dropped the moment recording ends, so the field is
+/// never mistaken for a text input the rest of the time.
+const RECORDER_CONTEXT: &str = "Input";
 
 /// The Input method pane.
 ///
@@ -479,7 +491,7 @@ impl InputMethodView {
                             // nothing focused the dispatch path is the window
                             // root, which carries none of them here.
                             .track_focus(&self.recorder)
-                            .key_context(RECORDER_CONTEXT)
+                            .when(self.recording, |this| this.key_context(RECORDER_CONTEXT))
                             .on_key_down(cx.listener(Self::key_recorded))
                             .on_modifiers_changed(cx.listener(Self::modifiers_recorded))
                             .child(
@@ -935,9 +947,41 @@ impl Render for InputMethodView {
 
 #[cfg(test)]
 mod tests {
-    use super::{recordable_key, recorded_modifiers, shortcut_key_label};
+    use super::{RECORDER_CONTEXT, recordable_key, recorded_modifiers, shortcut_key_label};
     use dodo_ime_ipc::settings::{Shortcut, ShortcutKey, ShortcutModifiers};
-    use gpui::Modifiers;
+    use gpui::{KeyBindingContextPredicate, KeyContext, Modifiers};
+
+    /// A key pressed at the recorder must be *recorded* and never also *obeyed*.
+    /// `quick_nav::NORMAL_MODE` is the binding set that would otherwise take
+    /// `⌘V`, `p` and `Esc` out from under it.
+    #[test]
+    fn a_recording_field_suppresses_every_normal_mode_binding() {
+        let path = |contexts: &[&str]| -> Vec<KeyContext> {
+            contexts
+                .iter()
+                .map(|name| KeyContext::parse(name).expect("a bare identifier parses"))
+                .collect()
+        };
+        let normal_mode = KeyBindingContextPredicate::parse(crate::quick_nav::NORMAL_MODE)
+            .expect("the predicate has to parse, or `KeyBinding::new` panics at startup");
+
+        let idle = path(&["Root", crate::quick_nav::KEY_CONTEXT, "InputMethod"]);
+        assert!(
+            normal_mode.depth_of(&idle).is_some(),
+            "an idle pane is still normal mode"
+        );
+
+        let recording = path(&[
+            "Root",
+            crate::quick_nav::KEY_CONTEXT,
+            "InputMethod",
+            RECORDER_CONTEXT,
+        ]);
+        assert!(
+            normal_mode.depth_of(&recording).is_none(),
+            "a recording field must take every key for itself"
+        );
+    }
 
     /// gpui's `platform` is Command on macOS and the Windows key on Windows, and
     /// both must land in `meta` — the field every host normalizes into. A

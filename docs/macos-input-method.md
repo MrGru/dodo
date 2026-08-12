@@ -172,11 +172,13 @@ no browser or native-editor Event Tap run was available here.
 
 Only one backend transforms at a time. Selecting Native stops Event Tap before
 writing settings. Selecting Event Tap waits for a live Native Input Method to
-adopt the selection; a new native bundle then passes keys through. The settings
-schema is version 5: version 4 names Windows' Keyboard Hook backend and version
-5 allows a modifier-only language shortcut, so an older host refuses the file
-and falls back to English/pass-through rather than compose beside a selected
-fallback. Windows details are in
+adopt the selection; a new native bundle then passes keys through. Event Tap
+stays attached in **every** selected language, not only Vietnamese — it owns the
+language-switch shortcut while it runs, so a tap that stopped in English could
+never switch back. The settings schema is version 8, whose history is in
+`dodo_ime_ipc::settings::SETTINGS_SCHEMA_VERSION`; an older host refuses a newer
+file and falls back to English/pass-through rather than compose beside a
+selected fallback. Windows details are in
 [`windows-input-method.md`](windows-input-method.md).
 
 ## 4. Verifying a change
@@ -389,9 +391,10 @@ every write is a temp file plus `rename`, so a reader sees one complete version 
 the other and never half of either.
 
 `input-method.json` carries the selected backend, the selected keyboard language,
-and the four Vietnamese settings the page offers — input scheme (Telex or VNI),
-tone-mark placement (modern `hoà` or traditional `hòa`), spell check, bracket
-shortcuts — plus a `revision` dodo bumps on every write. The menu bar and the bundle share
+the language-switch shortcut, and the four Vietnamese settings the page offers —
+input scheme (Telex or VNI), tone-mark placement (modern `hoà` or traditional
+`hòa`), spell check, bracket shortcuts — plus a `revision` dodo bumps on every
+write. The menu bar and the bundle share
 that language identity; English and Japanese pass keys through until native
 engines exist. The output mode is deliberately **not** persisted: Native Input
 Method always composes, while Event Tap deliberately uses direct rewriting
@@ -419,7 +422,40 @@ dodo's settings file is an ordinary situation, not an exotic one. A bundle that
 refuses the file uses its English/pass-through default and reports revision `0`,
 so dodo can say so.
 
+### 8a. The language-switch shortcut, and the one combination this host cannot see
+
+The shortcut is `{ modifiers, key }` — schema 8, `dodo_ime_ipc::settings::Shortcut`
+— where `key` is one of the engine's non-printing keys or the literal
+`"modifiers"`, meaning the modifiers *are* the shortcut. Every host matches it the
+same way, against a normalized `KeyEvent`, so `⌘` and the Windows key are one
+field and so are `⌥` and Alt. A printing key is not in the vocabulary: this host
+is handed what a key *types*, and `⌥Z` arrives as `Ω`, so a shortcut recorded from
+a letter could never be recognised here.
+
+**This bundle never sees a modifier-only shortcut**, and that is the one thing
+about the flow that is not symmetric. `recognizedEvents:` in `controller.rs` is
+`NSEventMaskKeyDown` alone — deliberately, because widening it takes over
+InputMethodKit's own mouse handling, and `commitComposition:` on a click outside
+the composition comes free from leaving it narrow. macOS therefore delivers a bare
+`⇧` to nothing here: `inputText:key:modifiers:client:` is called for key-downs and
+`FlagsChanged` reaches only `handleEvent:client:`, which InputMethodKit picks
+*instead of* `inputText:` when a controller implements it. Receiving one means
+rewriting the whole key path through `NSEvent` — including whether
+`NSEvent.characters` still resolves dead keys the way `inputText:` does — and that
+is a round of its own, with captain testing, not a line to add here.
+
+Until then: `⌃⇧Space` and every other combination that ends in a key works under
+Native Input Method, and a modifier-only combination needs the Event Tap backend,
+which reads `CGEventType::FlagsChanged` directly. The Input method pane says so
+beneath the recorder rather than showing a setting that does nothing.
+
 ## 9. What the next round has to add
+
+- **`handleEvent:client:`, for a modifier-only shortcut under Native Input
+  Method.** See §8a for why the current event mask cannot deliver one and what
+  changing it costs. `tests/controller.rs` is where the replacement key path
+  would have to be driven against the mock client, and only a captain at a real
+  keyboard can confirm dead keys and non-QWERTY layouts still work afterwards.
 
 - **Wiring the bundle into the release.** `scripts/package.sh` does not pass
   `--input-method` yet, so a shipped `dodo.app` carries no input method and the
