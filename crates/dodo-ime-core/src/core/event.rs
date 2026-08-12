@@ -48,8 +48,10 @@ pub enum Key {
     End,
     PageUp,
     PageDown,
-    /// A function key, a bare modifier, a media key — anything an engine has no
-    /// reading for.
+    /// One of the four command modifiers. Hosts preserve this identity so a
+    /// modifier-only shortcut cannot fire on an unrelated function key.
+    Modifier,
+    /// A function key, a media key — anything an engine has no reading for.
     Other,
 }
 

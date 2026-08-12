@@ -62,6 +62,14 @@ const VK_LEFT_ARROW: u16 = 0x7B;
 const VK_RIGHT_ARROW: u16 = 0x7C;
 const VK_DOWN_ARROW: u16 = 0x7D;
 const VK_UP_ARROW: u16 = 0x7E;
+const VK_RIGHT_COMMAND: u16 = 0x36;
+const VK_COMMAND: u16 = 0x37;
+const VK_SHIFT: u16 = 0x38;
+const VK_OPTION: u16 = 0x3A;
+const VK_CONTROL: u16 = 0x3B;
+const VK_RIGHT_SHIFT: u16 = 0x3C;
+const VK_RIGHT_OPTION: u16 = 0x3D;
+const VK_RIGHT_CONTROL: u16 = 0x3E;
 
 /// The four command modifiers, read out of an `NSEvent` modifier mask.
 pub fn modifiers(flags: u64) -> Modifiers {
@@ -91,6 +99,8 @@ fn identity(key_code: u16) -> Option<Key> {
         VK_RIGHT_ARROW => Key::ArrowRight,
         VK_UP_ARROW => Key::ArrowUp,
         VK_DOWN_ARROW => Key::ArrowDown,
+        VK_RIGHT_COMMAND | VK_COMMAND | VK_SHIFT | VK_OPTION | VK_CONTROL | VK_RIGHT_SHIFT
+        | VK_RIGHT_OPTION | VK_RIGHT_CONTROL => Key::Modifier,
         _ => return None,
     })
 }
@@ -130,8 +140,8 @@ pub fn key_event(text: &str, key_code: u16, flags: u64) -> KeyEvent {
         }
         None if typed.is_some() => Key::Character,
         // A key that types nothing and that this table does not name: a function
-        // key, a media key, a bare modifier. `Key::Other` is a word boundary,
-        // which is what the engine should do with F5.
+        // key or a media key. `Key::Other` is a word boundary, which is what
+        // the engine should do with F5.
         None => Key::Other,
     };
 
@@ -145,7 +155,8 @@ pub fn key_event(text: &str, key_code: u16, flags: u64) -> KeyEvent {
 #[cfg(test)]
 mod tests {
     use super::{
-        FLAG_COMMAND, FLAG_CONTROL, FLAG_OPTION, FLAG_SHIFT, key_event, modifiers, single_char,
+        FLAG_COMMAND, FLAG_CONTROL, FLAG_OPTION, FLAG_SHIFT, VK_CONTROL, VK_RIGHT_SHIFT, key_event,
+        modifiers, single_char,
     };
     use dodo_ime_core::{Key, Modifiers};
 
@@ -206,7 +217,7 @@ mod tests {
     /// must not become text.
     #[test]
     fn the_keys_with_an_identity_are_classified_by_key_code() {
-        let cases: [(&str, u16, Key); 15] = [
+        let cases: [(&str, u16, Key); 17] = [
             ("\r", 0x24, Key::Enter),
             ("\r", 0x4C, Key::Enter),
             ("\t", 0x30, Key::Tab),
@@ -222,6 +233,8 @@ mod tests {
             ("", 0x7E, Key::ArrowUp),
             ("", 0x7D, Key::ArrowDown),
             ("", 0x3F, Key::Other),
+            ("", VK_CONTROL, Key::Modifier),
+            ("", VK_RIGHT_SHIFT, Key::Modifier),
         ];
         for (text, key_code, expected) in cases {
             let event = key_event(text, key_code, 0);

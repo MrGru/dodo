@@ -4822,10 +4822,10 @@ impl Str {
                 "Chuyển ngôn ngữ".into()
             }
             (Str::InputMethodLanguageSwitchDescription, Language::English) => {
-                "Cycles active languages. Choose a base key, at least one modifier, and an optional sound.".into()
+                "Cycles active languages. Select at least two keys; modifiers alone are valid. A base key and sound are optional.".into()
             }
             (Str::InputMethodLanguageSwitchDescription, Language::Vietnamese) => {
-                "Luân chuyển các ngôn ngữ đang bật. Chọn phím chính, ít nhất một phím bổ trợ và âm báo tùy chọn.".into()
+                "Luân chuyển các ngôn ngữ đang bật. Chọn ít nhất hai phím; chỉ phím bổ trợ cũng hợp lệ. Phím chính và âm báo là tùy chọn.".into()
             }
             (Str::InputMethodShortcutControl, Language::English) => "Control".into(),
             (Str::InputMethodShortcutControl, Language::Vietnamese) => "Phím Control".into(),

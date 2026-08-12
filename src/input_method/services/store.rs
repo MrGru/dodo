@@ -197,20 +197,21 @@ mod tests {
     #[test]
     fn a_newer_settings_file_is_refused_and_reported() {
         let dir = scratch("newer");
-        std::fs::write(dir.join(SETTINGS_FILE), br#"{"version":7}"#).unwrap();
+        let newer = u64::from(dodo_ime_ipc::settings::SETTINGS_SCHEMA_VERSION) + 1;
+        std::fs::write(dir.join(SETTINGS_FILE), format!(r#"{{"version":{newer}}}"#)).unwrap();
         let store = DiskInputMethodStore::at(dir.clone());
 
         let error = store.load_settings().unwrap_err();
         assert_eq!(
             error,
             IpcError::UnsupportedVersion {
-                found: 7,
+                found: newer,
                 supported: dodo_ime_ipc::settings::SETTINGS_SCHEMA_VERSION
             }
         );
         assert!(matches!(
             message_for(&error),
-            Str::InputMethodStoreUnsupportedVersion { found: 7, .. }
+            Str::InputMethodStoreUnsupportedVersion { found, .. } if found == newer
         ));
 
         let _ = std::fs::remove_dir_all(&dir);

@@ -21,6 +21,17 @@ pub const VK_UP: u32 = 0x26;
 pub const VK_RIGHT: u32 = 0x27;
 pub const VK_DOWN: u32 = 0x28;
 pub const VK_DELETE: u32 = 0x2e;
+pub const VK_SHIFT: u32 = 0x10;
+pub const VK_CONTROL: u32 = 0x11;
+pub const VK_MENU: u32 = 0x12;
+pub const VK_LWIN: u32 = 0x5b;
+pub const VK_RWIN: u32 = 0x5c;
+pub const VK_LSHIFT: u32 = 0xa0;
+pub const VK_RSHIFT: u32 = 0xa1;
+pub const VK_LCONTROL: u32 = 0xa2;
+pub const VK_RCONTROL: u32 = 0xa3;
+pub const VK_LMENU: u32 = 0xa4;
+pub const VK_RMENU: u32 = 0xa5;
 
 /// Converts exactly one non-control Unicode scalar from `ToUnicodeEx`.
 pub fn one_character(units: &[u16]) -> Option<char> {
@@ -49,6 +60,8 @@ pub fn key_event(vkey: u32, text: Option<char>, modifiers: Modifiers) -> KeyEven
         VK_RIGHT => Some(Key::ArrowRight),
         VK_DOWN => Some(Key::ArrowDown),
         VK_DELETE => Some(Key::Delete),
+        VK_SHIFT | VK_CONTROL | VK_MENU | VK_LWIN | VK_RWIN | VK_LSHIFT | VK_RSHIFT
+        | VK_LCONTROL | VK_RCONTROL | VK_LMENU | VK_RMENU => Some(Key::Modifier),
         _ => None,
     };
     let key = identity.unwrap_or_else(|| text.map_or(Key::Other, |_| Key::Character));
@@ -70,7 +83,7 @@ pub fn key_event(vkey: u32, text: Option<char>, modifiers: Modifiers) -> KeyEven
 
 #[cfg(test)]
 mod tests {
-    use super::{VK_BACK, VK_LEFT, VK_SPACE, key_event, one_character};
+    use super::{VK_BACK, VK_CONTROL, VK_LEFT, VK_SPACE, key_event, one_character};
     use dodo_ime_core::{Key, Modifiers};
 
     #[test]
@@ -90,6 +103,10 @@ mod tests {
         assert_eq!(
             key_event(VK_LEFT, None, Modifiers::NONE).key,
             Key::ArrowLeft
+        );
+        assert_eq!(
+            key_event(VK_CONTROL, None, Modifiers::NONE).key,
+            Key::Modifier
         );
     }
 

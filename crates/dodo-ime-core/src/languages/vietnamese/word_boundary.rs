@@ -91,6 +91,7 @@ mod tests {
             Key::End,
             Key::PageUp,
             Key::PageDown,
+            Key::Modifier,
             Key::Other,
         ] {
             assert!(breaks_composition(key), "{key:?}");
