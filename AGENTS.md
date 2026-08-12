@@ -408,7 +408,19 @@ Eight things about build and release that catch people:
   detail, including the two traps that cost time: Homebrew's `rustc` shadows rustup's and ships
   only the host std (`rustup run` does **not** fix it — use the toolchain's absolute path), and a
   cross-check needs its own `CARGO_TARGET_DIR` or it invalidates the warm cache a size
-  measurement depends on.
+  measurement depends on. Two sharper corollaries, each of which has cost a session: the
+  toolchain's absolute **`cargo`** is not enough on its own, because cargo resolves `rustc` from
+  `PATH` — set `RUSTC=<toolchain>/bin/rustc` too, or the cross build fails with "can't find crate
+  for `core`" — and never let two toolchains share `target/`, which poisons it with `E0514`
+  ("compiled by an incompatible version of rustc") until the affected packages are
+  `cargo clean -p`'d. **The `crates/dodo-ime-*` crates *do* cross-check for Windows from here**
+  (`cargo check --locked --target x86_64-pc-windows-msvc -p dodo-ime-core -p dodo-ime-ipc -p
+  dodo-ime-windows --all-targets`) because they link no TLS; only the `dodo` crate itself is
+  unreachable. So a Windows-only mistake in **`src/`** — the classic being a
+  `#[cfg(target_os = "macos")]` item called from an `any(macos, windows)` block, which is exactly
+  how `InputMethod::refresh_status` broke the Windows build — cannot be caught locally at all, and
+  a change to a `cfg`-shaped part of `src/input_method/`, `src/tray/` or `src/layout.rs` is worth
+  auditing by hand before it reaches the captain's Windows machine.
 - **`fmt` and `clippy` are blocking jobs; keep them green.** Run `cargo fmt --all` and
   `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
   (34 unformatted files, 12 warnings) is paid off, and **there is no crate-level `allow`** — every

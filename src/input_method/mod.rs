@@ -515,8 +515,14 @@ impl InputMethod {
         cx.refresh_windows();
     }
 
-    /// Reads the bundle's status file and adopts it.
-    #[cfg(target_os = "macos")]
+    /// Reads the native host's status file and adopts it.
+    ///
+    /// Both hosts write that file — the macOS bundle and the Windows TSF DLL —
+    /// and both wake dodo the same way when they switch language on their own
+    /// (a distributed notification on macOS, a named event on Windows), so this
+    /// is deliberately *not* macOS-only: [`init`]'s listener runs on both, and
+    /// gating this on macOS alone is what stopped Windows compiling at all.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     async fn refresh_status(cx: &mut AsyncApp) {
         let Some(store) = cx.update(|cx| {
             cx.try_global::<InputMethod>()
@@ -560,8 +566,13 @@ impl InputMethod {
             cx.update(|cx| Self::set_language(language, cx));
         }
         cx.update(|cx| {
+            // Each platform's fallback owner is decided from the status this
+            // just adopted — whether a native host is live, and whether it has
+            // the settings dodo wrote — so both reconcile here, not only macOS.
             #[cfg(target_os = "macos")]
             Self::reconcile_event_tap(cx);
+            #[cfg(target_os = "windows")]
+            Self::reconcile_keyboard_hook(cx);
             cx.refresh_windows();
         });
     }
