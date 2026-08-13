@@ -502,6 +502,57 @@ fn footer_button(
         )
 }
 
+/// The box the active tool is rendered into, and the scroll container around
+/// it. They are a pair and are written here rather than inline in
+/// [`Layout::render`] because the two together are one rule that is easy to
+/// break from either end — and because a `Div`'s style can be asserted in a
+/// test, while the layout it produces cannot be without a window.
+///
+/// **The rule: the tool decides its own height, and this box is at least the
+/// pane.** Those are two different things and the old shape could only express
+/// the second. The box used to be `size_full`, i.e. height 100% of the scroll
+/// container — a definite height, which meant a tool taller than the pane was
+/// simply clipped: gpui measures a scroll container's content as the bounding
+/// box of its **direct** children, so a page overflowing *inside* a box pinned
+/// to 100% never made the container scrollable at all. It is now a flex item
+/// with `flex_grow(1.)` and no height of its own, in a column scroll
+/// container: growing gives it the whole pane when the tool is shorter (which
+/// is every tool that fills its pane, and what `size_full` was there for), and
+/// `flex_shrink_0` is what stops the flex algorithm taking that height back
+/// when the tool is taller. Then the box *is* the content height, and the
+/// container scrolls.
+///
+/// The floors are unchanged and still the only thing they ever were: below
+/// `MAIN_MIN_*` the tool keeps its size and this container gains a scrollbar
+/// rather than the tool being squeezed further.
+///
+/// **`w_full` here is load-bearing**: a box that sizes to its content leaves
+/// rules and rows stopping short of the pane's edge. It is a width, not a
+/// height, and the vertical fix must not be paid for with it.
+fn tool_box() -> Div {
+    div()
+        .w_full()
+        .flex_grow(1.)
+        .flex_shrink_0()
+        .min_w(px(MAIN_MIN_WIDTH))
+        .min_h(px(MAIN_MIN_HEIGHT))
+}
+
+/// The scroll container [`tool_box`] is the sole child of. A column flex, so
+/// that box can grow past the pane instead of being stretched to it; the pane
+/// header stays outside, so the pane title and the sidebar toggle never scroll
+/// away.
+fn main_pane() -> Stateful<Div> {
+    div()
+        .id("main-pane")
+        .flex()
+        .flex_col()
+        .w_full()
+        .flex_1()
+        .min_h_0()
+        .overflow_scroll()
+}
+
 pub struct Layout {
     collapsible: SidebarCollapsible,
     sidebar: SidebarState,
@@ -985,47 +1036,18 @@ impl Render for Layout {
                             )
                             .child(div().font_bold().child(t(title, cx))),
                     )
-                    // The tool scrolls rather than being squeezed. The inner
-                    // box is `size_full` so on any ordinary window it is
-                    // exactly the pane and nothing scrolls at all; `min_w` /
-                    // `min_h` are the floor under that, and the only thing they
-                    // change is that below it the content keeps its size and
-                    // this container gains a scrollbar.
-                    //
-                    // The header row above stays outside, so the pane title and
-                    // the sidebar toggle never scroll away.
-                    //
-                    // `w_full` on the scroll container is load-bearing: one
-                    // that sizes to its content leaves rules and rows stopping
-                    // short of the pane's edge.
-                    .child(
-                        div()
-                            .id("main-pane")
-                            .w_full()
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_scroll()
-                            .child(
-                                div()
-                                    .size_full()
-                                    .min_w(px(MAIN_MIN_WIDTH))
-                                    .min_h(px(MAIN_MIN_HEIGHT))
-                                    .map(|this| match self.active {
-                                        View::JsonFormatter => {
-                                            this.child(self.json_formatter.clone())
-                                        }
-                                        View::EncoderDecoder => {
-                                            this.child(self.encoder_decoder.clone())
-                                        }
-                                        View::ApiExplorer => this.child(self.api_explorer.clone()),
-                                        View::Cleaner => this.child(self.cleaner.clone()),
-                                        View::Docker => this.child(self.docker.clone()),
-                                        View::Database => this.child(self.database.clone()),
-                                        #[cfg(any(target_os = "macos", target_os = "windows"))]
-                                        View::InputMethod => this.child(self.input_method.clone()),
-                                    }),
-                            ),
-                    ),
+                    // The tool scrolls rather than being squeezed, and how
+                    // that is arranged is [`main_pane`] and [`tool_box`].
+                    .child(main_pane().child(tool_box().map(|this| match self.active {
+                        View::JsonFormatter => this.child(self.json_formatter.clone()),
+                        View::EncoderDecoder => this.child(self.encoder_decoder.clone()),
+                        View::ApiExplorer => this.child(self.api_explorer.clone()),
+                        View::Cleaner => this.child(self.cleaner.clone()),
+                        View::Docker => this.child(self.docker.clone()),
+                        View::Database => this.child(self.database.clone()),
+                        #[cfg(any(target_os = "macos", target_os = "windows"))]
+                        View::InputMethod => this.child(self.input_method.clone()),
+                    }))),
             )
     }
 }
@@ -1034,14 +1056,14 @@ impl Render for Layout {
 mod tests {
     use std::mem::{Discriminant, discriminant};
 
-    use gpui::{SharedString, px};
+    use gpui::{Display, FlexDirection, Length, Overflow, SharedString, Styled as _, px, relative};
     use gpui_component::sidebar::SidebarMenuItem;
     use gpui_component::{Collapsible as _, IconNamed as _};
 
     use super::{
         AUTO_COLLAPSE_WIDTH, Layout, MAIN_MIN_HEIGHT, MAIN_MIN_WIDTH, PANE_CHROME_HEIGHT,
         PANE_CHROME_WIDTH, SIDEBAR_RAIL_WIDTH, SIDEBAR_WIDTH, SidebarState, ToolItem, View,
-        pane_title, window_min_size,
+        main_pane, pane_title, tool_box, window_min_size,
     };
     use crate::docker::DockerPage;
     use crate::i18n::Str;
@@ -1656,5 +1678,78 @@ mod tests {
                 assert_eq!(title_of(view, page), discriminant(&view.title()));
             }
         }
+    }
+
+    /// The defect this pair exists to prevent: a tool page taller than the pane
+    /// being clipped instead of scrolled.
+    ///
+    /// gpui measures a scroll container's content as the bounding box of its
+    /// **direct** children, so the box holding the tool is the only thing that
+    /// can report the page's height. Give it a height of its own — `size_full`,
+    /// which is 100% and therefore definite — and it reports the pane's height
+    /// however tall the page is, and everything past the bottom edge is simply
+    /// gone. This is asserted on the style rather than on the laid-out result
+    /// because computing a gpui layout needs a window, and `TaffyLayoutEngine`
+    /// is private to gpui besides.
+    #[test]
+    fn the_tool_box_takes_its_height_from_the_tool_and_never_from_the_pane() {
+        let mut tool_box = tool_box();
+        let style = tool_box.style();
+
+        assert_eq!(
+            style.size.height, None,
+            "a height here is a definite height, and a page pinned to the pane \
+             cannot report the overflow the scroll container is meant to reveal",
+        );
+        assert_eq!(
+            style.flex_grow,
+            Some(1.),
+            "…so the pane is filled by growing instead: a tool shorter than the \
+             pane still gets all of it, which is what `size_full` was for",
+        );
+        assert_eq!(
+            style.flex_shrink,
+            Some(0.),
+            "and growing is only half of it — a shrinkable item is pulled back \
+             to the container's height, which is the clipping again",
+        );
+
+        // The floors are unchanged, and the width one is load-bearing: a box
+        // that sizes to its content leaves rules and rows stopping short of
+        // the pane's edge.
+        assert_eq!(style.size.width, Some(Length::from(relative(1.))));
+        assert_eq!(style.min_size.width, Some(Length::from(px(MAIN_MIN_WIDTH))));
+        assert_eq!(
+            style.min_size.height,
+            Some(Length::from(px(MAIN_MIN_HEIGHT)))
+        );
+    }
+
+    /// The other half: growing only means anything inside a column flex, and
+    /// only a scroll container can show what grew past it.
+    #[test]
+    fn the_main_pane_is_a_column_that_scrolls() {
+        let mut main_pane = main_pane();
+        let style = main_pane.style();
+
+        assert_eq!(style.display, Some(Display::Flex));
+        assert_eq!(
+            style.flex_direction,
+            Some(FlexDirection::Column),
+            "a row would make height the cross axis, and `flex_grow` on the \
+             tool box would stop meaning anything vertical",
+        );
+        assert_eq!(style.overflow.y, Some(Overflow::Scroll));
+        assert_eq!(style.overflow.x, Some(Overflow::Scroll));
+        assert_eq!(
+            style.size.width,
+            Some(Length::from(relative(1.))),
+            "the pane's full width, so the tool's rules reach its edge",
+        );
+        // `flex_1` + `min_h_0`: the container is what shrinks with the window,
+        // so that the box inside it can keep the content's height.
+        assert_eq!(style.flex_grow, Some(1.));
+        assert_eq!(style.flex_shrink, Some(1.));
+        assert_eq!(style.min_size.height, Some(Length::from(px(0.))));
     }
 }

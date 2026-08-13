@@ -1,6 +1,6 @@
 ---
 name: dodo-tool-view
-description: End-to-end checklist for adding a new tool to dodo's sidebar (a new src/<tool>.rs module, the View enum entry, its icon SVG and AppIcon variant, and wiring it into Layout). Load when asked to add, rename, reorder or remove a tool view, or when a new sidebar entry does not appear or renders blank.
+description: End-to-end checklist for adding a new tool to dodo's sidebar (a new src/<tool>.rs module, the View enum entry, its icon SVG and AppIcon variant, and wiring it into Layout), plus the rule deciding whether a tool's root fills the pane or is scrolled by it. Load when asked to add, rename, reorder or remove a tool view, when a new sidebar entry does not appear or renders blank, or when part of a tool page is unreachable at a small window size (clipped, cut off, will not scroll).
 ---
 
 A tool is a self-contained module under `src/` exposing an entity with
@@ -100,18 +100,31 @@ appears, that is the one you missed.
   `t(view.title(), cx)`. A new tool therefore needs a `Str` variant per title, plus one for every
   label, button, placeholder and error message it shows — see `dodo-theming-settings`, which also
   covers parameterized messages and the widgets whose strings do not refresh on their own.
-- **The main pane is a scroll container with a floor under it.** Your view is handed a
-  `div().size_full().min_w(MAIN_MIN_WIDTH).min_h(MAIN_MIN_HEIGHT)` inside
-  `div().id("main-pane").w_full().flex_1().min_h_0().overflow_scroll()`, so give the root of your
-  `Render` a `v_flex().size_full()` and put `.flex_1().min_h_0()` on whatever should absorb the
-  leftover height. Omitting `min_h_0` makes a multi-line editor grow past the window instead of
-  scrolling. Two consequences worth knowing: your view is **never** narrower than
-  `MAIN_MIN_WIDTH` or shorter than `MAIN_MIN_HEIGHT` (`src/layout.rs` — 520×360 today, and
-  `WindowOptions::window_min_size` stops a resize drag before even that), and on any ordinary
-  window that box is exactly the pane, so the outer container has no scroll range and consumes no
-  wheel events from yours. A tool whose content can genuinely exceed its box still needs its own
-  scrolling — see `src/docker/views/containers.rs` for the `overflow_scroll()` + `min_w(..)`
-  pattern.
+- **The main pane is a scroll container with a floor under it, and your root's height decides
+  whether that container can ever scroll.** `layout::main_pane` is the container and
+  `layout::tool_box` is the box your view is handed — both are functions with the whole rule in
+  their doc comments, and both are asserted by unit tests. What you have to choose is which of two
+  shapes your tool is:
+  - **A tool that fills the pane** (every tool but one): root `v_flex().size_full()`, with
+    `.flex_1().min_h_0()` on whatever absorbs the leftover height, and its own `overflow_scroll()`
+    on whatever can exceed it — see `src/docker/views/containers.rs`. Omitting `min_h_0` makes a
+    multi-line editor grow past the window instead of scrolling.
+  - **A page that is as tall as its content** — a column of settings rows, like
+    `input_method::views::input_method_view::page_root`: root `v_flex().w_full()` and **no
+    height at all**. The pane then scrolls it, which is the only thing that reaches a row past the
+    bottom edge at a small window.
+
+  Do not give a content-height page `size_full`. A height of 100% is a *definite* height, and gpui
+  measures a scroll container's content as the bounding box of its **direct** children — so a page
+  pinned to the pane reports the pane's height however long it really is, and the surplus rows are
+  clipped with no scrollbar to reveal them. That was the Input method page's bug, fixed on
+  2026-08-13.
+
+  Two consequences worth knowing either way: your view is **never** narrower than `MAIN_MIN_WIDTH`
+  or shorter than `MAIN_MIN_HEIGHT` (`src/layout.rs` — 520×360 today, and
+  `WindowOptions::window_min_size` stops a resize drag before even that); and on any ordinary
+  window a filling tool's box is exactly the pane, so the outer container has no scroll range and
+  consumes no wheel events from yours.
 - **The sidebar opens collapsed to icons**, and collapses again on its own if the user expands it
   and then narrows the window past `AUTO_COLLAPSE_WIDTH`. So a new tool's row is an *icon* first
   and a label second: the icon has to read on its own, and `View::title` is what the collapsed row

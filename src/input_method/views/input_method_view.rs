@@ -896,10 +896,23 @@ fn shortcut_key_label(key: ShortcutKey) -> Option<Str> {
     })
 }
 
+/// The page's root, empty. This is the longest tool page dodo has — every row
+/// below is conditional on the platform, the selected backend or a storage
+/// problem, and the tallest combination does not fit the smallest window — so
+/// it is the one page whose height has to be its **own**, not the pane's.
+///
+/// It is `w_full` and deliberately not `size_full`: a height of 100% is a
+/// definite height, and a page pinned to the pane cannot report the overflow
+/// the main pane's scroll container exists to reveal — the rows past the
+/// bottom edge are just clipped. `layout::tool_box` is the other half of this;
+/// neither half is any use alone.
+fn page_root() -> Div {
+    v_flex().w_full()
+}
+
 impl Render for InputMethodView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = v_flex()
-            .size_full()
+        let root = page_root()
             .gap_4()
             .child(
                 div()
@@ -984,9 +997,36 @@ impl Render for InputMethodView {
 
 #[cfg(test)]
 mod tests {
-    use super::{RECORDER_CONTEXT, recordable_key, recorded_modifiers, shortcut_key_label};
+    use super::{
+        RECORDER_CONTEXT, page_root, recordable_key, recorded_modifiers, shortcut_key_label,
+    };
     use dodo_ime_ipc::settings::{Shortcut, ShortcutKey, ShortcutModifiers};
-    use gpui::{KeyBindingContextPredicate, KeyContext, Modifiers};
+    use gpui::{KeyBindingContextPredicate, KeyContext, Length, Modifiers, Styled as _, relative};
+
+    /// The captain's report: at a small window the last settings on this page
+    /// could not be reached. The cause was not a missing scroll container —
+    /// `layout::main_pane` has always been one — but this page reporting the
+    /// pane's height as its own, which leaves nothing to scroll and clips the
+    /// rows past the bottom edge instead. `layout::tool_box` is the other half.
+    ///
+    /// Asserted on the style because a gpui layout needs a window to compute.
+    #[test]
+    fn the_page_reports_its_own_height_so_a_small_window_can_scroll_it() {
+        let mut root = page_root();
+        let style = root.style();
+
+        assert_eq!(
+            style.size.height, None,
+            "`size_full` here is a height of 100% of the pane, and a page that \
+             is exactly the pane can never overflow it",
+        );
+        assert_eq!(
+            style.size.width,
+            Some(Length::from(relative(1.))),
+            "the width is the half that must not regress: rows and rules still \
+             reach the pane's edge",
+        );
+    }
 
     /// A key pressed at the recorder must be *recorded* and never also *obeyed*.
     /// `quick_nav::NORMAL_MODE` is the binding set that would otherwise take
