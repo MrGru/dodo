@@ -291,7 +291,20 @@ Native host cannot see a modifier-only shortcut at all** — `recognizedEvents:`
 Event Tap; `docs/macos-input-method.md` §8a is the authority and §9 owns the fix.
 Event Tap retains its macOS-only
 accessibility/secure-input/feedback protections; the TSF installer has separate tested path data in
-`models/windows.rs` and is intentionally per-user. The
+`models/windows.rs` and is intentionally per-user.
+**A Backspace rewrite is wrong in a browser address bar**, and only a fallback can be wrong that
+way — a native host composes through a marked-text client. Inline autocomplete keeps a selection
+alive between keystrokes, so the first Backspace eats it instead of the character the engine meant.
+`models/browser_rewrite.rs` is that rule, pure and tested: one `BROWSERS` table routing bundle IDs
+to *two* strategies (Blink takes `Shift`+`Left` then `1 -> 0` on the count; WebKit and Gecko take an
+invisible character then one extra Backspace — the Chromium trick is unreliable in Safari), three
+guards that answer "post it verbatim", and an unlisted application deliberately left alone rather
+than treated as WebKit. **Start-of-field is not detectable** and `delete_before > 0` is the proxy;
+**focus is not detectable either**, so Safari and Firefox pay one extra insert plus Backspace in
+ordinary page inputs too — accepted, and emitted from one function so it can be narrowed later.
+`browser_address_bar_fix` is the switch, default on, added to `input-method.json` **without** a
+schema bump because a defaulted `bool` no native host reads is not a misread. `docs/macos-input-method.md`
+§3b is the authority, including what no unit test can prove: no real browser has run this. The
 Windows hook API has no normal password-field bit, so it passes secure-desktop and all other
 uncertain input through; `docs/windows-input-method.md` is explicit that this needs captain runtime
 testing. `dodo_ime_ipc::paths` now duplicates both the macOS and Windows data-directory rules and

@@ -50,6 +50,11 @@ pub const SETTINGS_FILE: &str = "input-method.json";
 /// restores optional base keys and migrates that forced default back. Version 8
 /// records the language switch as a generic [`Shortcut`] instead of four
 /// modifier flags beside one of four base keys.
+///
+/// [`SettingsDocument::browser_address_bar_fix`] deliberately did **not** bump
+/// it: it is a defaulted `bool` that only dodo's own Event Tap reads, so a
+/// bundle that has never heard of it ignores one unknown key and goes on typing
+/// exactly as before. Refusing the whole file over that would be the harm.
 pub const SETTINGS_SCHEMA_VERSION: u32 = 8;
 
 /// How a key sequence becomes Vietnamese, as this file spells it.
@@ -536,6 +541,25 @@ pub struct SettingsDocument {
     pub revision: u64,
     #[serde(default)]
     pub vietnamese: VietnameseSettings,
+    /// Whether a direct-output host may work around a browser that keeps an
+    /// inline autocomplete selection alive between keystrokes.
+    ///
+    /// Only dodo's macOS Event Tap reads this; the native hosts compose through
+    /// a marked-text client and never rewrite with Backspace, so there is no
+    /// selection for them to trip over. It lives in this file rather than in
+    /// dodo's own session state because it is a setting *of the input method*,
+    /// written and re-read through the one path that already reconfigures a
+    /// live listener without a restart.
+    ///
+    /// Default on: the browsers it fixes are the common case, and the
+    /// arithmetic is a no-op in every application it does not recognise.
+    #[serde(default = "enabled")]
+    pub browser_address_bar_fix: bool,
+}
+
+/// `#[serde(default)]` on a `bool` means `false`; this field defaults to on.
+fn enabled() -> bool {
+    true
 }
 
 impl Default for SettingsDocument {
@@ -548,6 +572,7 @@ impl Default for SettingsDocument {
             language_switch: LanguageSwitch::default(),
             revision: 0,
             vietnamese: VietnameseSettings::default(),
+            browser_address_bar_fix: true,
         }
     }
 }
@@ -717,6 +742,29 @@ mod tests {
         assert_eq!(document.vietnamese.tone_placement, Tone::Modern);
         assert!(document.vietnamese.spell_check);
         assert!(document.vietnamese.bracket_shortcuts);
+        assert!(document.browser_address_bar_fix);
+    }
+
+    /// The one field added without a schema bump, and the two properties that
+    /// justify not bumping: a file that predates it reads as *on*, and a file
+    /// carrying it round-trips.
+    #[test]
+    fn the_browser_address_bar_fix_defaults_on_and_survives_a_file_that_never_heard_of_it() {
+        let legacy = SettingsDocument::parse(br#"{"version":8,"language":"vi"}"#).unwrap();
+        assert!(legacy.browser_address_bar_fix);
+
+        let off = SettingsDocument {
+            browser_address_bar_fix: false,
+            ..SettingsDocument::default()
+        };
+        let json = serde_json::to_string(&off).unwrap();
+        assert!(json.contains(r#""browser_address_bar_fix":false"#));
+        assert_eq!(SettingsDocument::parse(json.as_bytes()).unwrap(), off);
+
+        // It is carried forward by every write helper rather than reset.
+        let next =
+            SettingsDocument::next(&off, LanguageId::Vietnamese, VietnameseSettings::default());
+        assert!(!next.browser_address_bar_fix);
     }
 
     /// The round trip that keeps the mirror honest: every field of

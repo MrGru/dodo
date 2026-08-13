@@ -1530,6 +1530,11 @@ pub enum Str {
     InputMethodShortcutArrowRight,
     InputMethodShortcutArrowUp,
     InputMethodShortcutArrowDown,
+
+    // The Event Tap's browser workaround. Appended, like everything above, so
+    // `position()` stays a fixed table.
+    InputMethodBrowserFix,
+    InputMethodBrowserFixDescription,
 }
 
 impl Str {
@@ -5119,6 +5124,20 @@ impl Str {
             (Str::InputMethodBracketShortcutsDescription, Language::Vietnamese) => {
                 "Trong Telex, [ và ] gõ ơ và ư — cách duy nhất để gõ uơ (thuở, huơ).".into()
             }
+            (Str::InputMethodBrowserFix, Language::English) => "Browser address bars".into(),
+            (Str::InputMethodBrowserFix, Language::Vietnamese) => {
+                "Thanh địa chỉ trình duyệt".into()
+            }
+            (Str::InputMethodBrowserFixDescription, Language::English) => {
+                "Work around browsers that keep an autocomplete suggestion selected while you \
+                 type, which would otherwise put the tone mark on the wrong letter."
+                    .into()
+            }
+            (Str::InputMethodBrowserFixDescription, Language::Vietnamese) => {
+                "Xử lý các trình duyệt vẫn bôi đen gợi ý tự động trong lúc bạn gõ, nếu không dấu \
+                 thanh sẽ rơi vào sai chữ."
+                    .into()
+            }
             (Str::CleanerScanDescription, Language::English) => {
                 "Scan this category for files that can be safely removed.".into()
             }
@@ -6521,6 +6540,8 @@ mod tests {
             plain(Str::InputMethodShortcutArrowRight),
             plain(Str::InputMethodShortcutArrowUp),
             plain(Str::InputMethodShortcutArrowDown),
+            plain(Str::InputMethodBrowserFix),
+            plain(Str::InputMethodBrowserFixDescription),
         ]
     }
 
@@ -7461,6 +7482,8 @@ mod tests {
             Str::InputMethodShortcutArrowRight => 930,
             Str::InputMethodShortcutArrowUp => 931,
             Str::InputMethodShortcutArrowDown => 932,
+            Str::InputMethodBrowserFix => 933,
+            Str::InputMethodBrowserFixDescription => 934,
         }
     }
 

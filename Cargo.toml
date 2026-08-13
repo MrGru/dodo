@@ -290,6 +290,12 @@ redis = { version = "1.5", default-features = false }
 # hand-written one, especially for a call nobody here can run in CI.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+# The Event Tap's `NSWorkspaceDidActivateApplicationNotification` observer, and
+# nothing else. `addObserverForName:object:queue:usingBlock:` is the one form of
+# that call which needs no Objective-C class of dodo's own — the alternative
+# takes a selector, which means `define_class!` for a single cached string.
+# **Not a new package**: `objc2-app-kit` already depends on this exact version.
+block2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSApplication",
     "NSImage",
@@ -306,6 +312,16 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
 ] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = [
     "NSArray",
+    # The Event Tap's frontmost-application cache: `NSNotificationCenter`, the
+    # `userInfo` dictionary a workspace activation carries, and the
+    # `NSOperationQueue` parameter of the block form (always `nil` here, but the
+    # type has to exist). `block2` switches on the block form itself. All four
+    # are already enabled transitively by `objc2-app-kit/NSWorkspace`; they are
+    # named here so a change over there cannot quietly take them away.
+    "NSDictionary",
+    "NSNotification",
+    "NSOperation",
+    "block2",
     "NSData",
     "NSError",
     "NSFileManager",

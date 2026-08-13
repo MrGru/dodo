@@ -750,6 +750,23 @@ impl InputMethodView {
             })
     }
 
+    /// The Event Tap's browser workaround, and the one row that appears only
+    /// under a fallback backend.
+    ///
+    /// It is drawn beside the Event Tap status card rather than with the four
+    /// engine settings below, because it is not one: Native composes through a
+    /// marked-text client and has no Backspace rewrite for a browser selection
+    /// to land in the middle of, so a switch offered there would control
+    /// nothing.
+    #[cfg(target_os = "macos")]
+    fn browser_fix_switch(cx: &App) -> Switch {
+        Switch::new("input-method-browser-address-bar-fix")
+            .checked(InputMethod::browser_address_bar_fix(cx))
+            .on_click(|checked: &bool, _, cx| {
+                InputMethod::set_browser_address_bar_fix(*checked, cx)
+            })
+    }
+
     fn spell_check_switch(cx: &App) -> Switch {
         Switch::new("input-method-spell-check")
             .checked(InputMethod::settings(cx).spell_check)
@@ -902,7 +919,12 @@ impl Render for InputMethodView {
                 this.child(Self::status_card(cx))
             })
             .when(InputMethod::backend(cx) == Backend::EventTap, |this| {
-                this.child(Self::event_tap_status_card(cx))
+                this.child(Self::event_tap_status_card(cx)).child(Self::row(
+                    Str::InputMethodBrowserFix,
+                    Str::InputMethodBrowserFixDescription,
+                    Self::browser_fix_switch(cx),
+                    cx,
+                ))
             });
         let root = root
             .child(Self::row(

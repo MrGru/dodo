@@ -27,6 +27,12 @@
 //! they create no observer; when selected, the state layer makes the native host
 //! pass through before starting the fallback.
 //!
+//! **Only a fallback can get a browser address bar wrong.** A native host
+//! composes through a marked-text client; a fallback rewrites with Backspaces,
+//! which is what an inline autocomplete selection breaks.
+//! [`models::browser_rewrite`] is that rule and `browser_address_bar_fix` is its
+//! switch — a setting of the *tap*, so the pane draws it only under Event Tap.
+//!
 //! # The language switch has one owner at a time, and it is whoever owns keys
 //!
 //! Whichever backend is selected answers the shortcut, because the others are
@@ -337,6 +343,18 @@ impl InputMethod {
         #[cfg(target_os = "windows")]
         Self::stop_keyboard_hook(cx);
         Self::edit(cx, |document| document.backend = backend);
+    }
+
+    /// Whether the Event Tap may work around browser inline autocomplete.
+    #[cfg(target_os = "macos")]
+    pub fn browser_address_bar_fix(cx: &App) -> bool {
+        cx.try_global::<InputMethod>()
+            .is_none_or(|state| state.document.browser_address_bar_fix)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn set_browser_address_bar_fix(on: bool, cx: &mut App) {
+        Self::edit(cx, |document| document.browser_address_bar_fix = on);
     }
 
     #[cfg(target_os = "macos")]

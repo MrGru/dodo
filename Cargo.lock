@@ -1608,6 +1608,7 @@ version = "0.1.12"
 dependencies = [
  "anyhow",
  "base64",
+ "block2 0.6.2",
  "bollard",
  "dispatch2",
  "dodo-ime-core",

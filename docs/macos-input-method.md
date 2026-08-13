@@ -170,6 +170,86 @@ re-entry are separate reset/filter paths, covered independently of that
 replacement. The descriptor and document simulators cover the transaction, but
 no browser or native-editor Event Tap run was available here.
 
+### 3b. Browser address bars
+
+A browser address bar keeps an **inline autocomplete selection alive between
+keystrokes**. Event Tap rewrites the current syllable as *n* Backspaces followed
+by one Unicode insert, and in an address bar the first Backspace deletes that
+selection rather than the character the engine meant — so the tone mark lands on
+the wrong letter. Textareas and ordinary in-page inputs have no such selection
+and were already correct. Safari reproduces it as readily as Chrome, so this is
+not a Chromium quirk.
+
+`src/input_method/models/browser_rewrite.rs` is the authority and is pure. Two
+strategies, because Blink and WebKit do not clear a selection the same way:
+
+- **Chromium family** (Chrome, Chrome Canary, Chromium, Brave, Edge, Vivaldi,
+  Opera, Arc, Cốc Cốc) — a full `Shift`+`Left` key-down/key-up pair, carrying
+  `Shift` and `NumericPad` exactly as macOS flags a real arrow key, ahead of the
+  Backspaces. One Backspace then becomes **none**, because the inserted string
+  overwrites what that selection covers; two or more are **unchanged**, because
+  the first Backspace consumes the selection, which is the one real character it
+  would have deleted anyway. The arithmetic holds with or without an
+  autocomplete selection, which is why no omnibox-focus test is needed.
+- **Safari and Firefox** (plus Safari Technology Preview and Firefox Developer
+  Edition) — one invisible character (`U+200B`, the single named constant
+  `SELECTION_COMMIT_CHARACTER`) typed before the Backspaces, which makes the
+  browser commit and dismiss the suggestion, and then **one extra Backspace** to
+  remove it again. `Shift`+`Left` is deliberately not used here: WebKit's
+  selection anchoring makes it unreliable.
+
+Both lists are one table, `BROWSERS`, and adding a browser is one row.
+
+**An application in neither list is left exactly as it was.** That is the
+deliberate reading of "everything else": treating every unrecognised application
+as WebKit would type an invisible character into every text field on the system
+to fix a problem only browsers have.
+
+Three guards skip both strategies, because getting any of them wrong destroys
+text the user typed: nothing to delete, a plan the engine is also passing the
+original key through with (`OutputPlan` has no separate "do not touch preceding
+text" flag and `pass_through` is the nearest signal it carries), and a plan with
+nothing to insert. Guards answer "post it verbatim", which is what this host did
+before the workaround existed.
+
+**Start of field cannot be detected**, and this is the limitation to know. No
+CoreGraphics API reports the caret's offset in someone else's text field without
+an Accessibility query per keystroke. The proxy is `delete_before > 0`: the
+engine only asks for Backspaces it believes it rendered itself, and the composer
+forgets that belief on a mouse-down, an arrow key, a focus change or a
+target-process change. The residual risk is a caret moved by something the tap
+cannot observe — and there the *existing* Backspace rewrite is already deleting
+the wrong characters, so neither strategy is what broke it.
+
+**Accepted trade-off.** A bundle identifier cannot say whether focus is in the
+address bar or in a page input, so the workaround runs for the whole
+application. For the Chromium strategy that is free. For Safari and Firefox it
+means every tone mark typed into an ordinary in-page input also costs one
+invisible insert and one extra Backspace, which a page can observe as extra DOM
+`input` events; the resulting text is unchanged. The invisible character is
+emitted from one place so a future focus test can narrow this.
+
+The whole behaviour is behind **Sidebar → Input method → Browser address bars**,
+default on, persisted as `browser_address_bar_fix` in `input-method.json`. That
+field was added **without** a schema bump: it is a defaulted `bool` only dodo's
+Event Tap reads, and a bundle that has never heard of it ignores one unknown key
+rather than refusing the whole file. The row is drawn only under the Event Tap
+backend — Native composes through a marked-text client and has no Backspace
+rewrite for a selection to land in the middle of.
+
+The frontmost application's bundle identifier is cached by an
+`NSWorkspaceDidActivateApplicationNotification` observer, seeded once when the
+tap starts. **Nothing asks `NSWorkspace` anything on the keystroke path.** All
+the extra events are posted through the same queue as every other synthetic
+event, in staging order, so "before the Backspaces" is a property of the
+descriptor list rather than of two racing post APIs.
+
+**Not verified: any real browser.** The count arithmetic, every guard, the
+bundle-ID routing (including an unknown identifier) and the staged descriptor
+sequences are unit tested; no browser was driven from this environment, so
+whether `Shift`+`Left` and `U+200B` actually clear the selection in each engine
+is the captain's to confirm.
+
 Only one backend transforms at a time. Selecting Native stops Event Tap before
 writing settings. Selecting Event Tap waits for a live Native Input Method to
 adopt the selection; a new native bundle then passes keys through. Event Tap

@@ -16,14 +16,35 @@
 //! two CoreGraphics facts it needs — `FlagsChanged` is in the mask so a
 //! modifier-only shortcut is observable, and a matched modifier transition is
 //! still returned unchanged so no application is left believing a key is held.
+//!
+//! # Browsers, and the one thing this host asks the outside world
+//!
+//! A browser address bar keeps an inline autocomplete selection alive between
+//! keystrokes, so a plain Backspace rewrite lands on the wrong text there.
+//! `models::browser_rewrite` is the whole of that rule — which browser needs
+//! which of the two strategies, the count arithmetic, and every guard — and it
+//! is pure. This file supplies the two platform facts it cannot: the frontmost
+//! application's bundle identifier, cached by an
+//! `NSWorkspaceDidActivateApplicationNotification` observer so that **nothing
+//! asks `NSWorkspace` anything on the keystroke path**, and the extra synthetic
+//! events themselves. All of them are posted through the one queue every other
+//! synthetic event uses, in staging order, so "before the Backspaces" is a
+//! property of the descriptor list rather than of two racing post APIs.
 
 use std::cell::{Cell, RefCell};
 use std::ptr::{NonNull, null_mut};
+use std::rc::Rc;
 
+use block2::RcBlock;
 use dodo_ime_core::{Key, KeyEvent, LanguageId, Modifiers};
 use dodo_ime_ipc::settings::SettingsDocument;
 use futures_channel::mpsc::UnboundedSender;
-use objc2_app_kit::NSBeep;
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
+use objc2_app_kit::{
+    NSBeep, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
+    NSWorkspaceDidActivateApplicationNotification,
+};
 use objc2_core_foundation::{
     CFBoolean, CFDictionary, CFMachPort, CFRetained, CFRunLoop, CFRunLoopMode, CFRunLoopSource,
     CFString, kCFRunLoopCommonModes,
@@ -32,7 +53,9 @@ use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventTapOptions,
     CGEventTapPlacement, CGEventTapProxy, CGEventType,
 };
+use objc2_foundation::{NSNotification, NSNotificationCenter};
 
+use crate::input_method::models::browser_rewrite::BrowserRewrite;
 use crate::input_method::models::direct_output::OutputPlan;
 use crate::input_method::models::event_tap::{
     DirectComposer, EventTapStatus, Handling, TapEvent, handling, invalidates_composer,
@@ -41,19 +64,53 @@ use crate::input_method::models::event_tap::{
 use crate::input_method::models::live_switch::LiveSwitch;
 
 const DELETE_KEY_CODE: u16 = 0x33;
+/// `kVK_LeftArrow`, the other half of the Chromium-family workaround.
+const LEFT_ARROW_KEY_CODE: u16 = 0x7b;
 const MAX_INPUT_UNICODE_UNITS: usize = 8;
 const MAX_REPLACEMENT_UNICODE_UNITS: usize = 64;
 
+/// What one synthetic event types, if anything.
+///
+/// Unicode belongs to key-down only: the matching key-up is a
+/// [`SyntheticPayload::Key`] with key code zero, so it ends that key without
+/// asking a client to insert the scalar a second time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SyntheticPayload {
+    /// A plain key press: `key_code` under `flags`.
+    Key,
+    /// The invisible character that makes a browser commit and dismiss its
+    /// inline suggestion. Its text is
+    /// `models::browser_rewrite::SELECTION_COMMIT_CHARACTER` and this host never
+    /// names it.
+    CommitCharacter,
+    /// The engine's replacement text for the current syllable.
+    Replacement,
+}
+
 /// One synthetic keyboard event, fully described before CoreGraphics allocates
-/// it. Unicode belongs to key-down only: key-up ends that key without asking a
-/// client to insert the scalar a second time.
+/// it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SyntheticEventDescriptor {
     key_code: u16,
     down: bool,
-    unicode_payload: bool,
+    payload: SyntheticPayload,
+    /// Modifiers this event is posted with. Empty for everything except the
+    /// Chromium-family `Shift`+`Left`.
+    flags: CGEventFlags,
     tag: i64,
 }
+
+/// `Shift`+`Left`, spelled the way macOS spells its own arrow keys.
+///
+/// `NumericPad` is not decoration: CoreGraphics sets it on every real arrow
+/// key, and an arrow event without it is one an application may treat
+/// differently from the one the user could have pressed.
+const SHIFT_LEFT_FLAGS: CGEventFlags =
+    CGEventFlags(CGEventFlags::MaskShift.0 | CGEventFlags::MaskNumericPad.0);
+
+/// Room for the invisible commit character in UTF-16, with slack for a
+/// replacement chosen during real-browser testing.
+const MAX_COMMIT_UNICODE_UNITS: usize = 4;
 
 /// Why a requested tap cannot start. No platform detail carries user input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,6 +131,9 @@ pub struct EventTap {
     source: CFRetained<CFRunLoopSource>,
     run_loop: CFRetained<CFRunLoop>,
     mode: &'static CFRunLoopMode,
+    /// Kept only to be dropped, which unregisters it. It writes into the same
+    /// [`FrontmostApplication`] the callback reads, and must not outlive it.
+    _activation: ActivationObserver,
 }
 
 impl EventTap {
@@ -99,6 +159,9 @@ impl EventTap {
 
         let mode = common_modes().ok_or(StartError::NoRunLoop)?;
         let mut state = Box::new(State::new(document, language_changes));
+        // Before the tap exists, so the very first keystroke already knows which
+        // application it is going to.
+        let activation = ActivationObserver::install(Rc::clone(&state.frontmost));
         let user_info = (&mut *state as *mut State).cast();
         let mask = event_mask();
         // SAFETY: `callback` matches CoreGraphics' declared callback type, and
@@ -136,6 +199,7 @@ impl EventTap {
             source,
             run_loop,
             mode,
+            _activation: activation,
         })
     }
 
@@ -168,12 +232,38 @@ impl Drop for EventTap {
     }
 }
 
+/// The frontmost application's bundle identifier, as last reported by AppKit.
+///
+/// It is a shared cell rather than a field of [`State`] because two things need
+/// it and only one of them is the tap: the notification block writes, the
+/// CoreGraphics callback reads, and both run on the main thread. Nothing here
+/// asks AppKit anything — [`ActivationObserver`] is the only writer.
+#[derive(Default)]
+struct FrontmostApplication {
+    bundle_id: RefCell<Option<String>>,
+}
+
+impl FrontmostApplication {
+    fn adopt(&self, bundle_id: Option<String>) {
+        if let Ok(mut current) = self.bundle_id.try_borrow_mut() {
+            *current = bundle_id;
+        }
+    }
+}
+
 struct State {
     composer: RefCell<DirectComposer>,
     /// The language switch as this listener currently understands it.
     switch: RefCell<LiveSwitch>,
     /// Where a cycle performed on the callback path is reported.
     language_changes: UnboundedSender<LanguageId>,
+    /// Whether the browser address-bar workaround is switched on.
+    ///
+    /// A `Cell` beside the composer rather than a re-read of the document:
+    /// [`reconfigure`](State::reconfigure) is the one place settings arrive, and
+    /// the callback path must not take a borrow it could fail.
+    browser_fix: Cell<bool>,
+    frontmost: Rc<FrontmostApplication>,
     synthetic_tag: i64,
     /// Key-up events matching a replaced physical key-down. A bitset avoids a
     /// callback-path allocation while preserving real down/up pairs.
@@ -191,6 +281,8 @@ impl State {
             composer: RefCell::new(DirectComposer::new(document.vietnamese.to_config())),
             switch: RefCell::new(LiveSwitch::new(&document)),
             language_changes,
+            browser_fix: Cell::new(document.browser_address_bar_fix),
+            frontmost: Rc::new(FrontmostApplication::default()),
             synthetic_tag: synthetic_event_tag(std::process::id()),
             suppressed_key_ups: Cell::new(0),
             target_process: Cell::new(None),
@@ -206,6 +298,20 @@ impl State {
         if let Ok(mut composer) = self.composer.try_borrow_mut() {
             composer.reconfigure(document.vietnamese.to_config());
         }
+        self.browser_fix.set(document.browser_address_bar_fix);
+    }
+
+    /// The adjustment this plan needs in the application it is about to land in.
+    ///
+    /// A failed borrow answers "no adjustment", for the same reason every other
+    /// failed borrow here answers the cautious way: posting the plan exactly as
+    /// the engine described it is what this host did before browsers were
+    /// special-cased, and it cannot delete anything the engine did not ask for.
+    fn browser_rewrite(&self, plan: &OutputPlan) -> BrowserRewrite {
+        let Ok(bundle_id) = self.frontmost.bundle_id.try_borrow() else {
+            return BrowserRewrite::verbatim(plan);
+        };
+        BrowserRewrite::plan(self.browser_fix.get(), bundle_id.as_deref(), plan)
     }
 
     /// Cycles the language when this press is the shortcut, and says whether
@@ -503,7 +609,8 @@ fn transform(state: &State, event: &CGEvent, autorepeat: bool) -> *mut CGEvent {
         }
         return original;
     }
-    let Some(output) = staged_output(&plan, state.synthetic_tag) else {
+    let Some(output) = staged_output(&plan, &state.browser_rewrite(&plan), state.synthetic_tag)
+    else {
         composer.reset();
         drop(composer);
         // The original down is passing, so its up must pass too even if an
@@ -562,10 +669,14 @@ fn single_character(units: &[u16]) -> Option<char> {
     (characters.next().is_none() && !character.is_control()).then_some(character)
 }
 
-fn staged_output(plan: &OutputPlan, tag: i64) -> Option<Vec<CFRetained<CGEvent>>> {
-    // Derive the replacement once, describe every event, then complete every
+fn staged_output(
+    plan: &OutputPlan,
+    rewrite: &BrowserRewrite,
+    tag: i64,
+) -> Option<Vec<CFRetained<CGEvent>>> {
+    // Derive both replacements once, describe every event, then complete every
     // fallible CoreGraphics allocation before posting any of them.
-    let descriptors = synthetic_event_descriptors(plan, tag)?;
+    let descriptors = synthetic_event_descriptors(plan, rewrite, tag)?;
     let mut units = [0_u16; MAX_REPLACEMENT_UNICODE_UNITS];
     let mut length = 0;
     if let Some(text) = &plan.insert {
@@ -574,35 +685,92 @@ fn staged_output(plan: &OutputPlan, tag: i64) -> Option<Vec<CFRetained<CGEvent>>
             length += 1;
         }
     }
+    let mut commit = [0_u16; MAX_COMMIT_UNICODE_UNITS];
+    let mut commit_length = 0;
+    if let Some(text) = rewrite.commit_character {
+        for unit in text.encode_utf16() {
+            *commit.get_mut(commit_length)? = unit;
+            commit_length += 1;
+        }
+        if commit_length == 0 {
+            return None;
+        }
+    }
 
     let mut output = Vec::with_capacity(descriptors.len());
     for descriptor in descriptors {
-        let event = if descriptor.unicode_payload {
-            tagged_unicode_event(&units[..length], true, descriptor.tag)?
-        } else {
-            tagged_key_event(descriptor.key_code, descriptor.down, descriptor.tag)?
+        let event = match descriptor.payload {
+            SyntheticPayload::Replacement => {
+                tagged_unicode_event(&units[..length], descriptor.tag)?
+            }
+            SyntheticPayload::CommitCharacter => {
+                tagged_unicode_event(&commit[..commit_length], descriptor.tag)?
+            }
+            SyntheticPayload::Key => tagged_key_event(
+                descriptor.key_code,
+                descriptor.down,
+                descriptor.flags,
+                descriptor.tag,
+            )?,
         };
         output.push(event);
     }
     Some(output)
 }
 
+/// Every event this rewrite posts, in the order it posts them.
+///
+/// The order *is* the fix. Whatever clears a browser's inline selection —
+/// `Shift`+`Left` or the invisible character — has to reach the application
+/// before the first Backspace, and `rewrite.delete_before` rather than
+/// `plan.delete_before` is the count, because clearing that selection changes
+/// how many characters the Backspaces still have to remove.
 fn synthetic_event_descriptors(
     plan: &OutputPlan,
+    rewrite: &BrowserRewrite,
     tag: i64,
 ) -> Option<Vec<SyntheticEventDescriptor>> {
-    let mut output = Vec::with_capacity(plan.delete_before.saturating_mul(2) + 2);
-    for _ in 0..plan.delete_before {
+    let mut output = Vec::with_capacity(rewrite.delete_before.saturating_mul(2) + 6);
+    if rewrite.extend_selection {
+        for down in [true, false] {
+            output.push(SyntheticEventDescriptor {
+                key_code: LEFT_ARROW_KEY_CODE,
+                down,
+                payload: SyntheticPayload::Key,
+                flags: SHIFT_LEFT_FLAGS,
+                tag,
+            });
+        }
+    }
+    if rewrite.commit_character.is_some() {
+        output.push(SyntheticEventDescriptor {
+            key_code: 0,
+            down: true,
+            payload: SyntheticPayload::CommitCharacter,
+            flags: CGEventFlags::empty(),
+            tag,
+        });
+        output.push(SyntheticEventDescriptor {
+            key_code: 0,
+            down: false,
+            payload: SyntheticPayload::Key,
+            flags: CGEventFlags::empty(),
+            tag,
+        });
+    }
+    for _ in 0..rewrite.delete_before {
         output.push(SyntheticEventDescriptor {
             key_code: DELETE_KEY_CODE,
             down: true,
-            unicode_payload: false,
+            payload: SyntheticPayload::Key,
+            flags: CGEventFlags::empty(),
             tag,
         });
         output.push(SyntheticEventDescriptor {
             key_code: DELETE_KEY_CODE,
             down: false,
-            unicode_payload: false,
+            payload: SyntheticPayload::Key,
+            flags: CGEventFlags::empty(),
             tag,
         });
     }
@@ -613,33 +781,112 @@ fn synthetic_event_descriptors(
         output.push(SyntheticEventDescriptor {
             key_code: 0,
             down: true,
-            unicode_payload: true,
+            payload: SyntheticPayload::Replacement,
+            flags: CGEventFlags::empty(),
             tag,
         });
         output.push(SyntheticEventDescriptor {
             key_code: 0,
             down: false,
-            unicode_payload: false,
+            payload: SyntheticPayload::Key,
+            flags: CGEventFlags::empty(),
             tag,
         });
     }
     (!output.is_empty()).then_some(output)
 }
 
-fn tagged_key_event(key_code: u16, down: bool, tag: i64) -> Option<CFRetained<CGEvent>> {
+fn tagged_key_event(
+    key_code: u16,
+    down: bool,
+    flags: CGEventFlags,
+    tag: i64,
+) -> Option<CFRetained<CGEvent>> {
     let event = CGEvent::new_keyboard_event(None, key_code, down)?;
+    if flags != CGEventFlags::empty() {
+        CGEvent::set_flags(Some(&event), flags);
+    }
     tag_event(&event, tag);
     Some(event)
 }
 
-fn tagged_unicode_event(units: &[u16], down: bool, tag: i64) -> Option<CFRetained<CGEvent>> {
-    let event = CGEvent::new_keyboard_event(None, 0, down)?;
+fn tagged_unicode_event(units: &[u16], tag: i64) -> Option<CFRetained<CGEvent>> {
+    let event = CGEvent::new_keyboard_event(None, 0, true)?;
     // SAFETY: CoreGraphics copies the live UTF-16 buffer during this call.
     unsafe {
         CGEvent::keyboard_set_unicode_string(Some(&event), units.len() as _, units.as_ptr());
     }
     tag_event(&event, tag);
     Some(event)
+}
+
+/// Keeps [`FrontmostApplication`] current, and is the only thing in this host
+/// that talks to AppKit.
+///
+/// Dropping it unregisters the block, which is what makes the shared
+/// [`FrontmostApplication`] safe to free afterwards.
+struct ActivationObserver {
+    center: Retained<NSNotificationCenter>,
+    token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
+}
+
+impl ActivationObserver {
+    /// Seeds the cache and starts watching for application switches.
+    ///
+    /// The seed is the only `NSWorkspace` query on a keystroke's behalf that is
+    /// ever made, and it happens once, at start: the tap can be switched on long
+    /// after the user last changed application, and a first keystroke that did
+    /// not know where it was going would be the one this whole workaround is
+    /// about.
+    fn install(frontmost: Rc<FrontmostApplication>) -> ActivationObserver {
+        let workspace = NSWorkspace::sharedWorkspace();
+        frontmost.adopt(bundle_id(workspace.frontmostApplication().as_deref()));
+        let center = workspace.notificationCenter();
+        // SAFETY: AppKit exports this immutable process-lifetime notification name.
+        let name = unsafe { NSWorkspaceDidActivateApplicationNotification };
+        let block = RcBlock::new(move |notification: NonNull<NSNotification>| {
+            // SAFETY: AppKit supplies a live notification for this call.
+            let notification = unsafe { notification.as_ref() };
+            frontmost.adopt(bundle_id(activated_application(notification).as_deref()));
+        });
+        // SAFETY: a `nil` queue means the block runs synchronously on the thread
+        // that posted the notification, and AppKit posts this one on the main
+        // thread — the same thread that installs the observer here, runs the tap
+        // callback, and drops this observer. Nothing it captures crosses a
+        // thread, and `Drop` unregisters it before that capture can be freed.
+        let token = unsafe {
+            center.addObserverForName_object_queue_usingBlock(Some(name), None, None, &block)
+        };
+        ActivationObserver { center, token }
+    }
+}
+
+impl Drop for ActivationObserver {
+    fn drop(&mut self) {
+        // SAFETY: `token` is exactly what this centre returned, and has not been
+        // removed before now.
+        unsafe { self.center.removeObserver(self.token.as_ref()) };
+    }
+}
+
+/// The `NSRunningApplication` a `DidActivateApplication` notification is about.
+///
+/// AppKit documents `NSWorkspaceApplicationKey` as the carrier, which is the
+/// race-free answer: asking for the frontmost application again would read
+/// whatever is frontmost *now* rather than what this notification announced.
+///
+/// `None` — a missing key, or an application with no bundle identifier — clears
+/// the cache rather than leaving the previous application's identifier in it.
+/// An unknown application gets no workaround, which is the safe direction.
+fn activated_application(notification: &NSNotification) -> Option<Retained<NSRunningApplication>> {
+    let info = notification.userInfo()?;
+    // SAFETY: AppKit exports this immutable process-lifetime key.
+    let key: &AnyObject = unsafe { NSWorkspaceApplicationKey }.as_ref();
+    info.objectForKey(key)?.downcast().ok()
+}
+
+fn bundle_id(application: Option<&NSRunningApplication>) -> Option<String> {
+    Some(application?.bundleIdentifier()?.to_string())
 }
 
 fn tag_event(event: &CGEvent, tag: i64) {
@@ -741,10 +988,13 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::{
-        DELETE_KEY_CODE, DirectComposer, MAX_REPLACEMENT_UNICODE_UNITS, OutputPlan, State,
-        SyntheticEventDescriptor, callback, classify_tap_event, event_mask, key_event,
-        modifier_event, single_character, synthetic_event_descriptors, tag_event,
+        BrowserRewrite, DELETE_KEY_CODE, DirectComposer, LEFT_ARROW_KEY_CODE,
+        MAX_COMMIT_UNICODE_UNITS, MAX_REPLACEMENT_UNICODE_UNITS, OutputPlan, SHIFT_LEFT_FLAGS,
+        State, SyntheticEventDescriptor, SyntheticPayload, callback, classify_tap_event,
+        event_mask, key_event, modifier_event, single_character, synthetic_event_descriptors,
+        tag_event,
     };
+    use crate::input_method::models::browser_rewrite::SELECTION_COMMIT_CHARACTER;
     use dodo_ime_core::{ActiveLanguages, Key, KeyEvent, LanguageId, Modifiers, VietnameseConfig};
     use dodo_ime_ipc::settings::{
         LanguageSwitch, SettingsDocument, Shortcut, ShortcutKey, ShortcutModifiers,
@@ -992,35 +1242,43 @@ mod tests {
         assert_eq!(plan.insert.as_deref(), Some("Đ"));
     }
 
+    /// A key press with no modifiers, as every descriptor but `Shift`+`Left`
+    /// spells it.
+    fn plain(key_code: u16, down: bool, tag: i64) -> SyntheticEventDescriptor {
+        SyntheticEventDescriptor {
+            key_code,
+            down,
+            payload: SyntheticPayload::Key,
+            flags: CGEventFlags::empty(),
+            tag,
+        }
+    }
+
+    fn backspace_pair(tag: i64) -> Vec<SyntheticEventDescriptor> {
+        vec![
+            plain(DELETE_KEY_CODE, true, tag),
+            plain(DELETE_KEY_CODE, false, tag),
+        ]
+    }
+
+    fn replacement_pair(tag: i64) -> Vec<SyntheticEventDescriptor> {
+        vec![
+            SyntheticEventDescriptor {
+                key_code: 0,
+                down: true,
+                payload: SyntheticPayload::Replacement,
+                flags: CGEventFlags::empty(),
+                tag,
+            },
+            plain(0, false, tag),
+        ]
+    }
+
     #[test]
     fn lowercase_and_uppercase_stroke_replacements_stage_one_backspace_pair_then_one_unicode_key() {
         let tag = 41;
-        let expected = vec![
-            SyntheticEventDescriptor {
-                key_code: DELETE_KEY_CODE,
-                down: true,
-                unicode_payload: false,
-                tag,
-            },
-            SyntheticEventDescriptor {
-                key_code: DELETE_KEY_CODE,
-                down: false,
-                unicode_payload: false,
-                tag,
-            },
-            SyntheticEventDescriptor {
-                key_code: 0,
-                down: true,
-                unicode_payload: true,
-                tag,
-            },
-            SyntheticEventDescriptor {
-                key_code: 0,
-                down: false,
-                unicode_payload: false,
-                tag,
-            },
-        ];
+        let mut expected = backspace_pair(tag);
+        expected.extend(replacement_pair(tag));
 
         for (key, replacement) in [('d', "đ"), ('D', "Đ")] {
             let mut composer = DirectComposer::new(VietnameseConfig::default());
@@ -1030,7 +1288,7 @@ mod tests {
             assert_eq!(plan.insert.as_deref(), Some(replacement), "{key}");
             assert!(!plan.pass_through, "{key}");
             assert_eq!(
-                synthetic_event_descriptors(&plan, tag),
+                synthetic_event_descriptors(&plan, &BrowserRewrite::verbatim(&plan), tag),
                 Some(expected.clone())
             );
         }
@@ -1042,7 +1300,168 @@ mod tests {
             insert: Some("x".repeat(MAX_REPLACEMENT_UNICODE_UNITS + 1)),
             ..OutputPlan::default()
         };
-        assert_eq!(synthetic_event_descriptors(&plan, 1), None);
+        assert_eq!(
+            synthetic_event_descriptors(&plan, &BrowserRewrite::verbatim(&plan), 1),
+            None
+        );
+    }
+
+    /// The Chromium-family sequence, end to end: one `Shift`+`Left` pair,
+    /// carrying both flags macOS puts on a real arrow key, ahead of everything
+    /// else — and no Backspace at all, because the replacement overwrites what
+    /// that selection now covers.
+    #[test]
+    fn extending_the_selection_stages_shift_left_first_and_drops_the_single_backspace() {
+        let tag = 7;
+        let plan = OutputPlan {
+            delete_before: 1,
+            insert: Some("ế".into()),
+            pass_through: false,
+        };
+        let rewrite = BrowserRewrite::plan(true, Some("com.google.Chrome"), &plan);
+        let staged = synthetic_event_descriptors(&plan, &rewrite, tag).unwrap();
+
+        let mut expected = vec![
+            SyntheticEventDescriptor {
+                key_code: LEFT_ARROW_KEY_CODE,
+                down: true,
+                payload: SyntheticPayload::Key,
+                flags: SHIFT_LEFT_FLAGS,
+                tag,
+            },
+            SyntheticEventDescriptor {
+                key_code: LEFT_ARROW_KEY_CODE,
+                down: false,
+                payload: SyntheticPayload::Key,
+                flags: SHIFT_LEFT_FLAGS,
+                tag,
+            },
+        ];
+        expected.extend(replacement_pair(tag));
+        assert_eq!(staged, expected);
+        assert_eq!(LEFT_ARROW_KEY_CODE, 123);
+        assert_eq!(
+            SHIFT_LEFT_FLAGS,
+            CGEventFlags::MaskShift | CGEventFlags::MaskNumericPad
+        );
+
+        // Two or more keeps every Backspace, still behind the selection.
+        let plan = OutputPlan {
+            delete_before: 3,
+            ..plan
+        };
+        let rewrite = BrowserRewrite::plan(true, Some("com.google.Chrome"), &plan);
+        let staged = synthetic_event_descriptors(&plan, &rewrite, tag).unwrap();
+        assert_eq!(staged[..2], expected[..2]);
+        assert_eq!(
+            staged
+                .iter()
+                .filter(|event| event.key_code == DELETE_KEY_CODE)
+                .count(),
+            6
+        );
+    }
+
+    /// The WebKit/Gecko sequence: the invisible character is typed before the
+    /// Backspaces, and there is exactly one more Backspace than the engine
+    /// asked for — the one that takes it away again.
+    #[test]
+    fn committing_the_suggestion_types_the_invisible_character_before_one_extra_backspace() {
+        let tag = 9;
+        let plan = OutputPlan {
+            delete_before: 2,
+            insert: Some("ế".into()),
+            pass_through: false,
+        };
+        let rewrite = BrowserRewrite::plan(true, Some("com.apple.Safari"), &plan);
+        let staged = synthetic_event_descriptors(&plan, &rewrite, tag).unwrap();
+
+        let mut expected = vec![
+            SyntheticEventDescriptor {
+                key_code: 0,
+                down: true,
+                payload: SyntheticPayload::CommitCharacter,
+                flags: CGEventFlags::empty(),
+                tag,
+            },
+            plain(0, false, tag),
+        ];
+        for _ in 0..3 {
+            expected.extend(backspace_pair(tag));
+        }
+        expected.extend(replacement_pair(tag));
+        assert_eq!(staged, expected);
+        assert!(
+            SELECTION_COMMIT_CHARACTER.encode_utf16().count() <= MAX_COMMIT_UNICODE_UNITS,
+            "the commit character must fit the buffer that stages it"
+        );
+    }
+
+    /// The setting off, and an application nobody listed, both stage exactly
+    /// what this host staged before browsers were special-cased.
+    #[test]
+    fn a_disabled_setting_or_an_unknown_application_stages_the_untouched_sequence() {
+        let tag = 3;
+        let plan = OutputPlan {
+            delete_before: 2,
+            insert: Some("ế".into()),
+            pass_through: false,
+        };
+        let verbatim = synthetic_event_descriptors(&plan, &BrowserRewrite::verbatim(&plan), tag);
+        for (enabled, bundle_id) in [
+            (false, Some("com.google.Chrome")),
+            (false, Some("com.apple.Safari")),
+            (true, Some("com.apple.TextEdit")),
+            (true, None),
+        ] {
+            assert_eq!(
+                synthetic_event_descriptors(
+                    &plan,
+                    &BrowserRewrite::plan(enabled, bundle_id, &plan),
+                    tag
+                ),
+                verbatim,
+                "{enabled} {bundle_id:?}"
+            );
+        }
+    }
+
+    /// The tap reads the setting from the document it was configured with, and
+    /// adopts a change without being restarted.
+    #[test]
+    fn the_browser_workaround_follows_the_setting_through_a_reconfigure() {
+        let state = typing_state();
+        let plan = OutputPlan {
+            delete_before: 1,
+            insert: Some("ế".into()),
+            pass_through: false,
+        };
+        state.frontmost.adopt(Some("com.google.Chrome".to_owned()));
+        assert_eq!(state.browser_rewrite(&plan).delete_before, 0);
+
+        state.reconfigure(SettingsDocument {
+            browser_address_bar_fix: false,
+            ..SettingsDocument::default()
+        });
+        assert_eq!(
+            state.browser_rewrite(&plan),
+            BrowserRewrite::verbatim(&plan)
+        );
+
+        state.reconfigure(SettingsDocument::default());
+        assert!(state.browser_rewrite(&plan).extend_selection);
+
+        // A different application, no restart, no notification of our own.
+        state.frontmost.adopt(Some("com.apple.Safari".to_owned()));
+        assert_eq!(
+            state.browser_rewrite(&plan).commit_character,
+            Some(SELECTION_COMMIT_CHARACTER)
+        );
+        state.frontmost.adopt(None);
+        assert_eq!(
+            state.browser_rewrite(&plan),
+            BrowserRewrite::verbatim(&plan)
+        );
     }
 
     #[test]
