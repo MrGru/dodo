@@ -2,9 +2,9 @@
 //!
 //! It is installed only while dodo owns the Keyboard Hook backend. The callback
 //! is intentionally smaller than the policy around it: injected, repeated,
-//! shortcut, key-up, secure-desktop-uncertain, and untranslatable input all go
-//! unchanged to the next hook. It never logs, persists, transmits, or exposes a
-//! keystroke.
+//! shortcut, secure-desktop-uncertain, and untranslatable input all go unchanged
+//! to the next hook. A key-up is consumed only when its physical down was. It
+//! never logs, persists, transmits, or exposes a keystroke.
 //!
 //! # It owns the language switch while it runs
 //!
@@ -15,13 +15,14 @@
 //! whether the key should reach the Vietnamese engine.
 //! `models::live_switch` is that rule and `models::keyboard_hook::key_event` is
 //! the virtual-key table, both of them pure so they are tested on hosts that
-//! cannot compile this file.
+//! cannot compile this file. A paired `WH_MOUSE_LL` hook observes button-downs
+//! only to forget retained text before a same-control focus or caret move.
 
 use std::collections::HashSet;
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use dodo_ime_core::{Key, LanguageEngine as _, LanguageId, VietnameseConfig, VietnameseEngine};
+use dodo_ime_core::{Key, LanguageId};
 use dodo_ime_ipc::settings::SettingsDocument;
 use futures_channel::mpsc::UnboundedSender;
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -31,14 +32,17 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, HC_ACTION, HHOOK,
-    KBDLLHOOKSTRUCT, LLKHF_INJECTED, MB_OK, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    WM_KEYDOWN, WM_KEYUP,
+    CallNextHookEx, GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
+    HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MB_OK, SetWindowsHookExW,
+    UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
 };
 
 use crate::input_method::models::direct_output::OutputPlan;
+use crate::input_method::models::event_tap::DirectComposer;
 use crate::input_method::models::keyboard_hook::{
-    Handling, HookEvent, KeyboardHookStatus, handling, key_event as windows_key_event, modifiers,
+    Handling, HookEvent, KeyboardHookStatus, SuppressedKeyUps, TargetIdentity, adopt_after_send,
+    handling, input_event_count, key_event as windows_key_event, modifiers, target_changed,
 };
 use crate::input_method::models::live_switch::LiveSwitch;
 
@@ -54,17 +58,20 @@ pub enum StartError {
 /// A live global hook. Dropping it always unregisters before callback state can
 /// be freed, so backend shutdown cannot leave a key observer behind.
 pub struct KeyboardHook {
-    hook: HHOOK,
+    keyboard_hook: HHOOK,
+    mouse_hook: HHOOK,
     state: Arc<Mutex<State>>,
 }
 
 struct State {
-    engine: VietnameseEngine,
+    composer: DirectComposer,
     /// The language switch as this listener currently understands it.
     switch: LiveSwitch,
     /// Where a cycle performed on the callback path is reported.
     language_changes: UnboundedSender<LanguageId>,
     pressed: HashSet<u32>,
+    suppressed_key_ups: SuppressedKeyUps,
+    target: Option<TargetIdentity>,
     status: KeyboardHookStatus,
 }
 
@@ -72,17 +79,19 @@ impl KeyboardHook {
     /// Installs the hook.
     ///
     /// It takes the whole settings document rather than a
-    /// [`VietnameseConfig`]: the hook answers the language switch as well as
+    /// [`dodo_ime_core::VietnameseConfig`]: the hook answers the language switch as well as
     /// Vietnamese, and the two must never be configured from different reads.
     pub fn start(
         document: SettingsDocument,
         language_changes: UnboundedSender<LanguageId>,
     ) -> Result<Self, StartError> {
         let state = Arc::new(Mutex::new(State {
-            engine: VietnameseEngine::new(direct_config(document.vietnamese.to_config())),
+            composer: DirectComposer::new(document.vietnamese.to_config()),
             switch: LiveSwitch::new(&document),
             language_changes,
             pressed: HashSet::new(),
+            suppressed_key_ups: SuppressedKeyUps::default(),
+            target: None,
             status: KeyboardHookStatus::Running,
         }));
         let mut active = active_hook()
@@ -94,13 +103,25 @@ impl KeyboardHook {
         *active = Some(state.clone());
         // A process-local low-level hook needs no injected DLL or elevated
         // helper. Windows delivers callbacks to dodo's existing UI loop.
-        let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(callback), null_mut(), 0) };
-        if hook.is_null() {
+        let keyboard_hook =
+            unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(callback), null_mut(), 0) };
+        if keyboard_hook.is_null() {
+            *active = None;
+            return Err(StartError::HookCreationFailed);
+        }
+        let mouse_hook =
+            unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_callback), null_mut(), 0) };
+        if mouse_hook.is_null() {
+            unsafe { UnhookWindowsHookEx(keyboard_hook) };
             *active = None;
             return Err(StartError::HookCreationFailed);
         }
         drop(active);
-        Ok(Self { hook, state })
+        Ok(Self {
+            keyboard_hook,
+            mouse_hook,
+            state,
+        })
     }
 
     pub fn status(&self) -> KeyboardHookStatus {
@@ -118,9 +139,10 @@ impl KeyboardHook {
     /// was recorded over.
     pub fn reconfigure(&self, document: SettingsDocument) {
         if let Ok(mut state) = self.state.lock() {
-            state.engine = VietnameseEngine::new(direct_config(document.vietnamese.to_config()));
+            state.composer.reconfigure(document.vietnamese.to_config());
             state.switch.adopt(&document);
             state.pressed.clear();
+            state.target = None;
         }
     }
 }
@@ -129,7 +151,9 @@ impl Drop for KeyboardHook {
     fn drop(&mut self) {
         // No retry loop: an unhook failure makes status honest, but state is
         // still detached so a later callback cannot transform anything.
-        if unsafe { UnhookWindowsHookEx(self.hook) } == 0 {
+        let keyboard_unhooked = unsafe { UnhookWindowsHookEx(self.keyboard_hook) } != 0;
+        let mouse_unhooked = unsafe { UnhookWindowsHookEx(self.mouse_hook) } != 0;
+        if !keyboard_unhooked || !mouse_unhooked {
             if let Ok(mut state) = self.state.lock() {
                 state.status = KeyboardHookStatus::Failed;
             }
@@ -149,11 +173,6 @@ fn active_hook() -> &'static Mutex<Option<Arc<Mutex<State>>>> {
     ACTIVE.get_or_init(|| Mutex::new(None))
 }
 
-fn direct_config(mut config: VietnameseConfig) -> VietnameseConfig {
-    config.output = dodo_ime_core::OutputMode::Direct;
-    config
-}
-
 unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code != HC_ACTION as i32 || lparam == 0 {
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
@@ -162,6 +181,7 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
     let Some(event) = event else {
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     };
+    // Own output and all other injected input pass before either callback lock.
     if event.flags & LLKHF_INJECTED != 0 || event.dwExtraInfo == SYNTHETIC_EVENT_TAG {
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
@@ -178,23 +198,38 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
 
     if wparam == WM_KEYUP as usize {
         state.pressed.remove(&event.vkCode);
-        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
+        let route = handling(HookEvent::KeyUp {
+            suppress: state.suppressed_key_ups.take(event.vkCode),
+        });
+        return if route == Handling::Suppress {
+            1
+        } else {
+            unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
+        };
     }
     if wparam != WM_KEYDOWN as usize {
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
     let repeat = !state.pressed.insert(event.vkCode);
-    let Some(key) = key_event(event) else {
-        let _ = state.engine.reset();
+    if repeat {
+        // This physical down reaches the application, so its eventual up must.
+        state.suppressed_key_ups.allow(event.vkCode);
+    }
+    let Some((key, target)) = key_event(event) else {
+        state.composer.reset();
+        target_changed(&mut state.target, None);
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     };
-    // The shortcut is answered before the engine sees anything, and before the
-    // selected language is consulted — that ordering is what lets it switch
+    if target_changed(&mut state.target, Some(target)) {
+        state.composer.reset();
+    }
+    // The shortcut is answered before the composer sees anything, and before
+    // the selected language is consulted — that ordering is what lets it switch
     // *out* of a language with no engine as well as into one. A repeat is
     // ignored so a held shortcut cycles once.
     let cycled = (!repeat).then(|| state.switch.cycle(&key)).flatten();
     if let Some(cycled) = cycled {
-        let _ = state.engine.reset();
+        state.composer.reset();
         let _ = state.language_changes.unbounded_send(cycled.language);
         if cycled.beep {
             // The same call the Native TSF host makes, so the two backends
@@ -206,14 +241,15 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         if key.key == Key::Modifier {
             return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
         }
+        state.suppressed_key_ups.suppress(event.vkCode);
         return 1;
     }
     if !state.switch.transforms() {
-        let _ = state.engine.reset();
+        state.composer.reset();
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
     if key.key == Key::Other || key.key == Key::Modifier {
-        let _ = state.engine.reset();
+        state.composer.reset();
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
     let route = handling(HookEvent::KeyDown {
@@ -223,34 +259,62 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         text_is_known: true,
     });
     if route != Handling::Process {
-        if !repeat {
-            let _ = state.engine.reset();
-        }
+        state.composer.reset();
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
 
-    let result = state.engine.process_key(&key);
-    let Some(plan) = OutputPlan::from_actions(&result.actions) else {
-        let _ = state.engine.reset();
-        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
-    };
+    // Plan against a copy. The retained text is adopted only after Windows
+    // accepts the complete staged event array.
+    let mut next = state.composer.clone();
+    let plan = next.process(key);
     if !plan.transforms() {
+        state.composer = next;
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
-    if !send_output(&plan) {
-        let _ = state.engine.reset();
+    let (sent, requested) = send_output(&plan);
+    if !adopt_after_send(&mut state.composer, next, sent, requested) {
+        state.suppressed_key_ups.allow(event.vkCode);
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
     if plan.pass_through {
+        state.suppressed_key_ups.allow(event.vkCode);
         unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
     } else {
+        state.suppressed_key_ups.suppress(event.vkCode);
         1
     }
 }
 
+/// Any mouse button can move a caret inside the same focused control. There is
+/// no cheap cross-application caret position contract, so forget rather than
+/// applying a later rewrite at a guessed end cursor.
+unsafe extern "system" fn mouse_callback(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code != HC_ACTION as i32
+        || lparam == 0
+        || !matches!(
+            wparam as u32,
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+        )
+    {
+        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
+    }
+    let Ok(active) = active_hook().try_lock() else {
+        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
+    };
+    let Some(state) = active.as_ref() else {
+        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
+    };
+    let Ok(mut state) = state.try_lock() else {
+        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
+    };
+    state.composer.reset();
+    state.target = None;
+    unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
+}
+
 /// Maps a Windows event only when its foreground layout supplies exactly one
 /// printable character or it is a well-known editing/navigation key.
-fn key_event(event: &KBDLLHOOKSTRUCT) -> Option<dodo_ime_core::KeyEvent> {
+fn key_event(event: &KBDLLHOOKSTRUCT) -> Option<(dodo_ime_core::KeyEvent, TargetIdentity)> {
     let foreground = unsafe { GetForegroundWindow() };
     if foreground.is_null() {
         return None;
@@ -259,6 +323,19 @@ fn key_event(event: &KBDLLHOOKSTRUCT) -> Option<dodo_ime_core::KeyEvent> {
     if thread == 0 {
         return None;
     }
+    let mut gui = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..GUITHREADINFO::default()
+    };
+    if unsafe { GetGUIThreadInfo(thread, &mut gui) } == 0 || gui.hwndFocus.is_null() {
+        return None;
+    }
+    let target = TargetIdentity::new(
+        foreground as usize,
+        thread,
+        gui.hwndFocus as usize,
+        gui.hwndCaret as usize,
+    );
     let mut keyboard = [0_u8; 256];
     if unsafe { GetKeyboardState(keyboard.as_mut_ptr()) } == 0 {
         return None;
@@ -288,15 +365,18 @@ fn key_event(event: &KBDLLHOOKSTRUCT) -> Option<dodo_ime_core::KeyEvent> {
         _ => return None,
     };
     let active = |vk: u16| keyboard[vk as usize] & 0x80 != 0;
-    Some(windows_key_event(
-        event.vkCode,
-        text,
-        modifiers(
-            active(VK_CONTROL),
-            active(VK_MENU),
-            active(VK_SHIFT),
-            active(VK_LWIN) || active(VK_RWIN),
+    Some((
+        windows_key_event(
+            event.vkCode,
+            text,
+            modifiers(
+                active(VK_CONTROL),
+                active(VK_MENU),
+                active(VK_SHIFT),
+                active(VK_LWIN) || active(VK_RWIN),
+            ),
         ),
+        target,
     ))
 }
 
@@ -309,8 +389,8 @@ fn one_character(units: &[u16]) -> Option<char> {
     (characters.next().is_none() && !character.is_control()).then_some(character)
 }
 
-fn send_output(plan: &OutputPlan) -> bool {
-    let mut events = Vec::with_capacity(plan.delete_before.saturating_mul(2) + 2);
+fn send_output(plan: &OutputPlan) -> (usize, usize) {
+    let mut events = Vec::with_capacity(input_event_count(plan));
     for _ in 0..plan.delete_before {
         events.push(key_input(0x08, 0, 0));
         events.push(key_input(0x08, 0, KEYEVENTF_KEYUP));
@@ -321,14 +401,22 @@ fn send_output(plan: &OutputPlan) -> bool {
             events.push(key_input(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
         }
     }
-    !events.is_empty()
-        && unsafe {
+    let requested = events.len();
+    let Ok(requested_u32) = u32::try_from(requested) else {
+        return (0, requested);
+    };
+    let sent = if requested == 0 {
+        0
+    } else {
+        unsafe {
             SendInput(
-                events.len() as u32,
+                requested_u32,
                 events.as_ptr(),
                 std::mem::size_of::<INPUT>() as i32,
-            ) == events.len() as u32
+            ) as usize
         }
+    };
+    (sent, requested)
 }
 
 fn key_input(vk: u16, scan: u16, flags: u32) -> INPUT {

@@ -8,11 +8,17 @@
 )]
 //!
 //! The OS callback contains no reliable password-field signal, so the service
-//! processes only a selected Vietnamese backend with a fully known key-down. It
-//! never consumes key-up, repeat, injected, shortcut, or uncertain events.
+//! processes only a selected Vietnamese backend with a fully known key-down.
+//! Repeats, injected input, shortcuts, and uncertain events pass through; only
+//! a key-up paired with a consumed physical key-down is consumed.
+
+use std::collections::HashSet;
 
 use dodo_ime_core::{Key, KeyEvent, Modifiers};
 use dodo_ime_ipc::settings::Backend;
+
+use crate::input_method::models::direct_output::OutputPlan;
+use crate::input_method::models::event_tap::DirectComposer;
 
 /// What the pane can honestly report about the dodo-lifetime-only fallback.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -48,7 +54,9 @@ pub enum HookEvent {
         shortcut: bool,
         text_is_known: bool,
     },
-    KeyUp,
+    KeyUp {
+        suppress: bool,
+    },
     Other,
 }
 
@@ -57,6 +65,89 @@ pub enum HookEvent {
 pub enum Handling {
     Process,
     PassThrough,
+    Suppress,
+}
+
+/// The Windows signals that prove composition is still aimed at one control.
+///
+/// A null caret owner is allowed because custom controls often draw their own;
+/// physical mouse-down is observed separately and invalidates even that case.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TargetIdentity {
+    foreground: usize,
+    thread: u32,
+    focus: usize,
+    caret: usize,
+}
+
+impl TargetIdentity {
+    pub(crate) fn new(foreground: usize, thread: u32, focus: usize, caret: usize) -> Self {
+        Self {
+            foreground,
+            thread,
+            focus,
+            caret,
+        }
+    }
+}
+
+/// Updates the observed target and reports whether retained text is unsafe.
+pub(crate) fn target_changed(
+    current: &mut Option<TargetIdentity>,
+    next: Option<TargetIdentity>,
+) -> bool {
+    let Some(next) = next else {
+        *current = None;
+        return true;
+    };
+    current
+        .replace(next)
+        .is_some_and(|previous| previous != next)
+}
+
+/// Physical key-ups whose corresponding downs did not reach the application.
+#[derive(Default)]
+pub(crate) struct SuppressedKeyUps(HashSet<u32>);
+
+impl SuppressedKeyUps {
+    pub(crate) fn suppress(&mut self, key: u32) {
+        self.0.insert(key);
+    }
+
+    pub(crate) fn allow(&mut self, key: u32) {
+        self.0.remove(&key);
+    }
+
+    pub(crate) fn take(&mut self, key: u32) -> bool {
+        self.0.remove(&key)
+    }
+}
+
+/// Number of fully paired Windows `INPUT`s in one direct-output plan.
+pub(crate) fn input_event_count(plan: &OutputPlan) -> usize {
+    let inserted = plan
+        .insert
+        .as_deref()
+        .map_or(0, |text| text.encode_utf16().count());
+    plan.delete_before
+        .saturating_add(inserted)
+        .saturating_mul(2)
+}
+
+/// Commits a staged plan only when `SendInput` accepted every event.
+pub(crate) fn adopt_after_send(
+    current: &mut DirectComposer,
+    next: DirectComposer,
+    sent: usize,
+    requested: usize,
+) -> bool {
+    let complete = requested != 0 && sent == requested;
+    if complete {
+        *current = next;
+    } else {
+        current.reset();
+    }
+    complete
 }
 
 /// Windows' Alt and Windows-key state in the shared vocabulary.
@@ -127,16 +218,23 @@ pub fn handling(event: HookEvent) -> Handling {
             shortcut: false,
             text_is_known: true,
         } => Handling::Process,
-        HookEvent::KeyDown { .. } | HookEvent::KeyUp | HookEvent::Other => Handling::PassThrough,
+        HookEvent::KeyUp { suppress: true } => Handling::Suppress,
+        HookEvent::KeyDown { .. } | HookEvent::KeyUp { suppress: false } | HookEvent::Other => {
+            Handling::PassThrough
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Handling, HookEvent, KeyboardHookStatus, desired_status, handling, key_event, modifiers,
+        Handling, HookEvent, KeyboardHookStatus, SuppressedKeyUps, TargetIdentity,
+        adopt_after_send, desired_status, handling, input_event_count, key_event, modifiers,
+        target_changed,
     };
-    use dodo_ime_core::{Key, Modifiers};
+    use crate::input_method::models::direct_output::OutputPlan;
+    use crate::input_method::models::event_tap::DirectComposer;
+    use dodo_ime_core::{Key, KeyEvent, Modifiers, VietnameseConfig};
     use dodo_ime_ipc::settings::{Backend, Shortcut, ShortcutKey, ShortcutModifiers};
 
     #[test]
@@ -295,10 +393,142 @@ mod tests {
                 shortcut: false,
                 text_is_known: false,
             },
-            HookEvent::KeyUp,
+            HookEvent::KeyUp { suppress: false },
             HookEvent::Other,
         ] {
             assert_eq!(handling(event), Handling::PassThrough, "{event:?}");
         }
+    }
+
+    struct WindowsHarness {
+        composer: DirectComposer,
+        document: String,
+        events: usize,
+        rewrites: Vec<OutputPlan>,
+    }
+
+    impl WindowsHarness {
+        fn new() -> Self {
+            Self {
+                composer: DirectComposer::new(VietnameseConfig::default()),
+                document: String::new(),
+                events: 0,
+                rewrites: Vec::new(),
+            }
+        }
+
+        fn type_keys(&mut self, keys: &str) {
+            for key in keys.chars() {
+                let event = KeyEvent::character(key);
+                let plan = self.composer.process(event);
+                self.document =
+                    dodo_ime_core::core::truncate_graphemes(&self.document, plan.delete_before);
+                if let Some(insert) = &plan.insert {
+                    self.document.push_str(insert);
+                }
+                self.events += input_event_count(&plan);
+                if plan.transforms() {
+                    self.rewrites.push(plan.clone());
+                }
+                if plan.pass_through {
+                    self.document.push(key);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn minimal_windows_plans_match_the_investigation_traces() {
+        for (keys, expected_text, expected_events, expected_rewrites) in [
+            ("dd", "đ", 4, &[(1, Some("đ"))][..]),
+            ("uw", "ư", 4, &[(1, Some("ư"))][..]),
+            ("hoiw", "hơi", 8, &[(2, Some("ơi"))][..]),
+            (
+                "tieengs",
+                "tiếng",
+                16,
+                &[(1, Some("ê")), (3, Some("ếng"))][..],
+            ),
+        ] {
+            let mut harness = WindowsHarness::new();
+            harness.type_keys(keys);
+            let rewrites: Vec<_> = harness
+                .rewrites
+                .iter()
+                .map(|plan| (plan.delete_before, plan.insert.as_deref()))
+                .collect();
+
+            assert_eq!(harness.document, expected_text, "{keys}");
+            assert_eq!(harness.events, expected_events, "{keys}");
+            assert_eq!(rewrites, expected_rewrites, "{keys}");
+        }
+    }
+
+    #[test]
+    fn swallowed_down_suppresses_one_up_but_a_passed_repeat_clears_it() {
+        let mut suppressed = SuppressedKeyUps::default();
+        suppressed.suppress(0x44);
+        assert_eq!(
+            handling(HookEvent::KeyUp {
+                suppress: suppressed.take(0x44),
+            }),
+            Handling::Suppress
+        );
+        assert!(!suppressed.take(0x44), "only the paired up is consumed");
+
+        suppressed.suppress(0x44);
+        suppressed.allow(0x44);
+        assert_eq!(
+            handling(HookEvent::KeyUp {
+                suppress: suppressed.take(0x44),
+            }),
+            Handling::PassThrough,
+            "a repeated down reached the app, so its final up must too"
+        );
+    }
+
+    #[test]
+    fn target_changes_and_uncertainty_reset_retained_text() {
+        let target = TargetIdentity::new(1, 2, 3, 4);
+        let mut observed = None;
+        assert!(!target_changed(&mut observed, Some(target)));
+        assert!(!target_changed(&mut observed, Some(target)));
+        for changed in [
+            TargetIdentity::new(9, 2, 3, 4),
+            TargetIdentity::new(1, 9, 3, 4),
+            TargetIdentity::new(1, 2, 9, 4),
+            TargetIdentity::new(1, 2, 3, 9),
+        ] {
+            let mut observed = Some(target);
+            assert!(target_changed(&mut observed, Some(changed)));
+        }
+
+        let mut composer = DirectComposer::new(VietnameseConfig::default());
+        assert!(composer.process(KeyEvent::character('d')).pass_through);
+        assert!(target_changed(
+            &mut observed,
+            Some(TargetIdentity::new(1, 2, 5, 4))
+        ));
+        composer.reset();
+        let after_focus_change = composer.process(KeyEvent::character('d'));
+        assert!(after_focus_change.pass_through);
+        assert!(!after_focus_change.transforms());
+
+        assert!(target_changed(&mut observed, None));
+        assert_eq!(observed, None);
+    }
+
+    #[test]
+    fn partial_send_resets_instead_of_adopting_the_planned_state() {
+        let mut composer = DirectComposer::new(VietnameseConfig::default());
+        assert!(composer.process(KeyEvent::character('d')).pass_through);
+        let mut next = composer.clone();
+        let plan = next.process(KeyEvent::character('d'));
+        assert_eq!(input_event_count(&plan), 4);
+
+        assert!(!adopt_after_send(&mut composer, next, 2, 4));
+        let retry = composer.process(KeyEvent::character('d'));
+        assert!(retry.pass_through);
+        assert!(!retry.transforms(), "the failed replacement was forgotten");
     }
 }
