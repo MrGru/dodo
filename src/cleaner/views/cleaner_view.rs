@@ -220,6 +220,10 @@ impl CleanerView {
             refresh |= table.delegate_mut().set_grid_width(grid_width);
             if refresh {
                 table.refresh(cx);
+                // `TableState::refresh` rebuilds its columns but does not
+                // notify its entity. The new rows must invalidate it too:
+                // the canvas can interrupt this parent frame before it paints.
+                cx.notify();
             }
         });
     }
@@ -1819,9 +1823,15 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
 
-    use super::apply_latest_progress;
+    use futures_util::{FutureExt as _, StreamExt as _};
+    use gpui::{AppContext as _, TestAppContext};
+
+    use super::{CleanerView, apply_latest_progress};
     use crate::cleaner::core::category::CleanerCategory;
+    use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata};
     use crate::cleaner::core::progress::{LatestProgress, ProgressSink, ScanPhase, ScanProgress};
+    use crate::cleaner::core::report::{CategoryScanResult, ScanCompleteness};
+    use crate::cleaner::core::risk::{ItemCapability, RiskLevel, SelectionPolicy};
     use crate::cleaner::state::CleanerState;
 
     use std::collections::HashMap;
@@ -1904,6 +1914,61 @@ mod tests {
         assert_eq!(
             state.category(CleanerCategory::UserCache).progress(),
             Some(&progress(CleanerCategory::UserCache, 7))
+        );
+    }
+
+    #[gpui::test]
+    fn a_landed_result_notifies_the_results_table(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let window = cx.add_window(CleanerView::new);
+        cx.run_until_parked();
+        let (cleaner, table) = cx
+            .read_window(&window, |cleaner, cx| {
+                let table = cleaner.read(cx).results_table.clone();
+                (cleaner, table)
+            })
+            .expect("test window stays open");
+        let mut notifications = cx.notifications(&table);
+        let category = CleanerCategory::UserCache;
+
+        cleaner.update(cx, |cleaner, cx| {
+            cleaner.state.set_selected_category(category);
+            cleaner.state.finish_scan(
+                category,
+                Some(CategoryScanResult {
+                    category,
+                    estimated_reclaimable_bytes: 1,
+                    scanned_entries: 1,
+                    items: vec![CleanableItem {
+                        id: CleanableItemId(1),
+                        category,
+                        group: None,
+                        display_name: "cache".to_string(),
+                        path: "/tmp/cache".into(),
+                        logical_size: 1,
+                        allocated_size: None,
+                        modified_at: None,
+                        last_accessed_at: None,
+                        risk: RiskLevel::SafeRecreatable,
+                        selection_policy: SelectionPolicy::SelectedByDefault,
+                        capabilities: vec![ItemCapability::MoveToTrash],
+                        explanation: String::new(),
+                        warnings: Vec::new(),
+                        metadata: ItemMetadata::Generic,
+                    }],
+                    warnings: Vec::new(),
+                    completeness: ScanCompleteness::Complete,
+                }),
+                false,
+                None,
+            );
+            cleaner.sync_results_table(cx);
+        });
+        cx.run_until_parked();
+
+        assert!(
+            notifications.next().now_or_never().is_some(),
+            "a completed scan must invalidate the table even if the parent frame is interrupted"
         );
     }
 
