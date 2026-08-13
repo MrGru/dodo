@@ -20,7 +20,7 @@ use crate::cleaner::core::scan_context::ScanContext;
 use crate::cleaner::core::scanner::CleanerScanner;
 use crate::cleaner::macos::applications::bundle::parse_bundle;
 use crate::cleaner::macos::applications::identity::AppIdentity;
-use crate::cleaner::macos::platform::application_icon_tiff;
+use crate::cleaner::macos::platform::application_icon;
 
 /// The standard top-level application roots this scanner indexes, and the
 /// same roots Phase 10's [`installed_app_identities`] builds its
@@ -135,6 +135,11 @@ impl CleanerScanner for InstalledAppsScanner {
         let mut warnings = Vec::new();
         let mut skipped_roots = Vec::new();
         let mut scanned_entries = 0;
+        // Carried rather than re-summed. The report below runs once per
+        // bundle, and `items.iter().map(..).sum()` there made the whole scan
+        // quadratic in the number of applications for a number that only ever
+        // grows by one item at a time.
+        let mut discovered_bytes = 0u64;
 
         for root in roots {
             if cancellation.is_cancelled() {
@@ -169,10 +174,7 @@ impl CleanerScanner for InstalledAppsScanner {
                     current_path: Some(path.clone()),
                     scanned_entries,
                     discovered_items: items.len() as u64,
-                    discovered_bytes: items
-                        .iter()
-                        .map(|item: &CleanableItem| item.logical_size)
-                        .sum(),
+                    discovered_bytes,
                 });
                 match parse_bundle(path.as_path()) {
                     Ok(bundle) => {
@@ -189,7 +191,8 @@ impl CleanerScanner for InstalledAppsScanner {
                         // copy of the same best-effort traversal.
                         let logical_size =
                             measure_size(path.as_path(), CleanerCategory::InstalledApps, risk);
-                        let icon_tiff = application_icon_tiff(path.as_path());
+                        let icon = application_icon(path.as_path());
+                        discovered_bytes += logical_size;
                         items.push(CleanableItem {
                             id: item_id(path.as_path()),
                             category: CleanerCategory::InstalledApps,
@@ -223,7 +226,7 @@ impl CleanerScanner for InstalledAppsScanner {
                                 team_id: None,
                                 version: bundle.version,
                                 executable: bundle.executable,
-                                icon_tiff,
+                                icon,
                             }),
                         });
                     }

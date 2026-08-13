@@ -300,6 +300,21 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSApplication",
     "NSImage",
     "NSResponder",
+    # Cleaner's Installed Apps and Universal Binaries scanners draw each
+    # bundle's Finder icon once into a small fixed bitmap and PNG-encode it
+    # (`cleaner::macos::platform::icon`, which is the authority on why the
+    # previous `TIFFRepresentation()` both never decoded and cost 70.5 MiB per
+    # application). `NSBitmapImageRep` is the bitmap and the PNG encoder,
+    # `NSGraphicsContext` is what makes it the current drawing destination,
+    # `NSGraphics` is the `NSDeviceRGBColorSpace` name and the compositing
+    # operation, and `NSImageRep` is `NSBitmapImageRep`'s superclass — objc2
+    # will not compile a class whose superclass feature is off, the same trap
+    # `NSResponder` above records. **No new package**: all four are feature
+    # flags on a crate already in the graph.
+    "NSBitmapImageRep",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSImageRep",
     # Cleaner's Finder integration and future permission/settings deep links.
     "NSWorkspace",
     # Cleaner's Xcode Junk scanner (Phase 11): a read-only check for whether

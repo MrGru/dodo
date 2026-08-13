@@ -16,7 +16,7 @@
 //! weak handle: this delegate lives inside the `Entity<TableState<Self>>`
 //! that `CleanerView` owns, so a *strong* back-reference would be a cycle.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::{
@@ -34,6 +34,7 @@ use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 use super::CleanerView;
 use crate::app_icon::AppIcon;
 use crate::cleaner::core::category::CleanerCategory;
+use crate::cleaner::core::icon::IconRaster;
 use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata};
 use crate::cleaner::core::risk::{ItemCapability, RiskLevel};
 use crate::i18n::{Str, t};
@@ -93,6 +94,13 @@ pub struct ResultsTableDelegate {
     items: Vec<CleanableItem>,
     selected_ids: HashSet<CleanableItemId>,
     category: CleanerCategory,
+    /// One ready-to-draw GPUI image per row that carries an icon, built when
+    /// the items are replaced and never in [`Self::render_td`].
+    /// `Image::from_bytes` takes an owned `Vec` and hashes it to derive the
+    /// id GPUI's asset cache is keyed on, so building one per visible cell
+    /// per frame would re-copy and re-hash every visible icon sixty times a
+    /// second for a value that cannot change until the items do.
+    icons: HashMap<CleanableItemId, Arc<Image>>,
 }
 
 impl ResultsTableDelegate {
@@ -102,6 +110,7 @@ impl ResultsTableDelegate {
             items: Vec::new(),
             selected_ids: HashSet::new(),
             category: CleanerCategory::SystemJunk,
+            icons: HashMap::new(),
         }
     }
 
@@ -116,6 +125,19 @@ impl ResultsTableDelegate {
         selected_ids: HashSet<CleanableItemId>,
     ) {
         self.category = category;
+        self.icons = items
+            .iter()
+            .filter_map(|item| {
+                let raster = item_icon(item)?;
+                Some((
+                    item.id,
+                    Arc::new(Image::from_bytes(
+                        ImageFormat::Png,
+                        raster.as_bytes().to_vec(),
+                    )),
+                ))
+            })
+            .collect();
         self.items = items;
         self.selected_ids = selected_ids;
     }
@@ -279,7 +301,7 @@ impl ResultsTableDelegate {
                     .min_w_0()
                     .items_center()
                     .gap_2()
-                    .child(application_icon(item, cx))
+                    .child(self.render_icon(item, cx))
                     .child(
                         div()
                             .min_w_0()
@@ -288,6 +310,30 @@ impl ResultsTableDelegate {
                     ),
             )
             .into_any_element()
+    }
+
+    /// The glyph beside a row's name: the application's own icon when the
+    /// scanner captured one, and this category's generic glyph otherwise —
+    /// which is also what a failed decode falls back to, so a row is never
+    /// blank.
+    fn render_icon(&self, item: &CleanableItem, cx: &App) -> AnyElement {
+        let fallback = category_icon(item.category);
+        self.icons.get(&item.id).map_or_else(
+            || {
+                Icon::new(fallback)
+                    .size_4()
+                    .flex_shrink_0()
+                    .text_color(cx.theme().muted_foreground)
+                    .into_any_element()
+            },
+            |image| {
+                img(ImageSource::Image(image.clone()))
+                    .size_4()
+                    .flex_shrink_0()
+                    .with_fallback(move || Icon::new(fallback).size_4().into_any_element())
+                    .into_any_element()
+            },
+        )
     }
 
     fn render_risk_cell(&self, item: &CleanableItem, cx: &App) -> AnyElement {
@@ -425,32 +471,15 @@ impl ResultsTableDelegate {
     }
 }
 
-fn application_icon(item: &CleanableItem, cx: &App) -> AnyElement {
-    let icon_tiff = match &item.metadata {
-        ItemMetadata::Application(metadata) => metadata.icon_tiff.as_ref(),
-        ItemMetadata::UniversalBinary(metadata) => metadata.icon_tiff.as_ref(),
+/// The per-application icon a scanner captured, if this item has one — the
+/// one place that knows both metadata variants carry the same kind of
+/// payload.
+fn item_icon(item: &CleanableItem) -> Option<&IconRaster> {
+    match &item.metadata {
+        ItemMetadata::Application(metadata) => metadata.icon.as_ref(),
+        ItemMetadata::UniversalBinary(metadata) => metadata.icon.as_ref(),
         _ => None,
-    };
-    let fallback = category_icon(item.category);
-    icon_tiff.map_or_else(
-        || {
-            Icon::new(fallback)
-                .size_4()
-                .flex_shrink_0()
-                .text_color(cx.theme().muted_foreground)
-                .into_any_element()
-        },
-        |bytes| {
-            img(ImageSource::Image(Arc::new(Image::from_bytes(
-                ImageFormat::Tiff,
-                bytes.clone(),
-            ))))
-            .size_4()
-            .flex_shrink_0()
-            .with_fallback(move || Icon::new(fallback).size_4().into_any_element())
-            .into_any_element()
-        },
-    )
+    }
 }
 
 fn copy_path_button(item: &CleanableItem, cx: &App) -> impl IntoElement {

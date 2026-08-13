@@ -265,7 +265,7 @@ mod tests {
                 team_id: None,
                 version: None,
                 executable: None,
-                icon_tiff: None,
+                icon: None,
             }),
         }
     }

@@ -26,7 +26,7 @@ use crate::cleaner::core::report::CleanupReport;
 use crate::cleaner::core::report::{CategoryScanResult, PartialScanReason, ScanCompleteness};
 use crate::cleaner::core::risk::SelectionPolicy;
 use crate::cleaner::core::scan_context::ScanContext;
-use crate::cleaner::core::scan_state::ScanState;
+use crate::cleaner::core::scan_state::{ScanIndicator, ScanState};
 use crate::cleaner::core::scanner::CleanerScanner;
 #[cfg(target_os = "macos")]
 use crate::cleaner::macos::applications::review as uninstall_review;
@@ -876,27 +876,34 @@ impl CleanerView {
     }
 
     /// The compact per-category indicator in the sidebar (req #4): a
-    /// `Spinner` while scanning/cancelling, a small check/warning/error glyph
-    /// once there is an outcome to show, nothing for a category that has
-    /// never been scanned or whose scan was cancelled outright.
+    /// `Spinner` while scanning or cancelling, a small check/warning/error
+    /// glyph once there is an outcome to show, nothing for a category that
+    /// has never been scanned or whose scan was cancelled outright.
+    ///
+    /// The mapping is [`ScanState::indicator`], not a `match` here: this
+    /// function's previous version said all of the above in its doc comment
+    /// and drew an empty `div()` for both in-flight states, which is the
+    /// "no spinner on the tab being scanned" report. Reading a tested pure
+    /// function is what keeps the claim and the pixels in step.
     fn render_scan_state_glyph(&self, category: CleanerCategory, cx: &App) -> AnyElement {
-        match self.state.category(category).scan_state() {
-            ScanState::Scanning | ScanState::Cancelling => div().into_any_element(),
-            ScanState::Completed => Icon::new(AppIcon::CircleCheck)
+        match self.state.category(category).scan_state().indicator() {
+            ScanIndicator::InProgress => Spinner::new()
+                .xsmall()
+                .color(cx.theme().primary)
+                .into_any_element(),
+            ScanIndicator::Success => Icon::new(AppIcon::CircleCheck)
                 .size_3()
                 .text_color(cx.theme().success.opacity(0.7))
                 .into_any_element(),
-            ScanState::CompletedWithWarnings | ScanState::PartiallyCompleted => {
-                Icon::new(AppIcon::AlertTriangle)
-                    .size_3()
-                    .text_color(cx.theme().warning)
-                    .into_any_element()
-            }
-            ScanState::Failed => Icon::new(AppIcon::CircleX)
+            ScanIndicator::Warning => Icon::new(AppIcon::AlertTriangle)
+                .size_3()
+                .text_color(cx.theme().warning)
+                .into_any_element(),
+            ScanIndicator::Error => Icon::new(AppIcon::CircleX)
                 .size_3()
                 .text_color(cx.theme().danger)
                 .into_any_element(),
-            ScanState::NotScanned | ScanState::Cancelled => div().into_any_element(),
+            ScanIndicator::Idle => div().into_any_element(),
         }
     }
 
@@ -1132,6 +1139,44 @@ impl CleanerView {
             .when(state.result().is_some(), |container| {
                 container.child(self.render_results_area(category, cx))
             })
+            // A first scan has no previous result to keep on screen, so
+            // without this the whole area below the scanning header was
+            // blank — the second half of "no in-progress indicator on the
+            // tab being scanned". A rescan skips it: the rows it is about to
+            // replace are better than a placeholder.
+            .when(
+                state.result().is_none()
+                    && state.scan_state().indicator() == ScanIndicator::InProgress,
+                |container| container.child(Self::render_scanning_placeholder(state, cx)),
+            )
+            .into_any_element()
+    }
+
+    /// What fills the results area while a category is being scanned for the
+    /// first time. Deliberately the same spinner and the same two words as
+    /// the header above it, rather than a second vocabulary for the same
+    /// state.
+    fn render_scanning_placeholder(state: &CategoryState, cx: &App) -> AnyElement {
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .child(Spinner::new().large().color(cx.theme().primary))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t(
+                        if state.scan_state() == ScanState::Cancelling {
+                            Str::CleanerStatusCancelling
+                        } else {
+                            Str::CleanerStatusScanning
+                        },
+                        cx,
+                    )),
+            )
             .into_any_element()
     }
 
@@ -1157,6 +1202,12 @@ impl CleanerView {
                 h_flex()
                     .items_center()
                     .gap_2()
+                    // The indeterminate indicator the doc comment above
+                    // promises. Before this it was a bold word alone, so the
+                    // only moving thing on a scanning pane was a counter that
+                    // stands still whenever a scanner is inside one long
+                    // directory.
+                    .child(Spinner::new().xsmall().color(cx.theme().primary))
                     .child(div().font_bold().child(t(
                         if cancelling {
                             Str::CleanerStatusCancelling

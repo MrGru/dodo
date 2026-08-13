@@ -3,6 +3,7 @@ use std::time::SystemTime;
 
 use crate::cleaner::core::ai_app_provider::AiAppRole;
 use crate::cleaner::core::category::CleanerCategory;
+use crate::cleaner::core::icon::IconRaster;
 use crate::cleaner::core::risk::{ItemCapability, RiskLevel, SelectionPolicy};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -56,9 +57,11 @@ pub struct ApplicationMetadata {
     pub team_id: Option<String>,
     pub version: Option<String>,
     pub executable: Option<String>,
-    /// Native Finder icon encoded as TIFF by the background scanner, ready for
-    /// GPUI's asynchronous image decoder.
-    pub icon_tiff: Option<Vec<u8>>,
+    /// This application's own Finder icon, rasterised small and shared —
+    /// never the platform's full representation ladder. [`IconRaster`]'s
+    /// module doc carries what that cost when it was, and why the bound is a
+    /// type rather than a comment.
+    pub icon: Option<IconRaster>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -136,8 +139,9 @@ pub struct UniversalBinaryMetadata {
     /// when the check itself could not run (`codesign` missing) rather than
     /// a real signing verdict.
     pub signed: Option<bool>,
-    /// Native Finder icon encoded as TIFF by the background scanner.
-    pub icon_tiff: Option<Vec<u8>>,
+    /// This bundle's own Finder icon, on the same terms as
+    /// [`ApplicationMetadata::icon`].
+    pub icon: Option<IconRaster>,
 }
 
 /// Attached to every item

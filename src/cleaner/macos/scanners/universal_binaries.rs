@@ -61,7 +61,7 @@ use crate::cleaner::core::risk::{RiskLevel, SelectionPolicy};
 use crate::cleaner::core::scan_context::ScanContext;
 use crate::cleaner::core::scanner::CleanerScanner;
 use crate::cleaner::macos::applications::bundle::parse_bundle;
-use crate::cleaner::macos::platform::{application_icon_tiff, is_any_bundle_running};
+use crate::cleaner::macos::platform::{application_icon, is_any_bundle_running};
 
 const DEFAULT_APP_ROOTS: &[&str] = &[
     "/Applications",
@@ -117,6 +117,9 @@ impl CleanerScanner for UniversalBinariesScanner {
         let mut items = Vec::new();
         let mut warnings = Vec::new();
         let mut scanned_entries = 0;
+        // Carried, not re-summed per bundle — see the same accumulator in
+        // `installed_apps` for why that made the scan quadratic.
+        let mut discovered_bytes = 0u64;
 
         for root in roots {
             if cancellation.is_cancelled() {
@@ -147,10 +150,7 @@ impl CleanerScanner for UniversalBinariesScanner {
                     current_path: Some(path.clone()),
                     scanned_entries,
                     discovered_items: items.len() as u64,
-                    discovered_bytes: items
-                        .iter()
-                        .map(|item: &CleanableItem| item.logical_size)
-                        .sum(),
+                    discovered_bytes,
                 });
 
                 let Ok(bundle) = parse_bundle(path.as_path()) else {
@@ -170,7 +170,7 @@ impl CleanerScanner for UniversalBinariesScanner {
                     continue;
                 }
 
-                items.push(build_item(
+                let item = build_item(
                     path.as_path(),
                     bundle.display_name.as_str(),
                     bundle.bundle_id.as_deref(),
@@ -178,7 +178,9 @@ impl CleanerScanner for UniversalBinariesScanner {
                     &slices,
                     current_arch,
                     binary_path.as_path(),
-                ));
+                );
+                discovered_bytes += item.logical_size;
+                items.push(item);
             }
         }
 
@@ -272,7 +274,7 @@ fn build_item(
             current_architecture: architecture_label(current_arch).to_string(),
             estimated_removable_bytes: removable_bytes,
             signed,
-            icon_tiff: application_icon_tiff(app_path),
+            icon: application_icon(app_path),
         }),
     }
 }

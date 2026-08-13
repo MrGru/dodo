@@ -6,8 +6,12 @@
 //! at the top of every `render`. That copy is a deep clone of every
 //! [`CleanableItem`](crate::cleaner::core::item::CleanableItem) in the
 //! result — display name, path, explanation, capability list and, for an
-//! application row, the whole TIFF icon payload — so it is O(items) in time
-//! *and* O(bytes) in the icons, and it was being paid on every frame.
+//! application row, its icon — so it is O(items) in time, and it was being
+//! paid on every frame. When this module was written the icon made it
+//! O(bytes) too; `core::icon` has since put that payload behind a shared
+//! handle, so a copy now costs a reference count rather than the icon. Both
+//! halves are needed and both are tested below: the plan stops the copy
+//! happening per frame, the handle stops the one copy duplicating megabytes.
 //!
 //! Every frame is far more frames than it sounds. GPUI caches a view's
 //! element tree, but a dirty view marks its whole ancestor path dirty and an
@@ -22,6 +26,8 @@
 //! application items carrying 64 KiB icons cost 21.8 ms — the whole 60 Hz
 //! frame budget, spent copying data that had not changed. Twenty items cost
 //! 5 µs, which is why the small lists nobody complained about felt fine.
+//! (Those 64 KiB were an underestimate of what an icon then was: the real
+//! payload measured 70.5 MiB per application. `core::icon` has the numbers.)
 //!
 //! The fix is not to copy less data — every row stays visible, every total
 //! and warning stays exact — but to copy it only when it is actually
@@ -111,6 +117,7 @@ mod tests {
 
     use super::{ResultsSync, ResultsSyncKey, ResultsSyncPlan};
     use crate::cleaner::core::category::CleanerCategory;
+    use crate::cleaner::core::icon::IconRaster;
     use crate::cleaner::core::item::{
         ApplicationMetadata, CleanableItem, CleanableItemId, ItemMetadata,
     };
@@ -128,6 +135,16 @@ mod tests {
     /// 20,000 copies of one short shared path would not be the same test.
     const LARGE: u64 = 20_000;
     const SMALL: u64 = 20;
+    /// The worst case measured over this machine's 98 real application
+    /// bundles at `IconRaster::EDGE_PIXELS` — see `core::icon`.
+    const REALISTIC_ICON_BYTES: usize = 7_745;
+
+    fn icon_of(item: &CleanableItem) -> Option<&IconRaster> {
+        match &item.metadata {
+            ItemMetadata::Application(metadata) => metadata.icon.as_ref(),
+            _ => None,
+        }
+    }
 
     fn item(ix: u64, category: CleanerCategory, icon_bytes: usize) -> CleanableItem {
         CleanableItem {
@@ -162,7 +179,7 @@ mod tests {
                     team_id: Some("ABCDE12345".to_string()),
                     version: Some("1.2.3".to_string()),
                     executable: Some(format!("vendor{ix}")),
-                    icon_tiff: Some(vec![7u8; icon_bytes]),
+                    icon: IconRaster::new(vec![7u8; icon_bytes]),
                 })
             },
         }
@@ -484,13 +501,15 @@ mod tests {
         delegate.assert_mirrors(&state);
     }
 
-    /// The icon payload is the reason a *small* result can be as expensive
-    /// to re-copy as a huge one: `CleanableItem::clone` deep-copies every
-    /// application's TIFF bytes.
+    /// The icon payload used to be the reason a *small* result could be as
+    /// expensive to re-copy as a huge one. Two things now bound it, and this
+    /// pins both: the plan means the copy happens once rather than per
+    /// frame, and `IconRaster` means that one copy shares the bytes instead
+    /// of duplicating them.
     #[test]
     fn icon_payloads_are_copied_once_not_once_per_frame() {
         let category = CleanerCategory::InstalledApps;
-        let state = scanned(category, 400, 64 * 1024);
+        let state = scanned(category, 400, REALISTIC_ICON_BYTES);
         let mut sync = ResultsSync::default();
         let mut delegate = MirrorDelegate::default();
 
@@ -502,18 +521,60 @@ mod tests {
         let carried: usize = delegate
             .items
             .iter()
-            .filter_map(|item| match &item.metadata {
-                ItemMetadata::Application(metadata) => metadata.icon_tiff.as_ref(),
-                _ => None,
-            })
-            .map(Vec::len)
+            .filter_map(icon_of)
+            .map(IconRaster::len)
             .sum();
         assert_eq!(
             carried,
-            400 * 64 * 1024,
+            400 * REALISTIC_ICON_BYTES,
             "every icon still reaches the grid; it is just not re-copied per frame"
         );
         delegate.assert_mirrors(&state);
+    }
+
+    /// The memory half of the captain's report, stated where it actually
+    /// bit: the grid's copy of an Installed Apps result must not be a second
+    /// copy of its icons. Before `IconRaster`, `result.items.clone()` deep-
+    /// copied a `Vec<u8>` per application — and that `Vec` held the whole
+    /// `NSImage` TIFF representation, measured at 73,949,448 bytes each.
+    #[test]
+    fn the_grids_copy_shares_the_scans_icon_bytes_rather_than_duplicating_them() {
+        const APPS: u64 = 400;
+        let category = CleanerCategory::InstalledApps;
+        let state = scanned(category, APPS, REALISTIC_ICON_BYTES);
+        let mut sync = ResultsSync::default();
+        let mut delegate = MirrorDelegate::default();
+        delegate.sync(&mut sync, &state);
+
+        let scanned_items = state
+            .category(category)
+            .result()
+            .expect("a finished scan")
+            .items
+            .as_slice();
+        assert_eq!(delegate.items.len(), scanned_items.len());
+
+        let mut shared = 0;
+        for (mirrored, original) in delegate.items.iter().zip(scanned_items) {
+            let (Some(mirrored), Some(original)) = (icon_of(mirrored), icon_of(original)) else {
+                panic!("every application row in this fixture carries an icon");
+            };
+            assert!(
+                std::ptr::eq(mirrored.as_bytes(), original.as_bytes()),
+                "the grid must point at the scan's icon bytes, not a copy of them"
+            );
+            shared += 1;
+        }
+        assert_eq!(shared, APPS as usize);
+
+        // And the bound the type enforces, over the whole result: whatever
+        // the icons are, this many applications cannot retain more than this.
+        let total: usize = scanned_items
+            .iter()
+            .filter_map(icon_of)
+            .map(IconRaster::len)
+            .sum();
+        assert!(total <= APPS as usize * IconRaster::MAX_BYTES);
     }
 
     #[test]

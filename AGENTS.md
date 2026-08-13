@@ -49,7 +49,14 @@ without checking. `core/` still carries `#[allow(dead_code)]` on items ahead of 
 them — **those are pending work, not dead code to delete** — but the allow comes off as each
 producer lands: `core::safety` now has a real `validate_path` and a moved-to-trash cleanup path
 (`macos::cleanup::cleanup_items`), so its allow is already gone. `core::permissions` is still the
-one whole-module allow marking an area that does not exist at all yet.
+one whole-module allow marking an area that does not exist at all yet. Three things settled on
+2026-08-13 are named in that `mod.rs` and worth knowing before touching the module: an item's
+application icon is a **bounded, `Arc`-shared** `core::icon::IconRaster` and never a raw `Vec<u8>`
+(what it replaced measured 70.5 MiB *per app* and could not be decoded at all — `core::icon` has
+the numbers); `core::category::CleanerCategory::HIDDEN` is the one-line switch deciding which
+categories the window lists, and because a scan starts only from a category's own pane a hidden
+one is never scanned; and what a scan *looks* like is the tested pure
+`core::scan_state::ScanState::indicator`, not a `match` inside a `render`.
 
 **"`render` only runs when something changed" is false in gpui, and it cost the Cleaner its frame
 rate.** A dirty view marks its whole *ancestor* path dirty, and an ancestor re-rendering sets

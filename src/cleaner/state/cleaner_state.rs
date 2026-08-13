@@ -172,7 +172,13 @@ pub struct CleanerState {
 impl Default for CleanerState {
     fn default() -> Self {
         Self {
-            selected_category: CleanerCategory::ALL[0],
+            // The first category the window actually *lists*, never
+            // `ALL[0]` — a hidden category (see `CleanerCategory::HIDDEN`)
+            // must never be what the panel opens on, because there would be
+            // no sidebar row selected and no way back to it.
+            selected_category: CleanerCategory::visible()
+                .next()
+                .unwrap_or(CleanerCategory::ALL[0]),
             expanded_sections: CleanerSection::ALL.into_iter().collect(),
             categories: CleanerCategory::ALL
                 .into_iter()

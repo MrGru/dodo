@@ -236,6 +236,18 @@
     cost per-frame work proportional to their result size, and the icon-carrying ones (Installed
     Apps, Universal Binaries) cost it proportional to their icon bytes too. That module doc holds
     the measurements and the fix.
+
+    **And the icon payload itself was two separate defects, fixed on 2026-08-13.** The bytes were
+    `-[NSImage TIFFRepresentation]` of the icon `NSWorkspace` returns for a bundle — measured at
+    **73,949,448 bytes per application**, identical for every one of them, so one Installed Apps
+    scan over this machine's 98 bundles retained **6.71 GiB** (twice that with the grid's copy).
+    They also never drew: that representation uses 16-bit floating-point samples, which the `image`
+    crate — the decoder GPUI hands `ImageFormat::Tiff` to — rejects outright, so 97 of 98 icons
+    failed to decode and every row fell back to its category glyph. `core::icon::IconRaster` and
+    `macos::platform::icon` are the fix and the authority: one fixed 64px PNG raster per bundle,
+    **5,891 bytes on average and 7,745 at worst, 98 of 98 decoding**, behind an `Arc` so the grid's
+    copy shares them, and behind a type that refuses anything over 32 KiB so the old shape cannot
+    come back silently.
   - **No `tracing` spans.** dodo has no `tracing`/`log` crate anywhere in the codebase (`grep -n
     '^tracing\|^log = ' Cargo.toml` returns nothing); adding one solely for the ticket's suggested
     span names (`cleaner.smart_care`, `cleaner.category_scan`, etc.) would introduce a new
