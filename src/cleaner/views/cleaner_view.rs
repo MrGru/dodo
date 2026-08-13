@@ -168,7 +168,7 @@ impl CleanerView {
     /// single row, and the copy is a deep clone of every item including its
     /// icon payload. `views::results_sync` carries the measurements and the
     /// decision table; here we only carry out what it decides.
-    fn sync_results_table(&mut self, cx: &mut Context<Self>) {
+    fn sync_results_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let category = self.state.selected_category();
         let category_state = self.state.category(category);
         let key = ResultsSyncKey::of(category, category_state);
@@ -200,7 +200,7 @@ impl CleanerView {
         };
         let grid_width = self.results_grid_width;
 
-        self.results_table.update(cx, |table, cx| {
+        self.results_table.update(cx, |table, table_cx| {
             // `refresh` rebuilds the column groups, and there are exactly
             // two reasons to: a different category (the column *set* is what
             // `ResultsTableDelegate::shows_selection` decides) or a pane
@@ -219,11 +219,12 @@ impl CleanerView {
             // items' widest action set are what the widths are derived from.
             refresh |= table.delegate_mut().set_grid_width(grid_width);
             if refresh {
-                table.refresh(cx);
-                // `TableState::refresh` rebuilds its columns but does not
-                // notify its entity. The new rows must invalidate it too:
-                // the canvas can interrupt this parent frame before it paints.
-                cx.notify();
+                table.refresh(table_cx);
+                table_cx.notify();
+                // The first completed scan replaces the placeholder with a
+                // new DataTable. Its entity cannot render until that parent
+                // frame has mounted it, so request a following frame.
+                window.request_animation_frame();
             }
         });
     }
@@ -1730,8 +1731,8 @@ impl CleanerView {
 }
 
 impl Render for CleanerView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_results_table(cx);
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_results_table(window, cx);
         let category = self.state.selected_category();
 
         v_flex()
@@ -1823,7 +1824,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
 
-    use futures_util::{FutureExt as _, StreamExt as _};
     use gpui::{AppContext as _, TestAppContext};
 
     use super::{CleanerView, apply_latest_progress};
@@ -1918,9 +1918,13 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_landed_result_notifies_the_results_table(cx: &mut TestAppContext) {
+    fn a_completed_scan_paints_result_rows_without_a_resize(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
         let window = cx.add_window(CleanerView::new);
+        cx.run_until_parked();
+        window
+            .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+            .expect("test window stays open");
         cx.run_until_parked();
         let (cleaner, table) = cx
             .read_window(&window, |cleaner, cx| {
@@ -1928,11 +1932,16 @@ mod tests {
                 (cleaner, table)
             })
             .expect("test window stays open");
-        let mut notifications = cx.notifications(&table);
         let category = CleanerCategory::UserCache;
 
         cleaner.update(cx, |cleaner, cx| {
             cleaner.state.set_selected_category(category);
+            cleaner.state.begin_scan(category);
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        cleaner.update(cx, |cleaner, cx| {
             cleaner.state.finish_scan(
                 category,
                 Some(CategoryScanResult {
@@ -1962,13 +1971,26 @@ mod tests {
                 false,
                 None,
             );
-            cleaner.sync_results_table(cx);
+            cx.notify();
         });
         cx.run_until_parked();
-
+        let callback_count = window
+            .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+            .expect("test window stays open");
         assert!(
-            notifications.next().now_or_never().is_some(),
-            "a completed scan must invalidate the table even if the parent frame is interrupted"
+            callback_count > 0,
+            "a completed scan must request the frame that renders its newly mounted table"
+        );
+        cx.run_until_parked();
+
+        let visible_rows = cx
+            .read_window(&window, |_, cx| {
+                table.read(cx).visible_range().rows().clone()
+            })
+            .expect("test window stays open");
+        assert!(
+            !visible_rows.is_empty(),
+            "the completed scan's rows must prepaint before any resize redraw"
         );
     }
 
