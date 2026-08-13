@@ -31,6 +31,17 @@
 //! off and type the key as itself. So the undo rule is stated once and both
 //! schemes get it.
 //!
+//! The bare `w` is the one key that reaches that layer as a whole *letter*
+//! rather than as a mark, and it undoes itself the same way — but the shared
+//! layer has to find the letter it made first, and a mark target is the wrong
+//! question for that. `windoư` has a nucleus of `i`, which can carry no horn at
+//! all, so there is no target; `ưindo` has one, five letters back. The source
+//! key recorded on the letter answers both, which is why `window` survives
+//! being read as Telex. See
+//! [`SourceCancelled`](super::syllable::MarkOutcome::SourceCancelled) and
+//! [`SourceRestored`](super::syllable::MarkOutcome::SourceRestored) for the two
+//! shapes that takes.
+//!
 //! # Three judgement calls
 //!
 //! - **`w` on its own types `ư`.** With no vowel to put a horn on, Unikey types

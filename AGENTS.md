@@ -203,7 +203,14 @@ recomputed at render time, so `toas` + `n` becomes `toán` without anything relo
 share every rule about Vietnamese. **Every modifier reaches back over the current syllable**, the
 stroke included since 2026-08-08 (`did` is `đi`, `add` is still `add` because the rule is about the
 *initial* letter); a scheme file that decides position itself rather than asking
-`Syllable::mark_target` is how that one was wrong for a round. The price is stated in
+`Syllable::mark_target` is how that one was wrong for a round. **Undoing a modifier reaches back
+too, and adjacency decides its shape** — the rule that makes `window` type `window`: a repeat
+cancels the letter *its own key* made (`Letter::source`, never the rendered text), collapsing to one
+literal when nothing was typed since (`ww` → `w`) and otherwise putting the earlier key back **where
+it stands** while the new one still types itself (`ưindo` + `w` → `window`, not `indow`). A direct
+marked letter's cancel therefore asks the **last** letter, not `mark_target`: `windoư`'s nucleus is
+a bare `i` that can carry no horn, so there was no target to ask and a second `w` grew `windoưư`.
+The price is stated in
 `vietnamese::tests`: a Latin word whose keys spell a **valid** Vietnamese syllable is composed and
 stays composed, because `rules`' word-boundary restore only rescues invalid ones — so `dodo` types
 `đô`, which is what Unikey does too and is not a bug to fix. Tests: `corpus.rs` holds ~460 real words as *answers* and

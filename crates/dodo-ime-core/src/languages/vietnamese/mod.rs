@@ -389,7 +389,9 @@ impl VietnameseEngine {
             Transform::Mark { mark, literal } => {
                 match self.syllable.apply_mark_from(mark, Some(source)) {
                     MarkOutcome::Applied => Applied::Changed,
-                    MarkOutcome::SourceCancelled | MarkOutcome::Reverted => {
+                    MarkOutcome::SourceCancelled
+                    | MarkOutcome::SourceRestored
+                    | MarkOutcome::Reverted => {
                         self.syllable.distrust_raw();
                         self.fall_back(literal)
                     }

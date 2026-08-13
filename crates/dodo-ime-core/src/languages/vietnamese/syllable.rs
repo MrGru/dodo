@@ -12,7 +12,10 @@
 //!   because anything searched the string for a mark to relocate.
 //! - **Undo is exact.** A second `s` clears [`Syllable::tone`]; a third `a`
 //!   clears one [`Letter::mark`]. Neither has to find a diacritic in rendered
-//!   text and guess which key put it there.
+//!   text and guess which key put it there — and where a whole letter came from
+//!   one key, the letter records that key, which is how `ư` the user typed and
+//!   `ư` a `w` rendered stay two distinguishable states. See
+//!   [`MarkOutcome::SourceCancelled`] and [`MarkOutcome::SourceRestored`].
 //! - **Telex and VNI cannot drift apart.** They disagree about which key means
 //!   *circumflex*; they agree completely about what a circumflex is, because
 //!   the answer is this file and neither of them owns a copy of it.
@@ -32,6 +35,7 @@
 use super::rules;
 use super::tone::{self, TonePlacement};
 use super::unicode;
+use super::word_boundary;
 
 /// A diacritic that changes which *letter* this is, as opposed to which tone.
 ///
@@ -110,10 +114,15 @@ impl Letter {
         self
     }
 
-    fn is_self_marked_by(&self, mark: Mark, source: char) -> bool {
-        self.source.is_some_and(|(source_mark, key)| {
-            source_mark == mark && key.eq_ignore_ascii_case(&source)
-        })
+    /// The key that made this whole letter, when `source` is that same key
+    /// again asking for `mark`.
+    ///
+    /// The answer is the character *as it was typed*, not the character now
+    /// being pressed, so undoing `Wi` + `w` puts the user's own `W` back.
+    fn self_mark_source(&self, mark: Mark, source: char) -> Option<char> {
+        self.source
+            .filter(|(source_mark, key)| *source_mark == mark && key.eq_ignore_ascii_case(&source))
+            .map(|(_, key)| key)
     }
 }
 
@@ -125,6 +134,11 @@ pub enum MarkOutcome {
     /// A one-key transformed letter was cancelled, so the whole letter went
     /// away before the caller types this key literally (`ww` becomes `w`).
     SourceCancelled,
+    /// A one-key transformed letter that is no longer the last letter was put
+    /// back as the key that made it, in the place it occupies. The caller still
+    /// types the current key as itself, at the end, because the two presses are
+    /// not one gesture — `windo` (`ưindo`) plus `w` is `window`, not `windo`.
+    SourceRestored,
     /// The letter already had that mark, so it was taken off again — the
     /// second `aa` in `aaa`, the second `w` in `aww`. The caller then types the
     /// key literally, which is what makes the undo produce `aa` rather than
@@ -324,9 +338,10 @@ impl Syllable {
             return MarkOutcome::NoTarget;
         };
         if self.letters[at].mark == Some(mark) {
-            if source.is_some_and(|source| self.letters[at].is_self_marked_by(mark, source)) {
-                self.letters.remove(at);
-                return MarkOutcome::SourceCancelled;
+            if let Some(source) = source
+                && let Some(typed) = self.letters[at].self_mark_source(mark, source)
+            {
+                return self.undo_self_mark(at, typed);
             }
             self.letters[at].mark = None;
             MarkOutcome::Reverted
@@ -340,14 +355,53 @@ impl Syllable {
         }
     }
 
-    /// Cancel a whole letter made by one marked source key, if this is the same
-    /// source again. Bracket shortcuts are direct marked letters too; this keeps
-    /// their cancellation rule shared with any future direct transform.
+    /// Take back the whole letter one source key made, now that the same key
+    /// has been pressed again.
+    ///
+    /// # Adjacency decides which shape this takes
+    ///
+    /// The two presses are **one gesture** only when nothing was typed between
+    /// them, and that is the whole difference between `ww` and `window`:
+    ///
+    /// - `ww` — the `ư` is still the last letter, so the pair collapses to the
+    ///   single literal `w` the caller is about to type. Two keys, one letter,
+    ///   which is the undo rule every other modifier obeys (`aaa` → `aa`).
+    /// - `w i n d o w` — four letters arrived after the `ư`, so the second `w`
+    ///   is not correcting the first, it is the next letter of a word. The `ư`
+    ///   goes back to being the `w` that made it, **where it stands**, and the
+    ///   caller types the current key at the end: `window`. Appending the
+    ///   restored key instead is what used to produce `indow`.
+    ///
+    /// Both readings are derived from provenance alone — which key made this
+    /// letter, and how many letters have arrived since — so no word list and no
+    /// inspection of the rendered text is involved.
+    fn undo_self_mark(&mut self, at: usize, typed: char) -> MarkOutcome {
+        let adjacent = at + 1 == self.letters.len();
+        // A bracket shortcut cannot stand in the syllable as itself, so its
+        // source can only ever be taken back the collapsing way.
+        if adjacent || !word_boundary::is_syllable_letter(typed) {
+            self.letters.remove(at);
+            return MarkOutcome::SourceCancelled;
+        }
+        self.letters[at] = Letter::new(typed, typed.is_ascii_uppercase());
+        MarkOutcome::SourceRestored
+    }
+
+    /// Cancel the whole letter a direct marked-letter key made, if this is that
+    /// same key again with nothing typed since.
+    ///
+    /// It asks the **last** letter rather than [`Syllable::mark_target`],
+    /// because a direct marked letter is pushed at the end and a mark target is
+    /// a question about the nucleus — two different letters as soon as the
+    /// syllable stops looking Vietnamese. `windoư` has nucleus `i`, which can
+    /// carry no horn at all, so the target was `None` and a second `w` used to
+    /// append a second `ư`. Bracket shortcuts are direct marked letters too and
+    /// share the rule.
     pub fn cancel_self_mark(&mut self, mark: Mark, source: char) -> bool {
-        let Some(at) = self.mark_target(mark) else {
+        let Some(at) = self.letters.len().checked_sub(1) else {
             return false;
         };
-        if self.letters[at].is_self_marked_by(mark, source) {
+        if self.letters[at].self_mark_source(mark, source).is_some() {
             self.letters.remove(at);
             true
         } else {
@@ -473,6 +527,66 @@ mod tests {
             MarkOutcome::Reverted
         );
         assert_eq!(literal.render(MODERN), "u");
+    }
+
+    /// With letters typed in between, the two presses are not one gesture: the
+    /// source key goes back where its letter stands and the caller still types
+    /// the current key. Removing the letter and letting the caller append the
+    /// literal is what turned `ưindo` + `w` into `indow`.
+    #[test]
+    fn a_repeat_with_letters_in_between_restores_the_source_key_in_place() {
+        let mut syllable = Syllable::new();
+        syllable.push_marked_letter('u', Some(Mark::Horn), false, Some('w'));
+        syllable.push_letter('i', false);
+        assert_eq!(syllable.render(MODERN), "ưi");
+        assert_eq!(
+            syllable.apply_mark_from(Mark::Horn, Some('w')),
+            MarkOutcome::SourceRestored
+        );
+        assert_eq!(syllable.render(MODERN), "wi");
+
+        // What went back is an ordinary letter with no provenance, so a third
+        // `w` has nothing of its own left to cancel.
+        assert_eq!(
+            syllable.apply_mark_from(Mark::Horn, Some('w')),
+            MarkOutcome::NoTarget
+        );
+    }
+
+    /// The key that is put back is the one the user typed, not the one they are
+    /// typing now — the two differ in case whenever either was shifted.
+    #[test]
+    fn the_restored_key_keeps_the_case_it_was_typed_with() {
+        let mut syllable = Syllable::new();
+        syllable.push_marked_letter('u', Some(Mark::Horn), true, Some('W'));
+        syllable.push_letter('i', false);
+        assert_eq!(
+            syllable.apply_mark_from(Mark::Horn, Some('w')),
+            MarkOutcome::SourceRestored
+        );
+        assert_eq!(syllable.render(MODERN), "Wi");
+    }
+
+    /// A direct marked letter is pushed at the end, so its cancel asks the last
+    /// letter. Asking [`Syllable::mark_target`] instead misses it entirely once
+    /// the syllable stops looking Vietnamese: `windoư` has nucleus `i`, which
+    /// can carry no horn at all, so there is no target to ask.
+    #[test]
+    fn a_direct_marked_letter_is_cancelled_from_the_end_not_from_the_mark_target() {
+        let mut syllable = make("windo");
+        syllable.push_marked_letter('u', Some(Mark::Horn), false, Some('w'));
+        assert_eq!(syllable.render(MODERN), "windoư");
+        assert_eq!(syllable.mark_target(Mark::Horn), None);
+        assert!(syllable.cancel_self_mark(Mark::Horn, 'w'));
+        assert_eq!(syllable.render(MODERN), "windo");
+
+        // A letter typed after it ends the gesture, so the same key is a new
+        // letter rather than an undo.
+        let mut later = make("windo");
+        later.push_marked_letter('u', Some(Mark::Horn), false, Some('w'));
+        later.push_letter('n', false);
+        assert!(!later.cancel_self_mark(Mark::Horn, 'w'));
+        assert_eq!(later.render(MODERN), "windoưn");
     }
 
     #[test]

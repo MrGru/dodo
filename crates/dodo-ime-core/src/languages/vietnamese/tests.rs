@@ -101,6 +101,31 @@ fn telex_rewrites_each_intermediate_state() {
     assert_eq!(action_stream(&mut incremental, "w"), [composition("thưow")]);
 }
 
+/// The reported failure, key by key.
+///
+/// Read the first line as Telex rather than as English and it is not
+/// surprising: a `w` with no vowel behind it types `ư`, so the word starts as
+/// `ư` and stays that way until the second `w` recognises its own earlier
+/// letter and puts the key back where it stands.
+#[test]
+fn telex_puts_an_earlier_w_back_where_it_stands() {
+    let mut typed = engine();
+    assert_eq!(
+        action_stream(&mut typed, "window"),
+        ["ư", "ưi", "ưin", "ưind", "ưindo", "window"].map(composition)
+    );
+
+    // The same recovery reached from the other side. `ww` settles the leading
+    // `w` as a literal first, which leaves the nucleus a bare `i`: no horn can
+    // land there, so the seventh key types `ư` at the end and the eighth takes
+    // that `ư` back.
+    let mut literal = engine();
+    assert_eq!(
+        action_stream(&mut literal, "wwindoww"),
+        ["ư", "w", "wi", "win", "wind", "windo", "windoư", "window"].map(composition)
+    );
+}
+
 #[test]
 fn telex_modifier_and_tone_rewrites_are_ordered() {
     let mut lower = engine();
@@ -324,6 +349,67 @@ fn a_repeated_modifier_undoes_itself_and_types_its_key() {
         ],
         telex,
     );
+}
+
+/// The same rule when the two presses are not next to each other.
+///
+/// A standalone `w` is a whole letter the key made, so pressing it again takes
+/// that letter back wherever it stands — and whatever arrived in between, which
+/// is the part that used to go wrong in two different ways. `ưindo` + `w`
+/// removed the `ư` and let the caller append the restored `w`, reordering the
+/// word into `indow`; and a `ư` that had fallen outside the nucleus was not
+/// recognised as cancellable at all, so `windoư` + `w` grew a second one.
+///
+/// Both readings come from provenance alone — which key made this letter, and
+/// how many letters have arrived since. No word list, no rendered text.
+#[test]
+fn a_repeated_standalone_w_takes_back_the_letter_it_made_wherever_it_is() {
+    check(
+        &[
+            // Alone, and as one gesture: two presses, one letter.
+            ("w", "ư"),
+            ("ww", "w"),
+            ("www", "wư"),
+            ("wwww", "ww"),
+            // At the start, with the rest of the word in between: two presses,
+            // two letters, because the second `w` is the next letter of a word
+            // rather than a correction of the first.
+            ("wiw", "wiw"),
+            ("window", "window"),
+            ("windows", "windows"),
+            ("widow", "widow"),
+            ("willow", "willow"),
+            ("WINDOW", "WINDOW"),
+            ("Window", "Window"),
+            // In the middle and at the end. `ww` makes the leading `w`
+            // literal, which leaves `windo` a nucleus of `i` — no horn can land
+            // there, so the next `w` types `ư`, and the one after takes it back.
+            ("wwindow", "windoư"),
+            ("wwindoww", "window"),
+            // After text that has already proved not to be Vietnamese.
+            ("sww", "sw"),
+            ("twnw", "twnw"),
+        ],
+        telex,
+    );
+}
+
+/// The distinction the whole fix rests on: `ư` the user typed and `ư` dodo
+/// rendered are different states, and only the second is a `w` to be taken
+/// back.
+///
+/// Both words below show `ưi` before their last key. `wiw` gets its `w` back,
+/// because a `w` made that letter outright; `uwiw` keeps the `u` the user
+/// actually typed and only loses the horn, exactly as `uww` does. Nothing that
+/// read the rendered string could tell the two apart.
+#[test]
+fn a_typed_u_and_a_w_that_rendered_u_horn_undo_differently() {
+    let mut made_by_w = engine();
+    assert_eq!(type_keys_uncommitted(&mut made_by_w, "wi"), "ưi");
+    let mut typed_as_u = engine();
+    assert_eq!(type_keys_uncommitted(&mut typed_as_u, "uwi"), "ưi");
+
+    check(&[("wiw", "wiw"), ("uwiw", "uiw"), ("uww", "uw")], telex);
 }
 
 /// The VNI half of the same rule. A digit cannot join a syllable, so the
