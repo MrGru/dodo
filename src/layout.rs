@@ -250,7 +250,13 @@ fn pane_title(view: View, docker_page: DockerPage) -> Str {
 /// tables and toolbars start clipping their right-hand ends, so squeezing
 /// further buys nothing a scrollbar does not buy better. 520 is the width at
 /// which that crowding was first recorded.
-const MAIN_MIN_WIDTH: f32 = 520.;
+///
+/// `pub(crate)` because a tool that lays itself out in pixels has to derive
+/// its own floor from this rather than restate it:
+/// [`cleaner::views::results_layout`](crate::cleaner::views::results_layout)
+/// is the one that does, and a second copy of "520" would be a number that
+/// silently stops meaning the same thing.
+pub(crate) const MAIN_MIN_WIDTH: f32 = 520.;
 const MAIN_MIN_HEIGHT: f32 = 360.;
 /// The sidebar's two widths. The collapsed one is `COLLAPSED_WIDTH` in the
 /// pinned checkout's `sidebar/mod.rs`, which the library does not export.

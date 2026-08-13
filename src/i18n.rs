@@ -1225,6 +1225,15 @@ pub enum Str {
     /// See `CleanerRevealInExplorer` — same reasoning, for Linux's arm.
     #[allow(dead_code)]
     CleanerRevealInFileManager,
+    #[allow(
+        dead_code,
+        reason = "The results grid's overflow menu became one visible button per \
+                  action on 2026-08-13, so nothing renders this any more. The \
+                  variant and its translations stay because `position()` below is \
+                  a fixed compatibility table this file asks not to be renumbered; \
+                  remove all three together in a round that is renumbering it \
+                  anyway."
+    )]
     CleanerMoreActions,
     CleanerColumnName,
     CleanerColumnRisk,

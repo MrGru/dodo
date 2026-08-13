@@ -3,30 +3,55 @@
 Advanced categories are modeled in `CleanerCategory`:
 
 - AI Apps
-- Xcode Junk *(not listed in the window — see below)*
-- Homebrew Cache *(not listed in the window — see below)*
+- Xcode Junk *(macOS only — see below)*
+- Homebrew Cache *(macOS only — see below)*
 - Node Tooling Cache
 - Docker Cache
-- Universal Binaries *(not listed in the window — see below)*
+- Universal Binaries *(macOS only — see below)*
 - Language Files
 
-## What the window lists
+## What the window lists, and where
 
-Three of those are deliberately absent from the Cleaner's navigation as of
-2026-08-13. Their scanners, tests and cleanup paths are untouched and still
-compiled — only the listing changed, and `CleanerCategory::HIDDEN` is the
-entire switch: deleting a name from that one array puts the category back.
-`CleanerCategory::is_visible` and `CleanerCategory::categories_for` are what
-read it, and `core::category`'s unit tests pin both.
+**On macOS the window lists all fourteen categories.** Three of them are not
+listed on Windows or Linux: Xcode Junk, Homebrew Cache and Universal Binaries.
+All three name something that only exists on a Mac — Xcode's `DerivedData`,
+Homebrew's download cache, and Mach-O fat binaries — so a row promising to look
+for them on Windows could only ever report nothing.
+
+`CleanerCategory::hidden_for(HostOs)` is the entire switch, and it is a **pure
+function of the platform**, not a `#[cfg]` split: returning an empty slice for a
+host puts every category back in its section's tree, and both answers are unit
+tested from whichever machine runs `cargo test` (the same reason `src/paths.rs`
+reads the target triple rather than `cfg` — two of dodo's four targets cannot be
+compiled from the machine this is usually written on). `CleanerCategory::ALL`
+still names all fourteen everywhere, so the scanners, their tests and their
+cleanup paths are untouched by the hiding. `is_visible`, `visible`/`visible_for`
+and `categories_for`/`categories_for_host` are what read it, and
+`core::category`'s unit tests pin every arm.
+
+`HostOs::current` — read by `is_visible` — is the single place the compiled-for
+platform enters the decision.
 
 Because a scan is only ever started from a category's own pane, a hidden
-category is not scanned at all — it has no row to select and therefore no
-`Scan` button.
+category is not scanned at all: it has no row to select and therefore no `Scan`
+button.
 
-Universal Binaries is the one whose absence is more than a preference: it is
+**This is not the same question as "which categories can this platform
+scan".** That one is answered by the per-platform scanner registries
+(`state::registry::default_scanners`), and off macOS it is a much shorter list —
+four generic categories. A category with no scanner here is still *listed* and
+reports "planned but not implemented yet", deliberately, so the roadmap stays
+visible. The reverse would be the bug, and
+`a_hidden_category_is_never_one_this_build_scans` is the test that forbids it:
+hiding a category this build does scan would strand a working scanner behind no
+row at all.
+
+Universal Binaries has a second reason to be absent from Windows and Linux, and
+it is why it was on the list before this became per-platform: it is
 analysis-only, and its own per-item explanation says slice removal "is not yet
-implemented", so the page could report a number and offer nothing to do about
-it.
+implemented", so the page reports a number and offers nothing to do about it.
+That is a macOS caveat the captain accepted rather than a reason to hide it
+there.
 
 Phase 1 status:
 

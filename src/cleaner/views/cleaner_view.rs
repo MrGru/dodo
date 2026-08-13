@@ -38,6 +38,7 @@ use crate::cleaner::services::ignore_store::{
     DiskOrphanIgnoreStore, OrphanIgnoreStore, OrphanIgnoreStoreError,
 };
 use crate::cleaner::state::{CategoryState, CleanerState, default_scanners};
+use crate::cleaner::views::results_layout::{FLOOR_GRID_WIDTH, ResultsLayout};
 use crate::cleaner::views::results_sync::{ResultsSync, ResultsSyncKey, ResultsSyncPlan};
 use crate::cleaner::views::results_table::{ResultsTableDelegate, category_icon};
 #[cfg(target_os = "macos")]
@@ -98,6 +99,17 @@ pub struct CleanerView {
     /// detail. UI-only — not domain state, same footing as
     /// `CleanerState::expanded_sections`.
     expanded_warnings: HashSet<CleanerCategory>,
+    /// How wide the results grid actually is, in logical pixels, net of the
+    /// table's border and trailing gutter.
+    ///
+    /// gpui hands nobody a size during `render` — an element learns its
+    /// bounds at prepaint, after the tree it belongs to has been built — so
+    /// this is measured by the `canvas` in [`Self::render_results_area`] and
+    /// read on the *next* frame. It starts at
+    /// [`FLOOR_GRID_WIDTH`](crate::cleaner::views::results_layout::FLOOR_GRID_WIDTH)
+    /// so that first frame is briefly cramped rather than briefly
+    /// overflowing, which is the direction that cannot clip a control.
+    results_grid_width: f32,
 }
 
 impl CleanerView {
@@ -129,6 +141,7 @@ impl CleanerView {
             results_table,
             results_sync: ResultsSync::default(),
             expanded_warnings: HashSet::new(),
+            results_grid_width: FLOOR_GRID_WIDTH,
         };
         view.load_ignored_paths(cx);
         view
@@ -159,35 +172,74 @@ impl CleanerView {
         let category = self.state.selected_category();
         let category_state = self.state.category(category);
         let key = ResultsSyncKey::of(category, category_state);
-        match self.results_sync.plan(key) {
-            ResultsSyncPlan::UpToDate => {}
-            ResultsSyncPlan::SelectionOnly => {
-                let selected_ids: HashSet<CleanableItemId> =
-                    category_state.selected_ids().into_iter().collect();
-                self.results_table.update(cx, |table, _cx| {
-                    table.delegate_mut().set_selection(selected_ids);
-                });
-            }
-            ResultsSyncPlan::Everything => {
-                let items = category_state
+        let plan = self.results_sync.plan(key);
+        // Read out of `self.state` before the delegate is touched: the
+        // borrow has to end before `results_table.update`, and nothing here
+        // clones anything the plan did not ask for.
+        let replacement = match plan {
+            ResultsSyncPlan::Everything => Some((
+                category_state
                     .result()
                     .map(|result| result.items.clone())
-                    .unwrap_or_default();
-                let selected_ids: HashSet<CleanableItemId> =
-                    category_state.selected_ids().into_iter().collect();
-                // `refresh` here and not in the other arms: it rebuilds the
-                // column groups, and the column set is what the *category*
-                // decides (`ResultsTableDelegate::shows_selection`). Header
-                // labels come from `render_th` every frame either way. Its
-                // one visible side effect is that a column the user dragged
-                // now keeps its width until the rows change, where the
-                // per-frame call used to undo the drag on the next frame.
-                self.results_table.update(cx, |table, cx| {
-                    table.delegate_mut().set(category, items, selected_ids);
-                    table.refresh(cx);
-                });
+                    .unwrap_or_default(),
+                category_state
+                    .selected_ids()
+                    .into_iter()
+                    .collect::<HashSet<CleanableItemId>>(),
+            )),
+            _ => None,
+        };
+        let selection = match plan {
+            ResultsSyncPlan::SelectionOnly => Some(
+                category_state
+                    .selected_ids()
+                    .into_iter()
+                    .collect::<HashSet<CleanableItemId>>(),
+            ),
+            _ => None,
+        };
+        let grid_width = self.results_grid_width;
+
+        self.results_table.update(cx, |table, cx| {
+            // `refresh` rebuilds the column groups, and there are exactly
+            // two reasons to: a different category (the column *set* is what
+            // `ResultsTableDelegate::shows_selection` decides) or a pane
+            // width that moved a column boundary. Header labels come from
+            // `render_th` every frame either way. Its one visible side
+            // effect is that the grid's widths are re-derived, which is
+            // precisely the point.
+            let mut refresh = false;
+            if let Some((items, selected_ids)) = replacement {
+                table.delegate_mut().set(category, items, selected_ids);
+                refresh = true;
+            } else if let Some(selected_ids) = selection {
+                table.delegate_mut().set_selection(selected_ids);
             }
+            // After `set`, so the new category's checkbox column and the new
+            // items' widest action set are what the widths are derived from.
+            refresh |= table.delegate_mut().set_grid_width(grid_width);
+            if refresh {
+                table.refresh(cx);
+            }
+        });
+    }
+
+    /// Records the width the results grid was actually given, as measured at
+    /// prepaint by [`Self::render_results_area`]'s `canvas`.
+    ///
+    /// Notifies only when the number really moved: a `canvas` prepaint runs
+    /// every frame the view is drawn, and an unconditional `notify` there is
+    /// an infinite redraw loop. Nothing feeds back the other way — the
+    /// columns are laid out *inside* a box whose width the pane decides, and
+    /// both scrollbars are absolutely positioned overlays — so a width that
+    /// settles stays settled.
+    fn set_results_grid_width(&mut self, pane_width: Pixels, cx: &mut Context<Self>) {
+        let grid_width = ResultsLayout::grid_width_for_pane(f32::from(pane_width));
+        if (grid_width - self.results_grid_width).abs() < 0.5 {
+            return;
         }
+        self.results_grid_width = grid_width;
+        cx.notify();
     }
 
     fn is_category_busy(&self, category: CleanerCategory) -> bool {
@@ -1637,11 +1689,37 @@ impl CleanerView {
                     ),
             )
             .child(
-                div().flex_1().min_h_0().child(
-                    DataTable::new(&self.results_table)
-                        .stripe(true)
-                        .bordered(true),
-                ),
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    // The grid sizes its own columns, so it has to know how
+                    // much room it got. gpui only tells an element that at
+                    // prepaint, which is what this zero-ink `canvas` is for:
+                    // it measures the box the table fills and hands the width
+                    // back to the view for the next frame to lay out with.
+                    // It paints nothing and takes no hitbox, so it is
+                    // invisible to both the eye and the mouse.
+                    .child(
+                        canvas(
+                            {
+                                let view = cx.entity().downgrade();
+                                move |bounds, _window, cx| {
+                                    let _ = view.update(cx, |view, cx| {
+                                        view.set_results_grid_width(bounds.size.width, cx)
+                                    });
+                                }
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+                    .child(
+                        DataTable::new(&self.results_table)
+                            .stripe(true)
+                            .bordered(true),
+                    ),
             )
             .into_any_element()
     }

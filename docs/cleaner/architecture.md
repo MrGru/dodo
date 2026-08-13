@@ -140,16 +140,35 @@ picks it on macOS and returns an empty vector on every other platform.
   result cheap to *display*: the view also handed the delegate a fresh deep clone of the entire
   result every frame, which `src/cleaner/views/results_sync.rs` now does only when the result or
   the selection actually changed. Read that module before adding any other per-`render` copy.
+
+  **The grid also sizes its own columns now.** `DataTable` gives every column a definite pixel
+  width and scrolls horizontally when they overflow, so a fixed column set pushes the rightmost
+  column — the actions — off the edge at a narrow window. `src/cleaner/views/results_layout.rs`
+  is the pure width-to-columns rule (and the per-row action set), tested without a window;
+  `CleanerView::render_results_area` measures the grid with a zero-ink `canvas` and hands the
+  width in, and `ResultsTableDelegate` reads the resulting column list instead of matching on a
+  column index. Every column is fixed and non-resizable as a consequence: the widths are derived
+  from the pane, and a hand-dragged column would both undo itself on the next resize and be free
+  to cause the overflow the derivation exists to prevent.
 - **No "export scan report to a local file"** action yet, though it's in the ticket's required
   interactions list.
 
 ## Platform strategy
 
-- macOS-first behavior is real across all 14 categories.
-- Non-macOS shows explicit unsupported UI text.
-- No fake Windows/Linux scanners are registered — `state::registry::default_scanners()` returns an
-  empty vector on every non-macOS target, and the view's "coming later" partial-result path covers
-  the gap honestly.
-- Future Windows/Linux support can be added as sibling modules under `src/cleaner/` (`windows/`,
-  `linux/`) implementing the same `CleanerScanner` trait — nothing about the core domain, state
-  machine or view layer assumes macOS.
+- macOS-first behavior is real across all 14 categories, and macOS is the only platform that
+  **lists** all 14. Windows and Linux hide Xcode Junk, Homebrew Cache and Universal Binaries:
+  `CleanerCategory::hidden_for(HostOs)` is the whole switch and is a pure function of the
+  platform, so both answers are unit tested from any host. See `docs/cleaner/advanced-tools.md`
+  for the reasoning and for why "listed here" and "scannable here" are deliberately two
+  different questions.
+- **Windows and Linux scanners now exist** — this section previously said no non-macOS scanner was
+  registered, which stopped being true when `src/cleaner/windows/` and `src/cleaner/linux/`
+  landed. Each registers the four generic categories (System Junk, User Cache, Trash Bins,
+  Large & Old Files); `state::registry::default_scanners()` picks the platform's set and returns
+  an empty vector only on a target that is none of the three. Every other listed category has no
+  scanner there and the view's "planned but not implemented yet" partial-result path covers the
+  gap honestly.
+- A wholly unsupported target still shows the explicit unsupported UI text
+  (`CleanerView::supported_platform`).
+- Nothing about the core domain, state machine or view layer assumes macOS; each platform module
+  implements the same `CleanerScanner` trait.

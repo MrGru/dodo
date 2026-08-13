@@ -53,10 +53,17 @@ one whole-module allow marking an area that does not exist at all yet. Three thi
 2026-08-13 are named in that `mod.rs` and worth knowing before touching the module: an item's
 application icon is a **bounded, `Arc`-shared** `core::icon::IconRaster` and never a raw `Vec<u8>`
 (what it replaced measured 70.5 MiB *per app* and could not be decoded at all — `core::icon` has
-the numbers); `core::category::CleanerCategory::HIDDEN` is the one-line switch deciding which
-categories the window lists, and because a scan starts only from a category's own pane a hidden
-one is never scanned; and what a scan *looks* like is the tested pure
+the numbers); `core::category::CleanerCategory::hidden_for(HostOs)` is the whole switch deciding
+which categories the window lists, and because a scan starts only from a category's own pane a
+hidden one is never scanned; and what a scan *looks* like is the tested pure
 `core::scan_state::ScanState::indicator`, not a `match` inside a `render`.
+**`hidden_for` is per platform and pure**: macOS lists all fourteen, Windows and Linux hide Xcode
+Junk, Homebrew Cache and Universal Binaries, and taking a `HostOs` rather than splitting on `cfg`
+is what lets both answers be asserted from this Mac. It is deliberately *not* the same question as
+"which categories can this platform scan", which the per-platform scanner registries answer and
+which is four categories off macOS — a listed category with no scanner says "planned but not
+implemented yet", and the test forbidding the reverse (hiding one this build does scan) is what
+keeps the two lists from becoming two owners.
 
 **"`render` only runs when something changed" is false in gpui, and it cost the Cleaner its frame
 rate.** A dirty view marks its whole *ancestor* path dirty, and an ancestor re-rendering sets
@@ -67,6 +74,18 @@ copy per frame, however well the rows themselves are virtualized: `src/cleaner/v
 is the fix, the measurements and the decision table, and is the pattern to copy — stamp a revision
 where the data is mutated, compare it before re-copying. Cheap `render` bodies are not an
 optimisation in dodo; they are the contract.
+
+**A `gpui_component` table does not lay itself out, and a tool that needs its own width has to
+measure it.** Every `Column` carries a definite pixel width and the table scrolls horizontally
+when they overflow, so a fixed column set silently pushes its rightmost column off the edge at a
+narrow window — which for the Cleaner was the actions. `src/cleaner/views/results_layout.rs` is
+the pattern: a pure width-to-columns function whose constants are read off the real app
+(`layout::MAIN_MIN_WIDTH`, now `pub(crate)` for exactly this, the library's own cell padding,
+icon-button square and scrollbar width) rather than chosen, so every breakpoint is a unit test.
+The width itself reaches it through a zero-ink `canvas` in the view: **gpui tells an element its
+bounds at prepaint, never during `render`**, so a self-sizing pane measures on one frame and lays
+out on the next — safe only because the entity is not borrowed during prepaint and because
+`notify` is called only when the number actually moved.
 
 **dodo persists ten things across restarts, and reads an eleventh another process writes**, all
 under `data_dir()` (`src/paths.rs`) and each
