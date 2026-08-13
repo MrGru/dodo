@@ -3,13 +3,15 @@
 # Verifies a packaged dodo archive before it is published.
 #
 #   scripts/verify-release.sh <archive> [--expect-version <v>] [--expect-tag <t>]
+#                             [--skip-execution]
 #
 # Checks, in order:
 #
 #   1. the archive exists and its .sha256 sidecar matches
 #   2. the contents list (printed, so a reviewer sees what shipped)
-#   3. the binary is present and has its executable bit, and LICENSE and
-#      THIRD-PARTY-NOTICES.md shipped with it
+#   3. the binary and required native host are at their exact package paths,
+#      executable modes survive where applicable, and LICENSE and
+#      THIRD-PARTY-NOTICES.md shipped with them
 #   4. the binary runs: `dodo --build-info` (see the caveat below)
 #   5. the embedded metadata is real — version matches, commit is not
 #      `unknown` and not `-dirty`, and the tag matches when one was expected
@@ -31,6 +33,7 @@ set -euo pipefail
 archive=""
 expect_version=""
 expect_tag=""
+skip_execution=0
 
 die() {
     printf '\033[31mFAIL\033[0m %s\n' "$1" >&2
@@ -43,7 +46,8 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --expect-version) expect_version="${2:?}"; shift 2 ;;
         --expect-tag) expect_tag="${2:?}"; shift 2 ;;
-        -h|--help) sed -n '2,27p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --skip-execution) skip_execution=1; shift ;;
+        -h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}"; exit 0 ;;
         -*) die "unknown argument: $1" ;;
         *) archive="$1"; shift ;;
     esac
@@ -108,6 +112,39 @@ case "$archive_name" in
 esac
 ok "executable bit preserved"
 
+# The native hosts are required at their exact package-relative paths. A
+# recursive same-name match would let a misplaced helper pass verification
+# while the in-app Install action still cannot find it.
+case "$archive_name" in
+    *-macos-*-app.tar.gz)
+        app="$workdir/dodo.app"
+        [ -f "$app/Contents/MacOS/dodo" ] \
+            || die "missing app executable at dodo.app/Contents/MacOS/dodo"
+        helper="$app/Contents/Helpers/Dodo Vietnamese.app"
+        helper_bin="$helper/Contents/MacOS/DodoVietnamese"
+        [ -f "$helper_bin" ] || die "missing input method at dodo.app/Contents/Helpers/Dodo Vietnamese.app/Contents/MacOS/DodoVietnamese"
+        [ -x "$helper_bin" ] || die "the input-method executable lost its executable bit"
+        [ -f "$helper/Contents/Info.plist" ] || die "the input-method Info.plist is missing"
+        if [ "$(uname -s)" = "Darwin" ]; then
+            plutil -lint "$helper/Contents/Info.plist" >/dev/null \
+                || die "the input-method Info.plist is malformed"
+            codesign --verify --deep --strict --verbose=2 "$helper" \
+                || die "the nested input-method signature is invalid"
+            codesign --verify --deep --strict --verbose=2 "$app" \
+                || die "the outer app signature is invalid"
+        fi
+        ok "macOS input method present at its exact path"
+        ;;
+    *-windows-*.zip)
+        archive_root="${archive_name%.zip}"
+        [ -f "$workdir/$archive_root/dodo.exe" ] \
+            || die "missing executable at $archive_root/dodo.exe"
+        dll="$workdir/$archive_root/input-method/dodo_ime_windows.dll"
+        [ -f "$dll" ] || die "missing Windows TSF host at $archive_root/input-method/dodo_ime_windows.dll"
+        ok "Windows TSF host present at its exact path"
+        ;;
+esac
+
 # --- 3b. licence files -----------------------------------------------------
 #
 # dodo's source is MIT, and the binary next to these files links
@@ -138,7 +175,10 @@ if [ "$runnable" = "1" ]; then
     esac
 fi
 
-if [ "$runnable" = "1" ]; then
+if [ "$skip_execution" = "1" ]; then
+    runnable=0
+    info "skipped execution by request (package contents only)"
+elif [ "$runnable" = "1" ]; then
     output="$("$bin" --build-info)" || die "the binary did not run (--build-info exited non-zero)"
     ok "binary launches (--build-info)"
     printf '%s\n' "$output" | sed 's/^/       /'

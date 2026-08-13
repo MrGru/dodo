@@ -32,8 +32,8 @@ being corrected. "What 'verified' means" in `docs/release.md` has the panic, the
 fix. Closing the single window quits the
 app through **`QuitMode::LastWindowClosed`** (GPUI's own check, run after the window is removed,
 not a callback that force-quits) plus a macOS-only `cmd-w` binding, needed because dodo installs
-no menu bar for that shortcut to hang off. The doc comments there carry the reasoning;
-`docs/release.md` records that the Windows half has never run on a Windows host.
+no menu bar for that shortcut to hang off. The doc comments there carry the reasoning. The Windows `--build-info` path has
+run on a release runner; interactive window lifecycle still needs captain testing.
 
 Most tools are a single `src/<tool>.rs`. **`src/api_explorer/`, `src/docker/` and
 `src/database/` are the exceptions** and the pattern to copy when a tool outgrows one file:
@@ -243,7 +243,7 @@ macOS launches, links the engine, and types with **no dependency on `Dodo.app` r
 does not link it and cannot start it. `docs/macos-input-method.md` is the authority on building,
 installing and enabling it by hand, on what dodo's own install action does (§7), on the two files
 the two processes exchange (§8), on what was and was not verified (§5), and on what the next round
-owes (§9: release wiring, the tray mark, a menu-bar icon, signing). Four things there
+owes (§9: modifier-only native shortcuts, a menu-bar icon, signing). Four things there
 are decisions rather than details. **`CFBundleIdentifier` must contain `.inputmethod.` as an
 infix**, not merely end in it: `io.github.mrgru.dodo.inputmethod` never appears in the
 input-source list and `…inputmethod.Dodo` does, with `TISRegisterInputSource` returning `0` and
@@ -270,8 +270,11 @@ per-user COM registration and the Vietnamese profile, while its TSF edit session
 composition rather than injecting keys. It re-reads settings before each key so a selected Keyboard
 Hook makes TSF pass through. The fallback itself lives in dodo's
 `src/input_method/services/keyboard_hook.rs`, is only active while dodo runs, tags injected output,
-and passes uncertainty, repeats, key-up, shortcuts and secure-desktop uncertainty through. See
-`docs/windows-input-method.md` for install/recovery and what captain testing still owes.
+and passes uncertainty, repeats, key-up, shortcuts and secure-desktop uncertainty through. The
+release ZIP carries `input-method/dodo_ime_windows.dll`; the updater replaces that packaged
+sidecar with `dodo.exe` but deliberately does not register or replace the separate `%APPDATA%`
+copy — Install/Reinstall still owns that action. See `docs/windows-input-method.md` for
+install/recovery and what captain testing still owes.
 
 **`crates/dodo-ime-ipc/` is a crate because neither process can reach the other's code**. dodo and
 both native hosts link it; it holds the identifiers each platform looks up, the two single-writer
@@ -476,11 +479,11 @@ Eight things about build and release that catch people:
   (see "Pre-push checks" in `README.md` for its cost and the `--no-verify` bypass).
   Note that `cargo build` alone does **not** prove the tree is green — `src/i18n.rs`'s test module
   is exhaustive over `Str`, so new strings break `cargo test` while the app still builds.
-  `build (windows-x64)` failed on its one real run (a `#[cfg(unix)]`-only bollard connector; fixed
-  by the platform split in `docker/services/engine.rs`, not yet confirmed green) and
-  `build (macos-x64)` is unverified — those rows are
-  `experimental` and non-blocking on purpose. See the honesty note atop `.github/workflows/ci.yml`
-  for what has actually run.
+  The original `build (windows-x64)` failure was a `#[cfg(unix)]`-only bollard connector;
+  the platform split in `docker/services/engine.rs` fixed it, and release run `31655518790`
+  later built and smoke-tested both Windows x64 and macOS x64. Those rows remain
+  `experimental` and non-blocking in ordinary CI; the release publish gate still requires every
+  platform. See the honesty note atop `.github/workflows/ci.yml` for what has actually run.
 - **No `--release` build runs on a push any more.** `ci.yml` does `cargo check` per platform plus
   one debug build; the four-platform release matrix lives in
   `.github/workflows/release-profile.yml` (weekly + manual) and, for a tag, in `release.yml`. The

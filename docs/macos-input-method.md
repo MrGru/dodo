@@ -6,8 +6,8 @@ method that types Vietnamese using `crates/dodo-ime-core`. macOS launches it;
 
 dodo can now **install it** (§7), **tell it how to type** (§8), or choose an
 Accessibility-gated **Event Tap** alternative (§3a). The bundle is ad-hoc signed
-for local use; release wiring, the tray mark, a menu-bar icon and Developer ID
-signing/notarisation remain — §9 lists them. The design rationale lives in the
+for local use and ships inside release app bundles; the tray mark, a menu-bar
+icon and Developer ID signing/notarisation remain — §9 lists them. The design rationale lives in the
 crate's module docs, which are the authority; this file is how to build, install
 and enable it by hand, what dodo does when it does that for you, and what was
 and was not verified.
@@ -38,9 +38,11 @@ scripts/macos-app-bundle.sh --binary target/release/dodo \
     --input-method "dist/Dodo Vietnamese.app"
 ```
 
-which nests it at **`dodo.app/Contents/Helpers/Dodo Vietnamese.app`**. Without
-`--input-method` nothing is nested and `dodo.app` is unchanged, which is what
-`scripts/package.sh` still does — see §9.
+which nests it at **`dodo.app/Contents/Helpers/Dodo Vietnamese.app`**. The
+release `scripts/package.sh --app-bundle` path assembles the target-specific
+host this way and fails if that already-built host is missing. Calling the
+lower-level app builder without `--input-method` still makes a developer-only
+bundle with no nested input method.
 
 macOS never looks inside `dodo.app` for an input method. That copy exists so the
 install action (§7) has something to copy out. The location is fixed by
@@ -537,11 +539,6 @@ beneath the recorder rather than showing a setting that does nothing.
   would have to be driven against the mock client, and only a captain at a real
   keyboard can confirm dead keys and non-QWERTY layouts still work afterwards.
 
-- **Wiring the bundle into the release.** `scripts/package.sh` does not pass
-  `--input-method` yet, so a shipped `dodo.app` carries no input method and the
-  install button on a released build can only report that. Doing so means building
-  `DodoVietnamese` in the macOS release rows and is a change to
-  `.github/workflows/release.yml`.
 - **A menu-bar icon.** `tsInputMethodIconFileKey` is unset, so the input menu
   shows the name with no glyph. It wants a `.pdf` or `.tiff`, which
   `scripts/generate-icons.py` does not produce.

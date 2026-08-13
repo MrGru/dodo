@@ -3,16 +3,13 @@
 How dodo is built, packaged, verified and published — and what each piece of
 that is actually worth.
 
-> **Read this first.** Everything in `.github/workflows/` is
-> **written but never executed**. This repository is developed on macOS arm64
-> with no remote configured for most of its life. CI has since run for real
-> (first run: 30106478178): `test`, `build (macos-arm64)` and
-> `build (linux-x64)` passed, `build (windows-x64)` failed. The macOS path —
-> the profile, the build, `--version`, the packaging scripts, the verification
-> script — also runs locally and works. The Windows path is still an informed
-> guess. Jobs in that category are marked `experimental: true` in the matrices
-> and are non-blocking; `linux-x64` has now gone green once and is a candidate
-> for having its flag flipped.
+> **Read this first.** CI and release workflows now have real runs behind
+> them. Release run `31655518790` produced and verified macOS arm64/x64, Linux
+> x64 and Windows x64 artifacts and published v0.1.12. That proves native
+> compilation, archive layout and the headless `--build-info` path; it does not
+> prove GUI behaviour, Windows TSF registration/typing, or an in-app update on
+> Windows. Experimental matrix flags remain evidence labels, not permission for
+> a release to omit a platform: the publish gate requires all four.
 >
 > Those job names are from the old CI shape. `ci.yml`'s release matrix has since
 > become a `check` matrix plus a single debug build, and the release-profile
@@ -186,7 +183,11 @@ it, and checks, in order:
 4. the binary **runs** — `dodo --build-info` exits 0;
 5. the embedded metadata is real: version equals the tag, the commit is not
    `unknown` and does not end in `-dirty`, `build_time` and `target` are set;
-6. archive and binary sizes are reported.
+6. macOS app archives contain the executable input method at
+   `dodo.app/Contents/Helpers/Dodo Vietnamese.app/Contents/MacOS/DodoVietnamese`,
+   with a valid plist and nested/outer signatures on macOS; Windows ZIPs contain
+   `input-method/dodo_ime_windows.dll` at that exact archive-relative path;
+7. archive and binary sizes are reported.
 
 **What step 4 does and does not prove.** dodo is a GUI application and a CI
 runner has no display, so the window cannot be opened there. `--version` /
@@ -243,10 +244,9 @@ against a windowless binary — its last green Windows run (`30259360264`,
 GUI-subsystem.
 
 A debug build is deliberately left on the console subsystem, so `cargo run` on
-Windows still prints normally. **None of this has been executed on a Windows
-host.** The diagnosis is inferred from the child's broken-pipe panic, the null
-`$info`, and the documented non-waiting behaviour; a real Windows runner is the
-arbiter.
+Windows still prints normally. The corrected `Start-Process -Wait` path passed
+on Windows in release run `31655518790`; interactive GUI behaviour remains a
+captain runtime check.
 
 ### Licence files in the packaged output
 
@@ -285,8 +285,11 @@ cover only `icons/**/*.svg` and `themes/**/*.json`, so these cost zero bytes.
 
 `scripts/package.ps1` treats `input-method/dodo_ime_windows.dll` as a required
 release artifact beside `dodo.exe`; it fails rather than publishing a ZIP whose
-Native TSF button cannot work. The Windows release verifier also checks that
-that DLL survived the ZIP. `cargo build` reaches it through the workspace
+Native TSF button cannot work. Both the matrix verifier and the post-download
+publish gate require that exact path, so a recursively found same-name DLL does
+not pass. The updater replaces the packaged sidecar with the executable and
+rolls both back if either replacement fails; it deliberately does not touch the
+registered `%APPDATA%` copy. `cargo build` reaches the DLL through the workspace
 `default-members`, and CI explicitly compiles and runs the TSF host's
 class-factory harness on Windows. User installation, recovery, and the manual
 runtime matrix are in [`windows-input-method.md`](windows-input-method.md).

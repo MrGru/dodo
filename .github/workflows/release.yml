@@ -22,10 +22,9 @@
 #     build_time. See "Reproducibility" in docs/build-optimization.md for what
 #     that does and does not buy.
 #
-# UNVERIFIED: this workflow has never been executed. It is written against the
-# GitHub Actions documentation and the local behaviour of the scripts it calls
-# (which have been run on macOS). The Linux and Windows paths in particular
-# have no green run behind them.
+# Release run 31655518790 built, packaged, verified and published all four
+# targets. That is artifact evidence only: GUI behaviour, native-host install
+# and typing still require captain runtime checks on each platform.
 
 name: Release
 
@@ -238,9 +237,9 @@ jobs:
       # `attach_parent_console` correctly leaves it alone. The two guards below
       # are what make a future regression legible instead of silent.
       #
-      # UNVERIFIED: this cannot be executed anywhere but a Windows runner, and
-      # has not been. See "Checking a Windows fix without a Windows machine" in
-      # docs/release.md.
+      # This passed on Windows in release run 31655518790. See "Checking a
+      # Windows fix without a Windows machine" in docs/release.md for the
+      # narrower checks available from a Mac.
       - name: Verify archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -259,11 +258,12 @@ jobs:
           Expand-Archive -Path $archive.FullName -DestinationPath $dest -Force
           Get-ChildItem -Recurse $dest | ForEach-Object { Write-Output "  $($_.FullName)" }
 
-          # 3/4. it runs and reports the expected metadata
-          $exe = Get-ChildItem -Recurse -Filter dodo.exe $dest | Select-Object -First 1
-          if (-not $exe) { throw "no dodo.exe in the archive" }
-          $tsf = Get-ChildItem -Recurse -Filter dodo_ime_windows.dll $dest | Select-Object -First 1
-          if (-not $tsf) { throw "no Windows TSF host DLL in the archive" }
+          # 3/4. exact package layout, then executable metadata
+          $root = Join-Path $dest ([IO.Path]::GetFileNameWithoutExtension($archive.Name))
+          $exe = Get-Item (Join-Path $root "dodo.exe") -ErrorAction SilentlyContinue
+          if (-not $exe) { throw "no dodo.exe at the archive root" }
+          $tsf = Get-Item (Join-Path $root "input-method\dodo_ime_windows.dll") -ErrorAction SilentlyContinue
+          if (-not $tsf) { throw "no Windows TSF host DLL at input-method/dodo_ime_windows.dll" }
 
           $infoFile = Join-Path $env:RUNNER_TEMP "build-info.txt"
           $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--build-info' `
@@ -360,6 +360,22 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      # Re-check the merged downloads rather than trusting that the artifact
+      # uploaded by each matrix row is the one its earlier verification saw.
+      # This contents-only pass is intentionally before manifest generation and
+      # publication; the Linux runner cannot execute or codesign-check every
+      # target, while each platform row already did those host-specific checks.
+      - name: Verify downloaded package contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(artifacts/*.tar.gz artifacts/*.zip)
+          [ "${#archives[@]}" -gt 0 ] || { echo "::error::no downloaded archives"; exit 1; }
+          for archive in "${archives[@]}"; do
+            scripts/verify-release.sh "$archive" --skip-execution
+          done
 
       # Rust here is only for `tools/update-manifest`: four small dependencies
       # and its own Cargo.lock, none of dodo's graph. Its own cache namespace so

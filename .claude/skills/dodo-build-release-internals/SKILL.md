@@ -107,11 +107,11 @@ Six more things about build and release that catch people:
   `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
   (34 unformatted files, 12 warnings) is paid off; there is no crate-level `allow`, and the two
   surviving suppressions are `#[allow]`ed at their definition with the reason inline.
-  `build (windows-x64)` failed on its one real run (a `#[cfg(unix)]`-only bollard connector; fixed
-  by the platform split in `docker/services/engine.rs`, not yet confirmed green) and
-  `build (macos-x64)` is unverified — those rows are
-  `experimental` and non-blocking on purpose. See the honesty note atop `.github/workflows/ci.yml`
-  for what has actually run.
+  The original `build (windows-x64)` failure was a `#[cfg(unix)]`-only bollard connector;
+  the platform split in `docker/services/engine.rs` fixed it, and release run `31655518790`
+  later built and smoke-tested both Windows x64 and macOS x64. Those rows remain
+  `experimental` and non-blocking in ordinary CI; the release publish gate still requires every
+  platform. See the honesty note atop `.github/workflows/ci.yml` for what has actually run.
 - **No `--release` build runs on a push any more.** `ci.yml` does `cargo check` per platform plus
   one debug build; the four-platform release matrix lives in
   `.github/workflows/release-profile.yml` (weekly + manual) and, for a tag, in `release.yml`. The

@@ -33,6 +33,11 @@ only `HKCU\Software\Classes\CLSID\{B97610DC-4C6B-457D-9B44-AD82B79A6789}` and
 uses `ITfInputProcessorProfiles` to add its Vietnamese profile. No driver,
 service, administrator prompt, or elevated helper is involved.
 
+An in-app dodo update replaces both `dodo.exe` and this packaged sidecar, so a
+later **Install/Reinstall** can consume the new DLL. It does **not** automatically
+replace or re-register the `%APPDATA%` copy; registration remains an explicit
+button action until captain runtime testing settles that policy.
+
 Then select **Dodo Vietnamese** from Windows' input-language controls. Windows
 may place the profile under the installed Vietnamese language's keyboard/input
 method list; use the Windows Settings search for **input method** if the exact

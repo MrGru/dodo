@@ -6,13 +6,16 @@
 //! and it *will* let you rename one: the file keeps its identity, the running
 //! process keeps its handle, and the path it used to occupy is free. So:
 //!
-//! 1. extract the new `dodo.exe` beside the running one;
-//! 2. rename the running one to `dodo.exe.dodo-old`;
-//! 3. rename the new one into `dodo.exe`;
-//! 4. relaunch, and quit.
+//! 1. extract and validate `dodo.exe` and `input-method/dodo_ime_windows.dll`;
+//! 2. replace the packaged sidecar beside the running executable;
+//! 3. rename the running executable to `dodo.exe.dodo-old`;
+//! 4. rename the new executable into `dodo.exe`;
+//! 5. relaunch, and quit.
 //!
-//! Steps 2 and 3 are [`swap::swap`](super::swap::swap), which rolls back if
-//! step 3 fails.
+//! Each replacement uses [`swap::swap`](super::swap::swap). If the executable
+//! swap fails, the sidecar replacement is rolled back too. The separately
+//! registered `%APPDATA%` DLL is deliberately untouched; Install/Reinstall owns
+//! registration.
 //!
 //! # "Schedule the stale file for deletion"
 //!
@@ -24,18 +27,20 @@
 //! sweep is a plain `remove_file` and works identically on all three platforms,
 //! which is why the other two use it too.
 //!
-//! # Never built on Windows
+//! # Windows evidence boundary
 //!
-//! `docs/release.md` records that no part of dodo has ever run on a Windows
-//! host. This module compiles on every platform (that is the point — see
+//! Release compilation, packaging and `dodo.exe --build-info` have run on a
+//! Windows runner. This module still has not performed an update on Windows.
+//! It compiles on every platform (that is the point — see
 //! [`MacosInstaller`](super::macos::MacosInstaller)'s note) and its swap,
-//! sweep and refusal paths are exercised by the tests here on whatever host
-//! runs them, because nothing in it is a Windows API. What is *unverified* is
-//! the behaviour of the real `rename`-while-running on a real Windows, and that
-//! is stated in `docs/release.md` rather than assumed away.
+//! sweep and refusal paths are exercised by the tests here because nothing in
+//! it is a Windows API. The real `rename`-while-running and two-file rollback
+//! remain captain runtime checks; `docs/release.md` records that boundary.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use dodo_ime_ipc::tsf::{DLL_NAME, PACKAGE_DIRECTORY};
 
 use crate::updater::models::install_target::{classify, staging_dir};
 use crate::updater::models::state::{InstallOutcome, ManualReason, UpdateError};
@@ -100,12 +105,54 @@ impl PlatformInstaller for WindowsInstaller {
             let _ = std::fs::remove_dir_all(&staging);
             UpdateError::Install("the archive does not contain dodo.exe".to_owned())
         })?;
+        let new_dll = new_exe
+            .parent()
+            .map(|root| root.join(PACKAGE_DIRECTORY).join(DLL_NAME))
+            .filter(|path| path.is_file())
+            .ok_or_else(|| {
+                let _ = std::fs::remove_dir_all(&staging);
+                UpdateError::Install(format!(
+                    "the archive does not contain {PACKAGE_DIRECTORY}/{DLL_NAME}"
+                ))
+            })?;
 
-        let result = swap::swap(&executable, &new_exe);
+        // Both payloads are known-good before the installed files are touched.
+        // This only updates the packaged sidecar; registration of the separate
+        // %APPDATA% copy remains the explicit Install/Reinstall action.
+        let dll_dir = parent.join(PACKAGE_DIRECTORY);
+        let created_dll_dir = !dll_dir.exists();
+        if let Err(err) = std::fs::create_dir_all(&dll_dir) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(UpdateError::Io(format!("{}: {err}", dll_dir.display())));
+        }
+        let installed_dll = dll_dir.join(DLL_NAME);
+        let old_dll = match swap::swap(&installed_dll, &new_dll) {
+            Ok(old) => old,
+            Err(error) => {
+                if created_dll_dir {
+                    let _ = std::fs::remove_dir(&dll_dir);
+                }
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+        };
+
+        if let Err(error) = swap::swap(&executable, &new_exe) {
+            let rollback = restore_sidecar(&installed_dll, &old_dll);
+            if created_dll_dir {
+                let _ = std::fs::remove_dir(&dll_dir);
+            }
+            let _ = std::fs::remove_dir_all(&staging);
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(UpdateError::Install(format!(
+                    "{error:?}; the TSF sidecar could not be restored: {rollback:?}"
+                ))),
+            };
+        }
+
         let _ = std::fs::remove_dir_all(&staging);
-        result?;
-
-        log::note("installed; a restart will run the new version");
+        log::note("installed executable and TSF sidecar; a restart will run the new version");
         Ok(InstallOutcome::Installed)
     }
 
@@ -123,8 +170,31 @@ impl PlatformInstaller for WindowsInstaller {
         };
         if let Some(parent) = classify(&executable).writable_parent() {
             swap::sweep(parent);
+            swap::sweep(&parent.join(PACKAGE_DIRECTORY));
         }
     }
+}
+
+/// Restores the packaged sidecar after a later executable swap fails.
+#[allow(dead_code)] // Reached only through this platform's installer; see `installers/mod.rs`.
+fn restore_sidecar(installed: &Path, old: &Path) -> Result<(), UpdateError> {
+    if let Err(err) = std::fs::remove_file(installed)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(UpdateError::Install(format!(
+            "could not remove the new TSF sidecar {}: {err}",
+            installed.display()
+        )));
+    }
+    if old.exists() {
+        std::fs::rename(old, installed).map_err(|err| {
+            UpdateError::Install(format!(
+                "the previous TSF sidecar remains at {}: {err}",
+                old.display()
+            ))
+        })?;
+    }
+    Ok(())
 }
 
 /// Finds the new executable in an extracted archive.
@@ -153,7 +223,7 @@ fn find_executable(staging: &Path, running: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WindowsInstaller, find_executable};
+    use super::{WindowsInstaller, find_executable, restore_sidecar};
     use crate::updater::models::state::InstallOutcome;
     use crate::updater::services::PlatformInstaller;
     use std::path::{Path, PathBuf};
@@ -188,19 +258,30 @@ mod tests {
     /// Whether Windows permits the rename of a genuinely running `.exe` is not
     /// something this host can answer; `docs/release.md` says so.
     #[test]
-    fn the_running_executable_is_renamed_aside_and_replaced() {
+    fn the_executable_and_sidecar_are_replaced_and_staging_is_removed() {
         let root = scratch();
 
-        let source = root.join("source");
-        std::fs::create_dir_all(&source).expect("creates");
+        let source = root.join("source/dodo-v9.9.9-windows-x64");
+        std::fs::create_dir_all(source.join("input-method")).expect("creates");
         std::fs::write(source.join("dodo.exe"), b"new binary").expect("writes");
+        std::fs::write(source.join("input-method/dodo_ime_windows.dll"), b"new dll")
+            .expect("writes");
         let archive = root.join("dodo.tar.gz");
-        pack_flat(&source, "dodo.exe", &archive);
+        pack_flat(
+            source.parent().expect("archive root"),
+            "dodo-v9.9.9-windows-x64",
+            &archive,
+        );
 
         let installed = root.join("Program Files/dodo");
-        std::fs::create_dir_all(&installed).expect("creates");
+        std::fs::create_dir_all(installed.join("input-method")).expect("creates");
         let running = installed.join("dodo.exe");
         std::fs::write(&running, b"old binary").expect("writes");
+        std::fs::write(
+            installed.join("input-method/dodo_ime_windows.dll"),
+            b"old dll",
+        )
+        .expect("writes");
 
         let outcome = WindowsInstaller::at(running.clone())
             .install(&archive)
@@ -209,11 +290,42 @@ mod tests {
         assert_eq!(outcome, InstallOutcome::Installed);
         assert_eq!(std::fs::read(&running).expect("installed"), b"new binary");
         assert_eq!(
+            std::fs::read(installed.join("input-method/dodo_ime_windows.dll")).expect("installed"),
+            b"new dll"
+        );
+        assert_eq!(
             std::fs::read(installed.join("dodo.exe.dodo-old")).expect("aside"),
             b"old binary",
             "the running file cannot be deleted, only renamed — so it has to still be there"
         );
+        assert_eq!(
+            std::fs::read(installed.join("input-method/dodo_ime_windows.dll.dodo-old"))
+                .expect("aside"),
+            b"old dll",
+            "both previous payloads remain available for rollback until the next launch"
+        );
+        assert!(
+            !installed
+                .join(format!(".dodo-update-{}", std::process::id()))
+                .exists(),
+            "staging must be removed only after both payloads survive"
+        );
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn restoring_the_sidecar_reinstates_the_previous_bytes() {
+        let root = scratch();
+        let installed = root.join("dodo_ime_windows.dll");
+        let old = root.join("dodo_ime_windows.dll.dodo-old");
+        std::fs::write(&installed, b"new").expect("writes");
+        std::fs::write(&old, b"old").expect("writes");
+
+        restore_sidecar(&installed, &old).expect("restores");
+
+        assert_eq!(std::fs::read(&installed).expect("restored"), b"old");
+        assert!(!old.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -223,10 +335,21 @@ mod tests {
         let running = root.join("dodo.exe");
         std::fs::write(&running, b"current").expect("writes");
         std::fs::write(root.join("dodo.exe.dodo-old"), b"stale").expect("writes");
+        std::fs::create_dir_all(root.join("input-method")).expect("creates");
+        std::fs::write(
+            root.join("input-method/dodo_ime_windows.dll.dodo-old"),
+            b"stale",
+        )
+        .expect("writes");
 
         WindowsInstaller::at(running.clone()).sweep_stale();
 
         assert!(!root.join("dodo.exe.dodo-old").exists());
+        assert!(
+            !root
+                .join("input-method/dodo_ime_windows.dll.dodo-old")
+                .exists()
+        );
         assert!(running.exists());
 
         let _ = std::fs::remove_dir_all(&root);
@@ -254,6 +377,34 @@ mod tests {
             "a failed install must leave the installation alone"
         );
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_missing_sidecar_fails_before_the_executable_is_touched() {
+        let root = scratch();
+        let source = root.join("source");
+        std::fs::create_dir_all(&source).expect("creates");
+        std::fs::write(source.join("dodo.exe"), b"new binary").expect("writes");
+        let archive = root.join("dodo.tar.gz");
+        pack_flat(&source, "dodo.exe", &archive);
+
+        let running = root.join("dodo.exe");
+        std::fs::write(&running, b"old binary").expect("writes");
+        let error = WindowsInstaller::at(running.clone())
+            .install(&archive)
+            .expect_err("the sidecar is required");
+
+        assert!(
+            format!("{error:?}").contains("input-method/dodo_ime_windows.dll"),
+            "{error:?}"
+        );
+        assert_eq!(std::fs::read(&running).expect("untouched"), b"old binary");
+        assert!(
+            !root
+                .join(format!(".dodo-update-{}", std::process::id()))
+                .exists()
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

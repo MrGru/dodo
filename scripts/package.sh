@@ -193,11 +193,20 @@ checksum "$archive"
 # signing and notarisation remain future work; see "Future readiness" in docs/release.md.
 if [ "$app_bundle" = "1" ]; then
     [ "$platform" = "macos" ] || die "--app-bundle is macOS only (target: $target)"
+    ime_bin="$repo_root/target/$target/$profile/DodoVietnamese"
+    [ -f "$ime_bin" ] || die "no target-specific DodoVietnamese found; cargo build must build the dodo-ime-macos workspace member for $target"
+
     app_stage="$out_dir/.stage/app"
-    rm -rf "$app_stage"
-    mkdir -p "$app_stage"
+    ime_stage="$out_dir/.stage/input-method"
+    rm -rf "$app_stage" "$ime_stage"
+    mkdir -p "$app_stage" "$ime_stage"
+    "$repo_root/scripts/macos-input-method-bundle.sh" \
+        --binary "$ime_bin" --version "$version" --out "$ime_stage"
+    input_method="$ime_stage/Dodo Vietnamese.app"
+    [ -d "$input_method" ] || die "input-method bundle assembly produced no Dodo Vietnamese.app"
     "$repo_root/scripts/macos-app-bundle.sh" \
-        --binary "$bin" --version "$version" --out "$app_stage"
+        --binary "$bin" --version "$version" --out "$app_stage" \
+        --input-method "$input_method"
     app_archive="$out_dir/$name-app.tar.gz"
     tar ${tar_flags[@]+"${tar_flags[@]}"} -czf "$app_archive" -C "$app_stage" "dodo.app"
     printf 'packaged %s\n' "$app_archive"
