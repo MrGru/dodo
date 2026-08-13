@@ -75,17 +75,14 @@ is the fix, the measurements and the decision table, and is the pattern to copy 
 where the data is mutated, compare it before re-copying. Cheap `render` bodies are not an
 optimisation in dodo; they are the contract.
 
-**A `gpui_component` table does not lay itself out, and a tool that needs its own width has to
-measure it.** Every `Column` carries a definite pixel width and the table scrolls horizontally
-when they overflow, so a fixed column set silently pushes its rightmost column off the edge at a
-narrow window — which for the Cleaner was the actions. `src/cleaner/views/results_layout.rs` is
-the pattern: a pure width-to-columns function whose constants are read off the real app
-(`layout::MAIN_MIN_WIDTH`, now `pub(crate)` for exactly this, the library's own cell padding,
-icon-button square and scrollbar width) rather than chosen, so every breakpoint is a unit test.
-The width itself reaches it through a zero-ink `canvas` in the view: **gpui tells an element its
-bounds at prepaint, never during `render`**, so a self-sizing pane measures on one frame and lays
-out on the next — safe only because the entity is not borrowed during prepaint and because
-`notify` is called only when the number actually moved.
+**Never use a prepaint callback to mutate and `notify` a view for the next frame.** GPUI's
+`WindowInvalidator::invalidate_view` schedules a redraw only in `DrawPhase::None`; a notify during
+layout/prepaint records state but does not dirty the window, so it waits for an unrelated event.
+That made the Cleaner's result rows appear only after some resize sequences. Its table now keeps
+the pre-`2dd735c` fixed-column path and accepts horizontal scrolling; `cleaner_view.rs` carries
+the headless layout-state regression test. A headless `simulate_next_frame` is not evidence that the platform scheduled
+one — it runs an already-queued callback by hand, which is why the failed redraw workaround's test
+passed while the captain's idle window remained blank.
 
 **dodo persists ten things across restarts, and reads an eleventh another process writes**, all
 under `data_dir()` (`src/paths.rs`) and each

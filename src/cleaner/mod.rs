@@ -47,10 +47,9 @@
 //!   sidebar's glyph builder documented a spinner and drew an empty `div()`
 //!   for both in-flight states, which no test could have caught where it was.
 //!
-//! A fourth, from the round after: **the results grid decides its own column
-//! widths**, because `gpui_component`'s table does not — see
-//! [`views::results_layout`], which is also where the per-row action buttons'
-//! rule lives.
+//! The results grid deliberately uses fixed columns and horizontal scrolling;
+//! `views::results_table` records why feeding prepaint measurements back into
+//! this view is unsafe.
 
 pub mod core;
 #[cfg(target_os = "linux")]

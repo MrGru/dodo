@@ -141,15 +141,12 @@ picks it on macOS and returns an empty vector on every other platform.
   result every frame, which `src/cleaner/views/results_sync.rs` now does only when the result or
   the selection actually changed. Read that module before adding any other per-`render` copy.
 
-  **The grid also sizes its own columns now.** `DataTable` gives every column a definite pixel
-  width and scrolls horizontally when they overflow, so a fixed column set pushes the rightmost
-  column — the actions — off the edge at a narrow window. `src/cleaner/views/results_layout.rs`
-  is the pure width-to-columns rule (and the per-row action set), tested without a window;
-  `CleanerView::render_results_area` measures the grid with a zero-ink `canvas` and hands the
-  width in, and `ResultsTableDelegate` reads the resulting column list instead of matching on a
-  column index. Every column is fixed and non-resizable as a consequence: the widths are derived
-  from the pane, and a hand-dragged column would both undo itself on the next resize and be free
-  to cause the overflow the derivation exists to prevent.
+  **The grid uses fixed columns and horizontal scrolling.** A self-sizing version briefly measured
+  the pane from a zero-ink `canvas` at prepaint and fed that width back into `CleanerView`. GPUI
+  does not schedule a redraw for `notify` during a draw phase, so the new width waited for an
+  unrelated event and result rows could remain absent while idle. `results_table.rs` therefore
+  keeps the original stable column path; the actions column is simply wide enough for all four
+  supported buttons.
 - **No "export scan report to a local file"** action yet, though it's in the ticket's required
   interactions list.
 
