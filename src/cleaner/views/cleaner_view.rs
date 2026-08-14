@@ -18,6 +18,8 @@ use crate::cleaner::core::category::{CleanerCategory, CleanerSection};
 use crate::cleaner::core::errors::{CleanupError, ScanError};
 use crate::cleaner::core::ignore::{IgnoredItemsDocument, path_signature};
 use crate::cleaner::core::item::{CleanableItem, CleanableItemId};
+#[cfg(target_os = "linux")]
+use crate::cleaner::core::item::{InstalledAppAction, ItemMetadata};
 #[cfg(target_os = "macos")]
 use crate::cleaner::core::permissions::{MacPermission, PermissionService, PermissionState};
 use crate::cleaner::core::progress::LatestProgress;
@@ -739,6 +741,41 @@ impl CleanerView {
                         .description(error.clone())
                 });
             }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let ItemMetadata::InstalledApp(metadata) = &item.metadata else {
+                return;
+            };
+            let Some(action) = metadata.action.as_ref() else {
+                return;
+            };
+            let ok_text = match action {
+                InstalledAppAction::FlatpakUser { .. } => Str::CleanerUninstallApplication,
+                InstalledAppAction::AppImage => Str::CleanerUninstallMoveToTrash,
+            };
+            let title = Str::CleanerUninstallReviewTitle {
+                name: item.display_name.clone(),
+            };
+            let view = cx.entity();
+            window.open_alert_dialog(cx, move |alert, _, cx| {
+                let confirm_view = view.clone();
+                let item = item.clone();
+                alert
+                    .title(t(title.clone(), cx))
+                    .button_props(
+                        DialogButtonProps::default()
+                            .ok_text(t(ok_text.clone(), cx))
+                            .ok_variant(ButtonVariant::Danger)
+                            .cancel_text(t(Str::CleanerCancelScan, cx))
+                            .show_cancel(true),
+                    )
+                    .on_ok(move |_, _, cx| {
+                        confirm_view
+                            .update(cx, |this, cx| this.run_cleanup(vec![item.clone()], cx));
+                        true
+                    })
+            });
         }
     }
 

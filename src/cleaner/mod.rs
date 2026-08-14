@@ -14,8 +14,9 @@
 //! - [`macos`], [`windows`] and [`linux`] hold platform-only implementation
 //!   seams. Docker Cache, Node Tooling Cache and AI Apps are shared by all
 //!   three: their OS differences are resolved inputs or thin activity probes.
-//!   The other scanners stay under the platform that owns their filesystem and
-//!   OS rules.
+//!   Installed Apps stays parallel by platform: Windows owns registry/MSIX
+//!   discovery, Linux owns package-manager/desktop metadata, and neither runs
+//!   vendor command text or deletes package-managed locations.
 //!
 //! Three things settled on 2026-08-13, each of which is counter-intuitive
 //! enough that the module holding it is named here rather than left to be
@@ -30,8 +31,8 @@
 //!   `macos::platform::icon` carry the measurements; do not put a raw
 //!   `Vec<u8>` icon back on an item.
 //! - **Not every [`core::category::CleanerCategory`] is on screen, and which
-//!   ones are depends on the platform.** macOS lists all fourteen, Windows
-//!   lists eight and Linux lists seven — exactly what each scanner registry
+//!   ones are depends on the platform.** macOS lists all fourteen, while
+//!   Windows and Linux each list eight — exactly what each scanner registry
 //!   implements today. [`core::category::CleanerCategory::hidden_for`] is the
 //!   entire switch and is a **pure function of a [`crate::paths::HostOs`]**,
 //!   not a `cfg` split, so all three answers are unit tested from any host;
@@ -52,7 +53,10 @@
 pub(crate) mod ai_apps;
 pub mod core;
 pub(crate) mod docker_cache;
-#[cfg(target_os = "linux")]
+// Linux Installed Apps keeps its package parsers and inventory policy
+// host-independent so their fixtures run on this Mac; process/filesystem I/O
+// remains Linux-only in shipping builds.
+#[cfg(any(target_os = "linux", test))]
 pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;

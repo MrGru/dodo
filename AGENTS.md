@@ -59,11 +59,13 @@ the numbers); `core::category::CleanerCategory::hidden_for(HostOs)` is the whole
 which categories the window lists, and because a scan starts only from a category's own pane a
 hidden one is never scanned; and what a scan *looks* like is the tested pure
 `core::scan_state::ScanState::indicator`, not a `match` inside a `render`.
-**`hidden_for` is per platform and pure**: macOS lists all fourteen; Linux lists the four
-filesystem categories plus shared AI Apps, Docker Cache and Node Tooling Cache, while Windows also
-lists Installed Apps. That Windows scanner never reads or runs registry uninstall strings and never
-deletes install directories: uninstall hands off to the native Installed Apps settings surface,
-and bounded portable-app discoveries are inventory-only. Taking a `HostOs` rather than splitting
+**`hidden_for` is per platform and pure**: macOS lists all fourteen; Windows and Linux list the
+four filesystem categories plus shared AI Apps, Docker Cache and Node Tooling Cache, and both list
+Installed Apps. Windows never reads registry uninstall strings and hands actions to Installed Apps
+settings. Linux treats desktop entries as user-facing evidence over dpkg (Debian/Ubuntu), RPM
+(Fedora), pacman (Arch), separately-scoped Flatpak, Snap and bounded AppImages; native packages,
+system Flatpaks and Snap are scan-only, and only user Flatpaks and bounded AppImages have actions.
+Neither platform deletes package-managed install locations. Taking a `HostOs` rather than splitting
 on `cfg` is what lets every platform answer be asserted from this Mac. AI Apps keeps each host's
 Ollama/LM Studio paths in
 `src/cleaner/ai_apps/definitions/<host>.rs`; every Windows/Linux location is explicitly inferred

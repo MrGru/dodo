@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::cleaner::ai_apps;
 use crate::cleaner::core::category::CleanerCategory;
 use crate::cleaner::core::errors::CleanupError;
-use crate::cleaner::core::item::CleanableItem;
+use crate::cleaner::core::item::{CleanableItem, InstalledAppAction, ItemMetadata};
 use crate::cleaner::core::report::{CleanupItemFailure, CleanupItemSuccess, CleanupReport};
 use crate::cleaner::core::safety::{
     AllowedRoot, DeletionPolicy, dedupe_nested_paths, validate_path,
@@ -30,6 +30,27 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
         let Some(policy) = policy.as_ref() else {
             continue;
         };
+        if let Some(application_id) = user_flatpak_action(item) {
+            match crate::cleaner::linux::scanners::installed_apps::uninstall_user_flatpak(
+                application_id,
+            ) {
+                Ok(()) => successes.push(CleanupItemSuccess {
+                    id: item.id,
+                    path: item.path.clone(),
+                    trashed_path: None,
+                    logical_size: 0,
+                }),
+                Err(message) => failures.push(CleanupItemFailure {
+                    id: item.id,
+                    path: item.path.clone(),
+                    error: CleanupError::ExternalOperationFailed {
+                        operation: "flatpak --user uninstall".to_string(),
+                        message,
+                    },
+                }),
+            }
+            continue;
+        }
         match validate_path(host, path.as_path(), item.category, policy) {
             Ok(()) => match move_to_trash(path.as_path()) {
                 Ok(receipt) => successes.push(CleanupItemSuccess {
@@ -59,9 +80,26 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
     }
 }
 
+fn user_flatpak_action(item: &CleanableItem) -> Option<&str> {
+    if item.category != CleanerCategory::InstalledApps {
+        return None;
+    }
+    let ItemMetadata::InstalledApp(metadata) = &item.metadata else {
+        return None;
+    };
+    if metadata.scope != crate::cleaner::core::item::InstalledAppScope::User {
+        return None;
+    }
+    match metadata.action.as_ref()? {
+        InstalledAppAction::FlatpakUser { application_id } => Some(application_id),
+        InstalledAppAction::AppImage => None,
+    }
+}
+
 /// Filesystem categories get explicit scanner-derived roots. Docker Cache
-/// routes to the shared CLI pruner instead; hidden categories cannot produce
-/// items here.
+/// routes to the shared CLI pruner instead. Installed Apps authorizes only a
+/// typed AppImage action beneath the user's home; native package locations,
+/// system Flatpaks and Snaps never become deletion roots.
 fn policy_for(item: &CleanableItem) -> DeletionPolicy {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut allowed_roots = vec![AllowedRoot {
@@ -95,6 +133,20 @@ fn policy_for(item: &CleanableItem) -> DeletionPolicy {
             path: root,
             allowed_categories: vec![CleanerCategory::NodeToolingCache],
         });
+    }
+
+    if matches!(
+        &item.metadata,
+        ItemMetadata::InstalledApp(metadata)
+            if metadata.scope == crate::cleaner::core::item::InstalledAppScope::User
+                && metadata.action == Some(InstalledAppAction::AppImage)
+    ) {
+        if let Some(home) = home.as_ref() {
+            allowed_roots.push(AllowedRoot {
+                path: home.clone(),
+                allowed_categories: vec![CleanerCategory::InstalledApps],
+            });
+        }
     }
 
     let ai_environment = (item.category == CleanerCategory::AiApps)

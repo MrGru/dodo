@@ -147,12 +147,11 @@ fn action_look(action: RowAction) -> (Str, AppIcon) {
 }
 
 fn uninstall_label() -> Str {
-    #[cfg(target_os = "windows")]
-    {
+    if cfg!(target_os = "windows") {
         Str::CleanerOpenInstalledAppsSettings
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
+    } else if cfg!(target_os = "linux") {
+        Str::CleanerUninstallApplication
+    } else {
         Str::CleanerBeginUninstallReview
     }
 }

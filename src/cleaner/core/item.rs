@@ -41,6 +41,7 @@ pub struct ItemWarning {
 pub enum ItemMetadata {
     Generic,
     Application(ApplicationMetadata),
+    InstalledApp(InstalledAppMetadata),
     MailFile(MailFileMetadata),
     LargeFile(LargeFileMetadata),
     Docker(DockerItemMetadata),
@@ -62,6 +63,34 @@ pub struct ApplicationMetadata {
     /// module doc carries what that cost when it was, and why the bound is a
     /// type rather than a comment.
     pub icon: Option<IconRaster>,
+}
+
+/// Typed action data for non-macOS installed-app inventories. Source identity
+/// and scope stay attached to the row so action code never has to infer either
+/// from a display label or parse a command string from package metadata.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct InstalledAppMetadata {
+    pub source: String,
+    pub identifier: String,
+    pub scope: InstalledAppScope,
+    pub action: Option<InstalledAppAction>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum InstalledAppScope {
+    User,
+    System,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum InstalledAppAction {
+    /// A fixed, argument-separated `flatpak --user uninstall` action. The
+    /// identifier is validated when the inventory record is normalized.
+    FlatpakUser { application_id: String },
+    /// Move exactly the scanned AppImage path to Trash through the shared
+    /// deletion boundary. No desktop entry or guessed application data is
+    /// included.
+    AppImage,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]

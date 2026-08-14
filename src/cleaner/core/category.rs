@@ -80,10 +80,9 @@ impl CleanerCategory {
     /// hiding changes only whether a row exists to start its scan.
     ///
     /// macOS implements all fourteen categories. Windows also implements
-    /// Installed Apps; Linux still lists only System Junk, User Cache, Trash
-    /// Bins, Large & Old Files, AI Apps, Node Tooling Cache and Docker Cache.
-    /// Later rounds must
-    /// unhide a row in the same change that registers its scanner.
+    /// Installed Apps, and Linux now does too through its package metadata,
+    /// Flatpak, Snap and bounded AppImage inventory. Later rounds must unhide a
+    /// row in the same change that registers its scanner.
     ///
     /// Two absences are policy rather than roadmap state. Language Files stays
     /// macOS-only because Windows and Linux have no safe, well-defined unit of
@@ -107,7 +106,6 @@ impl CleanerCategory {
             ],
             HostOs::Unix => &[
                 CleanerCategory::MailFiles,
-                CleanerCategory::InstalledApps,
                 CleanerCategory::OrphanedFiles,
                 CleanerCategory::XcodeJunk,
                 CleanerCategory::HomebrewCache,
@@ -176,9 +174,8 @@ mod tests {
         CleanerCategory::UniversalBinaries,
         CleanerCategory::LanguageFiles,
     ];
-    const HIDDEN_ON_LINUX: [CleanerCategory; 7] = [
+    const HIDDEN_ON_LINUX: [CleanerCategory; 6] = [
         CleanerCategory::MailFiles,
-        CleanerCategory::InstalledApps,
         CleanerCategory::OrphanedFiles,
         CleanerCategory::XcodeJunk,
         CleanerCategory::HomebrewCache,
@@ -193,7 +190,7 @@ mod tests {
 
         for (host, hidden, visible_count) in [
             (HostOs::Windows, HIDDEN_ON_WINDOWS.as_slice(), 8),
-            (HostOs::Unix, HIDDEN_ON_LINUX.as_slice(), 7),
+            (HostOs::Unix, HIDDEN_ON_LINUX.as_slice(), 8),
         ] {
             assert_eq!(CleanerCategory::hidden_for(host), hidden);
             assert_eq!(CleanerCategory::visible_for(host).count(), visible_count);
@@ -256,8 +253,8 @@ mod tests {
         );
         assert_eq!(
             CleanerCategory::categories_for_host(HostOs::Unix, CleanerSection::Applications)
-                .count(),
-            0
+                .collect::<Vec<_>>(),
+            vec![CleanerCategory::InstalledApps]
         );
     }
 

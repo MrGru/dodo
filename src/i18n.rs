@@ -1276,6 +1276,7 @@ pub enum Str {
     CleanerUninstallScanOnlyBadge,
     CleanerUninstallMoveToTrash,
     CleanerUninstallClose,
+    CleanerUninstallApplication,
     CleanerConfidenceConfirmed,
     CleanerConfidenceHigh,
     CleanerConfidenceMedium,
@@ -1911,6 +1912,8 @@ impl Str {
             }
             (Str::CleanerUninstallClose, Language::English) => "Close".into(),
             (Str::CleanerUninstallClose, Language::Vietnamese) => "Đóng".into(),
+            (Str::CleanerUninstallApplication, Language::English) => "Uninstall".into(),
+            (Str::CleanerUninstallApplication, Language::Vietnamese) => "Gỡ cài đặt".into(),
             (Str::CleanerConfidenceConfirmed, Language::English) => "Confirmed".into(),
             (Str::CleanerConfidenceConfirmed, Language::Vietnamese) => "Chắc chắn".into(),
             (Str::CleanerConfidenceHigh, Language::English) => "High".into(),
@@ -6565,6 +6568,7 @@ mod tests {
             plain(Str::InputMethodBrowserFix),
             plain(Str::InputMethodBrowserFixDescription),
             plain(Str::CleanerOpenInstalledAppsSettings),
+            plain(Str::CleanerUninstallApplication),
         ]
     }
 
@@ -7508,6 +7512,7 @@ mod tests {
             Str::InputMethodBrowserFix => 933,
             Str::InputMethodBrowserFixDescription => 934,
             Str::CleanerOpenInstalledAppsSettings => 935,
+            Str::CleanerUninstallApplication => 936,
         }
     }
 
