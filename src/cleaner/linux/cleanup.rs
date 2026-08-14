@@ -56,7 +56,8 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
 
 /// Only the three categories that ever carry `MoveToTrash` on Linux (System
 /// Junk, User Cache, Large & Old Files — Trash Bins is review-only) get an
-/// allowed root. Hidden, unsupported categories cannot produce items here.
+/// allowed root. Docker Cache routes to the shared CLI pruner instead; hidden,
+/// unsupported categories cannot produce items here.
 fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut allowed_roots = vec![AllowedRoot {

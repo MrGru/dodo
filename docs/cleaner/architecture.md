@@ -38,14 +38,13 @@ Cleaner is wired as a top-level tool in:
    applied per category per tick, never one `cx.notify()` per file. A scan's result, cancellation
    and error never travel that way; they are the background task's return value.
 6. Category results accumulate into summary fields and per-category result panels.
-7. A category with no registered scanner surfaces an explicit partial "coming later" result rather
-   than a fake success — moot now that all 14 categories have one, but the mechanism stays in place
-   for a future Windows/Linux port that will genuinely need it.
+7. On a supported host, a category with no registered scanner is hidden. The explicit partial
+   "coming later" result remains a defensive fallback rather than a roadmap row.
 8. Completion transitions to `Completed`, `PartiallyCompleted`, or `CompletedWithFailures`.
-9. "Clean selected" opens a confirmation dialog, then runs either the Trash-move pipeline
-   (`macos::cleanup::cleanup_items`) or, for `CleanerCategory::DockerCache` only, the Docker-CLI prune
-   pipeline (`macos::scanners::docker_cache::prune_items`) — `CleanerView::run_cleanup` branches on
-   category, never mixing the two.
+9. "Clean selected" opens a confirmation dialog, then runs either the host's Trash-move pipeline
+   or, for `CleanerCategory::DockerCache` only, the shared Docker-CLI prune pipeline
+   (`cleaner::docker_cache::prune_items`) — `CleanerView::run_cleanup` branches on category before
+   any target-specific filesystem cleanup, never mixing the two.
 
 ## Concurrency strategy
 
@@ -78,7 +77,7 @@ Cleaner is wired as a top-level tool in:
   scanner-file change.
 - `core::ignore` — the pure data shape (`IgnoredItemsDocument`) behind the "Keep" persisted list.
 
-## macOS scanners (`src/cleaner/macos/scanners/`), one file (or small module) per category
+## Platform scanners, one file (or small module) per category
 
 | Category | File(s) |
 |---|---|
@@ -93,12 +92,12 @@ Cleaner is wired as a top-level tool in:
 | Xcode Junk | `xcode_junk.rs` |
 | Homebrew Cache | `homebrew_cache.rs` |
 | Node Tooling Cache | `node_tooling_cache.rs`, `node_tooling/{npm,yarn_classic,yarn_berry,pnpm,bun,nub}.rs` |
-| Docker Cache | `docker_cache.rs` |
 | Universal Binaries (analysis-only) | `universal_binaries.rs` |
 | Language Files (analysis-only) | `language_files.rs` |
 
-`macos/scanners/mod.rs`'s `default_scanners()` is the single registration point; `state::registry`
-picks it on macOS and returns an empty vector on every other platform.
+The table above is the macOS-specific set. Docker Cache lives at `src/cleaner/docker_cache.rs`
+because its fixed-argv CLI scanner/pruner is shared unchanged by all three hosts. Each platform's
+`scanners/mod.rs` registers its set; `state::registry` picks the compiled target's registry.
 
 ## Shared macOS infrastructure
 
@@ -152,19 +151,13 @@ picks it on macOS and returns an empty vector on every other platform.
 
 ## Platform strategy
 
-- macOS-first behavior is real across all 14 categories, and macOS is the only platform that
-  **lists** all 14. Windows and Linux hide Xcode Junk, Homebrew Cache and Universal Binaries:
-  `CleanerCategory::hidden_for(HostOs)` is the whole switch and is a pure function of the
-  platform, so both answers are unit tested from any host. See `docs/cleaner/advanced-tools.md`
-  for the reasoning and for why "listed here" and "scannable here" are deliberately two
-  different questions.
-- **Windows and Linux scanners now exist** — this section previously said no non-macOS scanner was
-  registered, which stopped being true when `src/cleaner/windows/` and `src/cleaner/linux/`
-  landed. Each registers the four generic categories (System Junk, User Cache, Trash Bins,
-  Large & Old Files); `state::registry::default_scanners()` picks the platform's set and returns
-  an empty vector only on a target that is none of the three. Every other listed category has no
-  scanner there and the view's "planned but not implemented yet" partial-result path covers the
-  gap honestly.
+- macOS is the only platform that **lists** all 14 categories. Windows and Linux list only their
+  four filesystem scanners plus shared Docker Cache; every unsupported row is hidden.
+  `CleanerCategory::hidden_for(HostOs)` is the whole switch and is a pure function of the platform,
+  so all answers are unit tested from any host. See `docs/cleaner/advanced-tools.md`.
+- `state::registry::default_scanners()` picks the platform's set and returns an empty vector only
+  on a target that is none of the three. Paired invariant tests forbid both a hidden scanner and a
+  listed row without a scanner.
 - A wholly unsupported target still shows the explicit unsupported UI text
   (`CleanerView::supported_platform`).
 - Nothing about the core domain, state machine or view layer assumes macOS; each platform module

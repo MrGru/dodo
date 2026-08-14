@@ -12,9 +12,9 @@
 //! - [`state`] orchestrates scans and UI-facing state transitions.
 //! - [`views`] renders the Cleaner panel.
 //! - [`macos`], [`windows`] and [`linux`] hold platform-only implementation
-//!   seams. macOS carries every category; Windows and Linux carry only the
-//!   four generic ones (System Junk, User Cache, Trash Bins, Large & Old
-//!   Files) — see each module's own doc comment for what that means and why.
+//!   seams. Docker Cache is shared by all three because it talks only to the
+//!   Docker CLI; the other scanners stay under the platform that owns their
+//!   filesystem and OS rules.
 //!
 //! Three things settled on 2026-08-13, each of which is counter-intuitive
 //! enough that the module holding it is named here rather than left to be
@@ -30,8 +30,8 @@
 //!   `Vec<u8>` icon back on an item.
 //! - **Not every [`core::category::CleanerCategory`] is on screen, and which
 //!   ones are depends on the platform.** macOS lists all fourteen; Windows
-//!   and Linux list only the four categories their scanner registries
-//!   implement today. [`core::category::CleanerCategory::hidden_for`] is the
+//!   and Linux list the five categories their scanner registries implement
+//!   today. [`core::category::CleanerCategory::hidden_for`] is the
 //!   entire switch and is a **pure function of a [`crate::paths::HostOs`]**,
 //!   not a `cfg` split, so all three answers are unit tested from any host;
 //!   `HostOs::current` is the one place the compiled-for platform enters it.
@@ -49,6 +49,7 @@
 //! this view is unsafe.
 
 pub mod core;
+pub(crate) mod docker_cache;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "macos")]

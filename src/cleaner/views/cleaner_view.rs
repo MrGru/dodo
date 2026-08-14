@@ -28,10 +28,9 @@ use crate::cleaner::core::risk::SelectionPolicy;
 use crate::cleaner::core::scan_context::ScanContext;
 use crate::cleaner::core::scan_state::{ScanIndicator, ScanState};
 use crate::cleaner::core::scanner::CleanerScanner;
+use crate::cleaner::docker_cache;
 #[cfg(target_os = "macos")]
 use crate::cleaner::macos::applications::review as uninstall_review;
-#[cfg(target_os = "macos")]
-use crate::cleaner::macos::scanners::docker_cache;
 #[cfg(target_os = "macos")]
 use crate::cleaner::macos::{cleanup, permissions, platform};
 use crate::cleaner::services::ignore_store::{
@@ -663,35 +662,33 @@ impl CleanerView {
             let report = cx
                 .background_executor()
                 .spawn(async move {
-                    #[cfg(target_os = "macos")]
-                    {
-                        if is_docker {
-                            docker_cache::prune_items(&items)
-                        } else {
+                    if is_docker {
+                        docker_cache::prune_items(&items)
+                    } else {
+                        #[cfg(target_os = "macos")]
+                        {
                             cleanup::cleanup_items(&items)
                         }
-                    }
-                    #[cfg(target_os = "windows")]
-                    {
-                        let _ = is_docker;
-                        crate::cleaner::windows::cleanup::cleanup_items(&items)
-                    }
-                    #[cfg(target_os = "linux")]
-                    {
-                        let _ = is_docker;
-                        crate::cleaner::linux::cleanup::cleanup_items(&items)
-                    }
-                    #[cfg(not(any(
-                        target_os = "macos",
-                        target_os = "windows",
-                        target_os = "linux"
-                    )))]
-                    {
-                        let _ = (is_docker, items);
-                        CleanupReport {
-                            successes: Vec::new(),
-                            failures: Vec::new(),
-                            estimated_reclaimed_bytes: 0,
+                        #[cfg(target_os = "windows")]
+                        {
+                            crate::cleaner::windows::cleanup::cleanup_items(&items)
+                        }
+                        #[cfg(target_os = "linux")]
+                        {
+                            crate::cleaner::linux::cleanup::cleanup_items(&items)
+                        }
+                        #[cfg(not(any(
+                            target_os = "macos",
+                            target_os = "windows",
+                            target_os = "linux"
+                        )))]
+                        {
+                            let _ = items;
+                            CleanupReport {
+                                successes: Vec::new(),
+                                failures: Vec::new(),
+                                estimated_reclaimed_bytes: 0,
+                            }
                         }
                     }
                 })

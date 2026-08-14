@@ -59,9 +59,9 @@ the numbers); `core::category::CleanerCategory::hidden_for(HostOs)` is the whole
 which categories the window lists, and because a scan starts only from a category's own pane a
 hidden one is never scanned; and what a scan *looks* like is the tested pure
 `core::scan_state::ScanState::indicator`, not a `match` inside a `render`.
-**`hidden_for` is per platform and pure**: macOS lists all fourteen; Windows and Linux list only
-the four categories with working scanners, and taking a `HostOs` rather than splitting on `cfg`
-is what lets every platform answer be asserted from this Mac. Language Files stays macOS-only
+**`hidden_for` is per platform and pure**: macOS lists all fourteen; Windows and Linux list the
+four filesystem categories plus shared Docker Cache, and taking a `HostOs` rather than splitting
+on `cfg` is what lets every platform answer be asserted from this Mac. Language Files stays macOS-only
 unless a safe equivalent appears; Orphaned Files stays unavailable on Windows and may return on
 Linux only with conservative package-manager-aware ownership. Scanner registries still own what
 can scan, and paired tests forbid disagreement in either direction: no hidden scanner and no

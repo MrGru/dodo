@@ -75,7 +75,7 @@ pub struct LargeFileMetadata {
 }
 
 /// Which Docker engine object a `CleanerCategory::DockerCache` item names.
-/// See `macos::scanners::docker_cache`.
+/// See [`crate::cleaner::docker_cache`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DockerObjectKind {
     Image,
@@ -84,7 +84,7 @@ pub enum DockerObjectKind {
     Network,
 }
 
-/// Attached to every item `macos::scanners::docker_cache::DockerCacheScanner`
+/// Attached to every item [`crate::cleaner::docker_cache::DockerCacheScanner`]
 /// produces. `engine_id` is whatever the `docker` CLI identifies the object
 /// by — an image/container id, a volume name, a network id — exactly what
 /// `docker_cache::prune_items` passes back to `docker rmi`/`rm`/`volume

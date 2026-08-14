@@ -63,8 +63,10 @@
 //! their `explanation` says so explicitly rather than implying an empty
 //! reclaim.
 
+use std::io;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -91,11 +93,49 @@ use crate::cleaner::core::scanner::CleanerScanner;
 /// literals.
 const PREDEFINED_NETWORKS: [&str; 3] = ["bridge", "host", "none"];
 
-pub struct DockerCacheScanner;
+struct DockerCommandOutput {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    exit_code: Option<i32>,
+}
+
+impl DockerCommandOutput {
+    fn succeeded(&self) -> bool {
+        self.exit_code == Some(0)
+    }
+}
+
+trait DockerCommandRunner: Send + Sync {
+    fn run(&self, args: &[&str]) -> io::Result<DockerCommandOutput>;
+}
+
+struct ProcessDockerCommandRunner;
+
+impl DockerCommandRunner for ProcessDockerCommandRunner {
+    fn run(&self, args: &[&str]) -> io::Result<DockerCommandOutput> {
+        let output = Command::new("docker").args(args).output()?;
+        Ok(DockerCommandOutput {
+            stdout: output.stdout,
+            stderr: output.stderr,
+            exit_code: output.status.code(),
+        })
+    }
+}
+
+pub struct DockerCacheScanner {
+    runner: Arc<dyn DockerCommandRunner>,
+}
 
 impl DockerCacheScanner {
     pub fn new() -> Self {
-        Self
+        Self {
+            runner: Arc::new(ProcessDockerCommandRunner),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_runner(runner: Arc<dyn DockerCommandRunner>) -> Self {
+        Self { runner }
     }
 }
 
@@ -128,18 +168,37 @@ impl CleanerScanner for DockerCacheScanner {
             return Err(ScanError::Cancelled);
         }
 
-        let containers = match run_json_lines(&["ps", "-a", "--format", "{{json .}}"]) {
+        let containers = match run_json_lines(
+            self.runner.as_ref(),
+            &["ps", "-a", "--format", "{{json .}}"],
+        ) {
             Ok(rows) => rows,
             Err(message) => return Ok(unavailable_result(message)),
         };
         if cancellation.is_cancelled() {
             return Err(ScanError::Cancelled);
         }
-        let images = run_json_lines(&["image", "ls", "--format", "{{json .}}"]).unwrap_or_default();
-        let volumes =
-            run_json_lines(&["volume", "ls", "--format", "{{json .}}"]).unwrap_or_default();
-        let networks =
-            run_json_lines(&["network", "ls", "--format", "{{json .}}"]).unwrap_or_default();
+        let images = match run_json_lines(
+            self.runner.as_ref(),
+            &["image", "ls", "--format", "{{json .}}"],
+        ) {
+            Ok(rows) => rows,
+            Err(message) => return Ok(unavailable_result(message)),
+        };
+        let volumes = match run_json_lines(
+            self.runner.as_ref(),
+            &["volume", "ls", "--format", "{{json .}}"],
+        ) {
+            Ok(rows) => rows,
+            Err(message) => return Ok(unavailable_result(message)),
+        };
+        let networks = match run_json_lines(
+            self.runner.as_ref(),
+            &["network", "ls", "--format", "{{json .}}"],
+        ) {
+            Ok(rows) => rows,
+            Err(message) => return Ok(unavailable_result(message)),
+        };
 
         let used_images: Vec<String> = containers
             .iter()
@@ -372,6 +431,13 @@ fn network_item(id: &str, name: &str) -> CleanableItem {
 /// them (nor should it — there is nothing on the host filesystem to
 /// contain).
 pub fn prune_items(items: &[CleanableItem]) -> CleanupReport {
+    prune_items_with_runner(items, &ProcessDockerCommandRunner)
+}
+
+fn prune_items_with_runner(
+    items: &[CleanableItem],
+    runner: &dyn DockerCommandRunner,
+) -> CleanupReport {
     let mut successes = Vec::new();
     let mut failures = Vec::new();
 
@@ -388,8 +454,9 @@ pub fn prune_items(items: &[CleanableItem]) -> CleanupReport {
             continue;
         };
         let args = remove_args(metadata.kind, &metadata.engine_id);
-        match Command::new("docker").args(&args).output() {
-            Ok(output) if output.status.success() => successes.push(CleanupItemSuccess {
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        match runner.run(&argv) {
+            Ok(output) if output.succeeded() => successes.push(CleanupItemSuccess {
                 id: item.id,
                 path: item.path.clone(),
                 trashed_path: None,
@@ -438,12 +505,11 @@ fn remove_args(kind: DockerObjectKind, id: &str) -> Vec<String> {
 /// output that is not line-delimited JSON at all (untrusted external output,
 /// per the ticket — a line that fails to parse is skipped, not fatal, but a
 /// process that fails outright is).
-fn run_json_lines(args: &[&str]) -> Result<Vec<Value>, String> {
-    let output = Command::new("docker")
-        .args(args)
-        .output()
+fn run_json_lines(runner: &dyn DockerCommandRunner, args: &[&str]) -> Result<Vec<Value>, String> {
+    let output = runner
+        .run(args)
         .map_err(|error| format!("docker CLI not found: {error}"))?;
-    if !output.status.success() {
+    if !output.succeeded() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -513,7 +579,193 @@ fn item_id(kind: DockerObjectKind, id: &str) -> CleanableItemId {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::io;
+    use std::sync::{Arc, Mutex};
+
     use super::*;
+
+    struct FakeRunner {
+        responses: Mutex<VecDeque<io::Result<DockerCommandOutput>>>,
+        commands: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl FakeRunner {
+        fn new(responses: Vec<io::Result<DockerCommandOutput>>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into()),
+                commands: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn commands(&self) -> Vec<Vec<String>> {
+            self.commands.lock().expect("commands lock").clone()
+        }
+    }
+
+    impl DockerCommandRunner for FakeRunner {
+        fn run(&self, args: &[&str]) -> io::Result<DockerCommandOutput> {
+            self.commands
+                .lock()
+                .expect("commands lock")
+                .push(args.iter().map(|arg| (*arg).to_string()).collect());
+            self.responses
+                .lock()
+                .expect("responses lock")
+                .pop_front()
+                .expect("a response for every command")
+        }
+    }
+
+    struct IgnoreProgress;
+
+    impl ProgressSink for IgnoreProgress {
+        fn report(&self, _progress: ScanProgress) {}
+    }
+
+    fn output(exit_code: i32, stdout: &str, stderr: &str) -> io::Result<DockerCommandOutput> {
+        Ok(DockerCommandOutput {
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+            exit_code: Some(exit_code),
+        })
+    }
+
+    fn scan_with(runner: Arc<FakeRunner>) -> CategoryScanResult {
+        DockerCacheScanner::with_runner(runner)
+            .scan(
+                &ScanContext::new(),
+                &IgnoreProgress,
+                &CancellationToken::new(),
+            )
+            .expect("scan result")
+    }
+
+    fn item_for(
+        result: &CategoryScanResult,
+        kind: DockerObjectKind,
+        engine_id: &str,
+    ) -> CleanableItem {
+        result
+            .items
+            .iter()
+            .find(|item| {
+                matches!(
+                    &item.metadata,
+                    ItemMetadata::Docker(metadata)
+                        if metadata.kind == kind && metadata.engine_id == engine_id
+                )
+            })
+            .expect("classified item")
+            .clone()
+    }
+
+    #[test]
+    fn captured_json_is_classified_without_showing_referenced_objects() {
+        let runner = Arc::new(FakeRunner::new(vec![
+            output(
+                0,
+                r#"{"ID":"stopped-id","Image":"nginx:latest","Mounts":"used-vol","Networks":"used-net","State":"exited","Names":"/old-web"}
+{"ID":"running-id","Image":"busy:latest","Mounts":"","Networks":"","State":"running","Names":"live"}"#,
+                "",
+            ),
+            output(
+                0,
+                r#"{"ID":"sha256:nginx","Repository":"nginx","Tag":"latest","Size":"10MB"}
+{"ID":"sha256:busy","Repository":"busy","Tag":"latest","Size":"20MB"}
+{"ID":"sha256:dangling","Repository":"<none>","Tag":"<none>","Size":"1.5MB"}
+{"ID":"sha256:alpine","Repository":"alpine","Tag":"3.20","Size":"2MB"}"#,
+                "",
+            ),
+            output(0, "{\"Name\":\"used-vol\"}\n{\"Name\":\"free-vol\"}", ""),
+            output(
+                0,
+                r#"{"ID":"default","Name":"bridge"}
+{"ID":"used","Name":"used-net"}
+{"ID":"free","Name":"free-net"}"#,
+                "",
+            ),
+        ]));
+
+        let result = scan_with(runner.clone());
+
+        assert_eq!(result.scanned_entries, 11);
+        assert_eq!(result.items.len(), 5);
+        assert_eq!(result.estimated_reclaimable_bytes, 3_500_000);
+        assert_eq!(result.completeness, ScanCompleteness::Complete);
+        assert_eq!(
+            runner.commands(),
+            vec![
+                vec!["ps", "-a", "--format", "{{json .}}"],
+                vec!["image", "ls", "--format", "{{json .}}"],
+                vec!["volume", "ls", "--format", "{{json .}}"],
+                vec!["network", "ls", "--format", "{{json .}}"],
+            ]
+        );
+
+        let container = item_for(&result, DockerObjectKind::Container, "stopped-id");
+        assert_eq!(
+            container.selection_policy,
+            SelectionPolicy::NotSelectedByDefault
+        );
+        let dangling = item_for(&result, DockerObjectKind::Image, "sha256:dangling");
+        assert_eq!(dangling.risk, RiskLevel::SafeRecreatable);
+        assert_eq!(
+            dangling.selection_policy,
+            SelectionPolicy::SelectedByDefault
+        );
+        let tagged = item_for(&result, DockerObjectKind::Image, "sha256:alpine");
+        assert_eq!(tagged.risk, RiskLevel::ReviewRecommended);
+        let volume = item_for(&result, DockerObjectKind::Volume, "free-vol");
+        assert_eq!(volume.risk, RiskLevel::UserData);
+        assert_eq!(volume.selection_policy, SelectionPolicy::NeverBulkSelect);
+        let network = item_for(&result, DockerObjectKind::Network, "free");
+        assert_eq!(
+            network.selection_policy,
+            SelectionPolicy::NotSelectedByDefault
+        );
+    }
+
+    #[test]
+    fn missing_cli_and_daemon_failure_are_partial_without_items() {
+        let missing = Arc::new(FakeRunner::new(vec![Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "docker missing",
+        ))]));
+        let missing_result = scan_with(missing);
+        assert!(missing_result.items.is_empty());
+        assert!(matches!(
+            missing_result.completeness,
+            ScanCompleteness::Partial {
+                reason: PartialScanReason::UnsupportedEnvironment,
+                ..
+            }
+        ));
+        assert!(
+            missing_result.warnings[0]
+                .message
+                .contains("docker CLI not found")
+        );
+
+        let daemon_down = Arc::new(FakeRunner::new(vec![
+            output(0, "", ""),
+            output(1, "", "Cannot connect to the Docker daemon"),
+        ]));
+        let daemon_result = scan_with(daemon_down.clone());
+        assert!(daemon_result.items.is_empty());
+        assert!(matches!(
+            daemon_result.completeness,
+            ScanCompleteness::Partial {
+                reason: PartialScanReason::UnsupportedEnvironment,
+                ..
+            }
+        ));
+        assert_eq!(
+            daemon_result.warnings[0].message,
+            "Cannot connect to the Docker daemon"
+        );
+        assert_eq!(daemon_down.commands().len(), 2);
+    }
 
     #[test]
     fn dangling_images_are_safe_and_selected_by_default() {
@@ -576,22 +828,32 @@ mod tests {
     }
 
     #[test]
-    fn remove_args_match_the_object_kind() {
+    fn pruning_uses_the_exact_non_forcing_argv_for_every_object_kind() {
+        let runner = FakeRunner::new(vec![
+            output(0, "", ""),
+            output(0, "", ""),
+            output(0, "", ""),
+            output(0, "", ""),
+        ]);
+        let items = vec![
+            image_item("image-id", "repo", "tag", false, 10),
+            container_item("container-id", "old", "exited"),
+            volume_item("volume-name"),
+            network_item("network-id", "unused"),
+        ];
+
+        let report = prune_items_with_runner(&items, &runner);
+
+        assert_eq!(report.successes.len(), 4);
+        assert!(report.failures.is_empty());
         assert_eq!(
-            remove_args(DockerObjectKind::Image, "abc"),
-            vec!["rmi", "abc"]
-        );
-        assert_eq!(
-            remove_args(DockerObjectKind::Container, "abc"),
-            vec!["rm", "abc"]
-        );
-        assert_eq!(
-            remove_args(DockerObjectKind::Volume, "abc"),
-            vec!["volume", "rm", "abc"]
-        );
-        assert_eq!(
-            remove_args(DockerObjectKind::Network, "abc"),
-            vec!["network", "rm", "abc"]
+            runner.commands(),
+            vec![
+                vec!["rmi", "image-id"],
+                vec!["rm", "container-id"],
+                vec!["volume", "rm", "volume-name"],
+                vec!["network", "rm", "network-id"],
+            ]
         );
     }
 

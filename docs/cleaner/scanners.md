@@ -273,8 +273,9 @@ Current behavior:
 
 ### Docker Cache scanner
 
-`src/cleaner/macos/scanners/docker_cache.rs` — dangling/unused images, stopped containers, and
-unused volumes/networks, via the `docker` CLI (`Command::new("docker")`, argument vectors, no shell).
+`src/cleaner/docker_cache.rs` — a scanner shared by macOS, Windows and Linux for dangling/unused
+images, stopped containers, and unused volumes/networks, via the `docker` CLI (fixed argument
+vectors, no shell).
 **Deliberately does not reuse `crate::docker::services::DockerEngine`** even though `src/docker/`
 already resolves a daemon connection and lists all four resource types: dodo's "self-contained-module
 invariant" (see `dodo-database-internals`, which dropped a "detect running database containers"
@@ -293,10 +294,9 @@ tokio runtime.
 
 Current behavior:
 
-- daemon status is folded into `ScanCompleteness::Partial { reason: UnsupportedEnvironment }` with a
-  `ScanWarning` the moment the *first* command (`docker ps -a`) fails — missing binary and unreachable
-  daemon are not distinguished, both just mean "Docker unavailable" and the category returns empty
-  rather than failing the whole Smart Care scan;
+- a missing CLI or non-zero exit from any of the four list commands is folded into
+  `ScanCompleteness::Partial { reason: UnsupportedEnvironment }` with a `ScanWarning`; the category
+  returns empty rather than showing objects from an uncertain partial inventory;
 - "in use" for images/volumes/networks is derived from `docker ps -a`'s own `Image`/`Mounts`/
   `Networks` columns, not a second `inspect` call per container — cheap, and matches the ticket's
   "avoid duplicate directory-size calculations"-style conservatism applied to process calls instead;

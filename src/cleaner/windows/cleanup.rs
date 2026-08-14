@@ -54,9 +54,9 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
     }
 }
 
-/// Only the four categories with Windows scanners have allowed roots. A
-/// hidden, unsupported category cannot produce an item here; if one ever did,
-/// `validate_path` would still refuse it because no root below names it.
+/// Only the four filesystem categories have allowed roots. Docker Cache is
+/// registered too, but its synthetic paths are routed to the shared CLI
+/// pruner before this function. Every other category is hidden and unsupported.
 fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))

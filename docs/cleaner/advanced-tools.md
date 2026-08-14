@@ -1,4 +1,4 @@
-# Advanced tools (planned)
+# Advanced tools
 
 Advanced categories are modeled in `CleanerCategory`:
 
@@ -12,11 +12,12 @@ Advanced categories are modeled in `CleanerCategory`:
 
 ## What the window lists, and where
 
-**On macOS the window lists all fourteen categories.** Three of them are not
-listed on Windows or Linux: Xcode Junk, Homebrew Cache and Universal Binaries.
-All three name something that only exists on a Mac — Xcode's `DerivedData`,
-Homebrew's download cache, and Mach-O fat binaries — so a row promising to look
-for them on Windows could only ever report nothing.
+**On macOS the window lists all fourteen categories.** Windows and Linux list
+only categories with working scanners: System Junk, User Cache, Trash Bins,
+Large & Old Files, and shared Docker Cache. Unsupported categories have no row.
+Language Files stays macOS-only because there is no safe common deletion unit;
+Windows Orphaned Files stays absent because generic AppData leftovers do not
+prove ownership.
 
 `CleanerCategory::hidden_for(HostOs)` is the entire switch, and it is a **pure
 function of the platform**, not a `#[cfg]` split: returning an empty slice for a
@@ -36,15 +37,10 @@ Because a scan is only ever started from a category's own pane, a hidden
 category is not scanned at all: it has no row to select and therefore no `Scan`
 button.
 
-**This is not the same question as "which categories can this platform
-scan".** That one is answered by the per-platform scanner registries
-(`state::registry::default_scanners`), and off macOS it is a much shorter list —
-four generic categories. A category with no scanner here is still *listed* and
-reports "planned but not implemented yet", deliberately, so the roadmap stays
-visible. The reverse would be the bug, and
-`a_hidden_category_is_never_one_this_build_scans` is the test that forbids it:
-hiding a category this build does scan would strand a working scanner behind no
-row at all.
+The per-platform scanner registries (`state::registry::default_scanners`) own
+what can scan. Visibility must match them exactly: paired tests forbid both a
+hidden scanner and a listed row without a scanner. Docker Cache is the first
+shared scanner added to the four platform-specific filesystem scanners.
 
 Universal Binaries has a second reason to be absent from Windows and Linux, and
 it is why it was on the list before this became per-platform: it is
@@ -53,10 +49,5 @@ implemented", so the page reports a number and offers nothing to do about it.
 That is a macOS caveat the captain accepted rather than a reason to hide it
 there.
 
-Phase 1 status:
-
-- discovery/cleanup logic not implemented yet,
-- no mutation tools are enabled,
-- no destructive operations run automatically.
 
 Future phases will keep high-risk operations out of automatic Smart Care cleanup and require explicit confirmation workflows.

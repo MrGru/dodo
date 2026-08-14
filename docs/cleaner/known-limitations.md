@@ -160,7 +160,7 @@
   - Models, Application support and Chat history are scan-only this phase (never allow-listed for
     cleanup, regardless of what a future UI bug might let a user select) — only Logs and Cache can
     ever be moved to Trash through Cleaner.
-- **Docker Cache (Phase 13)** — `macos::scanners::docker_cache`, via the `docker` CLI:
+- **Docker Cache (Phase 13)** — shared `cleaner::docker_cache`, via the `docker` CLI:
   - **Build cache is not reported at all.** The ticket lists it as a distinct engine-object type
     alongside dangling/unused images, stopped containers, unused networks and volumes; getting its
     size needs `docker system df -v` (or `docker builder du`), which this phase does not add — only

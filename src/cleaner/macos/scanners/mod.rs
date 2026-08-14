@@ -1,6 +1,5 @@
 mod ai_app_providers;
 pub(crate) mod ai_apps;
-pub(crate) mod docker_cache;
 pub(crate) mod homebrew_cache;
 mod installed_apps;
 mod language_files;
@@ -18,9 +17,9 @@ pub(crate) mod xcode_junk;
 use std::sync::Arc;
 
 use crate::cleaner::core::scanner::CleanerScanner;
+use crate::cleaner::docker_cache::DockerCacheScanner;
 
 pub use ai_apps::AiAppsScanner;
-pub use docker_cache::DockerCacheScanner;
 pub use homebrew_cache::HomebrewCacheScanner;
 pub use installed_apps::InstalledAppsScanner;
 pub use language_files::LanguageFilesScanner;
