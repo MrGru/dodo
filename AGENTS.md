@@ -47,23 +47,25 @@ three modules rather than inferring the design from the files cold.
 Its `mod.rs` doc comment is the authority on what has shipped; do not assume it is still round 1
 without checking. `core/` still carries `#[allow(dead_code)]` on items ahead of what constructs
 them — **those are pending work, not dead code to delete** — but the allow comes off as each
-producer lands: `core::safety` now has a real `validate_path` and a moved-to-trash cleanup path
-(`macos::cleanup::cleanup_items`), so its allow is already gone. `core::permissions` is still the
-one whole-module allow marking an area that does not exist at all yet. Three things settled on
-2026-08-13 are named in that `mod.rs` and worth knowing before touching the module: an item's
+producer lands: `core::safety` now has the real deletion boundary used by all three cleanup paths:
+host-aware lexical normalization plus canonical allowed-root containment rejects traversal,
+symlink/junction escapes, filesystem roots, declared roots and the user's home; its deny-by-default
+`DeletionPolicy` authorizes nothing until a scanner root is named. `core::permissions` is still the
+one whole-module allow marking an area that does not exist at all yet. Three things named in
+`src/cleaner/mod.rs` are worth knowing before touching the module: an item's
 application icon is a **bounded, `Arc`-shared** `core::icon::IconRaster` and never a raw `Vec<u8>`
 (what it replaced measured 70.5 MiB *per app* and could not be decoded at all — `core::icon` has
 the numbers); `core::category::CleanerCategory::hidden_for(HostOs)` is the whole switch deciding
 which categories the window lists, and because a scan starts only from a category's own pane a
 hidden one is never scanned; and what a scan *looks* like is the tested pure
 `core::scan_state::ScanState::indicator`, not a `match` inside a `render`.
-**`hidden_for` is per platform and pure**: macOS lists all fourteen, Windows and Linux hide Xcode
-Junk, Homebrew Cache and Universal Binaries, and taking a `HostOs` rather than splitting on `cfg`
-is what lets both answers be asserted from this Mac. It is deliberately *not* the same question as
-"which categories can this platform scan", which the per-platform scanner registries answer and
-which is four categories off macOS — a listed category with no scanner says "planned but not
-implemented yet", and the test forbidding the reverse (hiding one this build does scan) is what
-keeps the two lists from becoming two owners.
+**`hidden_for` is per platform and pure**: macOS lists all fourteen; Windows and Linux list only
+the four categories with working scanners, and taking a `HostOs` rather than splitting on `cfg`
+is what lets every platform answer be asserted from this Mac. Language Files stays macOS-only
+unless a safe equivalent appears; Orphaned Files stays unavailable on Windows and may return on
+Linux only with conservative package-manager-aware ownership. Scanner registries still own what
+can scan, and paired tests forbid disagreement in either direction: no hidden scanner and no
+listed row without one.
 
 **"`render` only runs when something changed" is false in gpui, and it cost the Cleaner its frame
 rate.** A dirty view marks its whole *ancestor* path dirty, and an ancestor re-rendering sets

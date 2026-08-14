@@ -14,7 +14,7 @@ use crate::cleaner::macos::platform::move_to_trash;
 use crate::cleaner::macos::scanners::{
     ai_apps, homebrew_cache, mail_files, node_tooling_cache, xcode_junk,
 };
-use crate::paths;
+use crate::paths::{self, HostOs};
 
 pub fn empty_trash_items(items: &[CleanableItem]) -> CleanupReport {
     let mut successes = Vec::new();
@@ -98,12 +98,13 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
 
     let mut successes = Vec::new();
     let mut failures = Vec::new();
-    for path in dedupe_nested_paths(by_path.keys().cloned().collect()) {
+    let host = HostOs::current();
+    for path in dedupe_nested_paths(host, by_path.keys().cloned().collect()) {
         let Some(item) = by_path.get(&path) else {
             continue;
         };
         let policy = policy_for(item);
-        match validate_path(path.as_path(), item.category, &policy) {
+        match validate_path(host, path.as_path(), item.category, &policy) {
             Ok(()) => match move_to_trash(path.as_path()) {
                 Ok(receipt) => successes.push(CleanupItemSuccess {
                     id: item.id,
@@ -138,30 +139,25 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
     if let Some(home) = home.as_ref() {
         allowed_roots.push(AllowedRoot {
             path: home.join("Library").join("Caches"),
-            allow_root_itself: false,
             allowed_categories: vec![CleanerCategory::UserCache],
         });
         allowed_roots.push(AllowedRoot {
             path: home.join(".cache"),
-            allow_root_itself: false,
             allowed_categories: vec![CleanerCategory::UserCache],
         });
         allowed_roots.push(AllowedRoot {
             path: home.join("Library").join("Logs"),
-            allow_root_itself: false,
             allowed_categories: vec![CleanerCategory::SystemJunk],
         });
         for folder in ["Downloads", "Desktop", "Documents", "Movies"] {
             allowed_roots.push(AllowedRoot {
                 path: home.join(folder),
-                allow_root_itself: false,
                 allowed_categories: vec![CleanerCategory::LargeOldFiles],
             });
         }
         for root in mail_files::attachment_roots(Some(home.as_path())) {
             allowed_roots.push(AllowedRoot {
                 path: root.path,
-                allow_root_itself: false,
                 allowed_categories: vec![CleanerCategory::MailFiles],
             });
         }
@@ -175,7 +171,6 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
         for root in [home.join("Applications"), PathBuf::from("/Applications")] {
             allowed_roots.push(AllowedRoot {
                 path: root,
-                allow_root_itself: false,
                 allowed_categories: vec![CleanerCategory::InstalledApps],
             });
         }
@@ -189,7 +184,6 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
         for root in locations::user_scope_leftover_roots(home.as_path()) {
             allowed_roots.push(AllowedRoot {
                 path: root,
-                allow_root_itself: false,
                 allowed_categories: vec![
                     CleanerCategory::InstalledApps,
                     CleanerCategory::OrphanedFiles,
@@ -207,7 +201,6 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
         for root in xcode_junk::cleanup_allowed_roots(home.as_path()) {
             allowed_roots.push(AllowedRoot {
                 path: root,
-                allow_root_itself: false,
                 allowed_categories: vec![CleanerCategory::XcodeJunk],
             });
         }
@@ -223,7 +216,6 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
         ) {
             allowed_roots.push(AllowedRoot {
                 path: cache_root,
-                allow_root_itself: false,
                 allowed_categories: vec![CleanerCategory::HomebrewCache],
             });
         }
@@ -239,7 +231,6 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
         for root in node_tooling_cache::cleanup_allowed_roots(&node_environment) {
             allowed_roots.push(AllowedRoot {
                 path: root,
-                allow_root_itself: false,
                 allowed_categories: vec![CleanerCategory::NodeToolingCache],
             });
         }
@@ -251,14 +242,12 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
         for root in ai_apps::cleanup_allowed_roots(home.as_path()) {
             allowed_roots.push(AllowedRoot {
                 path: root,
-                allow_root_itself: false,
                 allowed_categories: vec![CleanerCategory::AiApps],
             });
         }
     }
     allowed_roots.push(AllowedRoot {
         path: PathBuf::from("/tmp"),
-        allow_root_itself: false,
         allowed_categories: vec![CleanerCategory::SystemJunk],
     });
 
@@ -275,8 +264,8 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
         PathBuf::from("/usr"),
         paths::data_dir(),
     ];
-    if let Some(home) = home {
-        protected_paths.push(home);
+    if let Some(home) = home.as_ref() {
+        protected_paths.push(home.clone());
     }
     if let Ok(exe) = std::env::current_exe() {
         protected_paths.push(exe);
@@ -285,6 +274,7 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
     DeletionPolicy {
         allowed_roots,
         protected_paths,
+        user_home: home,
     }
 }
 
@@ -298,6 +288,7 @@ mod tests {
     use crate::cleaner::core::risk::{RiskLevel, SelectionPolicy};
     use crate::cleaner::core::safety::validate_path;
     use crate::cleaner::macos::cleanup::policy_for;
+    use crate::paths::HostOs;
 
     fn sample_item(category: CleanerCategory, path: PathBuf) -> CleanableItem {
         CleanableItem {
@@ -332,7 +323,12 @@ mod tests {
 
         assert!(
             matches!(
-                validate_path(home.as_path(), CleanerCategory::UserCache, &policy),
+                validate_path(
+                    HostOs::MacOs,
+                    home.as_path(),
+                    CleanerCategory::UserCache,
+                    &policy
+                ),
                 Err(SafetyError::ProtectedPath(_))
             ),
             "the home directory itself must never validate for deletion"
@@ -340,11 +336,12 @@ mod tests {
         assert!(
             matches!(
                 validate_path(
+                    HostOs::MacOs,
                     std::path::Path::new("/Applications"),
                     CleanerCategory::InstalledApps,
                     &policy
                 ),
-                Err(SafetyError::ProtectedPath(_))
+                Err(SafetyError::RootDeletionRejected(_))
             ),
             "/Applications itself must never validate for deletion, even for the one category \
              whose allowed roots live inside it"
@@ -352,6 +349,7 @@ mod tests {
         assert!(
             matches!(
                 validate_path(
+                    HostOs::MacOs,
                     std::path::Path::new("/System"),
                     CleanerCategory::SystemJunk,
                     &policy
@@ -382,13 +380,6 @@ mod tests {
             metadata: ItemMetadata::Generic,
         });
 
-        assert!(
-            policy
-                .allowed_roots
-                .iter()
-                .all(|root| !root.allow_root_itself),
-            "cache cleanup must not authorize deleting a whole allowed root directly"
-        );
         assert!(
             policy.allowed_roots.iter().any(|root| {
                 root.allowed_categories
@@ -440,10 +431,6 @@ mod tests {
             "user-scope leftover roots must be allow-listed for InstalledApps"
         );
         assert!(
-            app_roots.iter().all(|root| !root.allow_root_itself),
-            "an allowed root must never authorize deleting itself outright"
-        );
-        assert!(
             app_roots
                 .iter()
                 .all(|root| !root.path.starts_with("/Library")),
@@ -490,10 +477,6 @@ mod tests {
                 .iter()
                 .any(|root| root.path.as_path() == std::path::Path::new("/Applications")),
             "OrphanedFiles never includes an app bundle root — only leftover locations"
-        );
-        assert!(
-            orphan_roots.iter().all(|root| !root.allow_root_itself),
-            "an allowed root must never authorize deleting itself outright"
         );
         assert!(
             orphan_roots
@@ -557,10 +540,6 @@ mod tests {
                 .any(|root| root.path.ends_with("Archives")),
             "Xcode Archives must stay scan-only"
         );
-        assert!(
-            xcode_roots.iter().all(|root| !root.allow_root_itself),
-            "an allowed root must never authorize deleting itself outright"
-        );
     }
 
     #[test]
@@ -602,10 +581,6 @@ mod tests {
                 .all(|root| !root.path.ends_with("Cellar")),
             "the Cellar must never be allow-listed"
         );
-        assert!(
-            homebrew_roots.iter().all(|root| !root.allow_root_itself),
-            "an allowed root must never authorize deleting itself outright"
-        );
     }
 
     #[test]
@@ -639,10 +614,6 @@ mod tests {
         assert!(
             node_roots.iter().all(|root| !root.path.ends_with("store")),
             "pnpm's content-addressable store must never be allow-listed"
-        );
-        assert!(
-            node_roots.iter().all(|root| !root.allow_root_itself),
-            "an allowed root must never authorize deleting itself outright"
         );
     }
 }

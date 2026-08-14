@@ -9,7 +9,7 @@ use crate::cleaner::core::safety::{
     AllowedRoot, DeletionPolicy, dedupe_nested_paths, validate_path,
 };
 use crate::cleaner::windows::platform::move_to_trash;
-use crate::paths;
+use crate::paths::{self, HostOs};
 
 pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
     let mut by_path = BTreeMap::new();
@@ -19,12 +19,13 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
 
     let mut successes = Vec::new();
     let mut failures = Vec::new();
-    for path in dedupe_nested_paths(by_path.keys().cloned().collect()) {
+    let host = HostOs::current();
+    for path in dedupe_nested_paths(host, by_path.keys().cloned().collect()) {
         let Some(item) = by_path.get(&path) else {
             continue;
         };
         let policy = policy_for(item);
-        match validate_path(path.as_path(), item.category, &policy) {
+        match validate_path(host, path.as_path(), item.category, &policy) {
             Ok(()) => match move_to_trash(path.as_path()) {
                 Ok(receipt) => successes.push(CleanupItemSuccess {
                     id: item.id,
@@ -53,11 +54,9 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
     }
 }
 
-/// Only the four generic categories have an allowed root at all here — every
-/// macOS-only category (`InstalledApps`, `XcodeJunk`, `HomebrewCache`, …) has
-/// no scanner on Windows (see `windows::scanners::default_scanners`), so it
-/// can never produce an item this function is asked to validate. If one ever
-/// did, `validate_path` would still refuse it: no root below names it.
+/// Only the four categories with Windows scanners have allowed roots. A
+/// hidden, unsupported category cannot produce an item here; if one ever did,
+/// `validate_path` would still refuse it because no root below names it.
 fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -66,13 +65,11 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
     if let Some(home) = home.as_ref() {
         allowed_roots.push(AllowedRoot {
             path: std::env::temp_dir(),
-            allow_root_itself: false,
             allowed_categories: vec![CleanerCategory::SystemJunk],
         });
         for folder in ["Downloads", "Desktop", "Documents", "Videos"] {
             allowed_roots.push(AllowedRoot {
                 path: home.join(folder),
-                allow_root_itself: false,
                 allowed_categories: vec![CleanerCategory::LargeOldFiles],
             });
         }
@@ -93,7 +90,6 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
             ] {
                 allowed_roots.push(AllowedRoot {
                     path: cache_root,
-                    allow_root_itself: false,
                     allowed_categories: vec![CleanerCategory::UserCache],
                 });
             }
@@ -105,7 +101,6 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
                 for entry in entries.flatten() {
                     allowed_roots.push(AllowedRoot {
                         path: entry.path().join("cache2"),
-                        allow_root_itself: false,
                         allowed_categories: vec![CleanerCategory::UserCache],
                     });
                 }
@@ -124,8 +119,8 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
         PathBuf::from("C:\\Users"),
         paths::data_dir(),
     ];
-    if let Some(home) = home {
-        protected_paths.push(home);
+    if let Some(home) = home.as_ref() {
+        protected_paths.push(home.clone());
     }
     if let Ok(exe) = std::env::current_exe() {
         protected_paths.push(exe);
@@ -134,5 +129,6 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
     DeletionPolicy {
         allowed_roots,
         protected_paths,
+        user_home: home,
     }
 }

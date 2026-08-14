@@ -30,17 +30,14 @@
 //!   `Vec<u8>` icon back on an item.
 //! - **Not every [`core::category::CleanerCategory`] is on screen, and which
 //!   ones are depends on the platform.** macOS lists all fourteen; Windows
-//!   and Linux hide Xcode Junk, Homebrew Cache and Universal Binaries, all
-//!   three of which name something only a Mac has.
-//!   [`core::category::CleanerCategory::hidden_for`] is the entire switch and
-//!   is a **pure function of a [`crate::paths::HostOs`]**, not a `cfg` split,
-//!   so both answers are unit tested from any host; `HostOs::current` is the
-//!   one place the compiled-for platform enters it. Because a scan is only
-//!   ever started from a category's own pane, a hidden category is not
-//!   scanned at all. `ALL` still names all fourteen everywhere, so nothing
-//!   about the scanners, their tests or their cleanup paths changes with it —
-//!   and "listed here" stays a different question from "scannable here",
-//!   which the per-platform scanner registries answer.
+//!   and Linux list only the four categories their scanner registries
+//!   implement today. [`core::category::CleanerCategory::hidden_for`] is the
+//!   entire switch and is a **pure function of a [`crate::paths::HostOs`]**,
+//!   not a `cfg` split, so all three answers are unit tested from any host;
+//!   `HostOs::current` is the one place the compiled-for platform enters it.
+//!   Because a scan starts only from a category's own pane, a hidden category
+//!   is never scanned. Tests pin both directions of the contract: no scanner
+//!   may be hidden and no listed row may lack a scanner.
 //! - **What a scan looks like is a tested pure function**, not a `match` in a
 //!   `render`. [`core::scan_state::ScanState::indicator`] is the one mapping
 //!   the sidebar row and the results pane both read. It exists because the

@@ -1,11 +1,10 @@
 //! Linux Cleaner implementations: the four generic categories (System Junk,
 //! User Cache, Trash Bins, Large & Old Files) that have a meaningful, honest
-//! equivalent on Linux. Every macOS-only category — Mail, Xcode, Homebrew,
-//! Installed Apps/uninstall review, Orphaned Files, AI Apps, Universal
-//! Binaries, Node Tooling Cache, Docker Cache, Language Files — has no
-//! scanner here at all; `CleanerView::pending_result` already turns a
-//! missing scanner into "planned but not implemented yet" rather than a
-//! silent gap, so nothing here needs to say so again.
+//! equivalent on Linux. Every other category has no scanner here and is
+//! hidden by `CleanerCategory::hidden_for`, so every listed row has a working
+//! implementation. Language Files stays hidden because package-owned and
+//! immutable localization assets are not a safe deletion unit. Orphaned Files
+//! may return only with conservative, package-manager-aware detection.
 //!
 //! Unlike the Windows module, `cargo check`'s Linux row is one of the two
 //! this Mac genuinely cannot cross-compile at all (`aws-lc-sys`'s C build

@@ -71,58 +71,42 @@ impl CleanerCategory {
         }
     }
 
-    /// Categories whose scanners, tests and cleanup paths all still ship,
-    /// but which this build's Cleaner window does not list.
+    /// Categories the Cleaner window must not list on a host because that
+    /// host has no working scanner for them.
     ///
-    /// **This function is the whole of the feature switch, and it is a
-    /// function of the platform rather than a constant.** Returning an empty
-    /// slice for a host puts every category back in its section's tree with
-    /// no other change anywhere: [`CleanerCategory::ALL`] still names all
-    /// fourteen on every target, so every `CategoryState` is still seeded,
-    /// every scanner the platform registers is still registered, and every
-    /// `match` on the enum still compiles.
+    /// **This function is the whole feature switch, and it takes a [`HostOs`]
+    /// rather than using `cfg`.** All three answers are therefore asserted
+    /// from every build. [`CleanerCategory::ALL`] still names every category;
+    /// hiding changes only whether a row exists to start its scan.
     ///
-    /// # Why a [`HostOs`] parameter and not `#[cfg(target_os = …)]`
+    /// macOS implements all fourteen categories. Windows and Linux currently
+    /// implement only System Junk, User Cache, Trash Bins and Large & Old
+    /// Files, so those are the only rows they list. Later rounds must unhide a
+    /// row in the same change that registers its scanner.
     ///
-    /// The same reason [`crate::paths`] classifies its platform from the
-    /// target triple: **both answers are then unit-testable from any host.**
-    /// A `cfg` split would ship its Windows and Linux arm unexecuted, on a
-    /// machine that cannot even compile the `dodo` crate for those targets
-    /// (see "Two of the four `cargo check` targets…" in the project's root
-    /// doc). Here the rule is ordinary data, [`Self::hidden_for`] is
-    /// exhaustively tested for all three, and the real build wires the
-    /// platform in exactly one place — [`HostOs::current`], read by
-    /// [`Self::is_visible`].
+    /// Two absences are policy rather than roadmap state. Language Files stays
+    /// macOS-only because Windows and Linux have no safe, well-defined unit of
+    /// removable localization data. Orphaned Files stays unavailable on
+    /// Windows because generic AppData leftovers do not prove ownership;
+    /// Linux may add only a conservative, package-manager-aware equivalent.
     ///
-    /// # What is hidden where, and why (captain's request, 2026-08-13)
-    ///
-    /// - **macOS lists all fourteen.** Every category has a real scanner
-    ///   there, so there is nothing to hide.
-    /// - **Windows and Linux hide [`CleanerCategory::XcodeJunk`],
-    ///   [`CleanerCategory::HomebrewCache`] and
-    ///   [`CleanerCategory::UniversalBinaries`].** All three name things that
-    ///   only exist on a Mac — Xcode's `DerivedData`, Homebrew's download
-    ///   cache, and Mach-O fat binaries — so a row promising to look for them
-    ///   on Windows would be a row that can only ever report nothing.
-    ///
-    /// # One owner, two questions
-    ///
-    /// This is *not* the same question as "which categories can this platform
-    /// actually scan", which the per-platform scanner registries
-    /// ([`crate::cleaner::state::default_scanners`]) answer and which is a
-    /// much shorter list off macOS. A category with no scanner here is still
-    /// listed and reports "planned but not implemented yet" — deliberately, so
-    /// the roadmap is visible. What must never happen is the reverse: hiding a
-    /// category this build *does* scan, which would strand a working scanner
-    /// behind no row at all. `a_hidden_category_is_never_one_this_build_scans`
-    /// is the test that pins it.
+    /// Scanner registries remain the owner of what can actually scan. The two
+    /// registry/visibility invariant tests below forbid disagreement in either
+    /// direction on every target build.
     pub fn hidden_for(host: HostOs) -> &'static [CleanerCategory] {
         match host {
             HostOs::MacOs => &[],
             HostOs::Windows | HostOs::Unix => &[
+                CleanerCategory::MailFiles,
+                CleanerCategory::InstalledApps,
+                CleanerCategory::OrphanedFiles,
+                CleanerCategory::AiApps,
                 CleanerCategory::XcodeJunk,
                 CleanerCategory::HomebrewCache,
+                CleanerCategory::NodeToolingCache,
+                CleanerCategory::DockerCache,
                 CleanerCategory::UniversalBinaries,
+                CleanerCategory::LanguageFiles,
             ],
         }
     }
@@ -178,45 +162,37 @@ mod tests {
     use super::{CleanerCategory, CleanerSection};
     use crate::paths::HostOs;
 
-    /// The three the captain asked for on 2026-08-13, in one place so every
-    /// test below reads the same list.
-    const MAC_ONLY: [CleanerCategory; 3] = [
+    const HIDDEN_OFF_MACOS: [CleanerCategory; 10] = [
+        CleanerCategory::MailFiles,
+        CleanerCategory::InstalledApps,
+        CleanerCategory::OrphanedFiles,
+        CleanerCategory::AiApps,
         CleanerCategory::XcodeJunk,
         CleanerCategory::HomebrewCache,
+        CleanerCategory::NodeToolingCache,
+        CleanerCategory::DockerCache,
         CleanerCategory::UniversalBinaries,
+        CleanerCategory::LanguageFiles,
     ];
 
-    /// The whole point of the [`HostOs`] parameter: this asserts the Windows
-    /// and Linux answer from a Mac, and the macOS answer from anywhere.
     #[test]
-    fn macos_lists_every_category_and_the_other_two_platforms_hide_three() {
+    fn hidden_categories_are_exhaustive_for_every_host() {
         assert!(CleanerCategory::hidden_for(HostOs::MacOs).is_empty());
         assert_eq!(CleanerCategory::visible_for(HostOs::MacOs).count(), 14);
 
         for host in [HostOs::Windows, HostOs::Unix] {
-            assert_eq!(
-                CleanerCategory::hidden_for(host),
-                MAC_ONLY,
-                "{host:?} must hide exactly the three macOS-only categories"
-            );
-            assert_eq!(CleanerCategory::visible_for(host).count(), 11);
-            for hidden in MAC_ONLY {
-                assert!(
-                    !CleanerCategory::visible_for(host).any(|shown| shown == hidden),
-                    "{hidden:?} must not be listed on {host:?}"
-                );
+            assert_eq!(CleanerCategory::hidden_for(host), HIDDEN_OFF_MACOS);
+            assert_eq!(CleanerCategory::visible_for(host).count(), 4);
+            for hidden in HIDDEN_OFF_MACOS {
+                assert!(!CleanerCategory::visible_for(host).any(|shown| shown == hidden));
                 assert!(
                     !CleanerCategory::categories_for_host(host, hidden.section())
-                        .any(|shown| shown == hidden),
-                    "{hidden:?} must not appear in its section's tree on {host:?}"
+                        .any(|shown| shown == hidden)
                 );
             }
         }
     }
 
-    /// The hiding is a listing change and nothing else: `ALL` still names all
-    /// fourteen on every platform, so the scanners, their tests and their
-    /// cleanup paths are untouched by it.
     #[test]
     fn hiding_a_category_does_not_remove_it_from_the_enum() {
         assert_eq!(CleanerCategory::ALL.len(), 14);
@@ -238,46 +214,36 @@ mod tests {
             for category in CleanerCategory::visible_for(host) {
                 assert!(
                     listed.contains(&category),
-                    "{category:?} is listed nowhere on {host:?}"
+                    "{category:?} missing on {host:?}"
                 );
             }
         }
     }
 
-    /// Advanced keeps all seven entries on macOS and loses three elsewhere,
-    /// and must still be a group with rows either way; the check also covers
-    /// the empty case, which is what a longer hidden list would produce.
     #[test]
-    fn a_section_renders_with_fewer_or_zero_entries() {
-        let mac: Vec<CleanerCategory> =
-            CleanerCategory::categories_for_host(HostOs::MacOs, CleanerSection::Advanced).collect();
-        assert_eq!(mac.len(), 7);
-        assert!(mac.contains(&CleanerCategory::XcodeJunk));
-
-        let elsewhere: Vec<CleanerCategory> =
-            CleanerCategory::categories_for_host(HostOs::Windows, CleanerSection::Advanced)
-                .collect();
-        assert_eq!(elsewhere.len(), 4);
-        assert!(!elsewhere.contains(&CleanerCategory::XcodeJunk));
-
-        // Nothing here assumes a section is non-empty: `categories_for` is an
-        // iterator the sidebar extends its row list with, so zero rows is a
-        // header on its own rather than a panic or a missing group.
-        let empty: Vec<CleanerCategory> =
-            CleanerCategory::ALL.into_iter().filter(|_| false).collect();
-        assert!(empty.is_empty());
+    fn a_section_may_have_no_visible_rows() {
+        assert_eq!(
+            CleanerCategory::categories_for_host(HostOs::MacOs, CleanerSection::Advanced).count(),
+            7
+        );
+        assert_eq!(
+            CleanerCategory::categories_for_host(HostOs::Windows, CleanerSection::Advanced).count(),
+            0
+        );
+        assert_eq!(
+            CleanerCategory::categories_for_host(HostOs::Unix, CleanerSection::Applications)
+                .count(),
+            0
+        );
     }
 
-    /// Whatever the window opens on must be something the window lists — on
-    /// every platform, and it is the same category on all three because
-    /// `System Junk` is hidden nowhere.
     #[test]
     fn the_first_visible_category_exists_and_is_visible() {
         for host in [HostOs::MacOs, HostOs::Windows, HostOs::Unix] {
-            let first = CleanerCategory::visible_for(host)
-                .next()
-                .expect("at least one");
-            assert_eq!(first, CleanerCategory::SystemJunk);
+            assert_eq!(
+                CleanerCategory::visible_for(host).next(),
+                Some(CleanerCategory::SystemJunk)
+            );
         }
         assert!(
             CleanerCategory::visible()
@@ -287,18 +253,27 @@ mod tests {
         );
     }
 
-    /// The one way the two per-platform lists could contradict each other:
-    /// hiding a category whose scanner this very build registers would leave
-    /// a working scanner behind no row at all. Runs against whichever
-    /// platform's registry was compiled in, which is the only one that can
-    /// be constructed here.
     #[test]
     fn a_hidden_category_is_never_one_this_build_scans() {
         for scanner in crate::cleaner::state::default_scanners() {
             let category = scanner.category();
             assert!(
                 category.is_visible(),
-                "{category:?} has a scanner in this build but no row to start it from"
+                "{category:?} has a scanner in this build but no row"
+            );
+        }
+    }
+
+    #[test]
+    fn a_listed_category_is_one_this_build_scans() {
+        let scanned: Vec<CleanerCategory> = crate::cleaner::state::default_scanners()
+            .into_iter()
+            .map(|scanner| scanner.category())
+            .collect();
+        for category in CleanerCategory::visible() {
+            assert!(
+                scanned.contains(&category),
+                "{category:?} has a row in this build but no scanner"
             );
         }
     }
