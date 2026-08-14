@@ -20,6 +20,12 @@ pub struct AllowedRoot {
     pub allowed_categories: Vec<CleanerCategory>,
 }
 
+/// Whether `path` is lexically absolute for `host`, including Windows drive,
+/// UNC and extended-length paths even when tested from a Unix host.
+pub fn is_absolute_path(host: HostOs, path: &Path) -> bool {
+    normalize_path(host, path).is_some()
+}
+
 /// Host-aware lexical containment. Windows paths compare case-insensitively
 /// and understand drive, UNC and extended-length prefixes; Unix and macOS
 /// remain case-sensitive.

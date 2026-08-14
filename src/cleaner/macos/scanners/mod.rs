@@ -1,5 +1,3 @@
-mod ai_app_providers;
-pub(crate) mod ai_apps;
 pub(crate) mod homebrew_cache;
 mod installed_apps;
 mod language_files;
@@ -14,11 +12,10 @@ pub(crate) mod xcode_junk;
 
 use std::sync::Arc;
 
+use crate::cleaner::ai_apps::AiAppsScanner;
 use crate::cleaner::core::scanner::CleanerScanner;
 use crate::cleaner::docker_cache::DockerCacheScanner;
 use crate::cleaner::node_tooling_cache::NodeToolingCacheScanner;
-
-pub use ai_apps::AiAppsScanner;
 pub use homebrew_cache::HomebrewCacheScanner;
 pub use installed_apps::InstalledAppsScanner;
 pub use language_files::LanguageFilesScanner;
@@ -43,7 +40,10 @@ pub fn default_scanners() -> Vec<Arc<dyn CleanerScanner>> {
         Arc::new(XcodeJunkScanner::new()),
         Arc::new(HomebrewCacheScanner::new()),
         Arc::new(NodeToolingCacheScanner::new()),
-        Arc::new(AiAppsScanner::new()),
+        Arc::new(AiAppsScanner::new(
+            crate::paths::HostOs::MacOs,
+            crate::cleaner::macos::platform::ai_app_activity,
+        )),
         Arc::new(DockerCacheScanner::new()),
         Arc::new(UniversalBinariesScanner::new()),
         Arc::new(LanguageFilesScanner::new()),

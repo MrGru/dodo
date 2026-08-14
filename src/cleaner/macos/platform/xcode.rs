@@ -14,7 +14,7 @@
 //! this is safe to call from the background executor scans run on (see
 //! `docs/cleaner/architecture.md`'s "Concurrency strategy"). The actual check
 //! now lives in `macos::platform::running_apps::is_any_bundle_running`,
-//! generalized for `macos::scanners::ai_apps`'s Ollama/LM Studio checks; this
+//! generalized for shared `cleaner::ai_apps`'s Ollama/LM Studio checks; this
 //! function is kept as a named, single-bundle-id wrapper so `xcode_junk`'s
 //! call site stays exactly as readable as before.
 

@@ -12,10 +12,10 @@
 //! - [`state`] orchestrates scans and UI-facing state transitions.
 //! - [`views`] renders the Cleaner panel.
 //! - [`macos`], [`windows`] and [`linux`] hold platform-only implementation
-//!   seams. Docker Cache and Node Tooling Cache are shared by all three:
-//!   their OS differences are resolved inputs rather than platform APIs. The
-//!   other scanners stay under the platform that owns their filesystem and OS
-//!   rules.
+//!   seams. Docker Cache, Node Tooling Cache and AI Apps are shared by all
+//!   three: their OS differences are resolved inputs or thin activity probes.
+//!   The other scanners stay under the platform that owns their filesystem and
+//!   OS rules.
 //!
 //! Three things settled on 2026-08-13, each of which is counter-intuitive
 //! enough that the module holding it is named here rather than left to be
@@ -31,7 +31,7 @@
 //!   `Vec<u8>` icon back on an item.
 //! - **Not every [`core::category::CleanerCategory`] is on screen, and which
 //!   ones are depends on the platform.** macOS lists all fourteen; Windows
-//!   and Linux list the six categories their scanner registries implement
+//!   and Linux list the seven categories their scanner registries implement
 //!   today. [`core::category::CleanerCategory::hidden_for`] is the
 //!   entire switch and is a **pure function of a [`crate::paths::HostOs`]**,
 //!   not a `cfg` split, so all three answers are unit tested from any host;
@@ -49,6 +49,7 @@
 //! `views::results_table` records why feeding prepaint measurements back into
 //! this view is unsafe.
 
+pub(crate) mod ai_apps;
 pub mod core;
 pub(crate) mod docker_cache;
 #[cfg(target_os = "linux")]

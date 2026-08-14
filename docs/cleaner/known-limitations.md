@@ -130,31 +130,29 @@
     Yarn cannot identify a global folder. Exact and arbitrarily nested provider roots are compared
     with host path rules, and a containing item is omitted rather than double-counted or made
     capable of deleting the inner root.
-- **AI Apps (Phase 12)** — Ollama and LM Studio via one registry (`core::ai_app_provider`), driven by
-  `macos::scanners::ai_apps`:
-  - **Neither app's exact macOS bundle identifier is confidently known.** Both `OLLAMA_BUNDLE_IDS`
-    and `LM_STUDIO_BUNDLE_IDS` (`macos::scanners::ai_app_providers`) list more than one candidate; a
-    wrong guess only means the "app is running" warning never fires for that app — nothing in this
-    phase depends on the check succeeding for correctness, only for a nicer warning.
-  - **LM Studio's exact model directory is not confidently known**, so both plausible candidates
-    (`~/.cache/lm-studio/models` and `~/Library/Application Support/LM Studio/models`) are checked;
-    whichever does not exist on a given machine is simply skipped as a missing root, the same way
-    every other scanner here treats an absent optional root.
-  - **Neither app registers a `TemporaryDownloads` or `ChatHistory` root.** There is no
-    version-stable, confidently-known on-disk convention for either sub-category for either app —
-    the same "report nothing rather than guess at a layout" posture Node Tooling's Nub provider
-    took. The `AiAppRole` variants and their `NeverBulkSelect`/scan-only enforcement exist and are
-    unit-tested with a synthetic provider, so a future session that does know a real path only has
-    to register it.
-  - **Model name extraction is Ollama-only.** `ai_app_providers::collect_ollama_model_names` reads
-    Ollama's manifest tree structure (directory and file *names* only, never a manifest's JSON body
-    or model weights) to populate `AiAppMetadata::model_names`. LM Studio has no equivalent this
-    phase; its `Models` items always carry an empty `model_names`.
-  - **No CLI process call.** Neither `ollama` nor any LM Studio CLI is invoked — filesystem-convention
-    detection only, the same reasoning Node Tooling Cache and Homebrew Cache used.
-  - Models, Application support and Chat history are scan-only this phase (never allow-listed for
-    cleanup, regardless of what a future UI bug might let a user select) — only Logs and Cache can
-    ever be moved to Trash through Cleaner.
+- **AI Apps (Phase 12, shared cross-platform in Cleaner parity round 4)** — Ollama and LM Studio
+  through `cleaner::ai_apps`, with path tables isolated under
+  `ai_apps/definitions/{macos,windows,linux}.rs`:
+  - **Windows and Linux paths and process names are inferred, not captain-verified.** Every location
+    carries `AiAppPathEvidence::Inferred`; the platform files are the single edit points after real
+    installations are captured. Windows is bounded to exact Ollama log files and exact LM Studio
+    Electron cache/log children. Linux exposes no fabricated Ollama log path and bounds LM Studio
+    to exact generated children below XDG roots. No whole AppData, config or cache root is cleanable.
+  - **The macOS LM Studio model directory remains uncertain**, so both plausible candidates
+    (`~/.cache/lm-studio/models` and `~/Library/Application Support/LM Studio/models`) remain. The
+    latter overlaps the Application Support summary. Which item owns those bytes is a separate,
+    unresolved captain decision in the wide-scan backlog; this cross-platform round does not settle
+    it.
+  - **Neither app registers a `TemporaryDownloads` or `ChatHistory` root.** Models, application
+    support and chat history are user data, `NeverBulkSelect` where applicable, and never
+    allow-listed. Only exact Logs and Cache locations can reach Trash through the existing
+    deletion boundary.
+  - **Model name extraction is Ollama-only.** `ai_apps::collect_ollama_model_names` reads Ollama's
+    manifest tree structure (directory and file *names* only, never manifest content or model
+    weights). LM Studio model summaries carry no extracted names.
+  - **Activity detection invokes no shell.** macOS uses `NSRunningApplication`, Windows uses a
+    ToolHelp process snapshot, and Linux reads `/proc/*/comm`. Running or unknown activity removes
+    default selection and adds a warning; it never means "not running".
 - **Docker Cache (Phase 13)** — shared `cleaner::docker_cache`, via the `docker` CLI:
   - **Build cache is not reported at all.** The ticket lists it as a distinct engine-object type
     alongside dangling/unused images, stopped containers, unused networks and volumes; getting its

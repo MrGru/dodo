@@ -2,7 +2,7 @@
 //! is currently running.
 //!
 //! Generalized from `macos::platform::xcode::is_xcode_running` (which now
-//! delegates here) because `macos::scanners::ai_apps` needs the exact same
+//! delegates here) because the shared `cleaner::ai_apps` scanner needs the exact same
 //! one-line `NSRunningApplication` check for two more bundle identifiers
 //! (Ollama, LM Studio), and unlike most "should this be a shared
 //! abstraction?" calls in this codebase, this one really is trivial: the
@@ -16,6 +16,8 @@
 use objc2_app_kit::NSRunningApplication;
 use objc2_foundation::NSString;
 
+use crate::cleaner::core::ai_app_provider::AiAppActivity;
+
 /// `true` if at least one of `bundle_ids` names a currently-running
 /// application. Every candidate is checked; the first match short-circuits.
 /// An empty slice always returns `false`.
@@ -24,4 +26,12 @@ pub fn is_any_bundle_running(bundle_ids: &[&str]) -> bool {
         let bundle_id = NSString::from_str(bundle_id);
         !NSRunningApplication::runningApplicationsWithBundleIdentifier(&bundle_id).is_empty()
     })
+}
+
+pub fn ai_app_activity(bundle_ids: &[&str]) -> AiAppActivity {
+    if is_any_bundle_running(bundle_ids) {
+        AiAppActivity::Running
+    } else {
+        AiAppActivity::NotRunning
+    }
 }

@@ -7,6 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::cleaner::core::ai_app_provider::AiAppActivity;
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TrashReceipt {
     pub original_path: PathBuf,
@@ -36,4 +38,54 @@ pub fn reveal_in_explorer(path: &Path) -> Result<(), String> {
         .spawn()
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Read-only process-name probe for AI apps. Snapshot failure is unknown,
+/// never "not running", so cleanable results are not selected by default.
+pub fn ai_app_activity(process_names: &[&str]) -> AiAppActivity {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+
+    struct Snapshot(HANDLE);
+    impl Drop for Snapshot {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return AiAppActivity::Unknown;
+    }
+    let snapshot = Snapshot(snapshot);
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    if unsafe { Process32FirstW(snapshot.0, &mut entry) } == 0 {
+        return AiAppActivity::Unknown;
+    }
+
+    loop {
+        let end = entry
+            .szExeFile
+            .iter()
+            .position(|character| *character == 0)
+            .unwrap_or(entry.szExeFile.len());
+        let name = String::from_utf16_lossy(&entry.szExeFile[..end]);
+        if process_names
+            .iter()
+            .any(|candidate| name.eq_ignore_ascii_case(candidate))
+        {
+            return AiAppActivity::Running;
+        }
+        if unsafe { Process32NextW(snapshot.0, &mut entry) } == 0 {
+            return AiAppActivity::NotRunning;
+        }
+    }
 }

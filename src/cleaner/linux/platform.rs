@@ -7,6 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::cleaner::core::ai_app_provider::AiAppActivity;
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TrashReceipt {
     pub original_path: PathBuf,
@@ -36,4 +38,37 @@ pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
         .spawn()
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Read `/proc/*/comm` without invoking a process-listing command. If procfs
+/// cannot be enumerated or yields no readable process names, activity remains
+/// unknown and the shared scanner suppresses default selection.
+pub fn ai_app_activity(process_names: &[&str]) -> AiAppActivity {
+    let Ok(processes) = std::fs::read_dir("/proc") else {
+        return AiAppActivity::Unknown;
+    };
+    let mut inspected = false;
+    for process in processes.flatten().filter(|entry| {
+        entry
+            .file_name()
+            .to_string_lossy()
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+    }) {
+        let Ok(name) = std::fs::read_to_string(process.path().join("comm")) else {
+            continue;
+        };
+        inspected = true;
+        if process_names
+            .iter()
+            .any(|candidate| name.trim().eq_ignore_ascii_case(candidate))
+        {
+            return AiAppActivity::Running;
+        }
+    }
+    if inspected {
+        AiAppActivity::NotRunning
+    } else {
+        AiAppActivity::Unknown
+    }
 }

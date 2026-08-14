@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 
+use crate::cleaner::ai_apps;
 use crate::cleaner::core::category::CleanerCategory;
 use crate::cleaner::core::errors::CleanupError;
 use crate::cleaner::core::item::CleanableItem;
@@ -11,7 +12,7 @@ use crate::cleaner::core::safety::{
 };
 use crate::cleaner::macos::applications::locations;
 use crate::cleaner::macos::platform::move_to_trash;
-use crate::cleaner::macos::scanners::{ai_apps, homebrew_cache, mail_files, xcode_junk};
+use crate::cleaner::macos::scanners::{homebrew_cache, mail_files, xcode_junk};
 use crate::cleaner::node_tooling_cache;
 use crate::paths::{self, HostOs};
 
@@ -139,6 +140,8 @@ fn policy_for(item: &CleanableItem) -> DeletionPolicy {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let node_environment = (item.category == CleanerCategory::NodeToolingCache)
         .then(|| node_tooling_cache::snapshot_environment(HostOs::MacOs, home.as_deref()));
+    let ai_environment = (item.category == CleanerCategory::AiApps)
+        .then(|| ai_apps::environment(HostOs::MacOs, home.as_deref()));
     let mut allowed_roots = Vec::new();
     if let Some(home) = home.as_ref() {
         allowed_roots.push(AllowedRoot {
@@ -243,12 +246,14 @@ fn policy_for(item: &CleanableItem) -> DeletionPolicy {
         // AI Apps (Phase 12): only locations `AiAppRole::allow_cleanup`
         // permits — Logs and Cache — are allow-listed. Models, Application
         // support and Chat history stay scan-only; see
-        // `macos::scanners::ai_apps` and `docs/cleaner/known-limitations.md`.
-        for root in ai_apps::cleanup_allowed_roots(home.as_path()) {
-            allowed_roots.push(AllowedRoot {
-                path: root,
-                allowed_categories: vec![CleanerCategory::AiApps],
-            });
+        // `cleaner::ai_apps` and `docs/cleaner/known-limitations.md`.
+        if let Some(environment) = ai_environment.as_ref() {
+            for root in ai_apps::cleanup_allowed_roots(environment) {
+                allowed_roots.push(AllowedRoot {
+                    path: root,
+                    allowed_categories: vec![CleanerCategory::AiApps],
+                });
+            }
         }
     }
     allowed_roots.push(AllowedRoot {

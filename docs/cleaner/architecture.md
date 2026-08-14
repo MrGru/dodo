@@ -89,17 +89,17 @@ Cleaner is wired as a top-level tool in:
 | Large & Old Files | `large_old_files.rs` |
 | Installed Apps | `installed_apps.rs` |
 | Orphaned Files | `orphaned_files.rs` |
-| AI Apps | `ai_apps.rs`, `ai_app_providers.rs` |
+| AI Apps (shared) | `ai_apps.rs`, `ai_apps/definitions/{macos,windows,linux}.rs` |
 | Xcode Junk | `xcode_junk.rs` |
 | Homebrew Cache | `homebrew_cache.rs` |
 | Node Tooling Cache (shared) | `node_tooling_cache.rs`, `node_tooling/{npm,yarn_classic,yarn_berry,pnpm,bun,nub}.rs` |
 | Universal Binaries (analysis-only) | `universal_binaries.rs` |
 | Language Files (analysis-only) | `language_files.rs` |
 
-The table above includes the macOS-specific set. Docker Cache and Node Tooling Cache live directly
-under `src/cleaner/` because both are shared by all three hosts; Node receives resolved platform
-cache directories rather than calling platform APIs. Each platform's `scanners/mod.rs` registers
-its set; `state::registry` picks the compiled target's registry.
+The table above includes the macOS-specific set. Docker Cache, Node Tooling Cache and AI Apps live
+directly under `src/cleaner/` because all three are shared by every host. Node and AI Apps receive
+resolved platform locations; AI process activity stays a thin target probe. Each platform's
+`scanners/mod.rs` registers its set; `state::registry` picks the compiled target's registry.
 
 ## Shared macOS infrastructure
 
@@ -154,8 +154,8 @@ its set; `state::registry` picks the compiled target's registry.
 ## Platform strategy
 
 - macOS is the only platform that **lists** all 14 categories. Windows and Linux list their
-  four filesystem scanners plus shared Docker Cache and Node Tooling Cache; every unsupported row
-  is hidden.
+  four filesystem scanners plus shared AI Apps, Docker Cache and Node Tooling Cache; every
+  unsupported row is hidden.
   `CleanerCategory::hidden_for(HostOs)` is the whole switch and is a pure function of the platform,
   so all answers are unit tested from any host. See `docs/cleaner/advanced-tools.md`.
 - `state::registry::default_scanners()` picks the platform's set and returns an empty vector only

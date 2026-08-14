@@ -60,8 +60,11 @@ which categories the window lists, and because a scan starts only from a categor
 hidden one is never scanned; and what a scan *looks* like is the tested pure
 `core::scan_state::ScanState::indicator`, not a `match` inside a `render`.
 **`hidden_for` is per platform and pure**: macOS lists all fourteen; Windows and Linux list the
-four filesystem categories plus shared Docker Cache and Node Tooling Cache, and taking a `HostOs`
-rather than splitting on `cfg` is what lets every platform answer be asserted from this Mac.
+four filesystem categories plus shared AI Apps, Docker Cache and Node Tooling Cache, and taking a
+`HostOs` rather than splitting on `cfg` is what lets every platform answer be asserted from this
+Mac. AI Apps keeps each host's Ollama/LM Studio paths in
+`src/cleaner/ai_apps/definitions/<host>.rs`; every Windows/Linux location is explicitly inferred
+until captain validation, and models, chats and settings remain scan-only user data.
 Language Files stays macOS-only
 unless a safe equivalent appears; Orphaned Files stays unavailable on Windows and may return on
 Linux only with conservative package-manager-aware ownership. Scanner registries still own what

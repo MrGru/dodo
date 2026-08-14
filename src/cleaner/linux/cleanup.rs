@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::cleaner::ai_apps;
 use crate::cleaner::core::category::CleanerCategory;
 use crate::cleaner::core::errors::CleanupError;
 use crate::cleaner::core::item::CleanableItem;
@@ -93,6 +94,19 @@ fn policy_for(item: &CleanableItem) -> DeletionPolicy {
         allowed_roots.push(AllowedRoot {
             path: root,
             allowed_categories: vec![CleanerCategory::NodeToolingCache],
+        });
+    }
+
+    let ai_environment = (item.category == CleanerCategory::AiApps)
+        .then(|| ai_apps::environment(HostOs::Unix, home.as_deref()));
+    for root in ai_environment
+        .as_ref()
+        .into_iter()
+        .flat_map(ai_apps::cleanup_allowed_roots)
+    {
+        allowed_roots.push(AllowedRoot {
+            path: root,
+            allowed_categories: vec![CleanerCategory::AiApps],
         });
     }
 

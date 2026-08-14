@@ -37,8 +37,8 @@ Verified per category, by reading what each scanner actually opens with `fs::rea
 - **Mail Files** (`macos::scanners::mail_files`) never reads a file's contents — only
   `fs::read_dir` to list attachment names, sizes and modified times. It cannot see a message body,
   because it never opens a `.emlx`/mbox file to look.
-- **AI Apps** (`macos::scanners::ai_apps`, `ai_app_providers`) never opens a prompt/history file or a
-  model's weight file. The one exception — Ollama's `collect_ollama_model_names` — reads only
+- **AI Apps** (`cleaner::ai_apps` and its per-platform definitions) never opens a prompt/history
+  file or a model's weight file. The one exception — Ollama's `collect_ollama_model_names` — reads only
   directory and file *names* inside the manifest tree, never a manifest's JSON body.
 - **Universal Binaries** (`macos::scanners::universal_binaries`) reads a Mach-O executable's raw
   bytes, but only to parse the fat-header/architecture-slice structure (`object` crate) — never to

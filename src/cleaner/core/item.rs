@@ -102,7 +102,7 @@ pub struct NodeToolMetadata {
     pub provider: String,
 }
 
-/// Attached to every item `macos::scanners::ai_apps::AiAppsScanner` produces.
+/// Attached to every item `cleaner::ai_apps::AiAppsScanner` produces.
 /// `role` is what the six per-item risk/selection/capability derivations
 /// (`AiAppRole::risk`, `AiAppRole::selection_policy`,
 /// `AiAppRole::allow_cleanup`) are keyed on — carrying it here too lets a
@@ -111,7 +111,7 @@ pub struct NodeToolMetadata {
 /// [`AiAppRole::Models`] item where a provider could cheaply extract names
 /// from on-disk *structure* (directory/file names) without reading any
 /// model's content — currently only Ollama's manifest tree; see
-/// `macos::scanners::ai_app_providers::collect_ollama_model_names`.
+/// `cleaner::ai_apps::collect_ollama_model_names`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct AiAppMetadata {
     pub app_id: String,

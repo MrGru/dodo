@@ -14,7 +14,7 @@ Advanced categories are modeled in `CleanerCategory`:
 
 **On macOS the window lists all fourteen categories.** Windows and Linux list
 only categories with working scanners: System Junk, User Cache, Trash Bins,
-Large & Old Files, shared Node Tooling Cache, and shared Docker Cache.
+Large & Old Files, shared AI Apps, shared Node Tooling Cache, and shared Docker Cache.
 Unsupported categories have no row.
 Language Files stays macOS-only because there is no safe common deletion unit;
 Windows Orphaned Files stays absent because generic AppData leftovers do not
@@ -40,8 +40,8 @@ button.
 
 The per-platform scanner registries (`state::registry::default_scanners`) own
 what can scan. Visibility must match them exactly: paired tests forbid both a
-hidden scanner and a listed row without a scanner. Docker Cache and Node Tooling Cache are shared
-alongside the four platform-specific filesystem scanners.
+hidden scanner and a listed row without a scanner. AI Apps, Docker Cache and Node Tooling Cache are
+shared alongside the four platform-specific filesystem scanners.
 
 Universal Binaries has a second reason to be absent from Windows and Linux, and
 it is why it was on the list before this became per-platform: it is

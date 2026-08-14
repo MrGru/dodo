@@ -1,6 +1,6 @@
 //! Linux Cleaner implementations: four filesystem categories (System Junk,
-//! User Cache, Trash Bins, Large & Old Files) plus the shared Node Tooling
-//! Cache and Docker Cache scanners. Every other category has no scanner here
+//! User Cache, Trash Bins, Large & Old Files) plus the shared AI Apps, Node
+//! Tooling Cache and Docker Cache scanners. Every other category has no scanner here
 //! and is hidden by
 //! `CleanerCategory::hidden_for`, so every listed row has a working
 //! implementation. Language Files stays hidden because package-owned and

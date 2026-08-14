@@ -5,6 +5,7 @@ mod user_cache;
 
 use std::sync::Arc;
 
+use crate::cleaner::ai_apps::AiAppsScanner;
 use crate::cleaner::core::scanner::CleanerScanner;
 use crate::cleaner::docker_cache::DockerCacheScanner;
 use crate::cleaner::node_tooling_cache::NodeToolingCacheScanner;
@@ -21,6 +22,10 @@ pub fn default_scanners() -> Vec<Arc<dyn CleanerScanner>> {
         Arc::new(LargeOldFilesScanner::new()),
         Arc::new(TrashBinsScanner::new()),
         Arc::new(NodeToolingCacheScanner::new()),
+        Arc::new(AiAppsScanner::new(
+            crate::paths::HostOs::Unix,
+            crate::cleaner::linux::platform::ai_app_activity,
+        )),
         Arc::new(DockerCacheScanner::new()),
     ]
 }

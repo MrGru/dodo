@@ -420,6 +420,9 @@ windows-sys = { version = "0.61", features = [
     # language switch sounds the same as the Native TSF one, which already calls
     # it through the `windows` crate in `crates/dodo-ime-windows`.
     "Win32_System_Diagnostics_Debug",
+    # Cleaner AI Apps uses a read-only process snapshot for conservative
+    # running-app detection; this adds no new package to the graph.
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",

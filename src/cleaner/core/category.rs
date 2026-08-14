@@ -80,8 +80,9 @@ impl CleanerCategory {
     /// hiding changes only whether a row exists to start its scan.
     ///
     /// macOS implements all fourteen categories. Windows and Linux currently
-    /// implement System Junk, User Cache, Trash Bins, Large & Old Files, Node
-    /// Tooling Cache and Docker Cache, so those are the only rows they list.
+    /// implement System Junk, User Cache, Trash Bins, Large & Old Files, AI
+    /// Apps, Node Tooling Cache and Docker Cache, so those are the only rows
+    /// they list.
     /// Later rounds must
     /// unhide a row in the same change that registers its scanner.
     ///
@@ -101,7 +102,6 @@ impl CleanerCategory {
                 CleanerCategory::MailFiles,
                 CleanerCategory::InstalledApps,
                 CleanerCategory::OrphanedFiles,
-                CleanerCategory::AiApps,
                 CleanerCategory::XcodeJunk,
                 CleanerCategory::HomebrewCache,
                 CleanerCategory::UniversalBinaries,
@@ -161,11 +161,10 @@ mod tests {
     use super::{CleanerCategory, CleanerSection};
     use crate::paths::HostOs;
 
-    const HIDDEN_OFF_MACOS: [CleanerCategory; 8] = [
+    const HIDDEN_OFF_MACOS: [CleanerCategory; 7] = [
         CleanerCategory::MailFiles,
         CleanerCategory::InstalledApps,
         CleanerCategory::OrphanedFiles,
-        CleanerCategory::AiApps,
         CleanerCategory::XcodeJunk,
         CleanerCategory::HomebrewCache,
         CleanerCategory::UniversalBinaries,
@@ -179,7 +178,7 @@ mod tests {
 
         for host in [HostOs::Windows, HostOs::Unix] {
             assert_eq!(CleanerCategory::hidden_for(host), HIDDEN_OFF_MACOS);
-            assert_eq!(CleanerCategory::visible_for(host).count(), 6);
+            assert_eq!(CleanerCategory::visible_for(host).count(), 7);
             for hidden in HIDDEN_OFF_MACOS {
                 assert!(!CleanerCategory::visible_for(host).any(|shown| shown == hidden));
                 assert!(
@@ -227,6 +226,7 @@ mod tests {
             CleanerCategory::categories_for_host(HostOs::Windows, CleanerSection::Advanced)
                 .collect::<Vec<_>>(),
             vec![
+                CleanerCategory::AiApps,
                 CleanerCategory::NodeToolingCache,
                 CleanerCategory::DockerCache
             ]
