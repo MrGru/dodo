@@ -4,6 +4,15 @@
 //! the user's keyboard layout. The host gives this module both. A dead key,
 //! ligature, or failed layout conversion has no single-character reading and is
 //! returned as `None` by the native adapter, so it passes through unchanged.
+//!
+//! # One array decides both the character and the modifier flags
+//!
+//! `ToUnicodeEx` reads a 256-byte keyboard state, and so does
+//! [`state_modifiers`]. That is deliberate: a `shift` flag that disagreed with
+//! the case of the character beside it is the defect this file exists to make
+//! impossible, and it is exactly what the Keyboard Hook fallback used to
+//! produce. [`merge_physical`] is the other half — see its docs for what
+//! `GetKeyboardState` does and does not promise.
 
 use dodo_ime_core::{Key, KeyEvent, Modifiers};
 
@@ -32,6 +41,84 @@ pub const VK_LCONTROL: u32 = 0xa2;
 pub const VK_RCONTROL: u32 = 0xa3;
 pub const VK_LMENU: u32 = 0xa4;
 pub const VK_RMENU: u32 = 0xa5;
+
+/// Windows' "this key is down" bit in a keyboard-state array.
+const DOWN: u8 = 0x80;
+
+/// Forces the physical keyboard into a queue-synchronised snapshot.
+///
+/// `GetKeyboardState` answers about the **calling thread**, and only advances as
+/// that thread reads key messages from its own queue. Inside this DLL that is
+/// the application's own thread while it is handling the very key press being
+/// translated, so the snapshot should already be right — but "should" is doing
+/// a lot of work in a text service loaded into somebody else's process, and the
+/// failure mode is silent and total: a Shift byte that is not set makes
+/// `ToUnicodeEx` return the unshifted character and makes every recorded
+/// shortcut with a modifier in it unmatchable.
+///
+/// So the modifiers `held` reports are merged in rather than trusted to be
+/// there already. Merging can only ever *add* a modifier the user is physically
+/// holding, so a correct snapshot is unchanged; it cannot repair the opposite
+/// race, where a modifier was released between the press and this call, and
+/// nothing can.
+///
+/// `vkey` is forced down for the same reason: a key event sink can be called
+/// before the press reaches the queue.
+///
+/// `held` is `GetAsyncKeyState`, which is not queue-bound. It is a parameter so
+/// that every rule above is a unit test on a host that has no `user32.dll`.
+pub fn merge_physical(state: &mut [u8; 256], vkey: u32, held: impl Fn(u32) -> bool) {
+    // Left and right are merged separately because `ToUnicodeEx` reads them:
+    // AltGr is right-Alt with left-Control, and a layout that has one cannot
+    // produce its characters from the aggregates alone.
+    for key in [
+        VK_LSHIFT,
+        VK_RSHIFT,
+        VK_LCONTROL,
+        VK_RCONTROL,
+        VK_LMENU,
+        VK_RMENU,
+        VK_LWIN,
+        VK_RWIN,
+    ] {
+        if held(key) {
+            state[key as usize] |= DOWN;
+        }
+    }
+    for (aggregate, sides) in [
+        (VK_SHIFT, [VK_LSHIFT, VK_RSHIFT]),
+        (VK_CONTROL, [VK_LCONTROL, VK_RCONTROL]),
+        (VK_MENU, [VK_LMENU, VK_RMENU]),
+    ] {
+        if sides
+            .into_iter()
+            .any(|side| state[side as usize] & DOWN != 0)
+        {
+            state[aggregate as usize] |= DOWN;
+        }
+    }
+    // A virtual key is not bounded by the array, so this is the one index that
+    // has to be checked rather than known.
+    if let Some(byte) = state.get_mut(vkey as usize) {
+        *byte |= DOWN;
+    }
+}
+
+/// The engine modifiers one keyboard-state array means.
+///
+/// Read from the same array `ToUnicodeEx` was handed, never from a second
+/// source — that pairing is this module's whole contract. Caps lock is
+/// deliberately absent, exactly as it is on macOS: the layout has already
+/// applied it to the character, which is the only form the engine wants it in.
+pub fn state_modifiers(state: &[u8; 256]) -> Modifiers {
+    let down = |key: u32| state[key as usize] & DOWN != 0;
+    Modifiers {
+        shift: down(VK_SHIFT) || down(VK_LSHIFT) || down(VK_RSHIFT),
+        control: down(VK_CONTROL) || down(VK_LCONTROL) || down(VK_RCONTROL),
+        alt: down(VK_MENU) || down(VK_LMENU) || down(VK_RMENU),
+        meta: down(VK_LWIN) || down(VK_RWIN),
+    }
+}
 
 /// Converts exactly one non-control Unicode scalar from `ToUnicodeEx`.
 pub fn one_character(units: &[u16]) -> Option<char> {
@@ -84,7 +171,8 @@ pub fn key_event(vkey: u32, text: Option<char>, modifiers: Modifiers) -> KeyEven
 #[cfg(test)]
 mod tests {
     use super::{
-        VK_BACK, VK_CONTROL, VK_LEFT, VK_LWIN, VK_MENU, VK_SPACE, key_event, one_character,
+        VK_BACK, VK_CONTROL, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RMENU,
+        VK_RSHIFT, VK_SHIFT, VK_SPACE, key_event, merge_physical, one_character, state_modifiers,
     };
     use dodo_ime_core::{Key, Modifiers};
     use dodo_ime_ipc::settings::{Shortcut, ShortcutKey, ShortcutModifiers};
@@ -174,6 +262,78 @@ mod tests {
         assert_eq!(
             key_event(VK_CONTROL, None, Modifiers::NONE).key,
             Key::Modifier
+        );
+    }
+
+    /// The failure this pairing exists to prevent: a snapshot that says nothing
+    /// is held while the user is holding Shift, which makes `ToUnicodeEx` type
+    /// a lowercase letter and leaves every shortcut unmatchable.
+    #[test]
+    fn a_held_shift_reaches_both_the_layout_state_and_the_modifiers() {
+        let mut empty = [0_u8; 256];
+        assert_eq!(state_modifiers(&empty), Modifiers::NONE);
+
+        merge_physical(&mut empty, 0x44, |key| key == VK_LSHIFT);
+        assert_ne!(empty[VK_LSHIFT as usize] & 0x80, 0);
+        assert_ne!(
+            empty[VK_SHIFT as usize] & 0x80,
+            0,
+            "ToUnicodeEx reads the aggregate"
+        );
+        assert_eq!(empty[VK_RSHIFT as usize] & 0x80, 0);
+        assert_ne!(empty[0x44] & 0x80, 0, "the arriving key is down");
+
+        let modifiers = state_modifiers(&empty);
+        assert_eq!(modifiers, Modifiers::SHIFT);
+        assert_eq!(key_event(0x44, Some('D'), modifiers).typed(), Some('D'));
+    }
+
+    /// A snapshot that was already right is left alone, and each side of a
+    /// modifier keeps its own byte — AltGr is right-Alt with left-Control and
+    /// cannot be produced from the aggregates.
+    #[test]
+    fn merging_only_adds_and_keeps_the_two_sides_apart() {
+        let mut correct = [0_u8; 256];
+        correct[VK_RSHIFT as usize] = 0x80;
+        correct[VK_SHIFT as usize] = 0x80;
+        let before = correct;
+        merge_physical(&mut correct, 0x41, |_| false);
+        assert_eq!(correct[VK_RSHIFT as usize], before[VK_RSHIFT as usize]);
+        assert_eq!(correct[VK_LSHIFT as usize], 0);
+        assert_eq!(state_modifiers(&correct), Modifiers::SHIFT);
+
+        let mut alt_gr = [0_u8; 256];
+        merge_physical(&mut alt_gr, 0x45, |key| {
+            key == VK_RMENU || key == VK_LCONTROL
+        });
+        assert_ne!(alt_gr[VK_RMENU as usize] & 0x80, 0);
+        assert_eq!(alt_gr[VK_LMENU as usize] & 0x80, 0);
+        assert_ne!(alt_gr[VK_MENU as usize] & 0x80, 0);
+        assert_ne!(alt_gr[VK_CONTROL as usize] & 0x80, 0);
+
+        let modifiers = state_modifiers(&alt_gr);
+        assert!(modifiers.alt && modifiers.control);
+        assert!(!modifiers.is_plain());
+    }
+
+    /// A modifier-only shortcut fires on the modifier's own key-down, which is
+    /// the one press the queue may not carry yet.
+    #[test]
+    fn the_arriving_modifier_completes_its_own_shortcut() {
+        let mut state = [0_u8; 256];
+        merge_physical(&mut state, VK_RSHIFT, |key| key == VK_LCONTROL);
+        let modifiers = state_modifiers(&state);
+        assert!(modifiers.control && modifiers.shift);
+        assert!(
+            Shortcut {
+                modifiers: ShortcutModifiers {
+                    control: true,
+                    shift: true,
+                    ..ShortcutModifiers::NONE
+                },
+                key: ShortcutKey::Modifiers,
+            }
+            .matches(&key_event(VK_RSHIFT, None, modifiers))
         );
     }
 

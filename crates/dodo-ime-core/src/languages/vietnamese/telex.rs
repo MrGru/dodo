@@ -22,6 +22,11 @@
 //! syllable logic duplicated between them. If a rule about Vietnamese ever
 //! needs writing here, the boundary has been drawn in the wrong place.
 //!
+//! Case is the shared layer's too. A doubled letter key (`dd`, `aa`, `ee`,
+//! `oo`) states the case of the letter it marks and `w` does not, but neither
+//! rule is written below: [`Transform::Mark`] carries only the literal, and
+//! `Syllable::retypes_last_letter` reads its case. See the parent module docs.
+//!
 //! # Undo comes from the shared layer, not from here
 //!
 //! `aaa` types `aa`, and `ss` types `s`. Neither is special-cased below: the
@@ -181,6 +186,11 @@ fn horn_or_breve(syllable: &Syllable, literal: char, upper: bool) -> Transform {
 /// is not already stroked" — a second stroke key is a
 /// [`Reverted`](super::syllable::MarkOutcome::Reverted) mark, which is how every
 /// other modifier here undoes itself (`noww` types `now`, `didd` types `did`).
+///
+/// Whether the resulting `đ` is capital is not decided here either. The shared
+/// layer takes the case from this key when it is adjacent to the `d` it marks
+/// (`dD` is `Đ`, `Dd` is `đ`) and leaves it alone when the key reached back
+/// over a word (`Did` is `Đi`).
 fn strokes_the_initial_d(syllable: &Syllable) -> bool {
     syllable.mark_target(Mark::Stroke).is_some()
 }
@@ -315,9 +325,10 @@ mod tests {
         }
     }
 
-    /// A `Mark` carries no case, only the literal to type if it turns out not
-    /// to apply — which is the whole reason a shifted modifier key cannot reach
-    /// the letter it marks.
+    /// A `Mark` carries no case field, only the literal to type if it turns out
+    /// not to apply. Whether that literal's own shift reaches the letter is the
+    /// shared layer's decision and is asserted in this crate's engine tests;
+    /// all this file promises is that a shifted key reads as the same mark.
     #[test]
     fn a_shifted_modifier_key_is_the_same_mark_on_the_same_letter() {
         assert_eq!(

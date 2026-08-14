@@ -679,7 +679,10 @@ mod tests {
 
     #[test]
     fn direct_document_simulator_converges_dd_and_repeated_w_cancellation() {
-        for (keys, expected) in [("dd", "đ"), ("DD", "Đ"), ("dD", "đ"), ("Dd", "Đ")] {
+        // The case follows the *stroke* key, which is the shared engine's rule
+        // and not something either fallback decides — see the Vietnamese
+        // module's "Whose shift decides a marked letter's case".
+        for (keys, expected) in [("dd", "đ"), ("DD", "Đ"), ("dD", "Đ"), ("Dd", "đ")] {
             assert_eq!(type_at_end_cursor(keys), expected, "{keys}");
         }
         for (keys, expected) in [("ww", "w"), ("wW", "W"), ("uww", "uw")] {

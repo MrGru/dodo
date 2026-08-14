@@ -34,16 +34,32 @@
 //! layout: neither file contains a rule about Vietnamese, so neither can drift
 //! from the other.
 //!
-//! # Case belongs to the letter, not to the key that decorated it
+//! # Whose shift decides a marked letter's case
 //!
-//! A modifier key decides *which* diacritic; the letter it lands on decides the
-//! case. `Aa`, `aA` and `AA` are three ways of putting a circumflex on an `a`
-//! that was already typed, so they give `Â`, `â`, `Â` — shift is how a typist
-//! reaches `S` for *sắc* in a caps-locked word, not a statement about the
-//! vowel underneath. [`Transform::Mark`] and [`Transform::Tone`] therefore
-//! carry no case at all, only the literal to type if the transform turns out
-//! not to apply, and VNI gets the rule for free because a digit has no case to
-//! leak.
+//! A modifier key decides *which* diacritic. It decides the **case** too, but
+//! only when it is another press of the very letter it is marking with nothing
+//! typed in between — `dd`, `aa`, `ee`, `oo`. There the second press is the
+//! user's latest word on that letter, so `dD` is `Đ` and `Dd` is `đ`; the same
+//! reading makes `aA` an `Â` and `Aa` an `â`. The rule and both its conditions
+//! live in `Syllable::retypes_last_letter`,
+//! which is where every rule about what a mark *does* already lives — neither
+//! [`telex`] nor [`vni`] knows anything about it.
+//!
+//! Every other modifier leaves the case alone, and the two conditions are what
+//! draw that line:
+//!
+//! - **A key that is not the letter has no opinion about it.** Telex's `w` and
+//!   the five tone letters, and every VNI digit: `Aw` is `Ă` and `D9` is `Đ`,
+//!   because shift is how a typist reaches `S` for *sắc* in a caps-locked word.
+//!   VNI cannot express the rule at all — a digit has no case — so `Dd` and
+//!   `D9` are the one place the two schemes deliberately disagree.
+//! - **A modifier reaching back over a word is applied from a distance.** The
+//!   stroke in `Did` and `dungd` marks a letter typed several keys ago, whose
+//!   case the user settled when they typed it: `Did` stays `Đi`.
+//!
+//! [`Transform::Mark`] and [`Transform::Tone`] therefore still carry no case
+//! field — only the literal to type if the transform turns out not to apply —
+//! and the case that does travel is the literal's own.
 //!
 //! The exceptions are the three places a modifier key *is* a letter rather than
 //! modifying one, where its own shift is the only case available: Telex's bare

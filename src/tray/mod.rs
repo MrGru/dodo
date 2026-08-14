@@ -181,13 +181,22 @@ impl Tray {
 
         match icon::render(language, cx) {
             Ok(icon) => {
-                // One call rather than `set_icon` then `set_icon_as_template`,
-                // so the bitmap and the template flag change together and there
-                // is no frame with a non-template image in the menu bar.
+                // On macOS, one call rather than `set_icon` then
+                // `set_icon_as_template`, so the bitmap and the template flag
+                // change together and there is no frame with a non-template
+                // image in the menu bar.
+                #[cfg(target_os = "macos")]
                 let swapped = cx
                     .global::<Tray>()
                     .icon
                     .set_icon_with_as_template(Some(icon), true);
+                // Everywhere else that call is a **no-op that returns `Ok`**:
+                // `tray_icon` compiles its whole body out off macOS, so the
+                // Windows mark never changed language at all. `set_icon` is the
+                // one that exists there, and the template flag means nothing to
+                // it.
+                #[cfg(not(target_os = "macos"))]
+                let swapped = cx.global::<Tray>().icon.set_icon(Some(icon));
                 if let Err(error) = swapped {
                     problem(&format!("could not swap the menu bar mark: {error}"));
                     return;

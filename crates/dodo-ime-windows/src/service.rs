@@ -16,12 +16,11 @@ use dodo_ime_core::{
 use dodo_ime_ipc::paths;
 use dodo_ime_ipc::settings::{Backend, SETTINGS_FILE, SettingsDocument};
 use dodo_ime_ipc::status::{STATUS_FILE, StatusDocument};
-use windows::Win32::Foundation::{BOOL, CloseHandle, E_FAIL, LPARAM, WPARAM};
+use windows::Win32::Foundation::{BOOL, CloseHandle, E_FAIL, LPARAM, S_OK, WPARAM};
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::Threading::{EVENT_MODIFY_STATE, OpenEventW, SetEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardLayout, GetKeyboardState, ToUnicodeEx, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
-    VK_SHIFT,
+    GetAsyncKeyState, GetKeyboardLayout, GetKeyboardState, ToUnicodeEx,
 };
 use windows::Win32::UI::TextServices::{
     ITfComposition, ITfCompositionSink, ITfContext, ITfContextComposition, ITfEditSession,
@@ -146,6 +145,12 @@ impl TextService {
         let _ = unsafe { CloseHandle(event) };
     }
 
+    /// One key-down in the engine's vocabulary.
+    ///
+    /// The character and the modifier flags come out of **one** keyboard-state
+    /// array, which `keymap::merge_physical` has reconciled with the physical
+    /// keyboard first — see its docs for why a snapshot alone is not enough and
+    /// what merging can and cannot repair.
     fn input_event(vkey: u32, lparam: LPARAM) -> Option<dodo_ime_core::KeyEvent> {
         // A held key is a repeat. The application owns repeats unchanged; this
         // prevents a single physical key from being rewritten more than once.
@@ -166,9 +171,12 @@ impl TextService {
         if unsafe { GetKeyboardState(&mut keyboard) }.is_err() {
             return None;
         }
-        let index = usize::try_from(vkey).ok()?;
-        let state = keyboard.get_mut(index)?;
-        *state |= 0x80; // callback arrives before this key is committed to state.
+        keymap::merge_physical(&mut keyboard, vkey, |key| {
+            // SAFETY: a virtual key code is the whole argument, and the call has
+            // no side effect on any thread's input state.
+            (unsafe { GetAsyncKeyState(key as i32) }) < 0
+        });
+        let modifiers = keymap::state_modifiers(&keyboard);
 
         let layout = unsafe { GetKeyboardLayout(thread) };
         if layout.0 == 0 {
@@ -177,22 +185,14 @@ impl TextService {
         let mut units = [0_u16; 4];
         // 0x4 is TO_UNICODE_NO_STATE_CHANGE. Dead keys and ligatures are not a
         // single character and therefore return to the application untouched.
-        let count = unsafe { ToUnicodeEx(vkey, 0, &keyboard, &mut units, 0x4, layout) };
+        // The scan code is bits 16-23 of `lParam`: `ToUnicodeEx` documents it as
+        // a parameter and a zero there is not the same key on every layout.
+        let scan_code = ((lparam.0 >> 16) & 0xff) as u32;
+        let count = unsafe { ToUnicodeEx(vkey, scan_code, &keyboard, &mut units, 0x4, layout) };
         let text = match count {
             0 => None,
             1 => Some(keymap::one_character(&units[..1])?),
             _ => return None,
-        };
-        let active = |vk: u32| {
-            keyboard
-                .get(vk as usize)
-                .is_some_and(|byte| byte & 0x80 != 0)
-        };
-        let modifiers = dodo_ime_core::Modifiers {
-            shift: active(VK_SHIFT.0 as u32),
-            control: active(VK_CONTROL.0 as u32),
-            alt: active(VK_MENU.0 as u32),
-            meta: active(VK_LWIN.0 as u32) || active(VK_RWIN.0 as u32),
         };
         Some(keymap::key_event(vkey, text, modifiers))
     }
@@ -216,15 +216,20 @@ impl TextService {
         })
     }
 
+    /// What one key-down should do, without performing any of it.
+    ///
+    /// The language switch is answered **before** the context is asked whether
+    /// it can be written to. A read-only text store is still a place the user
+    /// may change input language from — the shortcut is a command about the
+    /// input method, not an edit — and requiring a writable context first made
+    /// the switch depend on where the caret happened to be. Only an in-flight
+    /// composition has to be ended, and only then is an edit session needed.
     fn prepare(
         &self,
         context: &ITfContext,
         vkey: u32,
         lparam: LPARAM,
     ) -> Option<(State, Vec<EngineAction>, bool, Option<bool>)> {
-        if !Self::writable(context) {
-            return None;
-        }
         let event = Self::input_event(vkey, lparam)?;
         let document = Self::configured_document()?;
         let mut next = self.state.borrow().clone();
@@ -235,12 +240,20 @@ impl TextService {
             next.language = document.active_languages.next(next.language);
             next.engine = (next.language == LanguageId::Vietnamese)
                 .then(|| VietnameseEngine::new(Self::vietnamese_config(document)));
+            let commit = next.composition.is_some() && Self::writable(context);
             return Some((
                 next,
-                vec![EngineAction::CommitComposition],
+                if commit {
+                    vec![EngineAction::CommitComposition]
+                } else {
+                    Vec::new()
+                },
                 true,
                 Some(document.language_switch.beep),
             ));
+        }
+        if !Self::writable(context) {
+            return None;
         }
         let result = next.engine.as_mut()?.process_key(&event);
         Self::action_changes_text(&result.actions).then_some((
@@ -256,27 +269,35 @@ impl TextService {
             return Ok(BOOL(0));
         };
         let shared = Rc::new(RefCell::new(next));
-        let edit: ITfEditSession = ApplyEdit {
-            context: context.clone(),
-            actions,
-            state: shared.clone(),
-        }
-        .into();
-        let client_id = self.state.borrow().client_id;
-        let requested = unsafe {
-            context.RequestEditSession(
-                client_id,
-                &edit,
-                TF_CONTEXT_EDIT_CONTEXT_FLAGS(TF_ES_SYNC.0 | TF_ES_READWRITE.0),
-            )
-        }?;
+        // Nothing to edit is not a failure: a language switch with no
+        // composition in flight changes no document and must still happen.
+        let requested = if actions.is_empty() {
+            S_OK
+        } else {
+            let edit: ITfEditSession = ApplyEdit {
+                context: context.clone(),
+                actions,
+                state: shared.clone(),
+            }
+            .into();
+            let client_id = self.state.borrow().client_id;
+            unsafe {
+                context.RequestEditSession(
+                    client_id,
+                    &edit,
+                    TF_CONTEXT_EDIT_CONTEXT_FLAGS(TF_ES_SYNC.0 | TF_ES_READWRITE.0),
+                )
+            }?
+        };
         if requested.is_ok() {
             *self.state.borrow_mut() = shared.borrow().clone();
             if let Some(beep) = switched {
                 let state = self.state.borrow();
                 Self::report_language(state.language, state.settings_revision);
                 if beep {
-                    unsafe { MessageBeep(MB_OK) };
+                    // The sound is advisory; a failure to make it is not an
+                    // error the user could act on.
+                    let _ = unsafe { MessageBeep(MB_OK) };
                 }
             }
             Ok(BOOL(handled as i32))

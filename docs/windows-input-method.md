@@ -87,6 +87,51 @@ Neither backend logs, persists, sends, or exposes raw keystrokes. The only
 persistent input-method data is the selected backend/language/engine settings
 in `input-method.json`; neither backend records typed text.
 
+## Where a key's case comes from (2026-08-14)
+
+`GetKeyboardState` answers **per calling thread**, and only advances as that
+thread reads key messages from its own queue. In the hook that thread is dodo's,
+in the background, so its copy is frozen at whatever dodo last saw when it had
+focus. Every reported Windows symptom followed from that one fact:
+
+- Shift read as up, so `ToUnicodeEx` returned the unshifted character. No
+  capital letter could reach the engine, and every rewritten syllable came back
+  lowercase — visible as a letter that looked right until the rewrite changed
+  it, which reads exactly like "the casing follows the wrong key".
+- The engine `Modifiers` came from the same array, so they were always empty.
+  A recorded shortcut must hold a command modifier and is compared exactly, so
+  **no** shortcut could ever match and the language switch did nothing.
+- Caps lock's toggle bit went stale for the same reason.
+
+The hook now **builds** the 256-byte array instead of fetching it
+(`models::keyboard_hook::layout_state`): the physical keys come from
+`GetAsyncKeyState`, which is not queue-bound; the arriving key folds itself in,
+because a low-level hook runs before Windows records the press and that press is
+what a modifier-only shortcut fires on; and caps lock is tracked from one
+snapshot taken while dodo still had focus. Building rather than merging matters
+here — a stale array is worse than an empty one, since a leftover Control byte
+makes `ToUnicodeEx` return a control character for an ordinary letter.
+
+The TSF DLL runs on the application's own thread while it is handling the very
+key press, so its snapshot should already be right; it therefore **merges** the
+physical modifiers in rather than rebuilding (`keymap::merge_physical`), which
+can only add a modifier the user is physically holding. It also now passes the
+real scan code from `lParam` bits 16-23; `ToUnicodeEx` documents the parameter
+and a zero there is not the same key on every layout.
+
+Both hosts read the character and the modifier flags out of the **same** array,
+so a `shift` flag can no longer disagree with the case of the character beside
+it.
+
+Two gates were also removed from the language switch: the hook required a
+focused edit control and TSF required a writable context before either looked at
+the shortcut, so a window with nowhere to type could not change language. Both
+now match the shortcut first, and a switch with no composition in flight needs
+no TSF edit session at all.
+
+All of the above is pure and unit-tested from the Mac development host. **None
+of it has been executed on Windows.** Step 3a below is what would prove it.
+
 ## Build and Windows verification
 
 The TSF host is a workspace default member. On a Windows developer machine:
@@ -110,6 +155,13 @@ account:
    appears and can be selected without an administrator prompt.
 3. Close dodo. In Notepad, type `tieengs ` and `dduowngf `; confirm `tiếng` and
    `đường` appear. Test Backspace, arrow keys, Ctrl+S, and a password field.
+3a. **Casing, under both backends and in Chrome as well as Notepad.** Type
+   `DDuwowngf ` and confirm `Đường`; `Vieetj ` for `Việt`; `TIEENGS ` for
+   `TIẾNG`. Then `dD` for `Đ` and `Dd` for `đ` — the case follows the second
+   `d`, which is the shared engine's rule and not a Windows one. Turn caps lock
+   on and repeat one of them. Finally confirm the tray mark is legible: switch
+   the taskbar between light and dark in Settings, restart dodo, and check the
+   dodo is not a black smudge on either.
 4. Reopen dodo, choose Keyboard Hook, keep dodo open, and repeat the Notepad
    test. Confirm key-up/repeat/shortcuts still behave normally and closing dodo
    stops transformation.
@@ -131,8 +183,8 @@ account:
    Hook does, that is the answer and it matches the macOS bundle's known
    limitation in `macos-input-method.md` §8a.
 
-No Windows runtime typing, registration, profile visibility, secure-context
-behaviour, or release-archive run has been verified from the Mac development
-host. The Windows CI runner compiles/tests the host but does not select a
+No Windows runtime typing, key casing, language switching, tray-icon rendering,
+registration, profile visibility, secure-context behaviour, or release-archive
+run has been verified from the Mac development host. The Windows CI runner compiles/tests the host but does not select a
 profile or type into another application; captain testing remains the runtime
 arbiter.

@@ -169,9 +169,17 @@ JSON → Base64) and the rule that resolves the captain's editable-regex request
 existing parsers — *a pattern selects candidates, the parser confirms*. `layout.rs`'s
 `apply_route` is the single place a detected route meets a `View`.
 
-**`src/tray/` is the second feature that is not a tool**, and macOS-only: a menu bar
-`NSStatusItem` showing a dodo with one keyboard-input-language glyph, plus a four-row native
-menu. Its module docs are the authority. Four things there are decisions rather than details.
+**`src/tray/` is the second feature that is not a tool**, and it is **macOS *and* Windows** —
+one `tray-icon` for both, a menu bar `NSStatusItem` or a notification-area icon showing a dodo
+with one keyboard-input-language glyph, plus a four-row native menu. Its module docs are the
+authority. **Two of `tray-icon`'s calls are macOS-only bodies that compile to nothing elsewhere,
+and both bit**: `set_icon_with_as_template` returns `Ok(())` without touching the icon off macOS,
+so the Windows mark never changed language until `src/tray/mod.rs` split the call; and a template
+image's all-zero colour channels, which AppKit repaints from alpha, are a **solid black** icon on
+Windows, where `CreateIcon` uses the colour bits. `icon::paint` is that decision, is pure, takes
+the host as a parameter so both answers are asserted from a Mac, and picks the ink from
+`SystemUsesLightTheme` — never `AppsUseLightTheme`, which is a different question. Four more
+things there are decisions rather than details.
 **The menu bar and native input method share `dodo_ime_core::LanguageId`** — the selected
 language is written to `input-method.json`, which the bundle reads; `i18n::Language` remains
 dodo's interface-language preference. A historical `session.json` tray value is migrated once
@@ -216,7 +224,15 @@ engine is semantic, not string
 rewriting**: a letter is `(base, mark, case)`, the tone belongs to the syllable and its position is
 recomputed at render time, so `toas` + `n` becomes `toán` without anything relocating a mark.
 `InputScheme` is an enum for the same reason — Telex and VNI produce identical `Transform`s and
-share every rule about Vietnamese. **Every modifier reaches back over the current syllable**, the
+share every rule about Vietnamese. **A doubled letter key states the case of the letter it marks**
+(the captain's call, 2026-08-14): `dD` is `Đ` and `Dd` is `đ`, and `aA`/`Aa` read the same way,
+because the second press *is* that letter again and is the user's latest word on it.
+`Syllable::retypes_last_letter` is the whole rule and both its conditions are load-bearing — the
+key has to spell the letter (so `w`, the tone letters and every VNI digit leave case alone, and
+`Dd` is `đ` while `D9` is `Đ`), and nothing may have been typed since (so a stroke reaching back
+over a word keeps the case the user typed: `Did` is `Đi`). Undoing the mark restores the case
+with it, which is why `Ddd` is `Dd`. It lives in `syllable.rs` and not in `telex.rs`, which
+decides *which key* and nothing else. **Every modifier reaches back over the current syllable**, the
 stroke included since 2026-08-08 (`did` is `đi`, `add` is still `add` because the rule is about the
 *initial* letter); a scheme file that decides position itself rather than asking
 `Syllable::mark_target` is how that one was wrong for a round. **Undoing a modifier reaches back
@@ -308,6 +324,22 @@ only what the user is *doing*. Native remains the persisted default. Event Tap i
 alternative in `services/event_tap.rs`; Windows instead offers `Keyboard Hook`, a clearly-labelled
 no-install fallback that runs only while dodo does. Both direct-output fallbacks use the existing
 engine and never share transformation with Native TSF/InputMethodKit.
+**On Windows, `GetKeyboardState` is the wrong question and asking it cost this round four
+symptoms.** It answers *per thread* and only advances as that thread reads key messages from its
+own queue, so in a `WH_KEYBOARD_LL` callback — which runs on dodo's thread while the key is on its
+way to somebody else's application — it is frozen at whatever dodo last saw. Shift read as up, so
+`ToUnicodeEx` returned the unshifted character (no capital could reach the engine, and every
+rewritten syllable came back lowercase) *and* `Modifiers` was always empty, so no valid shortcut
+could ever match and the language switch was dead. `models::keyboard_hook::layout_state` now
+**builds** the array from `GetAsyncKeyState` rather than fetching it — a stale array is worse than
+an empty one, because a leftover Control byte turns a letter into a control character — with the
+arriving key folded in (`with_key_down`, which is what a modifier-only shortcut fires on) and caps
+lock tracked (`CapsLock`) rather than asked. The TSF DLL runs in the application's own thread where
+the snapshot should be right, so it *merges* rather than rebuilds (`keymap::merge_physical`), and
+it passes the real scan code from `lParam`. All of it is pure and tested from this Mac; none of it
+has run on Windows. **The other half of the switch was two gates**: the hook required a focused
+edit control and TSF required a writable context before either looked at the shortcut, so a window
+with nowhere to type could not switch language. Both now match the shortcut first.
 **Whichever backend is selected owns the language switch**, because the others are passing every key
 through — so both fallbacks stay attached in *every* language (a listener that stopped in English
 could never switch back), answer the shortcut before the engine sees anything, and are

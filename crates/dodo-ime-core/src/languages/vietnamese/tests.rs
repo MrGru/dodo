@@ -582,13 +582,16 @@ fn capitalization_survives_every_transform() {
 
 /// # The rule
 ///
-/// **A modifier key decides which diacritic; the letter it lands on decides
-/// the case.** `Aa`, `aA` and `AA` are three ways of typing a circumflex onto
-/// an `a` that was already typed uppercase, lowercase, uppercase — so they give
-/// `Â`, `â`, `Â`. Shift is how a typist reaches `S` for *sắc* on a caps-locked
-/// word; it is not an opinion about the letter underneath, and Vietnamese has
-/// no convention in which it could be one. VNI is the same rule stated more
-/// obviously, because a digit has no case at all to leak.
+/// **A modifier key that is not the letter it marks decides which diacritic and
+/// nothing else.** Telex's `w`, the five tone letters and every VNI digit are
+/// all of them: shift is how a typist reaches `S` for *sắc* on a caps-locked
+/// word, not an opinion about the vowel underneath, and a digit has no case at
+/// all to leak in the first place. So `Aw` is `Ă`, `mAs` is `mÁ` and `D9` is
+/// `Đ`.
+///
+/// A doubled *letter* key is the other half of the rule and has its own table
+/// in `a_doubled_letter_key_states_the_case_of_the_letter_it_marks`, next to
+/// the reasoning. The two together are the whole of it.
 ///
 /// The three exceptions all have the same shape: **when the modifier key
 /// becomes a letter itself, its own case is the only case there is.** Telex's
@@ -600,20 +603,6 @@ fn capitalization_survives_every_transform() {
 fn a_modifier_keys_own_case_never_reaches_the_letter_it_marks() {
     check(
         &[
-            // The doubled vowels: the first `a` is the letter, the second is
-            // only a circumflex.
-            ("aa", "â"),
-            ("aA", "â"),
-            ("Aa", "Â"),
-            ("AA", "Â"),
-            ("ee", "ê"),
-            ("eE", "ê"),
-            ("Ee", "Ê"),
-            ("EE", "Ê"),
-            ("oo", "ô"),
-            ("oO", "ô"),
-            ("Oo", "Ô"),
-            ("OO", "Ô"),
             // `w` landing on a vowel is a breve or a horn, never a letter.
             ("aw", "ă"),
             ("aW", "ă"),
@@ -627,12 +616,6 @@ fn a_modifier_keys_own_case_never_reaches_the_letter_it_marks() {
             ("uW", "ư"),
             ("Uw", "Ư"),
             ("UW", "Ư"),
-            // `dd`: the stroke belongs to the leading `d`, whichever `d` was
-            // shifted.
-            ("dd", "đ"),
-            ("dD", "đ"),
-            ("Dd", "Đ"),
-            ("DD", "Đ"),
             // One horn key marking a bare `uo` pair keeps each vowel's own
             // case, rather than levelling them.
             ("uow", "ươ"),
@@ -649,8 +632,8 @@ fn a_modifier_keys_own_case_never_reaches_the_letter_it_marks() {
         telex,
     );
 
-    // Mixed case inside one syllable is where a leaked modifier case would
-    // show: every letter below keeps exactly the case it was typed with.
+    // Mixed case inside one syllable. Every doubled vowel below agrees with
+    // itself, so only a *leaked* modifier case could show.
     check(
         &[
             ("tiEEngs", "tiẾng"),
@@ -698,6 +681,99 @@ fn a_modifier_keys_own_case_never_reaches_the_letter_it_marks() {
             ("Ma1", "Má"),
         ],
         vni,
+    );
+}
+
+/// # The other half of the rule
+///
+/// **A doubled letter key states the case of the letter it marks.** `dd`, `aa`,
+/// `ee` and `oo` are not really modifier keys: each one is a second press of
+/// the very letter it decorates, so its own shift is the user's latest word on
+/// that letter and it wins outright. `dD` is `Đ` and `Dd` is `đ`; `aA` is `Â`
+/// and `Aa` is `â`.
+///
+/// Two conditions have to hold, and each has its own block below.
+///
+/// - **The key has to be that letter.** `w` and the tone letters are not, so
+///   they leave the case alone — that is the table in
+///   [`a_modifier_keys_own_case_never_reaches_the_letter_it_marks`]. VNI cannot
+///   express this rule at all, because a digit has no case: `Dd` is `đ` while
+///   `D9` is `Đ`, and that is the one place the two schemes disagree on
+///   purpose.
+/// - **Nothing may have been typed since.** The two presses are one gesture
+///   only when they are adjacent. A stroke that reaches back over a word marks
+///   a letter whose case the user settled several keys ago — `Did` is `Đi`, and
+///   a *shifted* reach-back key does not recase it either.
+///
+/// Undoing the mark undoes the override with it, so no keystroke's own case is
+/// lost to a key that was taken back: `Ddd` is `Dd`.
+#[test]
+fn a_doubled_letter_key_states_the_case_of_the_letter_it_marks() {
+    check(
+        &[
+            // The captain's table, exactly.
+            ("dd", "đ"),
+            ("dD", "Đ"),
+            ("Dd", "đ"),
+            ("DD", "Đ"),
+            // And the same reading for every other doubled letter.
+            ("aa", "â"),
+            ("aA", "Â"),
+            ("Aa", "â"),
+            ("AA", "Â"),
+            ("ee", "ê"),
+            ("eE", "Ê"),
+            ("Ee", "ê"),
+            ("EE", "Ê"),
+            ("oo", "ô"),
+            ("oO", "Ô"),
+            ("Oo", "ô"),
+            ("OO", "Ô"),
+            // In a word rather than alone.
+            ("dDi", "Đi"),
+            ("Ddi", "đi"),
+            ("cAan", "cân"),
+            ("caAn", "cÂn"),
+            ("cAAn", "cÂn"),
+            ("tiEEngs", "tiẾng"),
+        ],
+        telex,
+    );
+
+    // A modifier that reached back over the word is applied from a distance and
+    // never recases its target, however it was shifted. This is the block that
+    // fails if the rule is implemented as "the latest key always wins".
+    check(
+        &[
+            ("did", "đi"),
+            ("Did", "Đi"),
+            ("DiD", "Đi"),
+            ("dId", "đI"),
+            ("dID", "đI"),
+            ("DID", "ĐI"),
+            ("dungd", "đung"),
+            ("DungD", "Đung"),
+            ("duwowngfd", "đường"),
+            ("Thienej", "Thiện"),
+            ("ThienEj", "Thiện"),
+            ("THIENEJ", "THIỆN"),
+        ],
+        telex,
+    );
+
+    // Taking the mark off puts the case the user typed back, so a key that was
+    // undone leaves nothing behind. Without this, `Ddd` would end `dd` and the
+    // capital the user typed would be gone.
+    check(
+        &[
+            ("Ddd", "Dd"),
+            ("dDd", "dd"),
+            ("DdD", "DD"),
+            ("Aaa", "Aa"),
+            ("aAa", "aa"),
+            ("aAA", "aA"),
+        ],
+        telex,
     );
 }
 

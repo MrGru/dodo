@@ -17,6 +17,21 @@
 //! the virtual-key table, both of them pure so they are tested on hosts that
 //! cannot compile this file. A paired `WH_MOUSE_LL` hook observes button-downs
 //! only to forget retained text before a same-control focus or caret move.
+//!
+//! # The keyboard state is built here, never fetched
+//!
+//! `GetKeyboardState` answers about the **calling thread**, and this callback
+//! runs on dodo's — in the background, where that answer stopped advancing the
+//! moment dodo lost focus. Reading Shift from it made every capital letter
+//! lowercase and made every shortcut with a modifier in it unmatchable, which
+//! was one defect wearing two faces. `models::keyboard_hook::PhysicalKeys`
+//! carries the reasoning; the physical keys come from `GetAsyncKeyState`, the
+//! arriving key folds itself in, and caps lock is tracked rather than asked.
+//!
+//! The shortcut is also answered **before** anything asks where text would go.
+//! A window with no focused control is still a window the user may switch
+//! language in, and while this backend runs the switch is answered here or
+//! nowhere.
 
 use std::collections::HashSet;
 use std::ptr::null_mut;
@@ -28,8 +43,8 @@ use futures_channel::mpsc::UnboundedSender;
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardLayout, GetKeyboardState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    GetAsyncKeyState, GetKeyState, GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, ToUnicodeEx, VK_CAPITAL,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
@@ -41,8 +56,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::input_method::models::direct_output::OutputPlan;
 use crate::input_method::models::event_tap::DirectComposer;
 use crate::input_method::models::keyboard_hook::{
-    Handling, HookEvent, KeyboardHookStatus, SuppressedKeyUps, TargetIdentity, adopt_after_send,
-    handling, input_event_count, key_event as windows_key_event, modifiers, target_changed,
+    CapsLock, Handling, HookEvent, KeyboardHookStatus, PhysicalKeys, SuppressedKeyUps,
+    TargetIdentity, adopt_after_send, handling, input_event_count, key_event as windows_key_event,
+    layout_state, physical_modifiers, target_changed, vk, with_key_down,
 };
 use crate::input_method::models::live_switch::LiveSwitch;
 
@@ -72,6 +88,9 @@ struct State {
     pressed: HashSet<u32>,
     suppressed_key_ups: SuppressedKeyUps,
     target: Option<TargetIdentity>,
+    /// Followed rather than asked for, because a background thread's answer is
+    /// a snapshot. See `models::keyboard_hook::CapsLock`.
+    caps: CapsLock,
     status: KeyboardHookStatus,
 }
 
@@ -92,6 +111,10 @@ impl KeyboardHook {
             pressed: HashSet::new(),
             suppressed_key_ups: SuppressedKeyUps::default(),
             target: None,
+            // Taken while dodo is still the foreground application — the user
+            // has just chosen this backend in dodo's own window — which is the
+            // one moment this thread's answer is current.
+            caps: CapsLock::new((unsafe { GetKeyState(VK_CAPITAL as i32) }) & 1 != 0),
             status: KeyboardHookStatus::Running,
         }));
         let mut active = active_hook()
@@ -215,18 +238,24 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         // This physical down reaches the application, so its eventual up must.
         state.suppressed_key_ups.allow(event.vkCode);
     }
-    let Some((key, target)) = key_event(event) else {
+    // Windows toggles caps lock on key-down, and this callback is the only place
+    // that reliably sees the press — but it toggles once per press, not once per
+    // autorepeat. See `models::keyboard_hook::CapsLock`.
+    if !repeat {
+        state.caps.observe_key_down(event.vkCode);
+    }
+    let caps_lock = state.caps.on();
+    let window = foreground_window();
+    let Some(key) = normalized_key(event, window.map(|(_, thread)| thread), caps_lock) else {
         state.composer.reset();
         target_changed(&mut state.target, None);
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     };
-    if target_changed(&mut state.target, Some(target)) {
-        state.composer.reset();
-    }
-    // The shortcut is answered before the composer sees anything, and before
-    // the selected language is consulted — that ordering is what lets it switch
-    // *out* of a language with no engine as well as into one. A repeat is
-    // ignored so a held shortcut cycles once.
+    // The shortcut is answered before the composer sees anything, before the
+    // selected language is consulted, and before anything asks where text would
+    // go — that ordering is what lets it switch *out* of a language with no
+    // engine as well as into one, and what keeps it working in a window with no
+    // focused edit control. A repeat is ignored so a held shortcut cycles once.
     let cycled = (!repeat).then(|| state.switch.cycle(&key)).flatten();
     if let Some(cycled) = cycled {
         state.composer.reset();
@@ -243,6 +272,16 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         }
         state.suppressed_key_ups.suppress(event.vkCode);
         return 1;
+    }
+    // From here the key is text, so where it would land has to be known.
+    let Some(target) = window.and_then(|(foreground, thread)| target_identity(foreground, thread))
+    else {
+        state.composer.reset();
+        target_changed(&mut state.target, None);
+        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
+    };
+    if target_changed(&mut state.target, Some(target)) {
+        state.composer.reset();
     }
     if !state.switch.transforms() {
         state.composer.reset();
@@ -312,17 +351,21 @@ unsafe extern "system" fn mouse_callback(code: i32, wparam: WPARAM, lparam: LPAR
     unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
 }
 
-/// Maps a Windows event only when its foreground layout supplies exactly one
-/// printable character or it is a well-known editing/navigation key.
-fn key_event(event: &KBDLLHOOKSTRUCT) -> Option<(dodo_ime_core::KeyEvent, TargetIdentity)> {
+/// The foreground window and its thread, when Windows names both.
+fn foreground_window() -> Option<(usize, u32)> {
     let foreground = unsafe { GetForegroundWindow() };
     if foreground.is_null() {
         return None;
     }
     let thread = unsafe { GetWindowThreadProcessId(foreground, null_mut()) };
-    if thread == 0 {
-        return None;
-    }
+    (thread != 0).then_some((foreground as usize, thread))
+}
+
+/// The focused control retained text belongs to, when there is one.
+///
+/// Only the composing path needs this. Requiring it before the language switch
+/// was matched made the shortcut depend on there being somewhere to type.
+fn target_identity(foreground: usize, thread: u32) -> Option<TargetIdentity> {
     let mut gui = GUITHREADINFO {
         cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
         ..GUITHREADINFO::default()
@@ -330,53 +373,83 @@ fn key_event(event: &KBDLLHOOKSTRUCT) -> Option<(dodo_ime_core::KeyEvent, Target
     if unsafe { GetGUIThreadInfo(thread, &mut gui) } == 0 || gui.hwndFocus.is_null() {
         return None;
     }
-    let target = TargetIdentity::new(
-        foreground as usize,
+    Some(TargetIdentity::new(
+        foreground,
         thread,
         gui.hwndFocus as usize,
         gui.hwndCaret as usize,
-    );
-    let mut keyboard = [0_u8; 256];
-    if unsafe { GetKeyboardState(keyboard.as_mut_ptr()) } == 0 {
-        return None;
-    }
-    let current = keyboard.get_mut(event.vkCode as usize)?;
-    *current |= 0x80;
-    let layout = unsafe { GetKeyboardLayout(thread) };
-    if layout.is_null() {
-        return None;
-    }
+    ))
+}
+
+/// The physical keyboard, as opposed to what dodo's own message queue remembers.
+///
+/// `GetAsyncKeyState`'s high bit is "held", and it is not synchronised to any
+/// thread's queue — which is the whole reason it is asked here. The arriving key
+/// folds itself in because a low-level hook runs before Windows records it.
+fn physical_keys(vkey: u32, caps_lock: bool) -> PhysicalKeys {
+    let held = |key: u32| (unsafe { GetAsyncKeyState(key as i32) }) < 0;
+    with_key_down(
+        PhysicalKeys {
+            left_shift: held(vk::LSHIFT),
+            right_shift: held(vk::RSHIFT),
+            left_control: held(vk::LCONTROL),
+            right_control: held(vk::RCONTROL),
+            left_alt: held(vk::LMENU),
+            right_alt: held(vk::RMENU),
+            left_windows: held(vk::LWIN),
+            right_windows: held(vk::RWIN),
+            caps_lock,
+        },
+        vkey,
+    )
+}
+
+/// Maps a Windows event only when its foreground layout supplies exactly one
+/// printable character or it is a well-known editing/navigation key.
+///
+/// The character and the modifier flags come from one `PhysicalKeys` read, so
+/// they cannot disagree about Shift — a `shift` flag beside a lowercase letter
+/// is the same defect as the reverse.
+fn normalized_key(
+    event: &KBDLLHOOKSTRUCT,
+    layout_thread: Option<u32>,
+    caps_lock: bool,
+) -> Option<dodo_ime_core::KeyEvent> {
+    let physical = physical_keys(event.vkCode, caps_lock);
+    let keyboard = layout_state(event.vkCode, physical);
+    // The layout of the application being typed into, not dodo's: a Dvorak or
+    // French user's `w` has to be their `w`. Zero asks for this thread's own,
+    // which is the best remaining answer when there is no foreground window.
+    let layout = unsafe { GetKeyboardLayout(layout_thread.unwrap_or(0)) };
     let mut units = [0_u16; 4];
-    let count = unsafe {
-        // Windows 10's no-state-change flag avoids consuming a dead-key state.
-        windows_sys::Win32::UI::Input::KeyboardAndMouse::ToUnicodeEx(
-            event.vkCode,
-            event.scanCode,
-            keyboard.as_ptr(),
-            units.as_mut_ptr(),
-            units.len() as i32,
-            0x4,
-            layout,
-        )
+    let count = if layout.is_null() {
+        0
+    } else {
+        unsafe {
+            // Windows 10's no-state-change flag avoids consuming a dead-key
+            // state.
+            ToUnicodeEx(
+                event.vkCode,
+                event.scanCode,
+                keyboard.as_ptr(),
+                units.as_mut_ptr(),
+                units.len() as i32,
+                0x4,
+                layout,
+            )
+        }
     };
     let text = match count {
         0 => None,
         1 => one_character(&units[..1]),
+        // A dead key or a ligature has no single-character reading, so the key
+        // goes back to the application untouched.
         _ => return None,
     };
-    let active = |vk: u16| keyboard[vk as usize] & 0x80 != 0;
-    Some((
-        windows_key_event(
-            event.vkCode,
-            text,
-            modifiers(
-                active(VK_CONTROL),
-                active(VK_MENU),
-                active(VK_SHIFT),
-                active(VK_LWIN) || active(VK_RWIN),
-            ),
-        ),
-        target,
+    Some(windows_key_event(
+        event.vkCode,
+        text,
+        physical_modifiers(physical),
     ))
 }
 

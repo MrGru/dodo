@@ -92,6 +92,14 @@ pub struct Letter {
     /// matching source cancels `ư` back to literal `w` without treating its
     /// synthetic `u` as independently typed.
     source: Option<(Mark, char)>,
+    /// The case this letter had before a **re-typed** modifier key overrode it
+    /// — see `Syllable::retypes_last_letter`.
+    ///
+    /// `Some` implies [`Letter::mark`] is `Some`, because it is written and
+    /// cleared with the override itself. Taking that mark off puts the user's
+    /// own keystroke back rather than leaving a case no key is still asking
+    /// for: `Ddd` is `Dd`, not `dd`.
+    overridden_case: Option<bool>,
 }
 
 impl Letter {
@@ -101,6 +109,7 @@ impl Letter {
             mark: None,
             upper,
             source: None,
+            overridden_case: None,
         }
     }
 
@@ -311,6 +320,27 @@ impl Syllable {
         matches.then_some((first, second))
     }
 
+    /// Whether `source` is another press of the very letter it is marking.
+    ///
+    /// Two things have to hold, and both are load-bearing:
+    ///
+    /// - **The key spells the letter.** `dd`, `aa`, `ee` and `oo` are the whole
+    ///   set; Telex's `w` and every VNI digit fail here, which is what keeps
+    ///   `Aw` an `Ă` and `D9` a `Đ`. A shifted `W` is how a typist reaches a
+    ///   modifier in a caps-locked word, not an opinion about the vowel.
+    /// - **Nothing was typed since.** The two presses are one gesture only when
+    ///   the target is still the last letter — the same adjacency
+    ///   `Syllable::undo_self_mark` uses. A stroke that reaches back over a
+    ///   word (`Did`, `dungd`) is a modifier applied from a distance, and the
+    ///   case of that letter was settled when the user typed it.
+    fn retypes_last_letter(&self, at: usize, source: char) -> bool {
+        at + 1 == self.letters.len()
+            && self
+                .letters
+                .get(at)
+                .is_some_and(|letter| source.eq_ignore_ascii_case(&letter.base))
+    }
+
     /// Put `mark` on the letter that should have it, or take it off again.
     ///
     /// The single place either input scheme's diacritic keys end up, which is
@@ -325,6 +355,11 @@ impl Syllable {
     /// the mark. The engine uses this to distinguish a literal `u` decorated by
     /// `w` (`uww` → `uw`) from `ư` that the first `w` created by itself (`ww` →
     /// `w`).
+    ///
+    /// The source is also what decides the marked letter's **case**, in the one
+    /// situation where the key has an opinion about it: see
+    /// `Syllable::retypes_last_letter`, and this module's parent docs for the
+    /// rule stated whole.
     pub fn apply_mark_from(&mut self, mark: Mark, source: Option<char>) -> MarkOutcome {
         if mark == Mark::Horn
             && let Some((first, second)) = self.bare_uo_pair()
@@ -343,14 +378,33 @@ impl Syllable {
             {
                 return self.undo_self_mark(at, typed);
             }
-            self.letters[at].mark = None;
+            let letter = &mut self.letters[at];
+            letter.mark = None;
+            // The key that overrode the case has just been taken back, so the
+            // case goes back with it.
+            if let Some(previous) = letter.overridden_case.take() {
+                letter.upper = previous;
+            }
             MarkOutcome::Reverted
         } else {
+            let retyped = source.is_some_and(|source| self.retypes_last_letter(at, source));
+            let letter = &mut self.letters[at];
             // A different mark is replaced rather than refused: `oow` is `ô`
             // corrected to `ơ`, which is a typist changing their mind, not an
             // error. Its old source no longer describes the letter.
-            self.letters[at].mark = Some(mark);
-            self.letters[at].source = None;
+            letter.mark = Some(mark);
+            letter.source = None;
+            match source.filter(|_| retyped) {
+                // The latest press of this letter is the latest word on its
+                // case: `dD` is `Đ` and `Dd` is `đ`.
+                Some(source) => {
+                    letter.overridden_case = Some(letter.upper);
+                    letter.upper = source.is_ascii_uppercase();
+                }
+                // A modifier that is not this letter says nothing about it, and
+                // a replaced mark carries no earlier override forward.
+                None => letter.overridden_case = None,
+            }
             MarkOutcome::Applied
         }
     }
