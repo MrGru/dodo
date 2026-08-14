@@ -1,6 +1,6 @@
-//! The two OS integrations every Windows scanner needs: moving a path to the
-//! Recycle Bin, and revealing one in Explorer. Unlike
-//! `cleaner::macos::platform`, which calls `NSFileManager` directly, trash
+//! Windows Cleaner OS integrations: moving a path to the Recycle Bin,
+//! revealing one in Explorer, and opening the native Installed Apps surface.
+//! Unlike `cleaner::macos::platform`, which calls `NSFileManager` directly, trash
 //! goes through the `trash` crate (see the dependency comment in
 //! `Cargo.toml`) rather than hand-written `IFileOperation` bindings this
 //! build has no way to check against a real Windows host.
@@ -35,6 +35,19 @@ pub fn move_to_trash(path: &Path) -> Result<TrashReceipt, String> {
 pub fn reveal_in_explorer(path: &Path) -> Result<(), String> {
     std::process::Command::new("explorer")
         .arg(format!("/select,{}", path.display()))
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Opens Windows' own Installed Apps surface. This deliberately receives no
+/// registry or vendor command text: Windows and the application's registered
+/// installer retain ownership of the actual uninstall.
+pub fn open_installed_apps_settings() -> Result<(), String> {
+    let command =
+        crate::cleaner::windows::scanners::installed_apps::installed_apps_settings_command();
+    std::process::Command::new(command.program)
+        .args(command.args)
         .spawn()
         .map_err(|error| error.to_string())?;
     Ok(())

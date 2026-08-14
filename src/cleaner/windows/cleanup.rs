@@ -61,6 +61,8 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
 
 /// Filesystem categories use explicit scanner-derived roots. Docker Cache's
 /// synthetic paths are routed to the shared CLI pruner before this function.
+/// Installed Apps never reaches cleanup: registry/MSIX uninstall opens Windows
+/// Settings, and bounded portable directories are inventory-only.
 fn policy_for(item: &CleanableItem) -> DeletionPolicy {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))

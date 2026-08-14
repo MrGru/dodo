@@ -79,10 +79,9 @@ impl CleanerCategory {
     /// from every build. [`CleanerCategory::ALL`] still names every category;
     /// hiding changes only whether a row exists to start its scan.
     ///
-    /// macOS implements all fourteen categories. Windows and Linux currently
-    /// implement System Junk, User Cache, Trash Bins, Large & Old Files, AI
-    /// Apps, Node Tooling Cache and Docker Cache, so those are the only rows
-    /// they list.
+    /// macOS implements all fourteen categories. Windows also implements
+    /// Installed Apps; Linux still lists only System Junk, User Cache, Trash
+    /// Bins, Large & Old Files, AI Apps, Node Tooling Cache and Docker Cache.
     /// Later rounds must
     /// unhide a row in the same change that registers its scanner.
     ///
@@ -98,7 +97,15 @@ impl CleanerCategory {
     pub fn hidden_for(host: HostOs) -> &'static [CleanerCategory] {
         match host {
             HostOs::MacOs => &[],
-            HostOs::Windows | HostOs::Unix => &[
+            HostOs::Windows => &[
+                CleanerCategory::MailFiles,
+                CleanerCategory::OrphanedFiles,
+                CleanerCategory::XcodeJunk,
+                CleanerCategory::HomebrewCache,
+                CleanerCategory::UniversalBinaries,
+                CleanerCategory::LanguageFiles,
+            ],
+            HostOs::Unix => &[
                 CleanerCategory::MailFiles,
                 CleanerCategory::InstalledApps,
                 CleanerCategory::OrphanedFiles,
@@ -161,7 +168,15 @@ mod tests {
     use super::{CleanerCategory, CleanerSection};
     use crate::paths::HostOs;
 
-    const HIDDEN_OFF_MACOS: [CleanerCategory; 7] = [
+    const HIDDEN_ON_WINDOWS: [CleanerCategory; 6] = [
+        CleanerCategory::MailFiles,
+        CleanerCategory::OrphanedFiles,
+        CleanerCategory::XcodeJunk,
+        CleanerCategory::HomebrewCache,
+        CleanerCategory::UniversalBinaries,
+        CleanerCategory::LanguageFiles,
+    ];
+    const HIDDEN_ON_LINUX: [CleanerCategory; 7] = [
         CleanerCategory::MailFiles,
         CleanerCategory::InstalledApps,
         CleanerCategory::OrphanedFiles,
@@ -176,14 +191,17 @@ mod tests {
         assert!(CleanerCategory::hidden_for(HostOs::MacOs).is_empty());
         assert_eq!(CleanerCategory::visible_for(HostOs::MacOs).count(), 14);
 
-        for host in [HostOs::Windows, HostOs::Unix] {
-            assert_eq!(CleanerCategory::hidden_for(host), HIDDEN_OFF_MACOS);
-            assert_eq!(CleanerCategory::visible_for(host).count(), 7);
-            for hidden in HIDDEN_OFF_MACOS {
-                assert!(!CleanerCategory::visible_for(host).any(|shown| shown == hidden));
+        for (host, hidden, visible_count) in [
+            (HostOs::Windows, HIDDEN_ON_WINDOWS.as_slice(), 8),
+            (HostOs::Unix, HIDDEN_ON_LINUX.as_slice(), 7),
+        ] {
+            assert_eq!(CleanerCategory::hidden_for(host), hidden);
+            assert_eq!(CleanerCategory::visible_for(host).count(), visible_count);
+            for category in hidden {
+                assert!(!CleanerCategory::visible_for(host).any(|shown| shown == *category));
                 assert!(
-                    !CleanerCategory::categories_for_host(host, hidden.section())
-                        .any(|shown| shown == hidden)
+                    !CleanerCategory::categories_for_host(host, category.section())
+                        .any(|shown| shown == *category)
                 );
             }
         }
@@ -230,6 +248,11 @@ mod tests {
                 CleanerCategory::NodeToolingCache,
                 CleanerCategory::DockerCache
             ]
+        );
+        assert_eq!(
+            CleanerCategory::categories_for_host(HostOs::Windows, CleanerSection::Applications)
+                .collect::<Vec<_>>(),
+            vec![CleanerCategory::InstalledApps]
         );
         assert_eq!(
             CleanerCategory::categories_for_host(HostOs::Unix, CleanerSection::Applications)

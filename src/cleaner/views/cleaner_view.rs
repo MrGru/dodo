@@ -727,6 +727,19 @@ impl CleanerView {
             let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
             uninstall_review_dialog::open(cx.entity(), item, other_apps, home, window, cx);
         }
+        #[cfg(target_os = "windows")]
+        {
+            // The selected row deliberately does not become a command
+            // argument. Windows owns app selection and vendor invocation.
+            let _ = item;
+            if let Err(error) = crate::cleaner::windows::platform::open_installed_apps_settings() {
+                window.open_alert_dialog(cx, move |alert, _, cx| {
+                    alert
+                        .title(t(Str::CleanerStatusFailed, cx))
+                        .description(error.clone())
+                });
+            }
+        }
     }
 
     fn selected_items_for_active_category(&self) -> Vec<CleanableItem> {

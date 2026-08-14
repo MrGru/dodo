@@ -30,9 +30,9 @@
 //!   `macos::platform::icon` carry the measurements; do not put a raw
 //!   `Vec<u8>` icon back on an item.
 //! - **Not every [`core::category::CleanerCategory`] is on screen, and which
-//!   ones are depends on the platform.** macOS lists all fourteen; Windows
-//!   and Linux list the seven categories their scanner registries implement
-//!   today. [`core::category::CleanerCategory::hidden_for`] is the
+//!   ones are depends on the platform.** macOS lists all fourteen, Windows
+//!   lists eight and Linux lists seven — exactly what each scanner registry
+//!   implements today. [`core::category::CleanerCategory::hidden_for`] is the
 //!   entire switch and is a **pure function of a [`crate::paths::HostOs`]**,
 //!   not a `cfg` split, so all three answers are unit tested from any host;
 //!   `HostOs::current` is the one place the compiled-for platform enters it.
@@ -61,7 +61,9 @@ pub(crate) mod node_tooling_cache;
 pub mod services;
 pub mod state;
 pub mod views;
-#[cfg(target_os = "windows")]
+// Windows' pure Installed Apps inventory policy is also compiled by this
+// host's tests; OS integrations inside the module remain target-gated.
+#[cfg(any(target_os = "windows", test))]
 pub mod windows;
 
 pub use views::CleanerView;

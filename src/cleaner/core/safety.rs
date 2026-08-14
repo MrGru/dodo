@@ -37,6 +37,16 @@ pub fn contains_path(host: HostOs, parent: &Path, child: &Path) -> bool {
     parent.contains(&child)
 }
 
+/// Host-aware direct-child check, used when a scanner promises a bounded
+/// one-level search rather than arbitrary descendant discovery.
+pub fn is_direct_child(host: HostOs, parent: &Path, child: &Path) -> bool {
+    let (Some(parent), Some(child)) = (normalize_path(host, parent), normalize_path(host, child))
+    else {
+        return false;
+    };
+    parent.contains(&child) && child.components.len() == parent.components.len() + 1
+}
+
 pub fn dedupe_nested_paths(host: HostOs, mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths.sort_by_key(|path| {
         normalize_path(host, path)
@@ -339,8 +349,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        AllowedRoot, DeletionPolicy, contains_path, dedupe_nested_paths, normalize_path,
-        validate_lexical_path, validate_path, validate_resolved_path,
+        AllowedRoot, DeletionPolicy, contains_path, dedupe_nested_paths, is_direct_child,
+        normalize_path, validate_lexical_path, validate_path, validate_resolved_path,
     };
     use crate::cleaner::core::category::CleanerCategory;
     use crate::cleaner::core::errors::SafetyError;
@@ -408,6 +418,22 @@ mod tests {
             Path::new("/home/me/Cache"),
             Path::new("/home/me/cache/npm")
         ));
+    }
+
+    #[test]
+    fn direct_children_use_host_path_rules_without_accepting_descendants() {
+        let parent = Path::new(r"C:\Users\Ada\AppData\Local\Programs");
+        assert!(is_direct_child(
+            HostOs::Windows,
+            parent,
+            Path::new(r"c:\users\ada\appdata\local\programs\Dodo")
+        ));
+        assert!(!is_direct_child(
+            HostOs::Windows,
+            parent,
+            Path::new(r"C:\Users\Ada\AppData\Local\Programs\Tools\Dodo")
+        ));
+        assert!(!is_direct_child(HostOs::Windows, parent, parent));
     }
 
     #[test]

@@ -142,7 +142,18 @@ fn action_look(action: RowAction) -> (Str, AppIcon) {
         RowAction::Reveal => (reveal_label(), AppIcon::FolderOpen),
         RowAction::CopyPath => (Str::CleanerCopyPath, AppIcon::Copy),
         RowAction::Keep => (Str::CleanerKeepItem, AppIcon::CircleCheck),
-        RowAction::Uninstall => (Str::CleanerBeginUninstallReview, AppIcon::Trash),
+        RowAction::Uninstall => (uninstall_label(), AppIcon::Trash),
+    }
+}
+
+fn uninstall_label() -> Str {
+    #[cfg(target_os = "windows")]
+    {
+        Str::CleanerOpenInstalledAppsSettings
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Str::CleanerBeginUninstallReview
     }
 }
 

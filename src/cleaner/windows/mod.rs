@@ -1,30 +1,31 @@
-//! Windows Cleaner implementations: four filesystem categories (System Junk,
-//! User Cache, Trash Bins, Large & Old Files) plus the shared AI Apps, Node
-//! Tooling Cache and Docker Cache scanners. Every other category has no scanner here
-//! and is hidden by
+//! Windows Cleaner implementations: Installed Apps, four filesystem categories
+//! (System Junk, User Cache, Trash Bins, Large & Old Files), and the shared AI
+//! Apps, Node Tooling Cache and Docker Cache scanners. Every other category has
+//! no scanner here and is hidden by
 //! `CleanerCategory::hidden_for`, so every listed row has a working
 //! implementation. In particular, Language Files has no safe common
 //! Windows deletion unit, and generic AppData leftovers are not trustworthy
 //! evidence for Orphaned Files.
 //!
-//! **None of this has been compiled, let alone run, on a real Windows
-//! host.** The Windows `cargo check` row is one of the two this Mac cannot
-//! even cross-*check* — `aws-lc-sys`'s C build script needs `windows.h` and
-//! there is no cross C toolchain for it here (see "Two of the four `cargo
-//! check` targets…" in the project's root doc) — so this module has had
-//! nothing stronger than careful reading and mirroring already-shipped
-//! macOS/generic code against it. Treat every claim below as unverified
-//! until a captain builds and runs it, the same posture
-//! `docs/windows-input-method.md` already states for the TSF host.
+//! Pure Windows inventory and policy are tested from every host, but the real
+//! registry/MSIX/Explorer integrations still need captain testing on Windows.
+//! A full Windows cross-check from this Mac remains blocked by `aws-lc-sys`'s
+//! C build requiring Windows headers (see "Two of the four `cargo check`
+//! targets…" in the project's root doc).
 
+#[cfg(target_os = "windows")]
 pub mod cleanup;
+#[cfg(target_os = "windows")]
 pub mod platform;
 pub mod scanners;
 
+#[cfg(target_os = "windows")]
 use std::sync::Arc;
 
+#[cfg(target_os = "windows")]
 use crate::cleaner::core::scanner::CleanerScanner;
 
+#[cfg(target_os = "windows")]
 pub fn default_scanners() -> Vec<Arc<dyn CleanerScanner>> {
     scanners::default_scanners()
 }

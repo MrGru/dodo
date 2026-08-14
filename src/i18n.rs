@@ -1544,6 +1544,13 @@ pub enum Str {
     // `position()` stays a fixed table.
     InputMethodBrowserFix,
     InputMethodBrowserFixDescription,
+
+    // Windows Cleaner Installed Apps. Appended to preserve stable positions.
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(dead_code, reason = "Windows-only Cleaner copy.")
+    )]
+    CleanerOpenInstalledAppsSettings,
 }
 
 impl Str {
@@ -1841,6 +1848,12 @@ impl Str {
             }
             (Str::CleanerBeginUninstallReview, Language::Vietnamese) => {
                 "Bắt đầu xem xét gỡ cài đặt".into()
+            }
+            (Str::CleanerOpenInstalledAppsSettings, Language::English) => {
+                "Open Windows Installed Apps".into()
+            }
+            (Str::CleanerOpenInstalledAppsSettings, Language::Vietnamese) => {
+                "Mở Ứng dụng đã cài đặt của Windows".into()
             }
             (Str::CleanerUninstallReviewTitle { name }, Language::English) => {
                 format!("Uninstall {name}?").into()
@@ -6551,6 +6564,7 @@ mod tests {
             plain(Str::InputMethodShortcutArrowDown),
             plain(Str::InputMethodBrowserFix),
             plain(Str::InputMethodBrowserFixDescription),
+            plain(Str::CleanerOpenInstalledAppsSettings),
         ]
     }
 
@@ -7493,6 +7507,7 @@ mod tests {
             Str::InputMethodShortcutArrowDown => 932,
             Str::InputMethodBrowserFix => 933,
             Str::InputMethodBrowserFixDescription => 934,
+            Str::CleanerOpenInstalledAppsSettings => 935,
         }
     }
 
