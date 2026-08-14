@@ -80,8 +80,9 @@ impl CleanerCategory {
     /// hiding changes only whether a row exists to start its scan.
     ///
     /// macOS implements all fourteen categories. Windows and Linux currently
-    /// implement System Junk, User Cache, Trash Bins, Large & Old Files and
-    /// Docker Cache, so those are the only rows they list. Later rounds must
+    /// implement System Junk, User Cache, Trash Bins, Large & Old Files, Node
+    /// Tooling Cache and Docker Cache, so those are the only rows they list.
+    /// Later rounds must
     /// unhide a row in the same change that registers its scanner.
     ///
     /// Two absences are policy rather than roadmap state. Language Files stays
@@ -103,7 +104,6 @@ impl CleanerCategory {
                 CleanerCategory::AiApps,
                 CleanerCategory::XcodeJunk,
                 CleanerCategory::HomebrewCache,
-                CleanerCategory::NodeToolingCache,
                 CleanerCategory::UniversalBinaries,
                 CleanerCategory::LanguageFiles,
             ],
@@ -161,14 +161,13 @@ mod tests {
     use super::{CleanerCategory, CleanerSection};
     use crate::paths::HostOs;
 
-    const HIDDEN_OFF_MACOS: [CleanerCategory; 9] = [
+    const HIDDEN_OFF_MACOS: [CleanerCategory; 8] = [
         CleanerCategory::MailFiles,
         CleanerCategory::InstalledApps,
         CleanerCategory::OrphanedFiles,
         CleanerCategory::AiApps,
         CleanerCategory::XcodeJunk,
         CleanerCategory::HomebrewCache,
-        CleanerCategory::NodeToolingCache,
         CleanerCategory::UniversalBinaries,
         CleanerCategory::LanguageFiles,
     ];
@@ -180,7 +179,7 @@ mod tests {
 
         for host in [HostOs::Windows, HostOs::Unix] {
             assert_eq!(CleanerCategory::hidden_for(host), HIDDEN_OFF_MACOS);
-            assert_eq!(CleanerCategory::visible_for(host).count(), 5);
+            assert_eq!(CleanerCategory::visible_for(host).count(), 6);
             for hidden in HIDDEN_OFF_MACOS {
                 assert!(!CleanerCategory::visible_for(host).any(|shown| shown == hidden));
                 assert!(
@@ -227,7 +226,10 @@ mod tests {
         assert_eq!(
             CleanerCategory::categories_for_host(HostOs::Windows, CleanerSection::Advanced)
                 .collect::<Vec<_>>(),
-            vec![CleanerCategory::DockerCache]
+            vec![
+                CleanerCategory::NodeToolingCache,
+                CleanerCategory::DockerCache
+            ]
         );
         assert_eq!(
             CleanerCategory::categories_for_host(HostOs::Unix, CleanerSection::Applications)

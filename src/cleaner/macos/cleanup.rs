@@ -11,9 +11,8 @@ use crate::cleaner::core::safety::{
 };
 use crate::cleaner::macos::applications::locations;
 use crate::cleaner::macos::platform::move_to_trash;
-use crate::cleaner::macos::scanners::{
-    ai_apps, homebrew_cache, mail_files, node_tooling_cache, xcode_junk,
-};
+use crate::cleaner::macos::scanners::{ai_apps, homebrew_cache, mail_files, xcode_junk};
+use crate::cleaner::node_tooling_cache;
 use crate::paths::{self, HostOs};
 
 pub fn empty_trash_items(items: &[CleanableItem]) -> CleanupReport {
@@ -99,12 +98,15 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
     let mut successes = Vec::new();
     let mut failures = Vec::new();
     let host = HostOs::current();
+    let policy = items.first().map(policy_for);
     for path in dedupe_nested_paths(host, by_path.keys().cloned().collect()) {
         let Some(item) = by_path.get(&path) else {
             continue;
         };
-        let policy = policy_for(item);
-        match validate_path(host, path.as_path(), item.category, &policy) {
+        let Some(policy) = policy.as_ref() else {
+            continue;
+        };
+        match validate_path(host, path.as_path(), item.category, policy) {
             Ok(()) => match move_to_trash(path.as_path()) {
                 Ok(receipt) => successes.push(CleanupItemSuccess {
                     id: item.id,
@@ -133,8 +135,10 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
     }
 }
 
-fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
+fn policy_for(item: &CleanableItem) -> DeletionPolicy {
     let home = std::env::var_os("HOME").map(PathBuf::from);
+    let node_environment = (item.category == CleanerCategory::NodeToolingCache)
+        .then(|| node_tooling_cache::snapshot_environment(HostOs::MacOs, home.as_deref()));
     let mut allowed_roots = Vec::new();
     if let Some(home) = home.as_ref() {
         allowed_roots.push(AllowedRoot {
@@ -225,14 +229,15 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
         // true` for the exact same environment snapshot the scan itself
         // would take. pnpm's shared store, and anything a future Nub
         // detection might ever report, are never included — see
-        // `macos::scanners::node_tooling_cache` and
+        // `cleaner::node_tooling_cache` and
         // `docs/cleaner/known-limitations.md`.
-        let node_environment = node_tooling_cache::snapshot_environment(Some(home.as_path()));
-        for root in node_tooling_cache::cleanup_allowed_roots(&node_environment) {
-            allowed_roots.push(AllowedRoot {
-                path: root,
-                allowed_categories: vec![CleanerCategory::NodeToolingCache],
-            });
+        if let Some(environment) = node_environment.as_ref() {
+            for root in node_tooling_cache::cleanup_allowed_roots(environment) {
+                allowed_roots.push(AllowedRoot {
+                    path: root,
+                    allowed_categories: vec![CleanerCategory::NodeToolingCache],
+                });
+            }
         }
 
         // AI Apps (Phase 12): only locations `AiAppRole::allow_cleanup`
@@ -266,6 +271,9 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
     ];
     if let Some(home) = home.as_ref() {
         protected_paths.push(home.clone());
+    }
+    if let Some(environment) = node_environment.as_ref() {
+        protected_paths.extend(node_tooling_cache::cleanup_denied_roots(environment));
     }
     if let Ok(exe) = std::env::current_exe() {
         protected_paths.push(exe);

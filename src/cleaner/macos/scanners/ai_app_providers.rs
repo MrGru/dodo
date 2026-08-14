@@ -3,7 +3,7 @@
 //!
 //! # Why one file, not one-per-provider like `node_tooling`
 //!
-//! `macos::scanners::node_tooling` gives each of its six providers its own
+//! `cleaner::node_tooling` gives each of its six providers its own
 //! file because each one implements a real trait method with genuinely
 //! different environment-variable and fallback-path logic. An
 //! [`AiAppDefinition`] has no behaviour at all — it is the static roots list

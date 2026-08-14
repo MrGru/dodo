@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::cleaner::core::scanner::CleanerScanner;
 use crate::cleaner::docker_cache::DockerCacheScanner;
+use crate::cleaner::node_tooling_cache::NodeToolingCacheScanner;
 
 pub use large_old_files::LargeOldFilesScanner;
 pub use system_junk::SystemJunkScanner;
@@ -19,6 +20,7 @@ pub fn default_scanners() -> Vec<Arc<dyn CleanerScanner>> {
         Arc::new(UserCacheScanner::new()),
         Arc::new(LargeOldFilesScanner::new()),
         Arc::new(TrashBinsScanner::new()),
+        Arc::new(NodeToolingCacheScanner::new()),
         Arc::new(DockerCacheScanner::new()),
     ]
 }

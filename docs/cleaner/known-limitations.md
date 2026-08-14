@@ -89,21 +89,18 @@
     exclusion-list concept to the shared `scan_root` engine for one scanner's need.
 - Phase 11 also adds **Node Tooling Cache**, six providers (npm, Yarn Classic, Yarn Berry, pnpm,
   Bun, Nub) behind one `NodeToolCacheProvider` trait (`src/cleaner/core/node_tool_provider.rs`),
-  driven by `src/cleaner/macos/scanners/node_tooling_cache.rs`. Scan+preview only, same as every
+  driven by shared `src/cleaner/node_tooling_cache.rs` on all three hosts. Scan+preview only,
+  same as every
   other category. Deliberate scope cuts:
-  - **No CLI process call was made anywhere in this phase.** Every location is derived from an
-    environment-variable override or a documented default filesystem path — `npm`, `yarn`, `pnpm`
-    and `bun` are never invoked, and pnpm's own `pnpm config get store-dir` is deliberately not
-    shelled out to either, the same "avoid an extra process call" reasoning `homebrew_cache` used
-    for skipping `brew --cache`. A non-default install that neither sets the relevant environment
-    variable nor uses the documented default location is invisible to the matching provider.
-  - **pnpm's store is scan-only and is never allow-listed for cleanup at all** — not "review
-    required", but structurally excluded from `node_tooling_cache::cleanup_allowed_roots`, so no
-    code path in this phase can move it to Trash regardless of what a future UI bug might let a
-    user select. The store is shared across every pnpm project on the machine; the ticket asks for
-    a future explicit "pnpm store prune" action with its own preview, which this phase does not
-    add. pnpm's separate, smaller registry-metadata cache (`~/Library/Caches/pnpm`) is unaffected
-    and is treated like any other tool's cache.
+  - **Configured roots use fixed-argv CLI queries.** npm, both Yarn generations, pnpm and Bun are
+    asked for their own paths behind an injected runner. Output must be one absolute, existing path;
+    failures fall through to a known host default where one is safe. No shell parses or evaluates
+    tool output.
+  - **pnpm's store is denied, not scan-only.** `npm_config_store_dir` or `pnpm store path`
+    identifies it solely so the scanner can omit it and cleanup can protect it. It is never a row
+    and never an allowed root. `PNPM_HOME` is pnpm's executable directory, not a store override,
+    so the old provider assumption was removed. pnpm's separate metadata cache is treated like the
+    other recreatable caches.
   - **Yarn Berry's project-local `.yarn/cache` and Plug'n'Play files (`.pnp.cjs`/`.pnp.data.json`)
     are out of scope for discovery.** Both require knowing where a Yarn Berry project lives on
     disk, and there is no fixed, home-relative convention for either — finding one would mean
@@ -128,13 +125,11 @@
     reported. `node_tooling::nub::detect_home` checks a defensive `NUB_HOME`-style override purely
     so a future session with real knowledge of Nub's layout has a wired place to extend; it is
     never turned into a location today, confirmed or not.
-  - Yarn Berry's default global cache path (`~/Library/Caches/Yarn/Berry`) is a documented
-    convention, the same "best-effort default location" status `homebrew_cache`'s
-    `~/Library/Caches/Homebrew` has — neither is derived by calling the tool itself. Because that
-    path nests inside Yarn Classic's own cache root (`~/Library/Caches/Yarn`), the scanner excludes
-    Yarn Berry's directory from Yarn Classic's own immediate-children enumeration (and, more
-    generally, excludes any immediate child that is also another provider's own location) rather
-    than double-reporting the same cache under two provider names.
+  - Yarn Berry's `globalFolder` is queried and its `cache` child is used. The old
+    `~/Library/Caches/Yarn/Berry` fallback remains only on macOS; Windows/Linux report nothing when
+    Yarn cannot identify a global folder. Exact and arbitrarily nested provider roots are compared
+    with host path rules, and a containing item is omitted rather than double-counted or made
+    capable of deleting the inner root.
 - **AI Apps (Phase 12)** — Ollama and LM Studio via one registry (`core::ai_app_provider`), driven by
   `macos::scanners::ai_apps`:
   - **Neither app's exact macOS bundle identifier is confidently known.** Both `OLLAMA_BUNDLE_IDS`

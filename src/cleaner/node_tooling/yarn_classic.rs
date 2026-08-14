@@ -1,7 +1,8 @@
 //! Yarn Classic (Yarn 1.x)'s global download cache.
 //!
-//! Standard location on macOS is `~/Library/Caches/Yarn`, overridable with
-//! `YARN_CACHE_FOLDER`. This provider does not add a separate logs location:
+//! The default follows each host's cache convention and is overridable with
+//! `YARN_CACHE_FOLDER` or Yarn's own `yarn cache dir` answer. This provider
+//! does not add a separate logs location:
 //! Yarn Classic has no documented, stable log directory distinct from its
 //! cache the way npm's `_logs` is — inventing one would mean guessing at a
 //! path this phase cannot justify. See `docs/cleaner/known-limitations.md`.
@@ -14,16 +15,23 @@ use crate::cleaner::core::node_tool_provider::{
 };
 use crate::cleaner::core::risk::{RiskLevel, SelectionPolicy};
 use crate::cleaner::core::scan_root::AggregateMode;
+use crate::paths::HostOs;
 
 pub(crate) struct YarnClassicProvider;
 
-/// Yarn Classic's cache root: `YARN_CACHE_FOLDER` if set, else
-/// `~/Library/Caches/Yarn`.
-fn resolve_cache_root(env_override: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
-    if let Some(path) = env_override {
-        return Some(path.to_path_buf());
-    }
-    home.map(|home| home.join("Library").join("Caches").join("Yarn"))
+fn resolve_cache_root(
+    env_override: Option<&Path>,
+    command: Option<&Path>,
+    host: HostOs,
+    cache_home: Option<&Path>,
+) -> Option<PathBuf> {
+    env_override.or(command).map(Path::to_path_buf).or_else(|| {
+        cache_home.map(|root| match host {
+            HostOs::Windows => root.join("Yarn").join("Cache"),
+            HostOs::MacOs => root.join("Yarn"),
+            HostOs::Unix => root.join("yarn"),
+        })
+    })
 }
 
 impl NodeToolCacheProvider for YarnClassicProvider {
@@ -38,7 +46,9 @@ impl NodeToolCacheProvider for YarnClassicProvider {
     fn discover(&self, environment: &NodeToolEnvironment) -> Vec<NodeCacheLocation> {
         let Some(cache_root) = resolve_cache_root(
             environment.yarn_cache_folder.as_deref(),
-            environment.home.as_deref(),
+            environment.yarn_classic_command_cache.as_deref(),
+            environment.host,
+            environment.cache_home.as_deref(),
         ) else {
             return Vec::new();
         };
@@ -71,17 +81,27 @@ mod tests {
     fn resolve_cache_root_prefers_the_environment_override() {
         let resolved = resolve_cache_root(
             Some(Path::new("/custom/yarn-cache")),
-            Some(Path::new("/Users/example")),
+            Some(Path::new("/queried/yarn-cache")),
+            HostOs::MacOs,
+            Some(Path::new("/Users/example/Library/Caches")),
         );
         assert_eq!(resolved, Some(PathBuf::from("/custom/yarn-cache")));
     }
 
     #[test]
     fn resolve_cache_root_falls_back_to_the_default_location() {
-        let resolved = resolve_cache_root(None, Some(Path::new("/Users/example")));
+        let resolved = resolve_cache_root(
+            None,
+            None,
+            HostOs::Unix,
+            Some(Path::new("/home/example/.cache")),
+        );
+        assert_eq!(resolved, Some(PathBuf::from("/home/example/.cache/yarn")));
+
+        let windows = Path::new(r"C:\Users\example\AppData\Local");
         assert_eq!(
-            resolved,
-            Some(PathBuf::from("/Users/example/Library/Caches/Yarn"))
+            resolve_cache_root(None, None, HostOs::Windows, Some(windows)),
+            Some(windows.join("Yarn").join("Cache"))
         );
     }
 

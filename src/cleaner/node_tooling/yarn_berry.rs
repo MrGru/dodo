@@ -16,14 +16,16 @@
 //! construction — nothing project-local ever appears at all.
 //!
 //! The global cache location is Yarn Berry's own convention
-//! (`enableGlobalCache`/`globalFolder`), separate from Yarn Classic's. This
-//! provider defaults to `~/Library/Caches/Yarn/Berry` and deliberately does
+//! (`enableGlobalCache`/`globalFolder`), separate from Yarn Classic's. The
+//! provider asks Yarn for `globalFolder` and scans its `cache` child. It keeps
+//! the shipped macOS fallback, but deliberately reports nothing on Windows or
+//! Linux when Yarn cannot identify its global folder. It does
 //! *not* honor `YARN_CACHE_FOLDER`: that variable's documented semantics are
 //! Yarn Classic's, and applying it here too would risk resolving to the
 //! exact same directory as Yarn Classic's own location whenever a user sets
 //! it, double-reporting one cache under two provider names. Since the
 //! default path nests *inside* `~/Library/Caches/Yarn` — the same directory
-//! Yarn Classic scans — `macos::scanners::node_tooling_cache` excludes any
+//! Yarn Classic scans — `cleaner::node_tooling_cache` excludes any
 //! immediate child that is also another provider's own location, the same
 //! technique `homebrew_cache` uses for its `Cask`/`Logs` subdirectories.
 
@@ -34,18 +36,21 @@ use crate::cleaner::core::node_tool_provider::{
 };
 use crate::cleaner::core::risk::{RiskLevel, SelectionPolicy};
 use crate::cleaner::core::scan_root::AggregateMode;
+use crate::paths::HostOs;
 
 pub(crate) struct YarnBerryProvider;
 
-/// Yarn Berry's default global cache root. No environment-variable override
-/// is honored here — see this module's doc comment for why.
-fn resolve_global_cache_root(home: Option<&Path>) -> Option<PathBuf> {
-    home.map(|home| {
-        home.join("Library")
-            .join("Caches")
-            .join("Yarn")
-            .join("Berry")
-    })
+fn resolve_global_cache_root(
+    command_global_folder: Option<&Path>,
+    host: HostOs,
+    cache_home: Option<&Path>,
+) -> Option<PathBuf> {
+    command_global_folder
+        .map(|root| root.join("cache"))
+        .or_else(|| match host {
+            HostOs::MacOs => cache_home.map(|root| root.join("Yarn").join("Berry")),
+            HostOs::Windows | HostOs::Unix => None,
+        })
 }
 
 impl NodeToolCacheProvider for YarnBerryProvider {
@@ -58,7 +63,11 @@ impl NodeToolCacheProvider for YarnBerryProvider {
     }
 
     fn discover(&self, environment: &NodeToolEnvironment) -> Vec<NodeCacheLocation> {
-        let Some(cache_root) = resolve_global_cache_root(environment.home.as_deref()) else {
+        let Some(cache_root) = resolve_global_cache_root(
+            environment.yarn_berry_command_global_folder.as_deref(),
+            environment.host,
+            environment.cache_home.as_deref(),
+        ) else {
             return Vec::new();
         };
         if !cache_root.is_dir() {
@@ -90,7 +99,11 @@ mod tests {
 
     #[test]
     fn resolve_global_cache_root_nests_under_yarn_classics_own_cache_directory() {
-        let resolved = resolve_global_cache_root(Some(Path::new("/Users/example")));
+        let resolved = resolve_global_cache_root(
+            None,
+            HostOs::MacOs,
+            Some(Path::new("/Users/example/Library/Caches")),
+        );
         assert_eq!(
             resolved,
             Some(PathBuf::from("/Users/example/Library/Caches/Yarn/Berry"))
@@ -98,21 +111,40 @@ mod tests {
     }
 
     #[test]
+    fn queried_global_folder_wins_and_non_macos_has_no_guessed_fallback() {
+        assert_eq!(
+            resolve_global_cache_root(
+                Some(Path::new("/custom/yarn/berry")),
+                HostOs::Unix,
+                Some(Path::new("/home/example/.cache")),
+            ),
+            Some(PathBuf::from("/custom/yarn/berry/cache"))
+        );
+        assert_eq!(
+            resolve_global_cache_root(
+                None,
+                HostOs::Windows,
+                Some(Path::new(r"C:\Users\example\AppData\Local")),
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn discover_reports_the_global_cache_when_present() {
         let home_root =
             std::env::temp_dir().join(format!("dodo-cleaner-yarn-berry-{}", std::process::id()));
-        let berry_root = home_root
-            .join("Library")
-            .join("Caches")
-            .join("Yarn")
-            .join("Berry");
+        let cache_home = home_root.join("Library").join("Caches");
+        let berry_root = cache_home.join("Yarn").join("Berry");
         fs::create_dir_all(&berry_root).expect("creates berry cache dir");
         fs::write(berry_root.join("cached-package.zip"), vec![0u8; 16])
             .expect("writes a cached archive");
 
         let provider = YarnBerryProvider;
         let environment = NodeToolEnvironment {
+            host: HostOs::MacOs,
             home: Some(home_root.clone()),
+            cache_home: Some(cache_home),
             ..Default::default()
         };
         let locations = provider.discover(&environment);

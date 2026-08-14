@@ -8,6 +8,7 @@ use crate::cleaner::core::report::{CleanupItemFailure, CleanupItemSuccess, Clean
 use crate::cleaner::core::safety::{
     AllowedRoot, DeletionPolicy, dedupe_nested_paths, validate_path,
 };
+use crate::cleaner::node_tooling_cache;
 use crate::cleaner::windows::platform::move_to_trash;
 use crate::paths::{self, HostOs};
 
@@ -20,12 +21,15 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
     let mut successes = Vec::new();
     let mut failures = Vec::new();
     let host = HostOs::current();
+    let policy = items.first().map(policy_for);
     for path in dedupe_nested_paths(host, by_path.keys().cloned().collect()) {
         let Some(item) = by_path.get(&path) else {
             continue;
         };
-        let policy = policy_for(item);
-        match validate_path(host, path.as_path(), item.category, &policy) {
+        let Some(policy) = policy.as_ref() else {
+            continue;
+        };
+        match validate_path(host, path.as_path(), item.category, policy) {
             Ok(()) => match move_to_trash(path.as_path()) {
                 Ok(receipt) => successes.push(CleanupItemSuccess {
                     id: item.id,
@@ -54,10 +58,9 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
     }
 }
 
-/// Only the four filesystem categories have allowed roots. Docker Cache is
-/// registered too, but its synthetic paths are routed to the shared CLI
-/// pruner before this function. Every other category is hidden and unsupported.
-fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
+/// Filesystem categories use explicit scanner-derived roots. Docker Cache's
+/// synthetic paths are routed to the shared CLI pruner before this function.
+fn policy_for(item: &CleanableItem) -> DeletionPolicy {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from);
@@ -108,6 +111,19 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
         }
     }
 
+    let node_environment = (item.category == CleanerCategory::NodeToolingCache)
+        .then(|| node_tooling_cache::snapshot_environment(HostOs::Windows, home.as_deref()));
+    for root in node_environment
+        .as_ref()
+        .into_iter()
+        .flat_map(|environment| node_tooling_cache::cleanup_allowed_roots(environment))
+    {
+        allowed_roots.push(AllowedRoot {
+            path: root,
+            allowed_categories: vec![CleanerCategory::NodeToolingCache],
+        });
+    }
+
     // Trash Bins is review-only on Windows, the same as on macOS — no
     // `MoveToTrash` capability ever reaches this function for it (see
     // `windows::scanners::trash_bins`), so no allowed root is needed here.
@@ -121,6 +137,9 @@ fn policy_for(_item: &CleanableItem) -> DeletionPolicy {
     ];
     if let Some(home) = home.as_ref() {
         protected_paths.push(home.clone());
+    }
+    if let Some(environment) = node_environment.as_ref() {
+        protected_paths.extend(node_tooling_cache::cleanup_denied_roots(environment));
     }
     if let Ok(exe) = std::env::current_exe() {
         protected_paths.push(exe);

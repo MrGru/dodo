@@ -1,8 +1,9 @@
 //! npm's own cache, split from its own log output.
 //!
 //! npm's real on-disk cache subfolder is always `_cacache`, regardless of
-//! whether the cache root is the default `~/.npm` or a configured location
-//! (`npm_config_cache`, npm's own env-var form of its `cache` config key) —
+//! whether the cache root is the host default (`~/.npm` on macOS/Linux or
+//! `%LOCALAPPDATA%\\npm-cache` on Windows) or a configured location
+//! (`npm_config_cache` or `npm config get cache`) —
 //! npm writes its content-addressable cache to `<cache root>/_cacache`
 //! either way. `<cache root>/_logs` is npm's own log output, reported as a
 //! separate group rather than folded into the cache group, per the ticket
@@ -18,17 +19,26 @@ use crate::cleaner::core::node_tool_provider::{
 };
 use crate::cleaner::core::risk::{RiskLevel, SelectionPolicy};
 use crate::cleaner::core::scan_root::AggregateMode;
+use crate::paths::HostOs;
 
 pub(crate) struct NpmProvider;
 
-/// npm's cache root: `npm_config_cache` if set, else `~/.npm`. A pure
-/// function so this module's tests can exercise both branches without
-/// touching disk or the real environment.
-fn resolve_cache_root(configured: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
-    if let Some(path) = configured {
-        return Some(path.to_path_buf());
-    }
-    home.map(|home| home.join(".npm"))
+/// npm's cache root: explicit environment override, npm's own answer, then
+/// the platform default.
+fn resolve_cache_root(
+    configured: Option<&Path>,
+    command: Option<&Path>,
+    host: HostOs,
+    home: Option<&Path>,
+    local_app_data: Option<&Path>,
+) -> Option<PathBuf> {
+    configured
+        .or(command)
+        .map(Path::to_path_buf)
+        .or_else(|| match host {
+            HostOs::Windows => local_app_data.map(|root| root.join("npm-cache")),
+            HostOs::MacOs | HostOs::Unix => home.map(|home| home.join(".npm")),
+        })
 }
 
 impl NodeToolCacheProvider for NpmProvider {
@@ -43,7 +53,10 @@ impl NodeToolCacheProvider for NpmProvider {
     fn discover(&self, environment: &NodeToolEnvironment) -> Vec<NodeCacheLocation> {
         let Some(cache_root) = resolve_cache_root(
             environment.npm_config_cache.as_deref(),
+            environment.npm_command_cache.as_deref(),
+            environment.host,
             environment.home.as_deref(),
+            environment.local_app_data.as_deref(),
         ) else {
             return Vec::new();
         };
@@ -95,20 +108,41 @@ mod tests {
     fn resolve_cache_root_prefers_the_configured_override() {
         let resolved = resolve_cache_root(
             Some(Path::new("/custom/npm-cache")),
+            Some(Path::new("/queried/npm-cache")),
+            HostOs::MacOs,
             Some(Path::new("/Users/example")),
+            None,
         );
         assert_eq!(resolved, Some(PathBuf::from("/custom/npm-cache")));
     }
 
     #[test]
     fn resolve_cache_root_falls_back_to_the_default_dot_npm() {
-        let resolved = resolve_cache_root(None, Some(Path::new("/Users/example")));
+        let resolved = resolve_cache_root(
+            None,
+            None,
+            HostOs::MacOs,
+            Some(Path::new("/Users/example")),
+            None,
+        );
         assert_eq!(resolved, Some(PathBuf::from("/Users/example/.npm")));
     }
 
     #[test]
     fn resolve_cache_root_is_none_without_an_override_or_a_home() {
-        assert_eq!(resolve_cache_root(None, None), None);
+        assert_eq!(
+            resolve_cache_root(None, None, HostOs::Unix, None, None),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_default_uses_local_app_data() {
+        let local = Path::new(r"C:\Users\example\AppData\Local");
+        assert_eq!(
+            resolve_cache_root(None, None, HostOs::Windows, None, Some(local)),
+            Some(local.join("npm-cache"))
+        );
     }
 
     #[test]

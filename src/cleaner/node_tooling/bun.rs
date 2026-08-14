@@ -34,14 +34,15 @@ use crate::cleaner::core::scan_root::AggregateMode;
 
 pub(crate) struct BunProvider;
 
-/// Bun's install cache: `BUN_INSTALL_CACHE_DIR` if set, else
-/// `<BUN_INSTALL or default ~/.bun>/install/cache`.
+/// Bun's install cache: direct override, Bun's own answer, then the configured
+/// or default install root.
 fn resolve_cache_root(
     bun_install: Option<&Path>,
     cache_override: Option<&Path>,
+    command: Option<&Path>,
     home: Option<&Path>,
 ) -> Option<PathBuf> {
-    if let Some(path) = cache_override {
+    if let Some(path) = cache_override.or(command) {
         return Some(path.to_path_buf());
     }
     let install_root = match bun_install {
@@ -64,6 +65,7 @@ impl NodeToolCacheProvider for BunProvider {
         let Some(cache_root) = resolve_cache_root(
             environment.bun_install.as_deref(),
             environment.bun_install_cache_dir.as_deref(),
+            environment.bun_command_cache.as_deref(),
             environment.home.as_deref(),
         ) else {
             return Vec::new();
@@ -99,6 +101,7 @@ mod tests {
         let resolved = resolve_cache_root(
             Some(Path::new("/custom/bun-install")),
             Some(Path::new("/custom/bun-cache")),
+            Some(Path::new("/queried/bun-cache")),
             Some(Path::new("/Users/example")),
         );
         assert_eq!(resolved, Some(PathBuf::from("/custom/bun-cache")));
@@ -109,6 +112,7 @@ mod tests {
         let resolved = resolve_cache_root(
             Some(Path::new("/custom/bun-install")),
             None,
+            None,
             Some(Path::new("/Users/example")),
         );
         assert_eq!(
@@ -118,8 +122,19 @@ mod tests {
     }
 
     #[test]
+    fn resolve_cache_root_uses_buns_own_answer_before_install_root() {
+        let resolved = resolve_cache_root(
+            Some(Path::new("/custom/bun-install")),
+            None,
+            Some(Path::new("/queried/bun-cache")),
+            Some(Path::new("/Users/example")),
+        );
+        assert_eq!(resolved, Some(PathBuf::from("/queried/bun-cache")));
+    }
+
+    #[test]
     fn resolve_cache_root_falls_back_to_the_default_dot_bun() {
-        let resolved = resolve_cache_root(None, None, Some(Path::new("/Users/example")));
+        let resolved = resolve_cache_root(None, None, None, Some(Path::new("/Users/example")));
         assert_eq!(
             resolved,
             Some(PathBuf::from("/Users/example/.bun/install/cache"))

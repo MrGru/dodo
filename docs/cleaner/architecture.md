@@ -11,8 +11,9 @@ deliberately not yet implemented — see "What's deferred" below.
   invariant is.
 - `src/cleaner/state/`: scan orchestration and UI state transitions (`CleanerState`, `CleanerStatus`).
 - `src/cleaner/views/`: GPUI rendering only — no filesystem traversal happens here.
-- `src/cleaner/macos/`: macOS-only implementation boundary (`#[cfg(target_os = "macos")]`) — every
-  scanner, the native Trash/Finder calls, permission checks, and app-identity/matching logic.
+- `src/cleaner/{macos,windows,linux}/`: target implementation boundaries for filesystem roots,
+  native Trash/Finder calls, permissions and app identity. CLI/path-policy scanners that genuinely
+  share behavior live directly under `src/cleaner/`.
 - `src/cleaner/services/`: the one persisted store this module owns (`cleaner-ignored-items.json`),
   behind a trait, following the same convention as dodo's other seven persisted files.
 
@@ -91,13 +92,14 @@ Cleaner is wired as a top-level tool in:
 | AI Apps | `ai_apps.rs`, `ai_app_providers.rs` |
 | Xcode Junk | `xcode_junk.rs` |
 | Homebrew Cache | `homebrew_cache.rs` |
-| Node Tooling Cache | `node_tooling_cache.rs`, `node_tooling/{npm,yarn_classic,yarn_berry,pnpm,bun,nub}.rs` |
+| Node Tooling Cache (shared) | `node_tooling_cache.rs`, `node_tooling/{npm,yarn_classic,yarn_berry,pnpm,bun,nub}.rs` |
 | Universal Binaries (analysis-only) | `universal_binaries.rs` |
 | Language Files (analysis-only) | `language_files.rs` |
 
-The table above is the macOS-specific set. Docker Cache lives at `src/cleaner/docker_cache.rs`
-because its fixed-argv CLI scanner/pruner is shared unchanged by all three hosts. Each platform's
-`scanners/mod.rs` registers its set; `state::registry` picks the compiled target's registry.
+The table above includes the macOS-specific set. Docker Cache and Node Tooling Cache live directly
+under `src/cleaner/` because both are shared by all three hosts; Node receives resolved platform
+cache directories rather than calling platform APIs. Each platform's `scanners/mod.rs` registers
+its set; `state::registry` picks the compiled target's registry.
 
 ## Shared macOS infrastructure
 
@@ -151,8 +153,9 @@ because its fixed-argv CLI scanner/pruner is shared unchanged by all three hosts
 
 ## Platform strategy
 
-- macOS is the only platform that **lists** all 14 categories. Windows and Linux list only their
-  four filesystem scanners plus shared Docker Cache; every unsupported row is hidden.
+- macOS is the only platform that **lists** all 14 categories. Windows and Linux list their
+  four filesystem scanners plus shared Docker Cache and Node Tooling Cache; every unsupported row
+  is hidden.
   `CleanerCategory::hidden_for(HostOs)` is the whole switch and is a pure function of the platform,
   so all answers are unit tested from any host. See `docs/cleaner/advanced-tools.md`.
 - `state::registry::default_scanners()` picks the platform's set and returns an empty vector only

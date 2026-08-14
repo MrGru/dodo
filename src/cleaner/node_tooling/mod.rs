@@ -1,8 +1,7 @@
-//! The six `NodeToolCacheProvider` implementations
-//! (`core::node_tool_provider`) — npm, Yarn Classic, Yarn Berry, pnpm, Bun
-//! and Nub. See `macos::scanners::node_tooling_cache` for how they're
-//! combined into one scan and one cleanup allow-list, and each submodule's
-//! own doc comment for that tool's specific detection rules and scope cuts.
+//! Shared `NodeToolCacheProvider` implementations for npm, Yarn Classic,
+//! Yarn Berry, pnpm, Bun and the deliberately empty Nub placeholder. See
+//! `cleaner::node_tooling_cache` for discovery, de-duplication and cleanup
+//! policy.
 
 mod bun;
 mod npm;
