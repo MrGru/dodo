@@ -1,15 +1,19 @@
 # `crates/` holds code that shares this lockfile, which is what separates it
 # from `tools/`.
 #
-# There are eleven members, in three groups.
+# There are twelve members, in three groups.
 #
-# `crates/dodo-app-icon`, `crates/dodo-i18n` and `crates/dodo-paths` are *kernel*
-# crates: code many of dodo's modules use, lifted out so it can be depended on
-# without depending on the rest of dodo — the icon set, the catalogue of every
-# user-visible string, and the rule for where dodo's files live. Two of the three
+# `crates/dodo-app-icon`, `crates/dodo-i18n`, `crates/dodo-paths` and
+# `crates/dodo-dialog-slot` are *kernel* crates: code many of dodo's modules
+# use, lifted out so it can be depended on without depending on the rest of
+# dodo — the icon set, the catalogue of every user-visible string, the rule for
+# where dodo's files live, and the one-dialog-at-a-time slot. Two of the four
 # have no dependencies at all. They deliberately do not depend on each other
 # either: the graph is wide and shallow, because a chain of small crates compiles
-# more slowly than one big one.
+# more slowly than one big one. `dodo-dialog-slot` is the one that had no
+# choice: it works through a gpui `Global`, which is identified by its type, so
+# a copy on each side of a crate boundary would be two unrelated slots — the
+# same argument that put `t()` and the active-language global in `dodo-i18n`.
 #
 # `crates/dodo-cleaner`, `crates/dodo-docker`, `crates/dodo-database` and
 # `crates/dodo-api-explorer` are *feature* crates — whole tools of the app,
@@ -35,7 +39,7 @@
 # bundle types with would be two different resolutions that nothing compares. One
 # workspace, one `Cargo.lock`, one `--locked`.
 #
-# `default-members` names all twelve (the root package and every crate), so a bare
+# `default-members` names all thirteen (the root package and every crate), so a bare
 # `cargo test` / `cargo clippy --all-targets` at the root covers each crate's own
 # tests. **Adding a crate means adding it here in the same commit**; without it
 # cargo defaults to the root package alone and the new crate's tests silently
@@ -56,6 +60,7 @@ default-members = [
     "crates/dodo-app-icon",
     "crates/dodo-cleaner",
     "crates/dodo-database",
+    "crates/dodo-dialog-slot",
     "crates/dodo-docker",
     "crates/dodo-i18n",
     "crates/dodo-ime-core",
@@ -130,6 +135,13 @@ dodo-app-icon = { path = "crates/dodo-app-icon" }
 # environment. `main.rs`'s own `paths` module is the seam: it reads the one thing
 # a pure crate cannot — the target triple `build.rs` embedded — and hands it over.
 dodo-paths = { path = "crates/dodo-paths" }
+# The single slot behind Settings' and the updater's dialogs. It used to be
+# `src/dialog_slot.rs`; it had to become a crate the moment the updater left
+# this binary, because the slot is a gpui `Global` and a `Global` is identified
+# by its **type** — a copy on each side of the boundary would be two slots, and
+# the two-identical-cards defect would come straight back. `main.rs` aliases it
+# to `crate::dialog_slot`, so `settings.rs` is unchanged.
+dodo-dialog-slot = { path = "crates/dodo-dialog-slot" }
 # Every string dodo shows a user. The catalogue is reachable without `gpui` —
 # a pure model holds a `Str` and a test renders it with no window — which is why
 # the UI half (the gpui global, `Language::current` / `set`, `t()`) is behind the

@@ -1614,6 +1614,7 @@ dependencies = [
  "dodo-app-icon",
  "dodo-cleaner",
  "dodo-database",
+ "dodo-dialog-slot",
  "dodo-docker",
  "dodo-i18n",
  "dodo-ime-core",
@@ -1718,6 +1719,14 @@ dependencies = [
  "serde_json",
  "sqlformat",
  "tokio-postgres-rustls",
+]
+
+[[package]]
+name = "dodo-dialog-slot"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
 ]
 
 [[package]]

@@ -36,7 +36,12 @@ use dodo_cleaner as cleaner;
 // all four lines reading `crate::database::…`. There is no `src/database/` any
 // more.
 use dodo_database as database;
-mod dialog_slot;
+// One dialog at a time for the two dialogs with more than one way in. It used
+// to be `src/dialog_slot.rs`; it is `crates/dodo-dialog-slot` now, because the
+// slot is a gpui `Global` — identified by its type — and the updater, which
+// left this binary, has to claim the *same* one `settings.rs` does. This alias
+// is what keeps both call sites reading `crate::dialog_slot::…`.
+use dodo_dialog_slot as dialog_slot;
 // The Docker/Podman tool is a *feature* crate — `crates/dodo-docker`, the
 // second module taken out of this binary. `layout.rs` names `DockerPage` and
 // `DockerView`, `run_app` below calls `docker::init`, and this alias is what

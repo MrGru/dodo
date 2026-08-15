@@ -8,6 +8,19 @@
 //! background check that found something). Both stacked two identical cards;
 //! this is the slot they now share, one per marker type.
 //!
+//! # Why this is a crate and not `src/dialog_slot.rs`
+//!
+//! It was that file until 2026-08-15, and it had to stop being one the moment
+//! the updater moved out of the binary: the slot is a gpui [`Global`], a
+//! `Global` is identified by its **type**, and a copy on each side of a crate
+//! boundary is therefore two unrelated slots — the updater would claim one
+//! that `src/settings.rs` never reads, and the two identical cards this module
+//! exists to prevent would come straight back. There can be exactly one of it,
+//! so it has to sit where the binary and every feature crate can both name it.
+//! That is the same argument that moved `t()` and the active-language global
+//! into `dodo-i18n`. `main.rs` aliases this crate to `crate::dialog_slot`, so
+//! every call site is spelled as it was.
+//!
 //! # The flag is checked against the window, never believed on its own
 //!
 //! [`claim`] takes the slot and every close path releases it. If a close path
