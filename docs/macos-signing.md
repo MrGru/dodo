@@ -684,7 +684,7 @@ reasons that have nothing to do with signing:
 certificate in hand does not reopen it as free.
 
 There is one *positive* compatibility property here: `data_dir()`
-(`src/paths.rs`) builds an absolute path from `$HOME` and is therefore
+(`crates/dodo-paths`) builds an absolute path from `$HOME` and is therefore
 unaffected by App Translocation, which is what an unsigned quarantined bundle
 suffers. So the IPC design is correct **both** before and after signing, and the
 transition changes nothing about it.

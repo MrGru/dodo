@@ -23,8 +23,8 @@ Cleaner is wired as a top-level tool in:
 
 - `src/main.rs` module registration
 - `src/layout.rs` `View` enum, `View::ALL`, title/icon mapping, entity creation, pane render match
-- `src/app_icon.rs` icon registration
-- `src/i18n.rs` localized titles and labels (800+ `Str` variants across the whole project; Cleaner's
+- `crates/dodo-app-icon/src/lib.rs` icon registration
+- `crates/dodo-i18n/` localized titles and labels (800+ `Str` variants across the whole project; Cleaner's
   own strings are a few hundred of those)
 
 ## Data flow

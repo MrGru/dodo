@@ -123,7 +123,7 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
 
   # ---------------------------------------------------------------------------
-  # Tests. dodo's suite is the i18n guards (src/i18n.rs, src/i18n_lint.rs), the
+  # Tests. dodo's suite is the i18n guards (crates/dodo-i18n, src/i18n_lint.rs), the
   # pure model logic under api_explorer/ and docker/, and the build-metadata
   # checks in src/build_info.rs. None of them opens a window, so a headless
   # runner is fine.

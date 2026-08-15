@@ -220,13 +220,17 @@ already know about. CI still runs the same checks.
 ├── docs/               # Build optimization and release engineering
 ├── scripts/            # Packaging and icon generation
 ├── tools/              # Release-only crates, excluded from the package
+├── crates/             # Workspace crates, sharing the one Cargo.lock
+│   ├── dodo-i18n/      # Every user-facing string, in each supported language
+│   ├── dodo-app-icon/  # AppIcon enum mapping icon names to embedded SVG paths
+│   ├── dodo-paths/     # Where persisted files live, per platform
+│   └── dodo-ime-*/     # The input method: engine, contract, macOS and Windows hosts
 ├── src/
 │   ├── main.rs         # Entry point: GPUI init, --version/--build-info, the window
 │   ├── app.rs          # DodoApp: top-level view holding the Layout
 │   ├── layout.rs       # Sidebar + main pane; the View enum that lists the tools
 │   ├── settings.rs     # The Settings dialog
-│   ├── i18n.rs         # Every user-facing string, in each supported language
-│   ├── paths.rs        # Where persisted files live, per platform
+│   ├── i18n.rs         # dodo's end of dodo-i18n: t(), the global, LanguageExt
 │   ├── json_formatter.rs
 │   ├── encoder_decoder.rs
 │   ├── api_explorer/   # HTTP client   ┐
@@ -235,7 +239,6 @@ already know about. CI still runs the same checks.
 │   ├── updater/        # The in-app updater, same five layers
 │   ├── quick_nav/      # Clipboard detection and the normal-mode key bindings
 │   ├── session/        # session.json: appearance, window, open tool, tool list
-│   ├── app_icon.rs     # AppIcon enum mapping icon names to embedded SVG paths
 │   ├── assets.rs       # rust-embed AssetSource that loads embedded icons
 │   └── window_icon.rs  # Runtime window/Dock icon and the Linux app_id
 └── assets/

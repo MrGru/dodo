@@ -65,8 +65,9 @@ Verified: this compiles and runs (`test encoder_decoder::tests::hex_roundtrip ..
 deliberately when you want a `TestAppContext`, never by accident. There is no reason to reach for
 a scratch crate to test pure logic.
 
-The localization guards live in `src/i18n/tests.rs` and `src/i18n_lint.rs` (`cargo test i18n`);
-see `dodo-i18n-text` for what they enforce. The pure, testable logic that is
+The localization guards live in `crates/dodo-i18n/src/tests.rs` (`cargo test -p dodo-i18n`, which
+compiles the catalogue alone and is the fast loop for a string change) and in `src/i18n_lint.rs`
+(`cargo test i18n_lint`); see `dodo-i18n-text` for what they enforce. The pure, testable logic that is
 still uncovered sits at the bottom of the tool modules — `encode_hex`, `decode_hex`,
 `decode_base64`, `decode_url`, `split_jwt`, `JsonFormatter::pretty_print`.
 

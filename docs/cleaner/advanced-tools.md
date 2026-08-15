@@ -23,7 +23,7 @@ prove ownership.
 `CleanerCategory::hidden_for(HostOs)` is the entire switch, and it is a **pure
 function of the platform**, not a `#[cfg]` split: returning an empty slice for a
 host puts every category back in its section's tree, and both answers are unit
-tested from whichever machine runs `cargo test` (the same reason `src/paths.rs`
+tested from whichever machine runs `cargo test` (the same reason `dodo-paths`
 reads the target triple rather than `cfg` — two of dodo's four targets cannot be
 compiled from the machine this is usually written on). `CleanerCategory::ALL`
 still names all fourteen everywhere, so the scanners, their tests and their

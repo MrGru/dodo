@@ -82,7 +82,7 @@ done
 # assets/branding/ whenever the artwork changes.
 #
 # Not to be confused with assets/icons, which is the in-app SVG set behind
-# src/app_icon.rs and is embedded in the binary. This one is not embedded.
+# crates/dodo-app-icon and is embedded in the binary. This one is not embedded.
 icon_source="$repo_root/assets/macos/dodo.icns"
 [ -f "$icon_source" ] || die "missing $icon_source; run: scripts/generate-icons.py"
 cp "$icon_source" "$app/Contents/Resources/dodo.icns"

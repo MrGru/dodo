@@ -23,7 +23,7 @@ never rebuild a view on selection.
    `render_alpha_mask`), so colours inside the file are discarded entirely; only coverage
    survives. A multi-colour or solid-filled icon becomes a blob.
    No build step — `src/assets.rs` embeds `assets/icons/**/*.svg` via `rust-embed`.
-4. **`src/app_icon.rs`** — add an `AppIcon` variant and its arm in `IconNamed::path`
+4. **`crates/dodo-app-icon/src/lib.rs`** — add an `AppIcon` variant and its arm in `IconNamed::path`
    (`Self::Foo => "icons/foo.svg"`). The path is what reaches the asset source; the variant name
    is arbitrary. Watch the existing `Palette => "icons/palatte.svg"` — filename typo, variant
    spelled correctly. **The glyph has to be the tool's own**, not one already on another row:
@@ -73,10 +73,11 @@ never rebuild a view on selection.
    straight onto the tool with no click, and there is no `self` to call `activate` on inside the
    constructor. `Layout::new` builds the Docker entity first and tells it by hand; copy that.
 
-6. **`src/i18n/`** — `View::title` returns a `Str`, not a string, so the tool needs a variant for
+6. **`crates/dodo-i18n/`** — `View::title` returns a `Str`, not a string, so the tool needs a variant for
    its sidebar title (in the `shell` area, which owns the sidebar) and one for every label inside
-   it (in the tool's own area, which is a new `src/i18n/<tool>/` directory of four small files:
-   `mod.rs`, `en.rs`, `vi.rs`, `samples.rs`, plus one line in `src/i18n/mod.rs`'s `areas!`). Load
+   it (in the tool's own area, which is a new `crates/dodo-i18n/src/<tool>/` directory of four
+   small files: `mod.rs`, `en.rs`, `vi.rs`, `samples.rs`, plus one line in the `areas!` macro in
+   `crates/dodo-i18n/src/lib.rs`). Load
    `dodo-i18n-text` before writing that text; `cargo test i18n` will fail until each new variant
    has a sample.
 

@@ -4,7 +4,7 @@ description: How dodo's themes, font size, border radius and language switching 
 ---
 
 Two things own all of this: `src/settings.rs` (the dialog and the app-level state it edits) and
-`src/i18n/` (localization).
+`crates/dodo-i18n/` (localization).
 
 **Everything on this page is persisted across restarts except one setting.** Theme, font size,
 border radius and language are saved to `session.json` — the captain asked for session restoration
@@ -126,7 +126,7 @@ rule, the steps, the exemptions and the two `cargo test` guards all live there. 
 only what localization has to do with *settings*: switching the language, and adding a new one.
 
 **Add a language**: a `Language` variant, a row in `Language::ALL`, arms in `code()` and `label()`,
-one arm in the `areas!` dispatch in `src/i18n/mod.rs`, and one new `<area>/xx.rs` per area — the
+one arm in the `areas!` dispatch in `crates/dodo-i18n/src/lib.rs`, and one new `<area>/xx.rs` per area — the
 compiler enumerates every area and every string you missed, and **no existing translation is
 touched**. `dodo-i18n-text` has the file-by-file version. `code()` is the stable dropdown value;
 `label()` is the language's name *in* that language, so it is deliberately not translated. Expect

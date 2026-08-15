@@ -396,16 +396,16 @@ bite (never pair `release` with a second `close_dialog`, and the window rather t
 decides). No other dodo dialog needs it: the rest are opened from a control the modal overlay
 covers.
 
-**`src/i18n/` is one directory per *area of the app*, not one file per language of the whole
-app**, and that shape is the answer to a defect rather than a preference. It used to be a single
-7,595-line `src/i18n.rs` whose `Str::text` matched on the *pair* `(Str, Language)`, so a third
-language meant editing all 937 strings instead of adding files. Now `<area>/mod.rs` owns that
+**`crates/dodo-i18n/` is one directory per *area of the app*, not one file per language of the
+whole app**, and that shape is the answer to a defect rather than a preference. It used to be a
+single 7,595-line `src/i18n.rs` whose `Str::text` matched on the *pair* `(Str, Language)`, so a
+third language meant editing all 937 strings instead of adding files. Now `<area>/mod.rs` owns that
 area's `Text` enum, `<area>/en.rs` and `<area>/vi.rs` are each an exhaustive `match` over it, and
 `Str` — still holdable, comparable and re-translating, which is what `ConsoleEntry` relies on — is
 a thin sum over the twenty area enums with a `From` for each, so `t()` takes `impl Into<Str>` and a
 call site reads `t(cleaner::Text::Scan, cx)`. Four things there are decisions rather than details.
 **Adding a language touches no existing string**: one `Language` variant, one arm in the `areas!`
-dispatch in `src/i18n/mod.rs`, and one new file per area — and the compiler names every area that
+dispatch in `crates/dodo-i18n/src/lib.rs`, and one new file per area — and the compiler names every area that
 has not been given one. **The area boundaries follow `src/`, and the four biggest modules are split
 further** along their own view boundaries (`api_explorer` / `api_scripts` / `api_variables` /
 `api_response` / `api_collections`, `database` / `db_query` / `db_catalog` / `db_connection`), which
@@ -418,14 +418,27 @@ with its own exhaustiveness check** by the `samples!` macro, which replaced a 94
 hand-numbered `position()`: one entry per variant produces both the list the tests walk and an
 exhaustive `match` over `Text`, so a variant with no sample is a compile error and no index number
 survives. `src/i18n_lint.rs` stays put at the top of `src/` because its 34 `include_str!` paths are
-relative to that directory. See the `dodo-i18n-text` skill before writing any user-facing string.
+relative to that directory, and every file it reads is a *view*, so the catalogue moving out did not
+touch it. **The catalogue is a crate and the UI half is not**: `dodo-i18n` depends on nothing at all
+and `gpui` is the dependency it may never grow, because a `Str` is held unrendered by pure models
+that are tested with no `App` and no frame. `src/i18n.rs` is dodo's end of it and re-exports the
+crate, so a call site still reads `use crate::i18n::{cleaner, t}`. Two things there could not move as
+they were, both forced by the orphan rule: the gpui global is an `ActiveLanguage` newtype rather than
+`Language` itself, and `Language::current` / `set` are `LanguageExt`'s associated functions — the
+call sites are unchanged, but a file that calls one has to import the trait. See the
+`dodo-i18n-text` skill before writing any user-facing string.
 
-`data_dir()` lives in `src/paths.rs`, not under `api_explorer/` any more, and it knows all
-three platforms: `~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME` or
-`~/.config`. The macOS path is frozen — changing it orphans every existing installation's saved
-collections. It classifies the platform from `build_info::VERSION_INFO.target` rather than
-`#[cfg]`, which is what lets all three branches be unit tested from a Mac that cannot compile two
-of them; copy that trick rather than a `cfg` split for anything else platform-shaped and pure.
+`data_dir()` is `crate::paths::data_dir()` and knows all three platforms:
+`~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME` or `~/.config`. The macOS
+path is frozen — changing it orphans every existing installation's saved collections. Every *rule*
+lives in `crates/dodo-paths/`, which has no dependencies and deliberately no build script; it
+classifies the platform from a target triple rather than `#[cfg]`, which is what lets all three
+branches be unit tested from a Mac that cannot compile two of them — copy that trick rather than a
+`cfg` split for anything else platform-shaped and pure. **The seam is `main.rs`'s own `paths`
+module**, which is where the one impure input enters: `build_info::VERSION_INFO.target` is a fact
+about *this binary*, so it is read there and handed to the crate. That is also why
+`HostOs::current()` is `paths::current()` now — an inherent method cannot follow its type across a
+crate boundary while its body stays behind.
 
 The files version differently, and the difference is deliberate. A `RequestSnapshot` inside
 `collections.json` is versioned only by `#[serde(default)]`, which copes with *added* fields and
@@ -491,7 +504,7 @@ experimental ones included, because a silently absent platform means those users
 an update; and the publish step is **create-or-update**, because `gh release create` cannot repair
 a tag that already exists and tags here are immutable. `src/updater/` is what reads it.
 
-Eight things about build and release that catch people:
+Nine things about build and release that catch people:
 
 - **The repo is a cargo workspace, and `crates/` vs `tools/` is the rule for which shape a new
   crate takes.** It gained `[workspace]` on 2026-08-08 when the input-method engine moved to
@@ -511,8 +524,24 @@ Eight things about build and release that catch people:
   `[target.'cfg(target_os = "macos")'.dependencies]` table — a plain `[dependencies]` entry would
   make the Linux and Windows `cargo check` rows build AppKit bindings. And `workspace.exclude`
   matches **paths, not globs** — `tools/*` there excludes nothing, which is why it is spelled out.
-  `cargo metadata --no-deps` at the root now lists four packages, not one — the fourth being
-`crates/dodo-ime-ipc`, which is a member for the same reason and named in `default-members` too.
+  `cargo metadata --no-deps` at the root lists seven packages, not one.
+
+- **`crates/` also holds dodo's *kernel* crates, and the rule for what earns one is use plus
+  independence.** `dodo-i18n` (every user-visible string), `dodo-app-icon` (the icon set) and
+  `dodo-paths` (where dodo's files live) came out of `src/` on 2026-08-15 because dozens of modules
+  use each and none of them needs the rest of dodo. Four rules govern them, and the root
+  `Cargo.toml`'s header comments are the authority. **A crate goes in `members` and
+  `default-members` in the same commit** — a member missing from `default-members` silently stops
+  being tested. **The graph stays wide and shallow**: the three do not depend on each other, because
+  a chain of small crates compiles more slowly than one big one and would defeat the point.
+  **Purity is the deliverable, not the file count** — `dodo-i18n` exists so a pure model can hold a
+  translated message without a windowing library, which is why its `Cargo.toml` has an empty
+  `[dependencies]` and a comment saying so. And **what cannot be pure stays in the binary**: the
+  gpui `Global` behind `Language`, and the one read of `build_info::VERSION_INFO.target`, live in
+  `src/i18n.rs` and `main.rs`'s `paths` module respectively, so the crates need no build script and
+  no gpui. `src/dialog_slot.rs`, `src/assets.rs` and `src/build_info.rs` were measured and
+  deliberately **not** extracted: two users each is not a crate, `assets.rs` embeds `./assets` by a
+  path relative to its crate root, and `build_info.rs` reads the `env!` variables `build.rs` sets.
 
 - **Two of the four `cargo check` targets cannot be run from this Mac at all.**
   Linux and Windows both die in `aws-lc-sys`'s C build script (no cross C toolchain, no
@@ -544,7 +573,7 @@ Eight things about build and release that catch people:
   do not delete. `.githooks/pre-push` runs `fmt`, `clippy` and `cargo test --locked` and refuses
   the push if any fails; it is opt-in per clone with `git config core.hooksPath .githooks`
   (see "Pre-push checks" in `README.md` for its cost and the `--no-verify` bypass).
-  Note that `cargo build` alone does **not** prove the tree is green — `src/i18n/`'s per-area
+  Note that `cargo build` alone does **not** prove the tree is green — `dodo-i18n`'s per-area
   sample tables are exhaustive over each area's `Text`, so new strings break `cargo test` while
   the app still builds.
   The original `build (windows-x64)` failure was a `#[cfg(unix)]`-only bollard connector;

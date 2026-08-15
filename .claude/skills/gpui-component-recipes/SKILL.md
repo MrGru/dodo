@@ -539,7 +539,7 @@ Button::new("copy").ghost().icon(AppIcon::Binary).tooltip("Copy")
 `.icon()` and `SettingPage::icon()` take `impl Into<Icon>`, and `impl<T: IconNamed> From<T> for
 Icon` means any `AppIcon` variant goes in directly — `AppIcon::Json`, no wrapper. Where you need
 a standalone element, `Icon::new(AppIcon::Settings)` (that is what `AppIcon::view()` in
-`src/app_icon.rs` returns). Note the library's own `Icon::view(cx)` / `IconName::view(cx)` return
+`crates/dodo-app-icon` returns). Note the library's own `Icon::view(cx)` / `IconName::view(cx)` return
 `Entity<Icon>` instead; dodo's same-named helper does not.
 
 ### `justify_*` on a `Button` aligns nothing; its padding depends on `.icon()` vs `.child()`
