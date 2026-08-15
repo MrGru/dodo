@@ -1,144 +1,206 @@
+<img src="assets/branding/dodo-256.png" alt="" width="112" align="right">
+
 # dodo
 
-A Rust desktop GUI application built on [Zed Industries'](https://github.com/zed-industries/zed)
-[GPUI](https://www.gpui.rs/) framework and the [gpui-component](https://github.com/longbridge/gpui-component)
-widget library.
+A native desktop app that puts the tools a developer keeps reaching for in one
+window: format some JSON, decode a token, fire an HTTP request, look inside a
+container, query a database, clean up a disk. One collapsible sidebar, one tool
+per row, no browser tab and no Electron.
+
+Written in Rust on Zed's GPUI framework — a native window, no web runtime.
+Paste a JSON blob, a JWT, a `curl` command or a database URI anywhere in the app
+and dodo opens the tool that handles it with the value already loaded.
+
+**Pre-1.0 and under active development.** It is useful daily; it is not
+finished, and this page says which parts are which.
+
+## Tools
+
+**JSON formatter** — pretty-print at 2, 3 or 4 spaces. Invalid input surfaces the
+parser error inline, as a diagnostic at the offending location.
+
+**Encoder / Decoder** — Base64 (standard and URL-safe), URL percent-encoding and
+Hex, both directions, plus a JWT inspector that splits a token into header,
+payload and signature. Decode only — signatures are not verified.
+
+**API Explorer** — a tabbed HTTP client. Per-tab method, URL, query parameters,
+headers, a body in seven shapes (JSON, text, XML, HTML, multipart form-data with
+file uploads, URL-encoded, binary) and Bearer / Basic / API-key auth. Responses
+come back with status, timing, size, headers, parsed cookies and a highlighted
+body that also renders JSON as a tree. Pre-request and post-response scripts run
+in a QuickJS sandbox behind a consent gate and report into Console and Tests
+tabs. Collections and environments persist; the request on screen generates
+cURL, `fetch`, `axios` or `XMLHttpRequest`.
+
+**Docker** — Docker or Podman over the Engine API (`DOCKER_HOST`, else the local
+socket). Containers, Images, Volumes and Networks are full list pages with
+status badges, live CPU %, search, multi-filter popovers, compose grouping, bulk
+and per-row lifecycle actions, keyboard navigation and a five-second background
+refresh; clicking a row opens the engine's own Inspect JSON, plus a bounded log
+tail for containers. A fifth page detects the container runtimes installed on
+the host itself — Docker, Podman Machine, Kubernetes, containerd — and starts or
+stops them; Kubernetes is deliberately read-only there.
+
+**Database Explorer** — PostgreSQL, SQLite, MySQL / MariaDB and Redis, from a
+connection form that can be filled from a pasted URI. Browse a lazily loaded
+object tree, run queries in tabbed editors with protocol-level cancellation and
+a bounded result grid, and export as streamed CSV or JSON. A table or view opens
+Data, Columns, Indexes, Constraints and DDL, with server-paged data that can be
+edited: row changes accumulate as pending edits, are shown for confirmation, and
+commit or roll back in one transaction — only where the result carries real
+primary/unique-key identity. Redis is read-only.
+
+**Cleaner** — safety-first disk cleanup: scan a category, review what was found,
+move it to the Trash. Scanning never deletes, cleanup is allow-list bounded, and
+nothing leaves the review step without being selected. macOS lists fourteen
+categories, Windows and Linux eight each — exactly what each platform's scanners
+implement. See [`docs/cleaner/`](docs/cleaner/) for the safety model, privacy
+posture and the known limitations of each scanner.
+
+**Input method** (macOS and Windows) — a Vietnamese Telex/VNI engine with a real
+native host on each platform: InputMethodKit on macOS, a per-user Text Services
+Framework DLL on Windows. Both keep typing once installed, with dodo closed. Each
+platform also offers a dodo-lifetime-only fallback — Event Tap on macOS, Keyboard
+Hook on Windows — and exactly one backend transforms keys at a time. The pane
+installs, reinstalls or removes the native host and carries the engine's
+settings. Linux has no sidebar row until it has an IBus host. See
+[`docs/macos-input-method.md`](docs/macos-input-method.md) and
+[`docs/windows-input-method.md`](docs/windows-input-method.md).
+
+### Around the tools
+
+- **Quick navigation.** With no input focused, `Cmd/Ctrl+V` — or just `p` —
+  reads the clipboard, works out what it is and opens the matching tool with the
+  value loaded. `Esc` leaves a text field and gets you back to that mode. When
+  nothing is recognised confidently, nothing happens. Switchable off, and each
+  format's pattern is editable in Settings.
+- **Settings.** Language (English, Vietnamese), 16 themes, font size, border
+  radius, script-execution policy, quick navigation, Start with OS (macOS and
+  Windows), and Features — which tools the sidebar lists and in what order.
+- **Menu bar / notification area** (macOS and Windows). Closing the window
+  leaves dodo and its input method running behind the tray icon; **Quit Dodo** is
+  the full shutdown path.
+- **Check for updates.** An in-app updater that downloads a release, verifies its
+  SHA-256, installs it and restarts. It can check silently at startup, but never
+  downloads anything without a button press.
+
+Window geometry, the open tool, the sidebar state and every setting survive a
+restart, except the script-execution policy, which deliberately asks again each
+launch.
+
+## Install
+
+Grab an archive from the [latest release](https://github.com/MrGru/dodo/releases/latest).
+Builds are **not code-signed or notarised**.
+
+**macOS** (`dodo-v<version>-macos-arm64-app.tar.gz`, or `-macos-x64-` on Intel):
+
+```sh
+tar -xzf dodo-v<version>-macos-arm64-app.tar.gz
+xattr -dr com.apple.quarantine dodo.app
+mv dodo.app /Applications
+```
+
+Take the `-app` archive rather than the plain-binary one: the Vietnamese input
+method ships inside the bundle, and Start with OS needs an installed app bundle
+on macOS 13 or later. The plain `dodo-v<version>-macos-<arch>.tar.gz` is just the
+binary, for terminal use.
+
+**Linux** (`dodo-v<version>-linux-x64.tar.gz`) — the archive holds the binary
+plus a `share/` tree laid out for installation:
+
+```sh
+tar -xzf dodo-v<version>-linux-x64.tar.gz
+cd dodo-v<version>-linux-x64
+cp -r share ~/.local/          # desktop entry and icons
+./dodo
+```
+
+Installing `share/` is not decoration: a Wayland compositor matches the window
+against `dodo.desktop` to find the icon.
+
+**Windows** (`dodo-v<version>-windows-x64.zip`) — unzip and run `dodo.exe`. Keep
+`input-method\dodo_ime_windows.dll` beside it; that is the TSF host the input
+method pane installs from.
+
+**Verify a download.** Every release publishes `SHA256SUMS` alongside a
+`.sha256` sidecar per archive:
+
+```sh
+sha256sum -c SHA256SUMS      # or: shasum -a 256 -c SHA256SUMS
+```
+
+`dodo --build-info` prints the commit, tag, build time, target and rustc version
+the binary was produced from.
+
+**Platform honesty.** All four targets are built, packaged and archive-verified
+by CI on every release ([`scripts/verify-release.sh`](scripts/verify-release.sh)
+checks that each archive unpacks, contains the expected files and runs). Only
+**macOS arm64** has been run on a real desktop. The macOS x64, Linux and Windows
+archives are produced and checked, but their install paths are unproven — expect
+rough edges and please report them. [`docs/release.md`](docs/release.md) records
+exactly what has and has not been verified.
+
+## Build from source
+
+Requires a Rust toolchain supporting **edition 2024** (1.85 or newer) via
+[rustup](https://rustup.rs/), and network access on the first build — `gpui`,
+`gpui_platform` and `gpui-component` are fetched from git. Platform requirements
+for building GPUI apps apply.
+
+```sh
+cargo run
+```
+
+Six feature crates can also be launched on their own, in a window containing
+nothing but that view:
+
+```sh
+cargo run -p dodo-cleaner        --example cleaner        --locked
+cargo run -p dodo-docker         --example docker         --locked
+cargo run -p dodo-database       --example database       --locked
+cargo run -p dodo-api-explorer   --example api_explorer   --locked
+cargo run -p dodo-json-formatter --example json_formatter --locked
+cargo run -p dodo-encoder-decoder --example encoder_decoder --locked
+```
+
+These are the same views the app mounts, reading the same data directory and
+real machine state. There is also a terminal harness for the Vietnamese engine
+with no input method installed at all:
+
+```sh
+cargo run -p dodo-ime-core --example telex
+```
+
+Contributors: [`docs/contributing.md`](docs/contributing.md) has the pre-push
+hook and a tour of the repository.
 
 ## Status
 
-**Pre-1.0, under active development.** dodo opens a single centered window with a
-collapsible sidebar; selecting a sidebar item switches the main pane to that tool.
-
-What ships today:
-
-- **Json formatter** - pretty-prints pasted JSON at a chosen indent width, with
-  the parse error shown inline as a diagnostic when the input is invalid.
-- **Encoder / Decoder** - Base64 (standard and URL-safe), URL percent-encoding
-  and Hex in both directions, plus a JWT inspector that splits a token into its
-  header, payload and signature (decode only - no signature verification).
-- **API Explorer** - an HTTP client: several request tabs, each with its own
-  method, URL, query parameters, headers, a body in seven shapes (JSON, text,
-  XML, HTML, form-data with file uploads, URL-encoded, binary) and Bearer /
-  Basic / API-key authorization, sent asynchronously (Cmd/Ctrl+Enter or the Send
-  button) and answered with a status badge, timing, size, response headers,
-  parsed cookies and a syntax-highlighted body that also renders JSON as a tree.
-  Pre-request and post-response scripts run in a QuickJS sandbox behind a
-  consent gate, reporting into the Console and Tests tabs. Saved collections and
-  environments persist to disk; history is per session. The request on screen can
-  be generated as cURL, `fetch`, `axios` or `XMLHttpRequest`. OAuth 2.0 is
-  labelled in the UI as a later step; scripts deliberately have no network
-  access, and collections cannot be reordered by dragging.
-- **Cleaner (macOS first)** - a new safety-first Cleaner tab with section and
-  category navigation, mock incremental scanning, progress updates and
-  cancellation, designed for real macOS scanner and Trash workflows in later
-  phases. On non-macOS platforms it shows a clear "Coming later" message
-  instead of pretending support exists.
-- **Docker** - a Docker/Podman manager talking to the Docker Engine API (honours
-  `DOCKER_HOST`, else the local Docker or Podman socket). **Containers**,
-  **Images**, **Volumes** and **Networks** are all real list pages with colored
-  status badges, live CPU %, published ports, relative times, instant search,
-  multi-filter popovers, compose grouping, selection with bulk actions, per-row
-  lifecycle actions (Delete confirms first), keyboard row navigation, right-click
-  menus and background refresh every five seconds; an unreachable engine shows an
-  error state with Retry. Clicking a row's name opens a read-only dialog with the
-  engine's own Inspect JSON, plus a bounded log tail for containers. Exec /
-  Terminal, Create / Pull / Build, stats beyond live CPU % and favourites are
-  disabled controls labelled "Coming soon".
-- **Database Explorer** - connect to PostgreSQL, SQLite, MySQL / MariaDB or
-  Redis (a connection form that can also be filled from a pasted URI), browse a
-  lazily loaded object tree, and run queries in tabbed SQL editors with
-  protocol-level cancellation, `EXPLAIN` on PostgreSQL, a bounded result grid,
-  cell/row copy and streamed CSV / JSON export. A table or view opens a detail
-  surface with Data, Columns, Indexes, Constraints and DDL, its data server-paged
-  and editable — add, edit, duplicate and delete rows accumulate as pending
-  changes shown for confirmation, then commit or roll back in one transaction,
-  and only where the result carries real primary/unique-key identity. Saved
-  queries, bounded query history and a catalog search persist per connection.
-  Redis is read-only; result columns cannot be sorted, and there is no
-  autocomplete.
-- **Input method (macOS and Windows)** - dodo's Vietnamese Telex/VNI engine has
-  a real native host on each platform: InputMethodKit on macOS and a per-user
-  Text Services Framework (TSF) DLL on Windows. Both keep typing with dodo
-  closed once installed. Windows also offers a no-install **Keyboard Hook**
-  fallback that works only while dodo stays open; it is clearly labelled as the
-  fallback, and exactly one backend transforms keys at a time. The pane installs,
-  reinstalls, or removes the native host and carries the engine's four settings:
-  Telex or VNI, modern or traditional tone placement, spell check and bracket
-  shortcuts. Linux has no sidebar row until it has an IBus host. See
-  [`docs/windows-input-method.md`](docs/windows-input-method.md) and
-  [`docs/macos-input-method.md`](docs/macos-input-method.md).
-- **Quick navigation** - vim-shaped, and works across all of the above. Whenever
-  no input is focused, `Cmd+V` / `Ctrl+V` — or just `p` — reads the clipboard,
-  works out what the text is, and opens the tool that handles it with the value
-  already loaded: JSON goes to the formatter and is formatted, Base64 and JWTs go
-  to the Encoder / Decoder decoded, a `curl` command opens a new API Explorer tab
-  built from it, and a database URI opens the matching saved connection or
-  creates one. `Esc` inside a text field leaves it and gets you back to that mode.
-  When nothing is recognised confidently, nothing happens. It can be switched off
-  in Settings, where each format's matching pattern can also be edited. A tool
-  you have switched off in Settings → Features is not a paste target: its
-  detector is skipped entirely, so the text falls through to whatever else can
-  read it rather than reopening a tool you hid.
-
-The sidebar footer holds **Settings** and **Check for updates**, an in-app updater
-that downloads a release, verifies its SHA-256, installs it and restarts. It can
-check on its own at startup, but never downloads anything without you pressing a
-button.
-
-Settings covers language, theme, font size, border radius, the script-execution
-policy, quick navigation, **Start with OS** (macOS and Windows), and
-**Features** - which of the tools above the sidebar lists, and in what order.
-Drag a row by its handle or use the arrows to reorder it, and switch off the
-ones you do not use; at least one tool has to stay. Every one of these survives
-a restart except the script-execution policy, which goes back to asking about
-imported scripts at every launch on purpose. So do the window's size, position
-and display, the open tool, and whether the sidebar is collapsed.
-
-## Tray and startup
-
-On macOS and Windows, closing Dodo removes its main window from the Dock or
-taskbar but leaves Dodo and its input method running behind the tray icon. Click
-the tray icon, or choose **Open Dodo** from its context menu, to restore it;
-**Quit Dodo** is the only full shutdown path.
-
-**Start with OS** starts tray-only after sign-in. macOS uses the Login Items API,
-which requires macOS 13 or later and an installed `Dodo.app`; macOS can require
-approval in System Settings → General → Login Items. Windows uses this user's
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry, whose command is
-limited to 260 characters and may be delayed by Windows after sign-in. Linux has
-neither feature yet.
+Pre-1.0. Every tool listed above works today; the gaps are named where a user
+would look for them rather than hidden — OAuth 2.0 in the API Explorer, Exec /
+Create / Pull / Build in Docker, column sorting and autocomplete in the Database
+Explorer, and an IBus host for Linux input. Persisted formats
+(`session.json`, saved collections, connections) are still free to change before
+1.0, though the in-app updater carries them forward.
 
 ## Tech stack
 
-- **[gpui](https://www.gpui.rs/)** and **gpui_platform** - the GPUI UI framework,
-  pulled directly from the Zed git repository.
-- **[gpui-component](https://github.com/longbridge/gpui-component)** - third-party
-  GPUI widget library (sidebar, buttons, icons, theming), pulled directly from git.
-- **[rust-embed](https://crates.io/crates/rust-embed)** - embeds SVG icons into the
-  binary at build time.
-- **[anyhow](https://crates.io/crates/anyhow)** - error handling.
-- **[regex](https://crates.io/crates/regex)** - quick navigation's editable
-  detector patterns. Already in the graph through `gpui`, so it is a direct
-  dependency rather than a new one; it has no backtracking, which is what makes
-  running a user-supplied pattern from a key handler safe.
-- **[reqwest](https://crates.io/crates/reqwest)** - the HTTP client behind the API
-  Explorer and the in-app updater, built with rustls rather than the platform TLS
-  stack, so no OpenSSL is needed.
-- **[bollard](https://crates.io/crates/bollard)** - the Docker module's Docker Engine
-  API client (local unix socket, no TLS, so no OpenSSL), driven from a small
-  **[tokio](https://crates.io/crates/tokio)** runtime on the background executor.
-- **[rquickjs](https://crates.io/crates/rquickjs)** - the QuickJS sandbox the API
-  Explorer's pre-request and post-response scripts run in.
-- **[postgres](https://crates.io/crates/postgres)**,
-  **[rusqlite](https://crates.io/crates/rusqlite)**,
-  **[mysql](https://crates.io/crates/mysql)** and
-  **[redis](https://crates.io/crates/redis)** - the Database Explorer's four
-  drivers, all blocking clients run on the background executor. PostgreSQL's TLS
-  goes through rustls for the same reason as above.
-
-See [`Cargo.toml`](Cargo.toml) for exact dependency sources. Note that `gpui`,
-`gpui_platform`, and `gpui-component` are all fetched from git rather than
-crates.io.
+[gpui](https://www.gpui.rs/) and gpui_platform (Zed's UI framework) with the
+[gpui-component](https://github.com/longbridge/gpui-component) widget library,
+both from git and pinned only by `Cargo.lock`. Around them:
+[reqwest](https://crates.io/crates/reqwest) with rustls for HTTP and updates,
+[bollard](https://crates.io/crates/bollard) on a small
+[tokio](https://crates.io/crates/tokio) runtime for the Docker Engine API,
+[rquickjs](https://crates.io/crates/rquickjs) for the script sandbox,
+[postgres](https://crates.io/crates/postgres),
+[rusqlite](https://crates.io/crates/rusqlite),
+[mysql](https://crates.io/crates/mysql) and
+[redis](https://crates.io/crates/redis) for the database drivers, and
+[rust-embed](https://crates.io/crates/rust-embed) for the icons and themes baked
+into the binary. TLS goes through rustls rather than the platform stack, so no
+OpenSSL is needed. [`Cargo.toml`](Cargo.toml) is the authority, and says why each
+dependency is there.
 
 ## Licence
 
@@ -150,115 +212,3 @@ licences, including **GPL-3.0-or-later** crates reached through `gpui`
 binary is an **open question that has not been decided**.
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) records both the dependency
 licences and that open question; read it before redistributing a build.
-
-## Prerequisites
-
-- A recent Rust toolchain that supports **edition 2024** (Rust 1.85 or newer).
-  Install via [rustup](https://rustup.rs/).
-- Network access on first build, since several dependencies are fetched from git.
-
-Platform-specific system requirements for building GPUI apply; see the
-[GPUI / Zed documentation](https://github.com/zed-industries/zed) for details.
-
-## Build and run
-
-```sh
-# Run the app
-cargo run
-
-# Or build without running
-cargo build
-```
-
-This opens a 900x620 centered window mounting the `DodoApp`.
-
-### Running one feature on its own
-
-Six feature crates can be launched by themselves, in a window containing
-nothing but that feature:
-
-```sh
-cargo run -p dodo-cleaner --example cleaner --locked
-cargo run -p dodo-docker --example docker --locked
-cargo run -p dodo-database --example database --locked
-cargo run -p dodo-api-explorer --example api_explorer --locked
-cargo run -p dodo-json-formatter --example json_formatter --locked
-cargo run -p dodo-encoder-decoder --example encoder_decoder --locked
-```
-
-These are the same views the app mounts. The stateful four read the same data
-directory and real machine state; the JSON formatter and Encoder/Decoder need
-neither. They are `examples/` targets, so nothing a shipped build compiles can
-reach them and the app's dependency graph is unchanged by their existence. See
-`crates/dodo-cleaner/examples/cleaner.rs` for the shared wiring each view needs.
-
-## Pre-push checks
-
-CI runs formatting and clippy as blocking jobs, so a push that fails either is a
-wasted round trip. The repo ships a `pre-push` hook that runs the same checks
-locally and refuses the push if any of them fails. Git does not version
-`.git/hooks`, so enable it once per clone:
-
-```sh
-git config core.hooksPath .githooks
-```
-
-That is the whole setup — there is no install script, and the setting is local
-to your clone, so nobody is opted in without doing this. Note that it points git
-at `.githooks` for *all* hooks, so anything you keep in `.git/hooks` stops
-running.
-
-The hook runs, in this order and stopping at the first failure:
-
-```sh
-cargo fmt --all --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
-```
-
-**Cost.** Cheapest first, so a formatting slip is caught in well under a second.
-With a warm `./target`, a green run of all three takes roughly **15 seconds**
-after a normal edit. It is much worse when the cache is cold — after
-`cargo clean`, a `Cargo.lock` change, or a toolchain bump, expect **several
-minutes**, because clippy and the test binary both have to build the whole
-dependency graph. The hook deliberately does not set its own `CARGO_TARGET_DIR`:
-sharing `./target` with everyday `cargo build` is what keeps the warm case cheap.
-A push that only deletes remote refs skips the checks entirely, since it uploads
-no code.
-
-**Bypass.** `git push --no-verify` skips the hook for one push. That is a
-supported way to use it — pushing a WIP branch, or a push whose failure you
-already know about. CI still runs the same checks.
-
-## Project structure
-
-```
-.
-├── .githooks/          # Tracked git hooks; see "Pre-push checks" above
-├── Cargo.toml          # Package metadata and dependencies
-├── build.rs            # Embeds build metadata (and the Windows .ico)
-├── docs/               # Architecture, build optimization, release and platform notes
-├── scripts/            # Packaging and icon generation
-├── tools/              # Release-only crates, excluded from the package
-├── crates/             # Workspace crates, sharing the one Cargo.lock
-│   ├── dodo-i18n/      # Every user-facing string, in each supported language
-│   ├── dodo-app-icon/  # AppIcon enum mapping icon names to embedded SVG paths
-│   ├── dodo-paths/     # Where persisted files live, per platform
-│   ├── dodo-{api-explorer,cleaner,database,docker,input-method,updater}/ # Feature crates
-│   ├── dodo-{json-formatter,encoder-decoder}/       # Single-file feature crates
-│   └── dodo-ime-*/     # Input-method engine, contract, macOS and Windows hosts
-├── src/
-│   ├── main.rs         # Entry point: GPUI init, --version/--build-info, the window
-│   ├── app.rs          # DodoApp: top-level view holding the Layout
-│   ├── layout.rs       # Sidebar + main pane; the View enum that lists the tools
-│   ├── settings/       # The Settings dialog
-│   ├── quick_nav/      # Clipboard detection and the normal-mode key bindings
-│   ├── session/        # session.json: appearance, window, open tool, tool list
-│   ├── assets.rs       # rust-embed AssetSource that loads embedded icons
-│   └── window_icon.rs  # Runtime window/Dock icon and the Linux app_id
-└── assets/
-    ├── branding/       # Source artwork and the 1024px master
-    ├── macos|windows|linux/  # Platform icons generated from that master
-    ├── icons/          # SVG icons embedded into the binary
-    └── themes/         # Theme JSON embedded into the binary
-```
