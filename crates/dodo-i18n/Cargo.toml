@@ -1,0 +1,15 @@
+[package]
+name = "dodo-i18n"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Every string dodo shows a user, as one enum per area of the app with one file per language inside it. No UI framework: the catalogue is plain data so a pure module can hold a translated message and a test can render it without a window."
+
+# **Deliberately empty, and the point of the crate.** `dodo-i18n` must not
+# depend on `gpui`: a `Str` is held by pure models (a `ConsoleEntry`, a
+# `DbError`) that are tested with no `App` and no frame, and every module that
+# later moves out of the binary has to be able to name its own strings without
+# dragging a windowing library behind it. The three UI-bound pieces — the gpui
+# `Global` holding the active language, `Language::current` / `set`, and `t()` —
+# stay in dodo's own `src/i18n.rs`.
+[dependencies]

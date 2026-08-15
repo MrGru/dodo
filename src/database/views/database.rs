@@ -99,7 +99,7 @@ use crate::database::views::row_editor::{
 };
 use crate::database::views::{saved_queries, saved_query_form};
 use crate::database::{DatabaseCopyCell, DatabaseCopyRow, KEY_CONTEXT};
-use crate::i18n::{Language, Str, database, db_catalog, db_connection, db_query, t};
+use crate::i18n::{Language, LanguageExt, Str, database, db_catalog, db_connection, db_query, t};
 use crate::paths::data_dir;
 
 /// The left panel's default width, and the range the divider allows.

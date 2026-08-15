@@ -8,7 +8,7 @@ use gpui_component::{ActiveTheme, IndexPath, Sizable, h_flex, v_flex};
 
 use serde::Serialize as _;
 
-use crate::i18n::{Language, Str, json_formatter, shared, t};
+use crate::i18n::{Language, LanguageExt, Str, json_formatter, shared, t};
 
 /// The indentation width options offered in the dropdown, in spaces.
 const INDENT_OPTIONS: [usize; 3] = [2, 3, 4];

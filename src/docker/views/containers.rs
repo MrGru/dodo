@@ -52,7 +52,7 @@ use crate::docker::{
     DockerMoveDown, DockerMoveUp, DockerOpenDetail, DockerRefreshList, DockerToggleSelect,
     KEY_CONTEXT, POLL_INTERVAL,
 };
-use crate::i18n::{Language, docker, shared, t};
+use crate::i18n::{Language, LanguageExt, docker, shared, t};
 
 /// Fixed column widths shared by the header and every row so they line up. Name,
 /// Image and Ports take the remaining width as flex columns and truncate.

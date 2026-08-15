@@ -44,7 +44,7 @@ use crate::docker::{
     DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp, DockerOpenDetail,
     DockerRefreshList, KEY_CONTEXT, POLL_INTERVAL,
 };
-use crate::i18n::{Language, docker, shared, t};
+use crate::i18n::{Language, LanguageExt, docker, shared, t};
 
 /// Fixed column widths. Name takes the remaining width as the one flex column.
 const DRIVER_W: Pixels = px(120.);

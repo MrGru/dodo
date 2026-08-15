@@ -1611,6 +1611,7 @@ dependencies = [
  "block2 0.6.2",
  "bollard",
  "dispatch2",
+ "dodo-i18n",
  "dodo-ime-core",
  "dodo-ime-ipc",
  "futures-channel",
@@ -1650,6 +1651,10 @@ dependencies = [
  "windows-sys 0.61.2",
  "winresource",
 ]
+
+[[package]]
+name = "dodo-i18n"
+version = "0.1.0"
 
 [[package]]
 name = "dodo-ime-core"

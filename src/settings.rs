@@ -59,7 +59,7 @@ use crate::api_explorer::models::script_consent::ConsentPolicy;
 use crate::app_icon::AppIcon;
 use crate::assets::Assets;
 use crate::dialog_slot::{self, SingleDialog};
-use crate::i18n::{Language, Str, shell, t};
+use crate::i18n::{Language, LanguageExt, Str, shell, t};
 use crate::layout::{Layout, View};
 use crate::quick_nav::QuickNav;
 use crate::quick_nav::models::detect::Detector;

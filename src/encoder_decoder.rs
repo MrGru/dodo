@@ -10,7 +10,7 @@ use base64::engine::{DecodePaddingMode, Engine as _, GeneralPurpose, GeneralPurp
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
 use crate::i18n::encoder_decoder::JwtPart;
-use crate::i18n::{Language, Str, encoder_decoder, t};
+use crate::i18n::{Language, LanguageExt, Str, encoder_decoder, t};
 
 /// Encoders are strict about padding; decoders accept padded or unpadded input
 /// so pasted values from either convention round-trip.

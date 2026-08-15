@@ -43,7 +43,7 @@ use crate::api_explorer::state::ui::{
 use crate::api_explorer::views::{generate_code, script_consent};
 use crate::api_explorer::{ScriptPolicy, SendRequest};
 use crate::app_icon::AppIcon;
-use crate::i18n::{Language, Str, api_collections, api_explorer, api_variables, t};
+use crate::i18n::{Language, LanguageExt, Str, api_collections, api_explorer, api_variables, t};
 use crate::paths::data_dir;
 
 /// The key context the send shortcut is bound in. Matching happens up the

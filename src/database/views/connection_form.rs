@@ -64,7 +64,7 @@ use crate::database::models::engine::{Address, Engine};
 use crate::database::models::error::DbError;
 use crate::database::models::uri::{self, ParsedUri, UriError};
 use crate::database::services;
-use crate::i18n::{Language, Str, db_connection, t};
+use crate::i18n::{Language, LanguageExt, Str, db_connection, t};
 
 /// The word for one TLS mode. Beside `SslMode::ALL` rather than on the enum
 /// itself: `models/` has no opinion about how a mode is worded, only about what

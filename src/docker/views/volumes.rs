@@ -45,7 +45,7 @@ use crate::docker::{
     DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp, DockerOpenDetail,
     DockerRefreshList, KEY_CONTEXT, POLL_INTERVAL,
 };
-use crate::i18n::{Language, docker, shared, t};
+use crate::i18n::{Language, LanguageExt, docker, shared, t};
 
 /// Fixed column widths. Name and Mount point take the remaining width as the two
 /// flex columns and truncate.

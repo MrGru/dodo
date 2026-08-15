@@ -1,12 +1,16 @@
 # `crates/` holds code that shares this lockfile, which is what separates it
 # from `tools/`.
 #
-# There are four members. `crates/dodo-ime-core` is the input-method engine,
-# linked *into* dodo. `crates/dodo-ime-ipc` is the settings and identifier
-# contract shared by dodo and the native hosts. `crates/dodo-ime-macos` is an
-# InputMethodKit app and `crates/dodo-ime-windows` is a TSF COM DLL; neither is
-# linked into dodo, but both link the engine and contract. That is what settles
-# the question:
+# There are five members, in two groups. `crates/dodo-i18n` is a *kernel* crate:
+# code many of dodo's modules use, extracted so it can be depended on without
+# depending on the rest of dodo — the catalogue of every user-visible string,
+# with no `gpui` and in fact no dependencies at all. The other four are the input
+# method: `crates/dodo-ime-core` is the engine, linked *into* dodo;
+# `crates/dodo-ime-ipc` is the settings and identifier contract shared by dodo
+# and the native hosts; `crates/dodo-ime-macos` is an InputMethodKit app and
+# `crates/dodo-ime-windows` is a TSF COM DLL; neither of those two is linked into
+# dodo, but both link the engine and contract. That is what settles the
+# question:
 # `tools/update-manifest` can carry its own `Cargo.lock` because nothing else
 # resolves what it resolves, whereas a second lockfile here would resolve
 # `dodo-ime-core` and `unicode-normalization` independently — so the engine
@@ -14,12 +18,13 @@
 # different resolutions that nothing compares. One workspace, one `Cargo.lock`,
 # one `--locked`.
 #
-# `default-members` names all five, so a bare `cargo test` / `cargo clippy
-# --all-targets` at the root covers the engine's tests and both native hosts too.
-# Without it cargo would default to the root package alone and the engine's ~200
-# tests would stop running the day they moved out of `src/`. Each native host's
-# platform bindings are target-gated, so another platform's check builds only
-# its pure half.
+# `default-members` names all six (the root package and every crate), so a bare
+# `cargo test` / `cargo clippy --all-targets` at the root covers each crate's own
+# tests. **Adding a crate means adding it here in the same commit**; without it
+# cargo defaults to the root package alone and the new crate's tests silently
+# stop running.
+# Each native host's platform bindings are target-gated, so another platform's
+# check builds only its pure half.
 #
 # `exclude` names `tools/update-manifest` again at the workspace level: without
 # it, building that crate through `--manifest-path` fails with "current package
@@ -31,6 +36,7 @@
 members = ["crates/*"]
 default-members = [
     ".",
+    "crates/dodo-i18n",
     "crates/dodo-ime-core",
     "crates/dodo-ime-ipc",
     "crates/dodo-ime-macos",
@@ -94,6 +100,11 @@ syntax-highlighting = [
 sql-highlighting = ["gpui-component/tree-sitter", "gpui-component/tree-sitter-sql"]
 
 [dependencies]
+# Every string dodo shows a user. Extracted so the catalogue is reachable
+# without `gpui`: a pure model holds a `Str` and a test renders it with no
+# window. `src/i18n.rs` is dodo's end of it — the gpui global, `Language::current`
+# / `set` and `t()` — and re-exports the rest, so a call site is unchanged.
+dodo-i18n = { path = "crates/dodo-i18n" }
 # dodo's input-method engine, kept out of this crate so the three OS hosts can
 # link it without linking everything below. dodo names its configuration types
 # in the Input method settings page and nothing else; the engine itself only ever

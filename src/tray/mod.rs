@@ -312,7 +312,7 @@ pub fn init(cx: &mut App) -> bool {
     // **Only the menu's own wording follows this**, never the selected input
     // language and never the glyph. The three language rows are endonyms and do
     // not move at all; see `TrayMenu::relabel`.
-    let localization = cx.observe_global::<crate::i18n::Language>(|cx| {
+    let localization = cx.observe_global::<crate::i18n::ActiveLanguage>(|cx| {
         if let Some(tray) = cx.try_global::<Tray>() {
             tray.menu.relabel(cx);
         }

@@ -50,7 +50,7 @@ use gpui_component::{
 use crate::api_explorer::models::variables::Variable;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Language, api_variables, t};
+use crate::i18n::{Language, LanguageExt, api_variables, t};
 
 /// The card's preferred width and the body's preferred height, shrunk to fit a
 /// small window by [`card_size`] before the dialog is built — `Dialog` computes
