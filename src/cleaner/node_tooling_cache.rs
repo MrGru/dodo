@@ -310,7 +310,7 @@ impl CleanerScanner for NodeToolingCacheScanner {
         let environment = match &self.forced_environment {
             Some(environment) => environment.clone(),
             None => snapshot_environment_with_runner(
-                HostOs::current(),
+                crate::paths::current(),
                 context.user_home.as_deref(),
                 self.runner.as_ref(),
             ),

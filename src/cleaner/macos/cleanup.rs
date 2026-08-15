@@ -98,7 +98,7 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
 
     let mut successes = Vec::new();
     let mut failures = Vec::new();
-    let host = HostOs::current();
+    let host = paths::current();
     let policy = items.first().map(policy_for);
     for path in dedupe_nested_paths(host, by_path.keys().cloned().collect()) {
         let Some(item) = by_path.get(&path) else {

@@ -1,12 +1,15 @@
 # `crates/` holds code that shares this lockfile, which is what separates it
 # from `tools/`.
 #
-# There are six members, in two groups.
+# There are seven members, in two groups.
 #
-# `crates/dodo-app-icon` and `crates/dodo-i18n` are *kernel* crates: code many of
-# dodo's modules use, lifted out so it can be depended on without depending on
-# the rest of dodo — the icon set, and the catalogue of every user-visible string
-# (which has no `gpui`, and in fact no dependencies at all).
+# `crates/dodo-app-icon`, `crates/dodo-i18n` and `crates/dodo-paths` are *kernel*
+# crates: code many of dodo's modules use, lifted out so it can be depended on
+# without depending on the rest of dodo — the icon set, the catalogue of every
+# user-visible string, and the rule for where dodo's files live. Two of the three
+# have no dependencies at all. They deliberately do not depend on each other
+# either: the graph is wide and shallow, because a chain of small crates compiles
+# more slowly than one big one.
 #
 # The other four are the input method. `crates/dodo-ime-core` is the engine,
 # linked *into* dodo. `crates/dodo-ime-ipc` is the settings and identifier
@@ -21,7 +24,7 @@
 # bundle types with would be two different resolutions that nothing compares. One
 # workspace, one `Cargo.lock`, one `--locked`.
 #
-# `default-members` names all seven (the root package and every crate), so a bare
+# `default-members` names all eight (the root package and every crate), so a bare
 # `cargo test` / `cargo clippy --all-targets` at the root covers each crate's own
 # tests. **Adding a crate means adding it here in the same commit**; without it
 # cargo defaults to the root package alone and the new crate's tests silently
@@ -44,6 +47,7 @@ default-members = [
     "crates/dodo-ime-ipc",
     "crates/dodo-ime-macos",
     "crates/dodo-ime-windows",
+    "crates/dodo-paths",
 ]
 exclude = ["tools/update-manifest"]
 
@@ -107,6 +111,10 @@ sql-highlighting = ["gpui-component/tree-sitter", "gpui-component/tree-sitter-sq
 # rest of the kernel; `main.rs` aliases it back to `crate::app_icon` so the 39
 # modules that name an `AppIcon` are untouched.
 dodo-app-icon = { path = "crates/dodo-app-icon" }
+# Where dodo writes its files, as a pure function of a platform and an
+# environment. `main.rs`'s own `paths` module is the seam: it reads the one thing
+# a pure crate cannot — the target triple `build.rs` embedded — and hands it over.
+dodo-paths = { path = "crates/dodo-paths" }
 # Every string dodo shows a user. Extracted so the catalogue is reachable
 # without `gpui`: a pure model holds a `Str` and a test renders it with no
 # window. `src/i18n.rs` is dodo's end of it — the gpui global, `Language::current`

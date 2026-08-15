@@ -121,17 +121,17 @@ impl CleanerCategory {
     /// exists — which is also the answer to "is a hidden category still
     /// scanned?". No. Scans are started only from a category's own pane.
     ///
-    /// [`HostOs::current`] is the one place the compiled-for platform enters
+    /// [`paths::current`](crate::paths::current) is the one place the compiled-for platform enters
     /// the decision; everything above it is pure.
     pub fn is_visible(self) -> bool {
-        !Self::hidden_for(HostOs::current()).contains(&self)
+        !Self::hidden_for(crate::paths::current()).contains(&self)
     }
 
     /// Every category the window lists, in `ALL` order. Used for the
     /// default selection, so a hidden category can never be what the panel
     /// opens on.
     pub fn visible() -> impl Iterator<Item = CleanerCategory> {
-        CleanerCategory::visible_for(HostOs::current())
+        CleanerCategory::visible_for(crate::paths::current())
     }
 
     /// [`Self::visible`] for an arbitrary platform — the shape every test
@@ -149,7 +149,7 @@ impl CleanerCategory {
     /// here rather than at the call site: there is no second listing of a
     /// section's categories that could disagree with it.
     pub fn categories_for(section: CleanerSection) -> impl Iterator<Item = CleanerCategory> {
-        CleanerCategory::categories_for_host(HostOs::current(), section)
+        CleanerCategory::categories_for_host(crate::paths::current(), section)
     }
 
     /// [`Self::categories_for`] for an arbitrary platform.

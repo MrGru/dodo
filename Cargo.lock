@@ -1615,6 +1615,7 @@ dependencies = [
  "dodo-i18n",
  "dodo-ime-core",
  "dodo-ime-ipc",
+ "dodo-paths",
  "futures-channel",
  "futures-util",
  "gpui",
@@ -1702,6 +1703,13 @@ dependencies = [
  "dodo-ime-ipc",
  "windows 0.57.0",
  "windows-core 0.57.0",
+]
+
+[[package]]
+name = "dodo-paths"
+version = "0.1.0"
+dependencies = [
+ "dodo-ime-ipc",
 ]
 
 [[package]]

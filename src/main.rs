@@ -35,7 +35,30 @@ mod i18n_lint;
 mod input_method;
 mod json_formatter;
 mod layout;
-mod paths;
+// Where dodo writes its files. Every rule is in `crates/dodo-paths`, which is
+// pure, has no dependencies and no build script; what cannot be pure is the one
+// impure input — which platform *this binary* was compiled for — so it is read
+// here, from the triple `build.rs` embedded, and handed to the crate. That is
+// also why `HostOs::current` is `paths::current` now: an inherent method cannot
+// follow its type across a crate boundary while its body stays behind.
+mod paths {
+    use std::path::PathBuf;
+
+    pub use dodo_paths::{Environment, HostOs, resolve};
+
+    use crate::build_info::VERSION_INFO;
+
+    /// The platform this binary was compiled for.
+    pub fn current() -> HostOs {
+        HostOs::of_target(VERSION_INFO.target)
+    }
+
+    /// dodo's data directory on this machine, created by whichever store saves
+    /// first.
+    pub fn data_dir() -> PathBuf {
+        resolve(current(), &Environment::from_env())
+    }
+}
 mod quick_nav;
 mod session;
 mod settings;

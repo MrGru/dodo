@@ -1,0 +1,19 @@
+[package]
+name = "dodo-paths"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Where dodo keeps the files it writes: the three platform families their locations differ between, and the pure rule that resolves one from a platform and an environment."
+
+# **None, and deliberately no build script.** Everything here is a pure function
+# of two arguments, which is what lets all three platforms' answers be asserted
+# from whichever one you happen to be on. The single impure input — the target
+# triple this binary was compiled for — is read by `dodo` and passed in; see
+# `main.rs`'s `paths` module.
+[dependencies]
+
+[dev-dependencies]
+# For one test only: the input-method bundle resolves the macOS support
+# directory itself, and that test is what keeps the two spellings one answer.
+# It is not a dependency of the library — nothing this crate ships links it.
+dodo-ime-ipc = { path = "../dodo-ime-ipc" }

@@ -3,25 +3,32 @@
 //! One directory, resolved once, shared by every store that persists something:
 //! `collections.json`, `environments.json`, `script-consent.json`,
 //! `updater.json`, `connections.json` and `query-data.json`. It used to live in
-//! [`api_explorer::services::collection_store`](crate::api_explorer::services::collection_store)
-//! because that was the first module to persist anything; it moved here when
-//! the second top-level module — the updater — started needing it, so neither
-//! one owns the other's path.
+//! dodo's `api_explorer::services::collection_store` because that was the first
+//! module to persist anything; it moved out when the second top-level module —
+//! the updater — started needing it, so neither one owns the other's path.
 //!
 //! # Why the platform is read from the *target string*, not from `cfg`
 //!
-//! [`HostOs::current`] derives the platform from
-//! [`VERSION_INFO.target`](crate::build_info::VERSION_INFO), the triple
-//! `build.rs` embedded, rather than from `#[cfg(target_os = …)]`. The rule the
-//! choice buys is worth the indirection: **every branch is unit-testable from
-//! any host.** Two of dodo's four release targets cannot even be *compiled*
-//! from the machine this is usually written on (see `docs/release.md`), so a
-//! `cfg`-split resolver would have had its Windows and Linux branches shipped
-//! unexecuted and untested. Here they are ordinary data, and
-//! [`resolve`] is exhaustively tested for all three.
+//! [`HostOs::of_target`] classifies the triple `build.rs` embedded rather than
+//! reading `#[cfg(target_os = …)]`. The rule the choice buys is worth the
+//! indirection: **every branch is unit-testable from any host.** Two of dodo's
+//! four release targets cannot even be *compiled* from the machine this is
+//! usually written on (see `docs/release.md`), so a `cfg`-split resolver would
+//! have had its Windows and Linux branches shipped unexecuted and untested. Here
+//! they are ordinary data, and [`resolve`] is exhaustively tested for all three.
 //!
 //! The triple is fixed at compile time, so this is not a runtime guess — it is
 //! the same fact `cfg` would have given, in a form a test can hold.
+//!
+//! # Why this crate has no dependencies and no build script
+//!
+//! Nothing here reads that triple. It is a fact about the *binary*, embedded by
+//! dodo's own `build.rs` into `build_info::VERSION_INFO.target`, so the two
+//! functions that need it — `paths::current` and `paths::data_dir`, which used
+//! to be `HostOs::current` and `data_dir` right here — stay in dodo's `main.rs`
+//! and hand what they know to [`of_target`](HostOs::of_target) and [`resolve`].
+//! A build script of this crate's own, re-deriving one string, would be a real
+//! cost for no gain when the seam is already here.
 //!
 //! # The macOS path is frozen
 //!
@@ -30,8 +37,6 @@
 //! not: a "better" path would silently orphan them.
 
 use std::path::PathBuf;
-
-use crate::build_info::VERSION_INFO;
 
 /// The directory name, under whichever per-user config root the platform uses.
 const APP_DIR: &str = "dodo";
@@ -45,7 +50,7 @@ const FALLBACK_DIR: &str = ".dodo";
 
 /// The three platform families dodo's data directory differs between.
 ///
-/// Not the same axis as [`PlatformKey`](crate::updater::models::platform::PlatformKey),
+/// Not the same axis as dodo's own `updater::models::platform::PlatformKey`,
 /// which enumerates the four *release* targets: this one has to answer for any
 /// target anyone builds, including the Linux-on-arm64 and BSD builds dodo does
 /// not release, so everything that is not macOS or Windows resolves to
@@ -76,11 +81,6 @@ impl HostOs {
         } else {
             HostOs::Unix
         }
-    }
-
-    /// The platform this binary was compiled for.
-    pub fn current() -> HostOs {
-        HostOs::of_target(VERSION_INFO.target)
     }
 }
 
@@ -153,12 +153,6 @@ pub fn resolve(os: HostOs, env: &Environment) -> PathBuf {
     }
 }
 
-/// dodo's data directory on this machine, created by whichever store saves
-/// first.
-pub fn data_dir() -> PathBuf {
-    resolve(HostOs::current(), &Environment::from_env())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Environment, HostOs, resolve};
@@ -228,8 +222,9 @@ mod tests {
     /// that keeps them one answer**: without it, a change here would silently
     /// leave the input method reading settings dodo no longer writes.
     ///
-    /// It lives on dodo's side rather than the contract crate's because only dodo
-    /// can see both functions.
+    /// It lives here rather than in the contract crate because this is the side
+    /// that owns the rule; `dodo-ime-ipc` is a dev-dependency for this test alone
+    /// and nothing this crate ships links it.
     #[test]
     fn the_input_method_agrees_about_the_data_directory() {
         let home = PathBuf::from("/Users/someone");

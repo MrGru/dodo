@@ -83,7 +83,7 @@ pub struct SystemRuntimeService {
 impl SystemRuntimeService {
     pub fn new() -> Self {
         Self {
-            os: HostOs::current(),
+            os: crate::paths::current(),
         }
     }
 

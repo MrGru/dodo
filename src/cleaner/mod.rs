@@ -36,7 +36,7 @@
 //!   implements today. [`core::category::CleanerCategory::hidden_for`] is the
 //!   entire switch and is a **pure function of a [`crate::paths::HostOs`]**,
 //!   not a `cfg` split, so all three answers are unit tested from any host;
-//!   `HostOs::current` is the one place the compiled-for platform enters it.
+//!   `paths::current` is the one place the compiled-for platform enters it.
 //!   Because a scan starts only from a category's own pane, a hidden category
 //!   is never scanned. Tests pin both directions of the contract: no scanner
 //!   may be hidden and no listed row may lack a scanner.
