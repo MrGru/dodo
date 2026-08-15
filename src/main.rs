@@ -131,6 +131,17 @@ mod paths {
             assert_eq!(super::data_dir(), dodo_database::paths::data_dir());
         }
 
+        /// `dodo_updater::paths` is the fifth copy of the same seam, and the
+        /// smallest: it guards `updater.json` alone. A `data_dir()` that did
+        /// not match the binary's would lose a skipped version and a channel
+        /// choice on every launch, so the updater would keep re-offering an
+        /// update the user already declined.
+        #[test]
+        fn the_updater_crate_resolves_the_same_host_as_this_binary() {
+            assert_eq!(super::current(), dodo_updater::paths::current());
+            assert_eq!(super::data_dir(), dodo_updater::paths::data_dir());
+        }
+
         /// `dodo_api_explorer::paths` is the fourth and last copy of the same
         /// seam, and it guards three files rather than two: a `data_dir()`
         /// that did not match the binary's would leave `collections.json`,
@@ -156,7 +167,61 @@ mod settings;
 mod tools;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
-mod updater;
+// The in-app updater is a *feature* crate — `crates/dodo-updater`, the fifth
+// module taken out of this binary. `layout.rs` names `updater::open` and
+// `run_app` below calls `updater::init`; this alias is what keeps both lines
+// reading `crate::updater::…`. There is no `src/updater/` any more.
+//
+// `init` takes a `BuildInfo` because a library crate is handed none of the
+// `env!("DODO_*")` variables `build.rs` sets — see that crate's `build_info`
+// module, and `paths` below for the same trade made for `dodo-paths`.
+use dodo_updater as updater;
+/// The other half of the `build_info` seam: what `crates/dodo-updater` cannot
+/// find out for itself, asserted here where `VERSION_INFO` is reachable.
+#[cfg(test)]
+mod updater_build_info {
+    use dodo_updater::models::platform::PlatformKey;
+    use dodo_updater::models::version::Version;
+
+    use crate::build_info::VERSION_INFO;
+
+    /// `dodo_updater::build_info` falls back to naming the platform with
+    /// `cfg!` whenever `init` has not run — which is every `cargo test` — and
+    /// the two spellings must classify alike, or the crate's own pipeline
+    /// tests would exercise a manifest entry no real build ever asks for.
+    /// This is the same guard `paths` keeps for the four other feature crates;
+    /// the *strings* may differ (`…-windows-gnu` against `…-windows-msvc`),
+    /// because classifying is the only thing anything does with them.
+    #[test]
+    fn the_updater_crate_classifies_this_binarys_target_the_same_way() {
+        assert_eq!(
+            PlatformKey::from_target(VERSION_INFO.target),
+            PlatformKey::current()
+        );
+    }
+
+    /// This binary must be able to find itself in a manifest, or the updater is
+    /// dead code on the platform it was compiled for. It moved here from
+    /// `models::platform` with the crate: only a binary is handed the triple.
+    #[test]
+    fn this_build_knows_which_platform_it_is() {
+        assert!(
+            PlatformKey::from_target(VERSION_INFO.target).is_some(),
+            "no manifest key for the target this binary was built for: {}",
+            VERSION_INFO.target
+        );
+    }
+
+    /// And it must be able to compare itself against a manifest's version.
+    /// Moved here from `services::pipeline` for the same reason: the version
+    /// the updater actually reports is the one `build.rs` embedded *here*.
+    #[test]
+    fn this_build_reports_a_version_the_updater_can_compare() {
+        let version =
+            Version::parse(VERSION_INFO.version).expect("build.rs embeds a semantic version");
+        assert_eq!(version.to_display(), VERSION_INFO.version);
+    }
+}
 mod window_icon;
 
 use gpui::*;
@@ -218,7 +283,16 @@ fn main() {
         // post-`gpui_component::init` ordering as the four above — it binds no
         // keys today, and keeping the position means adding one later is not a
         // debugging session.
-        updater::init(cx);
+        updater::init(
+            // The two `VERSION_INFO` fields the updater reads, handed over
+            // rather than re-derived: `build_info` stays in this binary
+            // because only a binary is given the variables `build.rs` sets.
+            updater::BuildInfo {
+                version: build_info::VERSION_INFO.version,
+                target: build_info::VERSION_INFO.target,
+            },
+            cx,
+        );
         // Installs the session global and the quit-time flush of
         // `session.json`. It reads nothing here — the read is awaited below,
         // because the window cannot be opened until its geometry is known.

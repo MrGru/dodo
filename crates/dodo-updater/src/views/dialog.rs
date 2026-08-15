@@ -27,7 +27,7 @@
 //! # It drives IO, and performs none
 //!
 //! Every button hands work to
-//! [`services::pipeline`](crate::updater::services::pipeline) on the background
+//! [`services::pipeline`](crate::services::pipeline) on the background
 //! executor and gets [`UpdateEvent`]s back through a channel; the events go
 //! into [`UpdaterMachine`], and this file renders whatever the machine then
 //! says. **Nothing here reads a file or opens a socket** — not even to check
@@ -56,13 +56,13 @@ use gpui_component::progress::Progress;
 use gpui_component::{ActiveTheme as _, Icon, StyledExt as _, WindowExt as _, h_flex, v_flex};
 
 use crate::app_icon::AppIcon;
-use crate::build_info::VERSION_INFO;
+use crate::build_info;
 use crate::dialog_slot::{self, SingleDialog};
 use crate::i18n::{Str, t, updater};
-use crate::updater::models::state::{InstallOutcome, UpdateEvent, UpdateInfo, UpdaterState};
-use crate::updater::services::{Cancellation, log, pipeline};
-use crate::updater::state::machine::{RetryFrom, UpdaterMachine};
-use crate::updater::{Updater, UpdaterServices};
+use crate::models::state::{InstallOutcome, UpdateEvent, UpdateInfo, UpdaterState};
+use crate::services::{Cancellation, log, pipeline};
+use crate::state::machine::{RetryFrom, UpdaterMachine};
+use crate::{Updater, UpdaterServices};
 
 /// The card's preferred width, and the body's height.
 ///
@@ -190,7 +190,7 @@ fn card_size_for(viewport: gpui::Size<gpui::Pixels>) -> (gpui::Pixels, gpui::Pix
 pub struct UpdateDialog {
     machine: UpdaterMachine,
     services: UpdaterServices,
-    config: crate::updater::models::config::UpdaterConfig,
+    config: crate::models::config::UpdaterConfig,
     /// The UI-side pump. Dropping it stops the dialog listening; [`abandon`]
     /// is what stops the *work*.
     ///
@@ -203,7 +203,7 @@ impl UpdateDialog {
     fn new(
         machine: UpdaterMachine,
         services: UpdaterServices,
-        config: crate::updater::models::config::UpdaterConfig,
+        config: crate::models::config::UpdaterConfig,
     ) -> Self {
         Self {
             machine,
@@ -232,9 +232,7 @@ impl UpdateDialog {
             // `build_info`'s own tests rule this out; refusing to guess is
             // still better than unwrapping in a released binary.
             self.machine.apply(UpdateEvent::Error(
-                crate::updater::models::state::UpdateError::Install(
-                    VERSION_INFO.version.to_owned(),
-                ),
+                crate::models::state::UpdateError::Install(build_info::version().to_owned()),
             ));
             cx.notify();
             return;
@@ -595,7 +593,7 @@ impl UpdateDialog {
     }
 
     fn current_version_str(&self) -> Str {
-        updater::Text::CurrentVersion(VERSION_INFO.version.to_owned()).into()
+        updater::Text::CurrentVersion(build_info::version().to_owned()).into()
     }
 
     fn current_version_line(&self, _cx: &Context<Self>) -> Option<Str> {
@@ -756,11 +754,11 @@ fn format_size(bytes: u64) -> String {
 /// Builds the real service bundle. Here rather than in `mod.rs` so that
 /// `UpdaterServices`' only construction site sits beside its only consumer.
 pub(crate) fn default_services() -> UpdaterServices {
-    use crate::updater::services::config_store::DiskUpdaterConfigStore;
-    use crate::updater::services::download::HttpDownloader;
-    use crate::updater::services::installers::platform_installer;
-    use crate::updater::services::manifest_source::HttpManifestSource;
-    use crate::updater::services::verify::Sha256Verifier;
+    use crate::services::config_store::DiskUpdaterConfigStore;
+    use crate::services::download::HttpDownloader;
+    use crate::services::installers::platform_installer;
+    use crate::services::manifest_source::HttpManifestSource;
+    use crate::services::verify::Sha256Verifier;
 
     UpdaterServices {
         source: Arc::new(HttpManifestSource::new()),

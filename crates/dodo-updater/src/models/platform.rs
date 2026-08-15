@@ -11,15 +11,14 @@
 //!
 //! # Derived from the target triple, not from `cfg`
 //!
-//! [`PlatformKey::current`] reads
-//! [`VERSION_INFO.target`](crate::build_info::VERSION_INFO) — the triple
-//! `build.rs` embedded — for the same reason
-//! [`paths::HostOs`](crate::paths::HostOs) does: two of the four release
+//! [`PlatformKey::current`] reads [`build_info::target`](crate::build_info),
+//! the triple `build.rs` embedded and `main.rs` handed over — for the same
+//! reason [`paths::HostOs`](crate::paths::HostOs) does: two of the four release
 //! targets cannot be compiled from the machine this is written on, so a
 //! `cfg`-split table would ship two branches nobody ever executed. As data,
 //! every row is tested.
 
-use crate::build_info::VERSION_INFO;
+use crate::build_info;
 
 /// A platform key as it appears in `update.json`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -75,7 +74,7 @@ impl PlatformKey {
 
     /// The platform this binary was built for.
     pub fn current() -> Option<PlatformKey> {
-        PlatformKey::from_target(VERSION_INFO.target)
+        PlatformKey::from_target(build_info::target())
     }
 
     /// The archive extension this platform's release asset carries. Windows
@@ -154,7 +153,9 @@ mod tests {
     }
 
     /// This binary must be able to find itself in a manifest, or the updater is
-    /// dead code on the platform it was compiled for.
+    /// dead code on the platform it was compiled for. Under `cargo test` this
+    /// is the `cfg!` fallback rather than the embedded triple — dodo's own
+    /// `main.rs` carries the test that the two classify alike.
     #[test]
     fn this_build_knows_which_platform_it_is() {
         assert!(

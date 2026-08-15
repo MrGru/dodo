@@ -5,7 +5,7 @@
 //! [`data_dir`](crate::paths::data_dir) that survive a restart are all *data*:
 //! saved collections, environments, script approvals. This is the first durable
 //! setting, so it follows
-//! [`script_consent`](crate::api_explorer::models::script_consent)'s file
+//! `dodo-api-explorer`'s `models::script_consent` file
 //! discipline exactly and pointedly **not** `collections.json`'s:
 //!
 //! - an explicit `"version"` written from the very first save;
@@ -34,7 +34,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::updater::models::version::Channel;
+use crate::models::version::Channel;
 
 /// The schema version written into every `updater.json`.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -149,7 +149,7 @@ mod tests {
         DEFAULT_CHECK_INTERVAL_HOURS, DEFAULT_MANIFEST_URL, MAX_CHECK_INTERVAL_HOURS,
         MIN_CHECK_INTERVAL_HOURS, SCHEMA_VERSION, UpdaterConfig,
     };
-    use crate::updater::models::version::Channel;
+    use crate::models::version::Channel;
 
     #[test]
     fn the_defaults_are_the_documented_ones() {

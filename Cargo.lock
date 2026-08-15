@@ -1620,6 +1620,7 @@ dependencies = [
  "dodo-ime-core",
  "dodo-ime-ipc",
  "dodo-paths",
+ "dodo-updater",
  "futures-channel",
  "futures-util",
  "gpui",
@@ -1637,7 +1638,6 @@ dependencies = [
  "percent-encoding",
  "plist",
  "regex",
- "reqwest",
  "rust-embed",
  "serde",
  "serde_json",
@@ -1798,6 +1798,22 @@ name = "dodo-paths"
 version = "0.1.0"
 dependencies = [
  "dodo-ime-ipc",
+]
+
+[[package]]
+name = "dodo-updater"
+version = "0.1.0"
+dependencies = [
+ "dodo-app-icon",
+ "dodo-dialog-slot",
+ "dodo-i18n",
+ "dodo-ime-ipc",
+ "dodo-paths",
+ "gpui",
+ "gpui-component",
+ "reqwest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

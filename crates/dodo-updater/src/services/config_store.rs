@@ -2,7 +2,7 @@
 //!
 //! The fourth file under [`data_dir`](crate::paths::data_dir), and deliberately
 //! the same shape as
-//! [`consent_store`](crate::api_explorer::services::consent_store): a trait, a
+//! `dodo-api-explorer`'s `services::consent_store`: a trait, a
 //! disk implementation, a temp-file-then-rename write, and a `version` field
 //! written from the **first** save with a parser that refuses anything newer.
 //! `AGENTS.md` names that as the pattern to copy and `collections.json`'s
@@ -32,9 +32,9 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
+use crate::models::config::{SCHEMA_VERSION, UpdaterConfig};
+use crate::models::state::UpdateError;
 use crate::paths::data_dir;
-use crate::updater::models::config::{SCHEMA_VERSION, UpdaterConfig};
-use crate::updater::models::state::UpdateError;
 
 /// A place the updater settings are loaded from and saved to.
 pub trait UpdaterConfigStore: Send + Sync + 'static {
@@ -158,9 +158,9 @@ impl UpdaterConfigStore for InMemoryConfigStore {
 #[cfg(test)]
 mod tests {
     use super::{DiskUpdaterConfigStore, InMemoryConfigStore, UpdaterConfigStore, parse_document};
-    use crate::updater::models::config::{SCHEMA_VERSION, UpdaterConfig};
-    use crate::updater::models::state::UpdateError;
-    use crate::updater::models::version::Channel;
+    use crate::models::config::{SCHEMA_VERSION, UpdaterConfig};
+    use crate::models::state::UpdateError;
+    use crate::models::version::Channel;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 

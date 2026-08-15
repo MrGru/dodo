@@ -14,7 +14,7 @@
 //! 2. `replacement` → `existing`
 //!
 //! Each rename is atomic (both paths are on the same volume — that is what
-//! [`staging_dir`](crate::updater::models::install_target::staging_dir) is for),
+//! [`staging_dir`](crate::models::install_target::staging_dir) is for),
 //! but the *pair* is not: a crash between them leaves nothing at `existing`. So
 //! step 2 rolls step 1 back on failure, and the window where neither exists is
 //! the duration of one `rename(2)`.
@@ -35,8 +35,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::updater::models::install_target::{is_stale, stale_path};
-use crate::updater::models::state::{ManualReason, UpdateError};
+use crate::models::install_target::{is_stale, stale_path};
+use crate::models::state::{ManualReason, UpdateError};
 
 /// Whether this process can create files in `dir`, and if not, why.
 ///
@@ -139,7 +139,7 @@ fn remove_any(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{classify_probe_failure, probe_writable, swap, sweep};
-    use crate::updater::models::state::{ManualReason, UpdateError};
+    use crate::models::state::{ManualReason, UpdateError};
     use std::io::ErrorKind;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -211,7 +211,7 @@ mod tests {
             "the installation must be exactly as it was"
         );
         assert!(
-            !crate::updater::models::install_target::stale_path(&installed).exists(),
+            !crate::models::install_target::stale_path(&installed).exists(),
             "and nothing left moved aside"
         );
 
@@ -222,7 +222,7 @@ mod tests {
     fn a_leftover_from_an_earlier_install_does_not_block_a_new_one() {
         let dir = scratch();
         let installed = dir.join("dodo");
-        let old = crate::updater::models::install_target::stale_path(&installed);
+        let old = crate::models::install_target::stale_path(&installed);
         std::fs::write(&installed, b"current").expect("writes");
         std::fs::write(&old, b"from a previous install").expect("writes");
         let staged = dir.join("staged");

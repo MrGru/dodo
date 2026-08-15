@@ -42,8 +42,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 #[cfg(test)]
-use crate::updater::models::state::{InstallOutcome, UpdateError};
-use crate::updater::services::PlatformInstaller;
+use crate::models::state::{InstallOutcome, UpdateError};
+use crate::services::PlatformInstaller;
 
 /// The installer for the platform this binary was built for.
 ///
@@ -142,9 +142,9 @@ impl PlatformInstaller for RecordingInstaller {
 #[cfg(test)]
 mod tests {
     use super::{Call, RecordingInstaller, platform_installer};
-    use crate::updater::models::platform::PlatformKey;
-    use crate::updater::models::state::{InstallOutcome, UpdateError};
-    use crate::updater::services::PlatformInstaller;
+    use crate::models::platform::PlatformKey;
+    use crate::models::state::{InstallOutcome, UpdateError};
+    use crate::services::PlatformInstaller;
     use std::path::Path;
 
     /// The factory has to produce *something* on whatever this is built for,

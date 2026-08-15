@@ -8,7 +8,7 @@
 //! # `manifest_version` is read before anything else
 //!
 //! Exactly the pattern
-//! [`consent_store::parse_document`](crate::api_explorer::services::consent_store::parse_document)
+//! `dodo-api-explorer`'s `services::consent_store::parse_document`
 //! established and `AGENTS.md` names as the one to copy: pull the version out of
 //! the raw JSON first, refuse anything higher than this build understands, and
 //! only then deserialize. `serde_json::from_slice` straight into [`Manifest`]
@@ -47,9 +47,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::i18n::{Str, updater};
-use crate::updater::models::platform::PlatformKey;
-use crate::updater::models::sha256::is_hex_digest;
-use crate::updater::models::version::{Channel, Version};
+use crate::models::platform::PlatformKey;
+use crate::models::sha256::is_hex_digest;
+use crate::models::version::{Channel, Version};
 
 /// The highest `manifest_version` this build understands.
 pub const SUPPORTED_MANIFEST_VERSION: u32 = 1;
@@ -207,8 +207,8 @@ fn validate_file(platform: &str, file: &ManifestFile) -> Result<(), ManifestErro
 #[cfg(test)]
 mod tests {
     use super::{Manifest, ManifestError, parse};
-    use crate::updater::models::platform::PlatformKey;
-    use crate::updater::models::version::Channel;
+    use crate::models::platform::PlatformKey;
+    use crate::models::version::Channel;
 
     /// The real v0.1.6 manifest, trimmed to two platforms. Kept verbatim in
     /// shape so this test fails if the published document ever stops matching

@@ -11,7 +11,7 @@
 //!   the factory that is the module's only `#[cfg(target_os)]`.
 //! - [`config_store`] — `updater.json`.
 //! - [`pipeline`] — the blocking function that sequences all of the above and
-//!   emits [`UpdateEvent`](crate::updater::models::state::UpdateEvent)s.
+//!   emits [`UpdateEvent`](crate::models::state::UpdateEvent)s.
 //! - [`log`] — the two `eprintln!`s that are the updater's whole diagnostic
 //!   surface.
 //!
@@ -46,8 +46,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::updater::models::manifest::ManifestFile;
-use crate::updater::models::state::{DownloadProgress, InstallOutcome, UpdateError};
+use crate::models::manifest::ManifestFile;
+use crate::models::state::{DownloadProgress, InstallOutcome, UpdateError};
 
 /// A flag the UI sets and the background job reads.
 ///
@@ -89,7 +89,7 @@ pub enum Flow {
 /// Where `update.json` comes from.
 pub trait ManifestSource: Send + Sync + 'static {
     /// The raw document. Parsing is
-    /// [`models::manifest::parse`](crate::updater::models::manifest::parse)'s
+    /// [`models::manifest::parse`](crate::models::manifest::parse)'s
     /// job, so a source never has to know the schema — which is what makes a
     /// fake source one line of setup.
     fn fetch(&self, url: &str) -> Result<Vec<u8>, UpdateError>;
@@ -109,7 +109,7 @@ pub struct DownloadedArchive {
 ///
 /// **The archive is never held in memory.** It is read from the socket in
 /// chunks, each written straight out and fed to a
-/// [`Sha256`](crate::updater::models::sha256::Sha256), so a 12 MB download
+/// [`Sha256`](crate::models::sha256::Sha256), so a 12 MB download
 /// costs one 64 KiB buffer. `api_explorer::services::http::client`'s
 /// `MAX_BODY_BYTES` cap is deliberately *not* inherited: that cap exists
 /// because the API Explorer displays bodies, and nothing here displays

@@ -35,10 +35,10 @@ use std::time::Duration;
 
 use reqwest::blocking::Client;
 
-use crate::updater::models::manifest::ManifestFile;
-use crate::updater::models::sha256::Sha256;
-use crate::updater::models::state::{DownloadProgress, UpdateError};
-use crate::updater::services::{DownloadedArchive, Downloader, Flow};
+use crate::models::manifest::ManifestFile;
+use crate::models::sha256::Sha256;
+use crate::models::state::{DownloadProgress, UpdateError};
+use crate::services::{DownloadedArchive, Downloader, Flow};
 
 /// How much is read from the socket at a time. Large enough that a 12 MB
 /// archive is a couple of hundred iterations, small enough that the progress
@@ -303,10 +303,10 @@ pub fn clean_temp_dir(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{InMemoryDownloader, clean_temp_dir, temp_dir};
-    use crate::updater::models::manifest::ManifestFile;
-    use crate::updater::models::sha256::Sha256;
-    use crate::updater::models::state::{DownloadProgress, UpdateError};
-    use crate::updater::services::{Downloader, Flow};
+    use crate::models::manifest::ManifestFile;
+    use crate::models::sha256::Sha256;
+    use crate::models::state::{DownloadProgress, UpdateError};
+    use crate::services::{Downloader, Flow};
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};

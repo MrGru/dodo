@@ -20,7 +20,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::updater::models::state::UpdateError;
+use crate::models::state::UpdateError;
 
 /// Extracts `archive` into `into`, creating it.
 ///

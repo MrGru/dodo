@@ -1,7 +1,7 @@
 # `crates/` holds code that shares this lockfile, which is what separates it
 # from `tools/`.
 #
-# There are twelve members, in three groups.
+# There are thirteen members, in three groups.
 #
 # `crates/dodo-app-icon`, `crates/dodo-i18n`, `crates/dodo-paths` and
 # `crates/dodo-dialog-slot` are *kernel* crates: code many of dodo's modules
@@ -15,14 +15,17 @@
 # a copy on each side of a crate boundary would be two unrelated slots — the
 # same argument that put `t()` and the active-language global in `dodo-i18n`.
 #
-# `crates/dodo-cleaner`, `crates/dodo-docker`, `crates/dodo-database` and
-# `crates/dodo-api-explorer` are *feature* crates — whole tools of the app,
-# lifted out of the binary rather than pieces many tools share. The Cleaner was
-# the first and is the shape the other three copy: their only outbound edges
-# were the three kernel crates above, their inbound surface was one or two
-# files, and `main.rs` aliases each back to `crate::cleaner` / `crate::docker` /
-# `crate::database` / `crate::api_explorer` so neither side's call sites
-# changed. `AGENTS.md`'s "feature crate" entry records what the moves bought and
+# `crates/dodo-cleaner`, `crates/dodo-docker`, `crates/dodo-database`,
+# `crates/dodo-api-explorer` and `crates/dodo-updater` are *feature* crates —
+# whole tools of the app, lifted out of the binary rather than pieces many
+# tools share. The Cleaner was the first and is the shape the others copy:
+# their only outbound edges were the kernel crates above, their inbound surface
+# was one or two files, and `main.rs` aliases each back to `crate::cleaner` /
+# `crate::docker` / `crate::database` / `crate::api_explorer` /
+# `crate::updater` so neither side's call sites changed. The updater is the one
+# that needed a second seam: `build_info` reads `env!("DODO_*")` variables only
+# a binary is handed, so `init` takes the two fields it uses as an argument
+# rather than any crate growing a build script. `AGENTS.md`'s "feature crate" entry records what the moves bought and
 # what they did not — and it is explicit that build speed was measured and is
 # not among it.
 #
@@ -39,7 +42,7 @@
 # bundle types with would be two different resolutions that nothing compares. One
 # workspace, one `Cargo.lock`, one `--locked`.
 #
-# `default-members` names all thirteen (the root package and every crate), so a bare
+# `default-members` names all fourteen (the root package and every crate), so a bare
 # `cargo test` / `cargo clippy --all-targets` at the root covers each crate's own
 # tests. **Adding a crate means adding it here in the same commit**; without it
 # cargo defaults to the root package alone and the new crate's tests silently
@@ -68,6 +71,7 @@ default-members = [
     "crates/dodo-ime-macos",
     "crates/dodo-ime-windows",
     "crates/dodo-paths",
+    "crates/dodo-updater",
 ]
 exclude = ["tools/update-manifest"]
 
@@ -168,9 +172,11 @@ dodo-docker = { path = "crates/dodo-docker" }
 # `quick_nav`'s `models::snapshot::RequestSnapshot` / `services::curl` for
 # routing a pasted cURL command. `main.rs` aliases the crate back to
 # `crate::api_explorer`. `rquickjs` went with it and left this file entirely;
-# `reqwest`, `base64` and `percent-encoding` are declared in both, because the
-# updater, the Encoder/Decoder and quick navigation still name them here. See
-# that crate's `lib.rs` for the seam.
+# `base64` and `percent-encoding` are declared in both, because the
+# Encoder/Decoder and quick navigation still name them here. `reqwest` was on
+# that list until the updater left too, and is now declared by
+# `crates/dodo-api-explorer` and `crates/dodo-updater` alone. See that crate's
+# `lib.rs` for the seam.
 dodo-api-explorer = { path = "crates/dodo-api-explorer" }
 # The Database Explorer, whole. The binary names four items from it —
 # `layout.rs`'s `DatabaseView`, `main.rs`'s `database::init`, and
@@ -179,6 +185,13 @@ dodo-api-explorer = { path = "crates/dodo-api-explorer" }
 # driver crates, `sqlformat` and the two rustls lines went with it. See that
 # crate's `lib.rs` for the seam.
 dodo-database = { path = "crates/dodo-database" }
+# The in-app updater, whole. The binary names exactly two items from it —
+# `layout.rs`'s `updater::open` and `main.rs`'s `updater::init` — and `main.rs`
+# aliases the crate back to `crate::updater`. `reqwest` went with it and left
+# this file entirely: the updater was its last consumer here. See that crate's
+# `lib.rs` for the seam, and its `build_info` module for the one thing a
+# library crate cannot be handed.
+dodo-updater = { path = "crates/dodo-updater" }
 # dodo's input-method engine, kept out of this crate so the three OS hosts can
 # link it without linking everything below. dodo names its configuration types
 # in the Input method settings page and nothing else; the engine itself only ever
@@ -203,25 +216,12 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["fo
 gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 anyhow = "1.0"
-# The HTTP client behind the API Explorer and the in-app updater.
-# `default-features = false` drops `default-tls`, `charset` and `system-proxy`;
-# `rustls` then selects rustls with the platform certificate verifier, so no
-# OpenSSL is required to build. `blocking` is deliberate: `services::Transport`
-# is a blocking trait that only ever runs on GPUI's background executor, never
-# on the UI thread.
-#
-# **Exactly one module in this crate may name it**: `updater::services` (its
-# `manifest_source` and `download`). The other permitted namer,
-# `api_explorer::services::http`, went to `crates/dodo-api-explorer`, which
-# declares the identical line — the two resolve to one package. The updater
-# needs the blocking client for a second reason: `Response::bytes_stream()` is
-# async and would need a tokio runtime, which `docker::services` is the only
-# place allowed to own.
-reqwest = { version = "0.13", default-features = false, features = [
-    "rustls",
-    "blocking",
-    "http2",
-] }
+# No `reqwest` here any more. This crate had it for `updater::services` alone
+# once `api_explorer::services::http` left, and the updater has now left too —
+# so the two crates that declare the identical line, `dodo-api-explorer` and
+# `dodo-updater`, are the whole of dodo's HTTP surface, and this binary names
+# no HTTP client at all. It is the same shape `bollard` and `tokio` took when
+# Docker left: a feature crate takes its outside-world dependencies with it.
 rust-embed = "8.12.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

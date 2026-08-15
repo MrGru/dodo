@@ -1,0 +1,63 @@
+[package]
+name = "dodo-updater"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "dodo's in-app updater: the update.json client, the SHA-256 verifier, the four platform installers and the one dialog they report to."
+
+# Every dependency below is one the updater already had while it was
+# `src/updater/`; nothing was added by the move and nothing was left behind.
+# The archive step deliberately adds none — `services::installers::extract`
+# shells out to `tar` (and PowerShell's `Expand-Archive` on Windows) rather
+# than linking an archive crate, which is what keeps this list this short.
+[dependencies]
+# The one icon the dialog draws. Re-exported as `crate::app_icon` in `lib.rs`
+# so the call site still reads `crate::app_icon::AppIcon`.
+dodo-app-icon = { path = "../dodo-app-icon" }
+# Every string the update dialog shows. The `gpui` feature is what brings `t()`
+# and the active-language global with it: the catalogue itself is pure, but the
+# dialog renders a `Str` into a `SharedString` and that needs an `App`.
+dodo-i18n = { path = "../dodo-i18n", features = ["gpui"] }
+# `updater.json` lives under `data_dir()`. `src/paths.rs` here is the seam that
+# resolves the host; see its module doc, and `crate::build_info` for the other
+# half of what a library crate is not handed.
+dodo-paths = { path = "../dodo-paths" }
+# The single slot the update dialog claims. It is a crate rather than a module
+# of the binary *because of this line*: the slot is a gpui `Global`, a `Global`
+# is identified by its type, and `src/settings.rs` has to claim the same one —
+# a copy on each side of this boundary would be two slots and the two-identical-
+# cards defect would come back. See that crate's docs.
+dodo-dialog-slot = { path = "../dodo-dialog-slot" }
+# Two constants only — the TSF DLL's file name and the directory it is
+# installed into — so the Windows installer replaces the *packaged* sidecar
+# beside `dodo.exe` and deliberately not the registered `%APPDATA%` copy. The
+# contract crate is where both processes read them from, so the updater cannot
+# drift from the installer.
+dodo-ime-ipc = { path = "../dodo-ime-ipc" }
+# Only the two files under `views/` may name these. The other 25 are gpui-free
+# on purpose: the manifest parse, the SemVer comparison, the incremental
+# SHA-256, the four installers and the whole state machine are tested with no
+# `App` and no frame.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+# The HTTP client, on the identical line the binary used to carry for it.
+# `default-features = false` drops `default-tls`, `charset` and `system-proxy`;
+# `rustls` then selects rustls with the platform certificate verifier, so no
+# OpenSSL is required to build. `blocking` is deliberate: `services::Transport`
+# is a blocking trait that only ever runs on GPUI's background executor, never
+# on the UI thread — and `Response::bytes_stream()`, the async alternative,
+# would need a tokio runtime, which only `crates/dodo-docker` may own.
+#
+# **Exactly two modules may name it**: `services::manifest_source` and
+# `services::download`. `crates/dodo-api-explorer` declares the identical line
+# for its own `services::http`; the two resolve to one package.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+    "blocking",
+    "http2",
+] }
+# `update.json` and `updater.json`. The manifest is parsed *strictly* — see
+# `models::manifest` for what it refuses and why a missing platform is not one
+# of those things.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

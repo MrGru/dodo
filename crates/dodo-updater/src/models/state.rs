@@ -1,7 +1,7 @@
 //! The updater's states and the events that move between them.
 //!
 //! Both are plain data with no GPUI and no IO anywhere near them, which is what
-//! lets [`state::machine`](crate::updater::state::machine) be unit tested as a
+//! lets [`state::machine`](crate::state::machine) be unit tested as a
 //! pure function of `(state, event)`. The rule the whole module rests on:
 //! **the state machine is the only thing that mutates state**, the pipeline only
 //! emits events, and the dialog only reads state.
@@ -26,14 +26,14 @@
 //! it returns to depends on what survives: cancelling a download leaves the
 //! update still available, cancelling a check leaves nothing at all.
 //!
-//! [`cancel`]: crate::updater::state::machine::UpdaterMachine::cancel
+//! [`cancel`]: crate::state::machine::UpdaterMachine::cancel
 
 use std::path::PathBuf;
 
 use crate::i18n::{Str, updater};
-use crate::updater::models::manifest::{Manifest, ManifestError, ManifestFile};
-use crate::updater::models::platform::PlatformKey;
-use crate::updater::models::version::{Channel, Version};
+use crate::models::manifest::{Manifest, ManifestError, ManifestFile};
+use crate::models::platform::PlatformKey;
+use crate::models::version::{Channel, Version};
 
 /// Everything the UI needs to describe an available update, lifted out of the
 /// manifest so nothing downstream has to hold the whole document.
@@ -304,7 +304,7 @@ pub enum UpdateEvent {
 #[cfg(test)]
 mod tests {
     use super::{DownloadProgress, ManualReason, UpdateError, UpdaterState};
-    use crate::updater::models::manifest::ManifestError;
+    use crate::models::manifest::ManifestError;
 
     #[test]
     fn progress_is_a_percentage_of_the_promised_size() {

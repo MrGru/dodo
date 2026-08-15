@@ -27,28 +27,60 @@
 //!
 //! # What happens at startup
 //!
-//! [`init`] loads `updater.json`, sweeps the file a previous install renamed
-//! aside, and — if the settings allow it — schedules a check. **The check is
-//! silent**: it opens nothing, says nothing and logs one line unless it finds
-//! something, in which case the dialog opens by itself. Nothing is ever
-//! downloaded without the user pressing a button; that was decided with the
-//! captain and is enforced structurally in [`services::pipeline`].
+//! [`init`] records what this build is (see below), loads `updater.json`,
+//! sweeps the file a previous install renamed aside, and — if the settings
+//! allow it — schedules a check. **The check is silent**: it opens nothing,
+//! says nothing and logs one line unless it finds something, in which case the
+//! dialog opens by itself. Nothing is ever downloaded without the user pressing
+//! a button; that was decided with the captain and is enforced structurally in
+//! [`services::pipeline`].
+//!
+//! # This is a *feature* crate, and it needed two seams
+//!
+//! It was `src/updater/` until 2026-08-15, when it moved out whole, following
+//! the shape `dodo-cleaner` set: the binary links it and names exactly two
+//! items — [`init`] and [`open`] — while `main.rs` aliases the crate back to
+//! `crate::updater`, so no call site on either side of the seam changed. The
+//! `crate::api_explorer` mentions left in the doc comments below are just that:
+//! mentions, and never were an edge.
+//!
+//! Two seams exist only because of the move, and they answer different
+//! questions. [`paths`] answers *which platform*, which `cfg!` can name.
+//! [`build_info`] answers *which build* — the version and the target triple
+//! `build.rs` embedded — which nothing but the binary knows, so [`init`] takes
+//! them as an argument rather than this crate growing a build script to
+//! re-derive one string. That is the same trade `main.rs`'s own `paths` module
+//! makes for `dodo-paths`.
+//!
+//! **The module declarations below say `pub` for `models`, `services` and
+//! `state` and `pub(crate)` for `views`.** The binary names none of the four —
+//! its whole surface is the two functions above — but the first three are the
+//! layers a reader of this crate is meant to see, and `views` is the one layer
+//! nothing outside may reach: `open` is the only way in.
 
+pub mod build_info;
 pub mod models;
+pub mod paths;
 pub mod services;
 pub mod state;
-pub mod views;
+pub(crate) mod views;
+
+// The icon set and the string catalogue are crates; these two aliases are what
+// keep `crate::app_icon::AppIcon` and `crate::i18n::t` spelled the way they
+// were inside the binary.
+use dodo_app_icon as app_icon;
+use dodo_dialog_slot as dialog_slot;
+use dodo_i18n as i18n;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{App, Global, Task};
 
-use crate::updater::models::config::UpdaterConfig;
-use crate::updater::services::config_store::UpdaterConfigStore;
-use crate::updater::services::{
-    Downloader, ManifestSource, PlatformInstaller, Verifier, log, pipeline,
-};
+pub use crate::build_info::BuildInfo;
+use crate::models::config::UpdaterConfig;
+use crate::services::config_store::UpdaterConfigStore;
+use crate::services::{Downloader, ManifestSource, PlatformInstaller, Verifier, log, pipeline};
 
 // Deliberately no `pub use` of the dialog type. `docker` re-exports
 // `DockerView` because `layout.rs` holds one; nothing outside this module ever
@@ -78,8 +110,8 @@ pub struct UpdaterServices {
 /// The updater's process-wide state.
 ///
 /// A global for the same reason
-/// [`ScriptPolicy`](crate::api_explorer::ScriptPolicy) and
-/// [`Language`](crate::i18n::Language) are: it is read from anywhere and
+/// `api_explorer::ScriptPolicy` and [`Language`](crate::i18n::Language)
+/// are: it is read from anywhere and
 /// written from one place. Unlike those two the configuration is **persisted** —
 /// see [`models::config`] for why "skip this version" makes that unavoidable.
 #[derive(Clone)]
@@ -152,7 +184,11 @@ impl Updater {
 /// Everything it does is asynchronous. The first thing on the UI thread is
 /// reading a global; the file read, the sweep and the check all run on the
 /// background executor.
-pub fn init(cx: &mut App) {
+pub fn init(build: BuildInfo, cx: &mut App) {
+    // First, and before anything can ask what version is running: this is the
+    // one thing a library crate cannot find out for itself. See `build_info`.
+    build_info::set(build);
+
     let services = Updater::services(cx);
 
     let load = services.clone();

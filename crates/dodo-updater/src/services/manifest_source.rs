@@ -22,8 +22,8 @@ use std::time::Duration;
 
 use reqwest::blocking::Client;
 
-use crate::updater::models::state::UpdateError;
-use crate::updater::services::ManifestSource;
+use crate::models::state::UpdateError;
+use crate::services::ManifestSource;
 
 /// The manifest is a few kilobytes of JSON. If it has not arrived in this long,
 /// the network is not going to produce it, and a background check must never
@@ -75,7 +75,7 @@ impl ManifestSource for HttpManifestSource {
         // tamperable.
         if !url.starts_with("https://") {
             return Err(UpdateError::Manifest(
-                crate::updater::models::manifest::ManifestError::InvalidFile {
+                crate::models::manifest::ManifestError::InvalidFile {
                     platform: String::new(),
                     detail: crate::i18n::updater::Text::ErrorManifestInsecureUrl(url.to_owned())
                         .into(),
@@ -164,8 +164,8 @@ impl ManifestSource for InMemoryManifestSource {
 #[cfg(test)]
 mod tests {
     use super::{InMemoryManifestSource, MAX_MANIFEST_BYTES};
-    use crate::updater::models::state::UpdateError;
-    use crate::updater::services::ManifestSource;
+    use crate::models::state::UpdateError;
+    use crate::services::ManifestSource;
 
     #[test]
     fn the_in_memory_source_records_what_it_was_asked_for() {

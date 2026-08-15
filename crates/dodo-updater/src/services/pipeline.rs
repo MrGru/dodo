@@ -34,13 +34,13 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::updater::models::config::UpdaterConfig;
-use crate::updater::models::manifest::{self, ManifestError};
-use crate::updater::models::platform::PlatformKey;
-use crate::updater::models::state::{InstallOutcome, UpdateError, UpdateEvent, UpdateInfo};
-use crate::updater::models::version::{UpdateDecision, Version, decide};
-use crate::updater::services::download::CANCELLED;
-use crate::updater::services::{
+use crate::models::config::UpdaterConfig;
+use crate::models::manifest::{self, ManifestError};
+use crate::models::platform::PlatformKey;
+use crate::models::state::{InstallOutcome, UpdateError, UpdateEvent, UpdateInfo};
+use crate::models::version::{UpdateDecision, Version, decide};
+use crate::services::download::CANCELLED;
+use crate::services::{
     Cancellation, Downloader, Flow, ManifestSource, PlatformInstaller, Verifier, log,
 };
 
@@ -59,8 +59,8 @@ pub enum CheckOutcome {
 /// Fetches the manifest and decides whether to offer what it names.
 ///
 /// `current` is the running version — always
-/// [`VERSION_INFO.version`](crate::build_info::VERSION_INFO) in the app, and a
-/// parameter so a test can pretend to be older.
+/// [`build_info::version`](crate::build_info) in the app, and a parameter so a
+/// test can pretend to be older.
 pub fn check(
     source: &dyn ManifestSource,
     config: &UpdaterConfig,
@@ -97,9 +97,8 @@ fn run_check(
     let manifest = manifest::parse(&bytes).map_err(UpdateError::Manifest)?;
 
     // A target with no manifest key at all — someone's own `linux-arm64` build.
-    let platform = PlatformKey::current().ok_or_else(|| {
-        UpdateError::PlatformMissing(crate::build_info::VERSION_INFO.target.to_owned())
-    })?;
+    let platform = PlatformKey::current()
+        .ok_or_else(|| UpdateError::PlatformMissing(crate::build_info::target().to_owned()))?;
 
     // The manifest has an entry for every platform the release publishes, and
     // `docs/release.md` records that a missing one *fails the release* rather
@@ -133,7 +132,7 @@ fn run_check(
 /// answer and not a failure.
 ///
 /// **Cancellation emits nothing.** The machine has already been moved back by
-/// [`UpdaterMachine::cancel`](crate::updater::state::machine::UpdaterMachine::cancel)
+/// [`UpdaterMachine::cancel`](crate::state::machine::UpdaterMachine::cancel)
 /// when the flag was set, and an `Error` event arriving afterwards would put an
 /// error on screen for something the user themselves asked for. `cancel` is
 /// checked before each stage as well as inside the transfer, so an abort during
@@ -209,7 +208,7 @@ pub fn download_and_install(
             // A completed install has no use for the archive; a *refused* one
             // does — the user was just told where it is.
             if matches!(outcome, InstallOutcome::Installed) {
-                crate::updater::services::download::clean_temp_dir(into);
+                crate::services::download::clean_temp_dir(into);
             }
             emit(UpdateEvent::ReadyToRestart(outcome.clone()));
             Ok(Some(outcome))
@@ -223,34 +222,34 @@ pub fn download_and_install(
 }
 
 /// The running version, parsed. `None` would mean `build.rs` embedded something
-/// that is not a version, which the `build_info` tests already rule out — but
-/// the updater refuses to guess rather than unwrapping.
+/// that is not a version, which the binary's `build_info` tests already rule
+/// out — but the updater refuses to guess rather than unwrapping.
 pub fn current_version() -> Result<Version, UpdateError> {
-    let text = crate::build_info::VERSION_INFO.version;
+    let text = crate::build_info::version();
     Version::parse(text)
         .ok_or_else(|| UpdateError::Manifest(ManifestError::UnreadableVersion(text.to_owned())))
 }
 
 /// Where a download is staged: the process's own temp directory.
 pub fn staging_directory() -> PathBuf {
-    crate::updater::services::download::temp_dir(std::process::id())
+    crate::services::download::temp_dir(std::process::id())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{CheckOutcome, check, current_version, download_and_install};
-    use crate::updater::models::config::UpdaterConfig;
-    use crate::updater::models::platform::PlatformKey;
-    use crate::updater::models::sha256::Sha256;
-    use crate::updater::models::state::{
+    use crate::models::config::UpdaterConfig;
+    use crate::models::platform::PlatformKey;
+    use crate::models::sha256::Sha256;
+    use crate::models::state::{
         DownloadProgress, InstallOutcome, ManualReason, UpdateError, UpdateEvent,
     };
-    use crate::updater::models::version::{Channel, Version};
-    use crate::updater::services::Cancellation;
-    use crate::updater::services::download::InMemoryDownloader;
-    use crate::updater::services::installers::{Call, RecordingInstaller};
-    use crate::updater::services::manifest_source::InMemoryManifestSource;
-    use crate::updater::services::verify::Sha256Verifier;
+    use crate::models::version::{Channel, Version};
+    use crate::services::Cancellation;
+    use crate::services::download::InMemoryDownloader;
+    use crate::services::installers::{Call, RecordingInstaller};
+    use crate::services::manifest_source::InMemoryManifestSource;
+    use crate::services::verify::Sha256Verifier;
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -820,12 +819,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The embedded version is dodo's, not this crate's, so the assertion that
+    /// `build.rs` embeds something parseable is `main.rs`'s. What is left here
+    /// is the half this crate can answer: whatever `build_info` reports, the
+    /// updater can parse it and compare it.
     #[test]
     fn this_build_reports_a_version_the_updater_can_compare() {
-        let version = current_version().expect("build.rs embeds a semantic version");
-        assert_eq!(
-            version.to_display(),
-            crate::build_info::VERSION_INFO.version
-        );
+        let version = current_version().expect("a semantic version");
+        assert_eq!(version.to_display(), crate::build_info::version());
     }
 }

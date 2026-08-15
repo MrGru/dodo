@@ -42,11 +42,11 @@ use std::process::Command;
 
 use dodo_ime_ipc::tsf::{DLL_NAME, PACKAGE_DIRECTORY};
 
-use crate::updater::models::install_target::{classify, staging_dir};
-use crate::updater::models::state::{InstallOutcome, ManualReason, UpdateError};
-use crate::updater::services::PlatformInstaller;
-use crate::updater::services::installers::{extract, swap};
-use crate::updater::services::log;
+use crate::models::install_target::{classify, staging_dir};
+use crate::models::state::{InstallOutcome, ManualReason, UpdateError};
+use crate::services::PlatformInstaller;
+use crate::services::installers::{extract, swap};
+use crate::services::log;
 
 /// The Windows installer. `#[allow(dead_code)]` for the reason given on
 /// [`MacosInstaller`](super::macos::MacosInstaller).
@@ -224,8 +224,8 @@ fn find_executable(staging: &Path, running: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{WindowsInstaller, find_executable, restore_sidecar};
-    use crate::updater::models::state::InstallOutcome;
-    use crate::updater::services::PlatformInstaller;
+    use crate::models::state::InstallOutcome;
+    use crate::services::PlatformInstaller;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 

@@ -29,11 +29,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::updater::models::install_target::{InstallTarget, classify, staging_dir};
-use crate::updater::models::state::{InstallOutcome, ManualReason, UpdateError};
-use crate::updater::services::PlatformInstaller;
-use crate::updater::services::installers::{extract, swap};
-use crate::updater::services::log;
+use crate::models::install_target::{InstallTarget, classify, staging_dir};
+use crate::models::state::{InstallOutcome, ManualReason, UpdateError};
+use crate::services::PlatformInstaller;
+use crate::services::installers::{extract, swap};
+use crate::services::log;
 
 /// The macOS installer.
 ///
@@ -170,8 +170,8 @@ fn strip_quarantine(bundle: &Path) {
 #[cfg(test)]
 mod tests {
     use super::MacosInstaller;
-    use crate::updater::models::state::{InstallOutcome, ManualReason};
-    use crate::updater::services::PlatformInstaller;
+    use crate::models::state::{InstallOutcome, ManualReason};
+    use crate::services::PlatformInstaller;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 

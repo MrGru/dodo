@@ -1,6 +1,6 @@
 //! The state machine, and the only thing in the updater that mutates state.
 //!
-//! Everything else has one job: [`services::pipeline`](crate::updater::services::pipeline)
+//! Everything else has one job: [`services::pipeline`](crate::services::pipeline)
 //! produces [`UpdateEvent`]s, the dialog applies them here and renders whatever
 //! [`UpdaterMachine::state`] then says. The dialog performs no IO and the
 //! pipeline holds no state, so this file is the whole of the updater's logic
@@ -37,9 +37,7 @@
 //!   verdict with no check — is dropped. The pipeline never emits those; the
 //!   machine refusing them is what makes that testable rather than assumed.
 
-use crate::updater::models::state::{
-    DownloadProgress, UpdateError, UpdateEvent, UpdateInfo, UpdaterState,
-};
+use crate::models::state::{DownloadProgress, UpdateError, UpdateEvent, UpdateInfo, UpdaterState};
 
 /// Where a retry should resume.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -239,13 +237,13 @@ impl UpdaterMachine {
 #[cfg(test)]
 mod tests {
     use super::{RetryFrom, UpdaterMachine};
-    use crate::updater::models::manifest::ManifestFile;
-    use crate::updater::models::platform::PlatformKey;
-    use crate::updater::models::state::{
+    use crate::models::manifest::ManifestFile;
+    use crate::models::platform::PlatformKey;
+    use crate::models::state::{
         DownloadProgress, InstallOutcome, ManualReason, UpdateError, UpdateEvent, UpdateInfo,
         UpdaterState,
     };
-    use crate::updater::models::version::{Channel, Version};
+    use crate::models::version::{Channel, Version};
     use std::path::PathBuf;
 
     fn info() -> UpdateInfo {

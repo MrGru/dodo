@@ -134,8 +134,8 @@ const SOURCES: [(&str, &str); 41] = [
     // `SharedString::from(info.notes)`, not a literal, so it is not a finding
     // and needs no exception here.
     (
-        "src/updater/views/dialog.rs",
-        include_str!("updater/views/dialog.rs"),
+        "crates/dodo-updater/src/views/dialog.rs",
+        include_str!("../crates/dodo-updater/src/views/dialog.rs"),
     ),
     // The Database Explorer. Its result *cells* and tree *labels* are data —
     // a server's own identifiers and values — but they arrive as

@@ -12,7 +12,7 @@
 //! # Streaming
 //!
 //! [`CHUNK`] bytes at a time into
-//! [`Sha256`](crate::updater::models::sha256::Sha256). A 12 MB archive costs a
+//! [`Sha256`](crate::models::sha256::Sha256). A 12 MB archive costs a
 //! 64 KiB buffer, and an archive of any size would.
 //!
 //! # A failure discards the file
@@ -25,10 +25,10 @@ use std::fs::File;
 use std::io::Read as _;
 use std::path::Path;
 
-use crate::updater::models::manifest::ManifestFile;
-use crate::updater::models::sha256::{Sha256, digests_match};
-use crate::updater::models::state::UpdateError;
-use crate::updater::services::Verifier;
+use crate::models::manifest::ManifestFile;
+use crate::models::sha256::{Sha256, digests_match};
+use crate::models::state::UpdateError;
+use crate::services::Verifier;
 
 const CHUNK: usize = 64 * 1024;
 
@@ -102,9 +102,9 @@ fn discard(archive: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{Sha256Verifier, digest_of};
-    use crate::updater::models::manifest::ManifestFile;
-    use crate::updater::models::state::UpdateError;
-    use crate::updater::services::Verifier;
+    use crate::models::manifest::ManifestFile;
+    use crate::models::state::UpdateError;
+    use crate::services::Verifier;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
