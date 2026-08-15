@@ -583,14 +583,30 @@ Ten things about build and release that catch people:
     there, and nothing was added or dropped by the move.
   - **`src/i18n_lint.rs` reaches across with `include_str!("../crates/dodo-cleaner/src/views/…")`**,
     so the three Cleaner views are still scanned for untranslated literals from the binary's tests.
-  **What the split bought, measured** (medians of three, `cargo build --locked`, warm cargo caches,
-  this Mac): clean build **128.01s → 114.05s** (−10.9%); touching a leaf file *inside* the Cleaner
-  **3.97s → 3.89s** (−2%, inside the noise); touching `src/layout.rs` **4.18s → 3.11s** (−26%).
-  **Read the middle number before extracting anything for build speed.** Moving a feature out does
-  not make editing *that feature* cheaper, because `dodo` depends on `dodo-cleaner` and so recompiles
-  in full anyway — the work moved, it did not shrink. What shrank is the binary, so every edit to a
-  file that is *still* in `src/` got a quarter faster. Extract for boundaries, testability and the
-  binary's own rebuild; do not expect the extracted crate's own edit loop to improve.
+  **A feature crate does not make the build faster, and this one was measured to find out.**
+  "Splitting the binary into crates" in `docs/build-optimization.md` is the authority — the method,
+  the per-unit breakdown, and why a non-interleaved A/B of build times lies. The summary, from three
+  interleaved rounds alternating `main` and the branch with a warm target directory each:
+
+  | | before | after | |
+  |---|---|---|---|
+  | clean build | 120.34s | 118.86s | −1.2% |
+  | touch a leaf file *inside* the Cleaner | 3.66s | 3.95s | **+7.9%** |
+  | touch `src/layout.rs` | 3.40s | 3.22s | −5.3% |
+
+  Every delta is a couple of tenths of a second, they point in opposite directions, and the third
+  round's after-block ran under machine load and moved both incrementals +32% on its own — which is
+  the size of the noise this is being measured against. Phase 2 got a flat rebuild and so does
+  Phase 3; **the "the binary still contains every feature" theory was wrong.** `cargo build
+  --timings` says why, and the number is unambiguous: touching that leaf file rebuilds the `dodo`
+  unit in **3.21s before and 3.20s after** — removing 25,646 lines from the binary did not move its
+  rebuild at all — and the extracted crate's own 0.72s is then *added* on top. dodo's incremental
+  rebuild is dependency fingerprinting, final codegen and linking ~800 rlibs, none of which a crate
+  boundary removes, while rustc's in-crate incremental compilation was already recompiling only the
+  codegen units a one-line edit touched. A crate boundary can only add a metadata-and-rlib step to
+  that. **So extract a feature for boundaries, testability and a public surface you can see — never
+  for build speed**, and do not re-measure this hoping for a different answer without changing what
+  dominates (the link).
 
 - **Two of the four `cargo check` targets cannot be run from this Mac at all.**
   Linux and Windows both die in `aws-lc-sys`'s C build script (no cross C toolchain, no

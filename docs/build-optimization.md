@@ -739,6 +739,60 @@ startup profile, because none was taken.
 
 ---
 
+## Splitting the binary into crates: measured, and it does not help
+
+The Phase 2/3 restructure lifted code out of the `dodo` binary into workspace
+crates — first the kernel pieces (`dodo-i18n`, `dodo-app-icon`, `dodo-paths`),
+then the largest whole feature (`crates/dodo-cleaner`, 93 files, 25,646 lines).
+Both phases were measured for build time. **Neither improved the incremental
+rebuild, and the feature crate made its own edit loop slightly worse.** Record
+this before anyone proposes the next extraction on build-speed grounds.
+
+Method: `cargo build --locked` at the workspace root, macOS arm64, three
+rounds *interleaved* — `main`, then the branch, then `main` again — each side
+with its own warm `CARGO_TARGET_DIR`, and the timed clean build doubling as the
+warm-up. Three samples per cell per round; the tables give the median of the
+round medians. Interleaving matters: a first, non-interleaved pass measured the
+"before" numbers an hour earlier than the "after" ones and reported a 10.9%
+faster clean build and a 26% faster `layout.rs` rebuild. Both evaporated when
+the two sides were run alternately. **Never A/B a build time without
+interleaving.**
+
+| | before | after | |
+|---|---|---|---|
+| clean build | 120.34s | 118.86s | −1.2% |
+| touch a leaf file inside the Cleaner | 3.66s | 3.95s | **+7.9%** |
+| touch `src/layout.rs` | 3.40s | 3.22s | −5.3% |
+
+The deltas are a couple of tenths of a second and point in opposite directions.
+The third round's after-block happened to run under machine load and moved both
+incremental figures +32% on its own, which is the size of the noise floor these
+numbers sit on.
+
+`cargo build --timings` explains it, and the explanation generalises to every
+future extraction:
+
+| unit rebuilt after touching that leaf file | before | after |
+|---|---|---|
+| `dodo` (compile + link) | 3.21s | 3.20s |
+| `dodo-cleaner` (compile) | — | 0.72s |
+| cargo's own no-op fingerprint pass | 0.75s | 1.08s |
+
+**Removing 25,646 lines from the binary did not change the binary's rebuild
+time by a measurable amount.** That 3.2s is dependency fingerprinting, final
+codegen and linking roughly 800 rlibs — none of which a crate boundary removes,
+because `dodo` depends on `dodo-cleaner` and so relinks either way. Meanwhile
+rustc's in-crate incremental compilation was *already* recompiling only the
+codegen units a one-line edit touched, so the crate boundary did not subdivide
+work that was being redone; it added a metadata-and-rlib step in front of work
+that was not.
+
+The corollary: the only lever that would move an incremental rebuild here is the
+link step. `lld`/`mold` (see "Linker optimizations" above, and the `-fuse-ld=lld`
+line CI already exports on Linux) is the thing to measure next, not more crates.
+Extract features for boundaries, testability and a visible public surface —
+which is a good enough reason on its own — but not for build speed.
+
 ## Future optimization opportunities
 
 Roughly in order of expected value:
@@ -754,6 +808,9 @@ Roughly in order of expected value:
 4. **`-C remap-path-prefix`**, if bit-for-bit reproducibility is ever a goal.
 5. **`build-std` with `panic_immediate_abort`** would cut more, but it needs
    nightly and it inherits every objection to `panic = "abort"`.
-6. **Benchmark before trusting any of this.** dodo has no benchmark harness. A
+6. **A faster linker on macOS.** The section above measures the incremental
+   rebuild as almost entirely link-bound, and nothing in the crate layout can
+   change that. Unmeasured here; `lld` is already exported by CI on Linux.
+7. **Benchmark before trusting any of this.** dodo has no benchmark harness. A
    startup-to-first-frame measurement would make several of these decisions
    empirical rather than argued.
