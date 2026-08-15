@@ -36,11 +36,30 @@
 /// The view sources, embedded at compile time so the test needs no working
 /// directory. These are the files that build what the user sees; pure logic
 /// modules have no text sinks and are not worth scanning.
-const SOURCES: [(&str, &str); 34] = [
+const SOURCES: [(&str, &str); 41] = [
     ("src/layout.rs", include_str!("layout.rs")),
     ("src/json_formatter.rs", include_str!("json_formatter.rs")),
     ("src/encoder_decoder.rs", include_str!("encoder_decoder.rs")),
-    ("src/settings.rs", include_str!("settings.rs")),
+    ("src/settings/mod.rs", include_str!("settings/mod.rs")),
+    (
+        "src/settings/appearance.rs",
+        include_str!("settings/appearance.rs"),
+    ),
+    (
+        "src/settings/features.rs",
+        include_str!("settings/features.rs"),
+    ),
+    (
+        "src/settings/general.rs",
+        include_str!("settings/general.rs"),
+    ),
+    ("src/settings/pages.rs", include_str!("settings/pages.rs")),
+    (
+        "src/settings/quick_nav.rs",
+        include_str!("settings/quick_nav.rs"),
+    ),
+    ("src/settings/search.rs", include_str!("settings/search.rs")),
+    ("src/settings/view.rs", include_str!("settings/view.rs")),
     (
         "crates/dodo-cleaner/src/views/cleaner_view.rs",
         include_str!("../crates/dodo-cleaner/src/views/cleaner_view.rs"),
@@ -555,7 +574,7 @@ mod tests {
     fn the_scan_still_covers_every_source_it_did() {
         assert_eq!(
             super::SOURCES.len(),
-            34,
+            41,
             "the view scan covers fewer files than it did; add the file back, or \
              lower this count deliberately and say why"
         );
@@ -574,11 +593,12 @@ mod tests {
     /// opens a dialog, or returns an element from a builder function. The last
     /// three forms were added for the API Explorer's `components/` and the
     /// per-region `impl ApiExplorer` blocks, which draw translated text without
-    /// implementing `Render` themselves; `AnyElement` is in the list because a
-    /// region renderer whose result outlives the `cx` borrow has to return it
-    /// boxed, in either its qualified or its imported spelling. `-> Div` covers
-    /// the shared elements that hand an unfinished frame back to their caller.
-    /// The guard that actually matters —
+    /// implementing `Render` themselves; the Settings return types and
+    /// `ListDelegate` cover the same shape after that view was split into parts.
+    /// `AnyElement` is in the list because a region renderer whose result
+    /// outlives the `cx` borrow has to return it boxed, in either its qualified
+    /// or its imported spelling. `-> Div` covers the shared elements that hand
+    /// an unfinished frame back to their caller. The guard that actually matters —
     /// `view_code_draws_no_untranslated_literals` — is unchanged.
     #[test]
     fn scanned_sources_are_the_view_sources() {
@@ -590,7 +610,11 @@ mod tests {
                     || source.contains("-> impl IntoElement")
                     || source.contains("-> gpui::AnyElement")
                     || source.contains("-> AnyElement")
-                    || source.contains("-> Div"),
+                    || source.contains("-> Div")
+                    || source.contains("-> SettingField")
+                    || source.contains("-> SettingPage")
+                    || source.contains("-> Vec<SettingPage>")
+                    || source.contains("impl ListDelegate for"),
                 "{path} no longer renders anything — it does not belong in SOURCES"
             );
         }
