@@ -172,6 +172,24 @@ cargo build
 
 This opens a 900x620 centered window mounting the `DodoApp`.
 
+### Running one feature on its own
+
+A feature crate can be launched by itself, in a window containing nothing but
+that feature. Today there is one:
+
+```sh
+# Just the Cleaner, in its own window
+cargo run -p dodo-cleaner --example cleaner --locked
+```
+
+It is the same view the app mounts, reading the same data directory and scanning
+the same machine — there is no fixture mode. It exists so that working on the
+Cleaner costs a Cleaner-sized launch instead of the whole app; it is an
+`examples/` target, so nothing a shipped build compiles can reach it and the
+app's dependency graph is unchanged by its existence. See
+`crates/dodo-cleaner/examples/cleaner.rs` for what wiring the view genuinely
+needs.
+
 ## Pre-push checks
 
 CI runs formatting and clippy as blocking jobs, so a push that fails either is a

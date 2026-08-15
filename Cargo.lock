@@ -1672,6 +1672,8 @@ dependencies = [
  "dodo-paths",
  "gpui",
  "gpui-component",
+ "gpui-component-assets",
+ "gpui_platform",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",

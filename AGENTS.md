@@ -583,6 +583,18 @@ Ten things about build and release that catch people:
     there, and nothing was added or dropped by the move.
   - **`src/i18n_lint.rs` reaches across with `include_str!("../crates/dodo-cleaner/src/views/…")`**,
     so the three Cleaner views are still scanned for untranslated literals from the binary's tests.
+  - **A feature crate earns a launcher, and the launcher is an `examples/` target.**
+    `cargo run -p dodo-cleaner --example cleaner --locked` opens one window containing nothing but
+    the Cleaner — the concrete payoff of the seam, and the reason to keep the inbound surface at one
+    view. `examples/` rather than `[[bin]]` so nothing a shipped build compiles can reach it, and
+    everything it needs (`gpui_platform`, `gpui-component-assets`) is a `[dev-dependency]`, so
+    `cargo tree -p dodo --edges normal,build` is byte-identical before and after. The launcher
+    invents nothing: no arguments, no fixtures, no second copy of a setting — it constructs the view
+    the way `layout.rs` does and reads the real `data_dir()`. Two pieces of `src/app.rs` are
+    genuinely required and are the whole file: `Root` plus `Root::render_dialog_layer` under it, or
+    the crate's dialogs open in state and never paint, and an asset source, or every
+    `icons/<name>.svg` resolves to nothing. Copy that shape for the next feature crate; do not let
+    it grow past a screenful.
   **A feature crate does not make the build faster, and this one was measured to find out.**
   "Splitting the binary into crates" in `docs/build-optimization.md` is the authority — the method,
   the per-unit breakdown, and why a non-interleaved A/B of build times lies. The summary, from three

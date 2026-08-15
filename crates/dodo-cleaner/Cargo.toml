@@ -96,3 +96,20 @@ windows-sys = { version = "0.61", features = [
 gpui = { git = "https://github.com/zed-industries/zed", features = [
     "test-support",
 ] }
+# `examples/cleaner.rs` — the standalone launcher — and nothing else. Both are
+# here rather than above so that the crate a real build links stays exactly as
+# it was: a `[dev-dependencies]` entry is invisible to `dodo`'s graph, which
+# `cargo tree -p dodo` proves. `gpui_platform` is what owns `application()`;
+# `gpui-component-assets` is the fallback under the example's asset source, for
+# the library's own carets and check marks.
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
+    "font-kit",
+] }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+
+# The launcher: one window containing nothing but the Cleaner. An `examples/`
+# target on purpose — nothing a shipped build compiles can reach it. See the
+# file's own module doc.
+[[example]]
+name = "cleaner"
+path = "examples/cleaner.rs"
