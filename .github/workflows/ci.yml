@@ -107,7 +107,7 @@ jobs:
     runs-on: macos-15
     # BLOCKING, for the same reason as `fmt`: the 12 warnings that predated this
     # workflow (collapsible_if, unnecessary_sort_by, redundant_closure and
-    # friends, in `src/docker/` and `src/encoder_decoder.rs`) were cleared in
+    # friends, in `crates/dodo-docker/` and `src/encoder_decoder.rs`) were cleared in
     # their own commit. The two that survive are `#[allow]`ed at their
     # definition with the reason written next to them; there is no crate-level
     # allow, so a new warning fails the build. Keep it that way.

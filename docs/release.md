@@ -76,7 +76,7 @@ Three further deliberate choices:
 
 - **`fmt` and `clippy` are blocking.** They shipped advisory because 34 files
   predated `.rustfmt.toml` and 12 clippy warnings predated the workflow, all in
-  `src/docker/` and `src/encoder_decoder.rs`. Both debts were paid off in their
+  `crates/dodo-docker/` and `src/encoder_decoder.rs`. Both debts were paid off in their
   own commits (`style: apply cargo fmt --all`, `fix(lint): clear the 12
   outstanding clippy warnings`) and `continue-on-error` was removed from both
   jobs. Two clippy lints remain deliberately suppressed —
@@ -309,7 +309,7 @@ forced explicitly (`RUSTC=~/.rustup/toolchains/<tc>/bin/rustc`) or it fails with
 a misleading "can't find crate for `core`".
 
 What does work, and is what proved the `#[cfg(unix)]` / `#[cfg(windows)]` split
-in `src/docker/services/engine.rs`: copy the platform-split function into a
+in `crates/dodo-docker/src/services/engine.rs`: copy the platform-split function into a
 throwaway crate that depends only on the crate in question (here `bollard`), and
 `cargo check --target x86_64-pc-windows-msvc` that. It compiles the real
 dependency's real Windows `impl` blocks, so it catches a connector that does not

@@ -321,7 +321,7 @@ layer that is `.occlude()`d and `cx.stop_propagation()`s the backdrop, binds `es
 `Dialog` key context, `focus_trap`s the card, and restores the previously focused handle on close.
 A hand-rolled `div().absolute().inset_0()` scrim does **none** of that: it covers only its
 positioned ancestor, and an empty `on_mouse_down` closure registers a listener that swallows
-nothing, so clicks and hovers still reach whatever is behind it. `src/docker/views/detail.rs`'s
+nothing, so clicks and hovers still reach whatever is behind it. `crates/dodo-docker/src/views/detail.rs`'s
 module doc is the worked example.
 
 Two things bite when the dialog body is your own view:

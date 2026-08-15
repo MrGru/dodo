@@ -1,10 +1,10 @@
 //! `CleanerCategory::DockerCache` (Phase 13): dangling/unused images, stopped
 //! containers, and unused volumes/networks — via the `docker` CLI, never the
-//! `bollard`/tokio integration `src/docker/` already owns.
+//! `bollard`/tokio integration `crates/dodo-docker/` already owns.
 //!
 //! # Why this does not reuse `crate::docker::services::DockerEngine`
 //!
-//! It would be the obvious reuse — `src/docker/` already resolves a daemon
+//! It would be the obvious reuse — `crates/dodo-docker/` already resolves a daemon
 //! connection (Docker Desktop, then Podman) and lists containers/images/
 //! volumes/networks. But `docs/cleaner/...` aside, dodo's own convention
 //! (see `dodo-database-internals`'s "self-contained-module invariant": *no*
@@ -89,7 +89,7 @@ use crate::core::scanner::CleanerScanner;
 /// The engine's own networks, created for the daemon's lifetime and never
 /// removable. Duplicated (not imported) from `docker::models::network`'s
 /// identical constant — see this module's doc comment on why `src/cleaner/`
-/// cannot depend on `src/docker/` at all, not even for three string
+/// cannot depend on `crates/dodo-docker/` at all, not even for three string
 /// literals.
 const PREDEFINED_NETWORKS: [&str; 3] = ["bridge", "host", "none"];
 

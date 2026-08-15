@@ -24,7 +24,12 @@ mod build_info;
 use dodo_cleaner as cleaner;
 mod database;
 mod dialog_slot;
-mod docker;
+// The Docker/Podman tool is a *feature* crate — `crates/dodo-docker`, the
+// second module taken out of this binary. `layout.rs` names `DockerPage` and
+// `DockerView`, `run_app` below calls `docker::init`, and this alias is what
+// keeps all three lines reading `crate::docker::…`. There is no `src/docker/`
+// any more.
+use dodo_docker as docker;
 mod encoder_decoder;
 // Every string dodo shows, plus the three UI-bound pieces (`t`, the active-
 // language global, `Language::current` / `set`) that the crate's `gpui`
@@ -83,6 +88,18 @@ mod paths {
         fn the_cleaner_crate_resolves_the_same_host_as_this_binary() {
             assert_eq!(super::current(), dodo_cleaner::paths::current());
             assert_eq!(super::data_dir(), dodo_cleaner::paths::data_dir());
+        }
+
+        /// `dodo_docker::paths` is the second copy of the same seam, for the
+        /// same reason, and needs the same guard: `models::runtime` decides
+        /// which container runtimes exist and how to start them purely from a
+        /// [`HostOs`], so a Docker crate that resolved a different platform
+        /// than the binary it is linked into would offer `systemctl` on macOS.
+        /// It exposes no `data_dir` — nothing under `crates/dodo-docker`
+        /// writes a file — so there is only one spelling to compare.
+        #[test]
+        fn the_docker_crate_resolves_the_same_host_as_this_binary() {
+            assert_eq!(super::current(), dodo_docker::paths::current());
         }
     }
 }

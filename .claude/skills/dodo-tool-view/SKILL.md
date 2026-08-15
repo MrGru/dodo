@@ -111,7 +111,7 @@ appears, that is the one you missed.
   shapes your tool is:
   - **A tool that fills the pane** (every tool but one): root `v_flex().size_full()`, with
     `.flex_1().min_h_0()` on whatever absorbs the leftover height, and its own `overflow_scroll()`
-    on whatever can exceed it — see `src/docker/views/containers.rs`. Omitting `min_h_0` makes a
+    on whatever can exceed it — see `crates/dodo-docker/src/views/containers.rs`. Omitting `min_h_0` makes a
     multi-line editor grow past the window instead of scrolling.
   - **A page that is as tall as its content** — a column of settings rows, like
     `input_method::views::input_method_view::page_root`: root `v_flex().w_full()` and **no

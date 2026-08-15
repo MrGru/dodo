@@ -1609,10 +1609,10 @@ dependencies = [
  "anyhow",
  "base64",
  "block2 0.6.2",
- "bollard",
  "dispatch2",
  "dodo-app-icon",
  "dodo-cleaner",
+ "dodo-docker",
  "dodo-i18n",
  "dodo-ime-core",
  "dodo-ime-ipc",
@@ -1646,7 +1646,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlformat",
- "tokio",
  "tokio-postgres-rustls",
  "trash",
  "tray-icon",
@@ -1683,6 +1682,22 @@ dependencies = [
  "serde_json",
  "trash",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "dodo-docker"
+version = "0.1.0"
+dependencies = [
+ "bollard",
+ "dodo-app-icon",
+ "dodo-i18n",
+ "dodo-paths",
+ "futures-util",
+ "gpui",
+ "gpui-component",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

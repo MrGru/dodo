@@ -260,7 +260,7 @@ Current behavior:
 `crates/dodo-cleaner/src/docker_cache.rs` — a scanner shared by macOS, Windows and Linux for dangling/unused
 images, stopped containers, and unused volumes/networks, via the `docker` CLI (fixed argument
 vectors, no shell).
-**Deliberately does not reuse `crate::docker::services::DockerEngine`** even though `src/docker/`
+**Deliberately does not reuse `dodo_docker::services::DockerEngine`** even though `crates/dodo-docker/`
 already resolves a daemon connection and lists all four resource types: dodo's "self-contained-module
 invariant" (see `dodo-database-internals`, which dropped a "detect running database containers"
 feature in every design round to avoid exactly this) forbids `crates/dodo-cleaner/src/` from gaining a `use

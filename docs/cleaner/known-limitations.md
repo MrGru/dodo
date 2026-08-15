@@ -176,11 +176,11 @@
     ls` do not include one without `docker system df -v`, which this phase does not call.
   - **No timeout on the four `docker` CLI calls.** A wedged daemon would stall the background task
     running this category's scan until the process returns or the whole scan is cancelled — the same
-    blocking-by-contract posture `src/docker/`'s own `bollard` calls already accept, not a new risk
+    blocking-by-contract posture `crates/dodo-docker/`'s own `bollard` calls already accept, not a new risk
     this scanner introduces.
   - **Does not reuse `crate::docker::services::DockerEngine`, by design, not oversight** — see
     `docs/cleaner/scanners.md`'s Docker Cache section for why: dodo's self-contained-module invariant
-    forbids `crates/dodo-cleaner/src/` from depending on `src/docker/`, so this is an independent, much smaller
+    forbids `crates/dodo-cleaner/src/` from depending on `crates/dodo-docker/`, so this is an independent, much smaller
     Docker client (the CLI, not `bollard`) rather than a shared one.
 - **Universal Binaries (Phase 14, analysis-only)** — `macos::scanners::universal_binaries`:
   - **Only the app's one main executable is inspected.** Nested frameworks, plugins, XPC services and

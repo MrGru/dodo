@@ -1,13 +1,13 @@
 ---
 name: dodo-docker-internals
-description: Deep internals of src/docker/ that no single file makes obvious - per-platform engine discovery and its two socket-path traps, why services/ is the only place naming bollard and the only tokio runtime dodo builds, docker::init's key-binding ordering, why POLL_INTERVAL is a constant, why the sidebar is flat with Docker's own vertical rail, and why a modal overlay must be window.open_dialog rather than a hand-rolled scrim. Load before touching anything under src/docker/, including a "Coming soon" placeholder (Exec/Terminal, Create/Pull/Build, Stats, Favorites).
+description: Deep internals of crates/dodo-docker/ that no single file makes obvious - per-platform engine discovery and its two socket-path traps, why services/ is the only place naming bollard and the only tokio runtime dodo builds, docker::init's key-binding ordering, why POLL_INTERVAL is a constant, why the sidebar is flat with Docker's own vertical rail, and why a modal overlay must be window.open_dialog rather than a hand-rolled scrim. Load before touching anything under crates/dodo-docker/, including a "Coming soon" placeholder (Exec/Terminal, Create/Pull/Build, Stats, Favorites).
 ---
 
-**`src/docker/`** is the Docker/Podman module, and it is **feature-complete as of round 6**: four
+**`crates/dodo-docker/`** is the Docker/Podman module, and it is **feature-complete as of round 6**: four
 list pages (Containers with compose grouping, filters, bulk actions; Images/Volumes/Networks),
 background polling with incremental merges, keyboard navigation, row context menus, and a
 read-only detail dialog — Inspect for all four resource types plus a container log viewer behind
-a second tab. **`src/docker/mod.rs` is the authority** — it documents the layer split, what each
+a second tab. **`crates/dodo-docker/src/lib.rs` is the authority** — it documents the layer split, what each
 round shipped, and, for the features that are still deliberately disabled "Coming soon"
 placeholders (Exec/Terminal, Create/Pull/Build, Stats beyond live CPU%, Favorites), exactly where
 each one plugs in. Read it before changing anything here rather than inferring the structure from
@@ -33,7 +33,7 @@ Six things about the module that are not obvious from any one file:
   `models/inspect.rs` stays testable without a daemon.
 - **`docker::init` registers the module's key bindings** and must run from `main` after
   `gpui_component::init` — the same tie-break rule as `api_explorer::init`. Bindings are scoped to
-  the `DockerList` key context; the actions themselves are declared in `src/docker/mod.rs`.
+  the `DockerList` key context; the actions themselves are declared in `crates/dodo-docker/src/lib.rs`.
 - **`docker::POLL_INTERVAL` is a constant, not a setting, on purpose** (5s). Exactly one visible
   page polls (`DockerView::should_poll`), and leaving the section calls `set_section_active(false)`
   (wired in `layout.rs`), so an idle cadence never runs.

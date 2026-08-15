@@ -1,0 +1,58 @@
+[package]
+name = "dodo-docker"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "dodo's Docker/Podman tool: the Engine API client, the four list pages, the host-runtime detector and the detail dialog they share."
+
+# Every dependency below is one the Docker module already had while it was
+# `src/docker/`; nothing was added by the move and nothing was left behind. The
+# list is short because the feature's outbound edges are: three kernel crates,
+# the UI framework its sixteen view/component files need, and the Engine API
+# client plus the async runtime that drives it.
+[dependencies]
+# The rail glyphs, row icons and status marks `views` and `components` draw.
+# Re-exported as `crate::app_icon` in `lib.rs` so every call site still reads
+# `crate::app_icon::AppIcon`.
+dodo-app-icon = { path = "../dodo-app-icon" }
+# Every string the Docker pages show. The `gpui` feature is what brings `t()`
+# and the active-language global with it: the catalogue itself is pure, but the
+# view files render a `Str` into a `SharedString` and that needs an `App`. See
+# that crate's `Cargo.toml` for why the feature exists at all.
+dodo-i18n = { path = "../dodo-i18n", features = ["gpui"] }
+# `HostOs`, which `models::runtime` treats as a *parameter* rather than a `cfg`
+# split — so every platform's runtime-detection and start/stop policy is
+# asserted from whichever one you are on. `src/paths.rs` here is the seam that
+# resolves the host; see its module doc. No file in this crate writes to
+# `data_dir()`, which is why this crate's seam does not expose it.
+dodo-paths = { path = "../dodo-paths" }
+# Only the sixteen files under `views/` and `components/` may name these two.
+# The other 27 — `models`, `services` and `state` — are gpui-free on purpose:
+# the row formatting, the CPU-percent maths, the inspect reduction and the
+# stores are all tested with no `App` and no frame.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+# The Docker Engine API client. Default features already carry `hyperlocal`
+# (the local unix-socket connector) and pointedly do NOT enable `ssl`/`rustls` —
+# the local socket needs no TLS, so this keeps dodo's rustls-only, OpenSSL-free
+# posture. **Only `services::engine` may name it**, the containment rule the
+# module doc states.
+bollard = "0.21.0"
+# bollard is async on tokio, unlike the API Explorer's blocking `reqwest`. A
+# single multi-thread runtime, built once and owned by `services`, drives every
+# bollard call via `Runtime::block_on` from GPUI's background executor — so the
+# blocking-by-contract discipline is preserved and no async runtime touches the
+# UI thread. Minimal feature set: the multi-thread scheduler plus the net and
+# time drivers the unix-socket IO needs.
+tokio = { version = "1.53.1", default-features = false, features = ["rt-multi-thread", "net", "time"] }
+# Only to consume bollard's container-stats `Stream` (two frames, to compute a
+# CPU delta) inside `services::engine`. Already in the tree transitively via
+# bollard, so it adds no build cost; pure Rust, no TLS.
+futures-util = "0.3.33"
+# `services::engine`'s one `Serialize` (the log-tail query it hands bollard),
+# and the JSON `models::inspect` reduces and `models::runtime` parses out of
+# `docker info` / `podman machine list`. `models::inspect` works on the
+# response *as JSON* precisely so every field rule is testable without a
+# daemon.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
