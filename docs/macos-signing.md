@@ -544,7 +544,7 @@ dodo's generated release notes tell users to run
 xattr -dr com.apple.quarantine /Applications/dodo.app
 ```
 
-(`docs/release.md`, and `src/updater/services/installers/macos.rs` does the
+(`docs/release.md`, and `crates/dodo-updater/src/services/installers/macos.rs` does the
 equivalent automatically for in-app updates). That line is the mitigation, it is
 already there, and it is sufficient for the app to run today.
 
@@ -560,7 +560,7 @@ already there, and it is sufficient for the app to run today.
 
 **The TCC point is the one the investigation did not make, and it is the
 strongest technical argument.** dodo has an in-app updater that replaces the
-whole bundle (`src/updater/services/installers/`), and a Cleaner that needs
+whole bundle (`crates/dodo-updater/src/services/installers/`), and a Cleaner that needs
 access to `~/Downloads`, `~/Desktop` and `~/Documents`. macOS keys a TCC grant
 to the requesting application's *identity*: for a signed app that is the
 designated requirement (bundle ID + Team ID), which is stable across versions;
@@ -758,7 +758,7 @@ change its macOS `.app` artifact name without breaking the in-app updater (§4.2
    `Contents/MacOS/<exe>` at mode 755, `Contents/_CodeSignature/CodeResources`,
    `Contents/CodeResources` — was archived with the exact `tar -czf` invocation
    `scripts/package.sh` uses and extracted with the exact `tar -xf` invocation
-   `src/updater/services/installers/extract.rs` uses. Both `CodeResources` files
+   `crates/dodo-updater/src/services/installers/extract.rs` uses. Both `CodeResources` files
    came back byte-for-byte and the executable bit survived. Extended attributes
    did **not** survive, which is the correct outcome: nothing in a Developer ID
    signature lives in an extended attribute for a bundle.
@@ -771,7 +771,7 @@ this is a constraint to preserve rather than a problem to solve.
 
 ### 7.4 — The updater's `strip_quarantine` stays correct
 
-`src/updater/services/installers/macos.rs` runs
+`crates/dodo-updater/src/services/installers/macos.rs` runs
 `xattr -dr com.apple.quarantine` over the extracted bundle before swapping it
 in. Removing an extended attribute does not touch the code signature or the
 stapled ticket (§7.3 part 1: neither lives in an xattr), so this stays correct

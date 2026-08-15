@@ -1,6 +1,6 @@
 ---
 name: dodo-build-release-internals
-description: How dodo is built, packaged, licensed and released - the in-app updater's check/ask/download/verify/install/restart pipeline and its macOS two-rename swap, the application icon pipeline, the update.json manifest and its create-or-update publish step, why two of four cargo check targets can't run natively from a Mac, why fmt/clippy are blocking with no crate-level allow, why no --release build runs on push, the open GPL-3.0 distribution question, and the rusqlite/sqlx conflict. Load when touching src/updater/, .github/workflows/, Cargo.toml's dependencies, docs/release.md, docs/build-optimization.md, scripts/generate-icons.py, tools/update-manifest/, deny.toml, or THIRD-PARTY-NOTICES.md, or when preparing or debugging a release.
+description: How dodo is built, packaged, licensed and released - the in-app updater's check/ask/download/verify/install/restart pipeline and its macOS two-rename swap, the application icon pipeline, the update.json manifest and its create-or-update publish step, why two of four cargo check targets can't run natively from a Mac, why fmt/clippy are blocking with no crate-level allow, why no --release build runs on push, the open GPL-3.0 distribution question, and the rusqlite/sqlx conflict. Load when touching crates/dodo-updater/src/, .github/workflows/, Cargo.toml's dependencies, docs/release.md, docs/build-optimization.md, scripts/generate-icons.py, tools/update-manifest/, deny.toml, or THIRD-PARTY-NOTICES.md, or when preparing or debugging a release.
 ---
 
 **Build and release engineering lives in `docs/`**, and those two files are the authority for it:
@@ -11,9 +11,9 @@ The rest is `Cargo.toml`'s `[profile.*]` comments, `build.rs`, `scripts/` and `.
 
 ## The in-app updater
 
-**`src/updater/`** is the in-app updater — check, ask, download, verify, install, restart — and
+**`crates/dodo-updater/src/`** is the in-app updater — check, ask, download, verify, install, restart — and
 the consumer of the `update.json` the release publishes. Same five-layer split as `api_explorer`/
-`docker`/`database`; **`src/updater/mod.rs` is the authority** on the structure and "The in-app
+`docker`/`database`; **`crates/dodo-updater/src/lib.rs` is the authority** on the structure and "The in-app
 updater" in `docs/release.md` on the behaviour, what was proved against the live release and what
 was not. Six things worth knowing before touching it:
 
@@ -89,7 +89,7 @@ decisions rather than details: the manifest points at macOS's **`-app.tar.gz` bu
 exact filename (an installer swaps the `.app`); **any missing platform fails the release**,
 experimental ones included, because a silently absent platform means those users are never offered
 an update; and the publish step is **create-or-update**, because `gh release create` cannot repair
-a tag that already exists and tags here are immutable. `src/updater/` is what reads it.
+a tag that already exists and tags here are immutable. `crates/dodo-updater/src/` is what reads it.
 
 ## CI, licensing and the dependency graph
 

@@ -306,7 +306,7 @@ cannot host a `Root` and there is no dialog layer to drive. Guard it by scanning
 showing.** `open_dialog` pushes, every time. That is right for a confirmation raised over an
 editor, and wrong for a dialog reachable from two unrelated places — Settings (the sidebar footer
 and the menu bar item) and the updater (the sidebar footer and a background check) both shipped
-two identical stacked cards. `src/dialog_slot.rs` is the shared fix: a marker type per dialog,
+two identical stacked cards. `crates/dodo-dialog-slot/src/lib.rs` is the shared fix: a marker type per dialog,
 `claim` before building anything, `release` from `on_close`. Two rules come with it. `release`
 clears a flag and must **never** be paired with a second `close_dialog` — `on_close` fires *after*
 the library's own single pop, so releasing there is free, while a dialog closing itself from its

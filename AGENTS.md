@@ -60,8 +60,11 @@ naming the outside-world crate), `state/`, `components/`, `views/`. Each one's o
 comments are the authority on its split and what shipped when; the matching skill below is where
 the non-obvious parts of each are written down — load it before changing anything in one of these
 three rather than inferring the design from the files cold. **All three have followed the Cleaner
-out of the binary**, so no tool that outgrew one file is a `src/` module any more; see the
-feature-crate entry below.
+out of the binary**, and so, on the same day, have `crates/dodo-updater/` and
+`crates/dodo-input-method/` — **nothing that outgrew one file is a `src/` module any more**, and
+`src/` is now the shell (`main.rs`, `layout.rs`, `tools.rs`, `settings.rs`, `session/`,
+`quick_nav/`, `tray/`) plus the two single-file tools. See the feature-crate entry below for the
+rules the six moves settled.
 
 **`crates/dodo-cleaner/` is the same shape but started unfinished, rounds have been landing
 since, and on 2026-08-15 it moved out of the binary entirely** — it was `src/cleaner/`, and any
@@ -318,7 +321,8 @@ independently of dodo. It links only the pure engine and IPC contract; `DllRegis
 per-user COM registration and the Vietnamese profile, while its TSF edit session performs marked
 composition rather than injecting keys. It re-reads settings before each key so a selected Keyboard
 Hook makes TSF pass through. The fallback itself lives in dodo's
-`src/input_method/services/keyboard_hook.rs`, is only active while dodo runs, tags injected output,
+`crates/dodo-input-method/src/services/keyboard_hook.rs`, is only active while dodo runs, tags
+injected output,
 and passes uncertainty, repeats, key-up, shortcuts and secure-desktop uncertainty through. The
 release ZIP carries `input-method/dodo_ime_windows.dll`; the updater replaces that packaged
 sidecar with `dodo.exe` but deliberately does not register or replace the separate `%APPDATA%`
@@ -343,8 +347,10 @@ nothing the user typed may ever appear in it; it is written on start, settings c
 language-switch commands, never ordinary typing, and a test pins its key set so adding a field is
 deliberate.
 
-**`src/input_method/` is dodo's end of it, and `services/tis.rs` carries a crash worth knowing
-about.** It is a **tool, not a Settings page** — the captain asked on 2026-08-09 — and the move took
+**`crates/dodo-input-method/` is dodo's end of it, and `services/tis.rs` carries a crash worth
+knowing about.** It left `src/` on 2026-08-15 — any path below that still says `src/input_method/`
+is stale — and `main.rs` aliases it back to `crate::input_method`, so every call site reads as it
+did; see the feature-crate entry below for the two edges the move had to invert. It is a **tool, not a Settings page** — the captain asked on 2026-08-09 — and the move took
 the whole surface: backend choice, status, install button and the four engine settings are on the
 pane and nowhere else, so no control is reachable twice. That makes `View::InputMethod` the **first
 and still only platform-conditional tool**, which its row in `src/tools.rs` says with one
@@ -410,14 +416,19 @@ testing. `dodo_ime_ipc::paths` now duplicates both the macOS and Windows data-di
 is tested against `src/paths.rs`. The module remains un-gated so Linux checks its pure parts, but
 only macOS and Windows expose the pane.
 
-**`src/dialog_slot.rs` is why Settings and the updater cannot stack two copies of themselves.**
-A dialog layer is a stack and `open_dialog` pushes unconditionally, so a dialog with two ways in —
-Settings (sidebar footer, menu bar item) and the updater (sidebar footer, background check) — put
-two identical cards on screen. Both now `claim` a slot keyed by a marker type and `release` it from
-`on_close`; the module doc is the authority, and `gpui-component-recipes` records the two rules that
+**`crates/dodo-dialog-slot/` is why Settings and the updater cannot stack two copies of
+themselves, and it is a *crate* because a gpui `Global` is identified by its type.** A dialog
+layer is a stack and `open_dialog` pushes unconditionally, so a dialog with two ways in — Settings
+(sidebar footer, menu bar item) and the updater (sidebar footer, background check) — put two
+identical cards on screen. Both now `claim` a slot keyed by a marker type and `release` it from
+`on_close`; the crate doc is the authority, and `gpui-component-recipes` records the two rules that
 bite (never pair `release` with a second `close_dialog`, and the window rather than the flag
-decides). No other dodo dialog needs it: the rest are opened from a control the modal overlay
-covers.
+decides). It was `src/dialog_slot.rs` until 2026-08-15 and had to stop being one the moment the
+updater left the binary: a copy on each side of a crate boundary is **two** slots, so the updater
+would claim one `settings.rs` never reads and the defect would come straight back. That is the same
+argument that put `t()` and the language global inside `dodo-i18n`; `main.rs` aliases it back to
+`crate::dialog_slot`. No other dodo dialog needs it: the rest are opened from a control the modal
+overlay covers.
 
 **`crates/dodo-i18n/` is one directory per *area of the app*, not one file per language of the
 whole app**, and that shape is the answer to a defect rather than a preference. It used to be a
@@ -531,7 +542,8 @@ decisions rather than details: the manifest points at macOS's **`-app.tar.gz` bu
 exact filename (an installer swaps the `.app`); **any missing platform fails the release**,
 experimental ones included, because a silently absent platform means those users are never offered
 an update; and the publish step is **create-or-update**, because `gh release create` cannot repair
-a tag that already exists and tags here are immutable. `src/updater/` is what reads it.
+a tag that already exists and tags here are immutable. `crates/dodo-updater/` is what reads it —
+it left `src/` on 2026-08-15, taking `reqwest` out of the root manifest with it.
 
 Ten things about build and release that catch people:
 
@@ -570,9 +582,13 @@ Ten things about build and release that catch people:
   crate needs a build script. The gpui `Global` behind `Language` was the other half of that rule
   and **is no longer**: `dodo-cleaner` has to render a `Str` from outside the binary, so it moved
   into `dodo-i18n` behind an opt-in `gpui` feature (see the i18n entry above). The default build of
-  every kernel crate is still dependency-free. `src/dialog_slot.rs`, `src/assets.rs` and `src/build_info.rs` were measured and
-  deliberately **not** extracted: two users each is not a crate, `assets.rs` embeds `./assets` by a
-  path relative to its crate root, and `build_info.rs` reads the `env!` variables `build.rs` sets.
+  every kernel crate is still dependency-free. `src/dialog_slot.rs` was the fourth to move, on
+  2026-08-15, and it is the one where the rule about *use* did not decide it: three users is still
+  not many, but the slot is a gpui `Global` and there can only be one of it. `src/assets.rs` and
+  `src/build_info.rs` were measured and deliberately **not** extracted: `assets.rs` embeds
+  `./assets` by a path relative to its crate root, and `build_info.rs` reads the `env!` variables
+  `build.rs` sets — which is also why the updater's `init` **takes** the two fields it needs rather
+  than any crate growing a build script to re-derive them.
 
 - **`crates/` also holds *feature* crates, and `crates/dodo-cleaner` is the worked example.**
   A kernel crate is code many tools share; a feature crate is one whole tool of the app, lifted out
@@ -640,7 +656,7 @@ Ten things about build and release that catch people:
   silently vanish on the next launch. `src/i18n_lint.rs` reaches across to its twelve view and
   component files the same way it already did for the Cleaner's three.
 
-  **`crates/dodo-api-explorer` is the fourth and the last**, extracted the same day: 77 files,
+  **`crates/dodo-api-explorer` is the fourth**, extracted the same day: 77 files,
   the largest feature dodo has, and the one whose inbound surface is widest — `layout.rs`
   (`ApiExplorer`), `main.rs` (`init`), `settings.rs` (`ScriptPolicy` and
   `models::script_consent::ConsentPolicy`) and `quick_nav` (`models::snapshot::RequestSnapshot`,
@@ -652,11 +668,42 @@ Ten things about build and release that catch people:
   dependency to leave with its crate is the wrong instinct. Its `paths` seam guards three files.
   With this one the binary's own test count falls from 976 to 477.
 
-  **All four feature crates have an `examples/` launcher.** The Cleaner proved the shape, and
-  Docker, the Database Explorer and the API Explorer repeat it: each mounts the real view, reads
-  real machine and persisted state, and keeps application-only dependencies under
+  **`crates/dodo-updater` is the fifth**, and it is the one that shows what to do when a feature
+  needs something *only a binary is given*. `build_info` reads the `env!("DODO_*")` variables
+  `build.rs` sets, a library crate is handed none of them, and no crate here may grow a build
+  script — so `init` **takes** the two fields the updater uses (`VERSION_INFO.version` and
+  `.target`) and its `build_info` module holds them, exactly the trade `main.rs`'s `paths` module
+  already makes for `dodo-paths`. Under `cargo test`, where nothing calls `init`, that module falls
+  back to its own `CARGO_PKG_VERSION` and to naming the platform with `cfg!`, and the three
+  assertions that were really *about the binary* moved to `main.rs` beside a new guard that the two
+  spellings classify to one `PlatformKey`. It is also the crate whose move finally took **`reqwest`
+  out of the root manifest**: dodo the binary now names no HTTP client at all, the same shape
+  `bollard` and `tokio` took when Docker left.
+
+  **`crates/dodo-input-method` is the sixth and the last**, and the only one whose edges were not
+  all outbound. `src/tray` reads it (five call sites) *and* it told the tray — a cycle no crate
+  boundary can hold — so the **notification** inverted: `observe_languages` takes a plain `fn`
+  pointer, `main.rs` hands over `tray::set_active_languages`, and a platform with no tray registers
+  nothing and is called back never. Its pane's test also names `quick_nav::{KEY_CONTEXT,
+  NORMAL_MODE}`, which a crate cannot read, so the crate mirrors both as `pub const`s and
+  `src/quick_nav`'s tests assert the two spellings stay one answer — a drift there would not fail
+  to compile. **Copy that pair of moves before reaching for anything cleverer**: an inbound edge
+  becomes a handed-in `fn`, and an unreachable constant becomes a mirrored one with a test.
+
+  **All six feature crates keep their platform gates, and moving one is the moment to check them.**
+  115 platform attributes came across with the input method; 11 of them only *selected a value* and
+  are now 5 `cfg!` sites, so both arms type-check from a Mac — the four `MODIFIER_*` glyph/word
+  constants, the backend radio group's two rows, and the tray call above. The other 104 declare or
+  use a platform-only type, call a platform-only function, or gate a struct field or a `mod` line,
+  none of which `cfg!` can express, so they stay. That is the rule: **a gate that picks a value
+  becomes `cfg!`; a gate in front of a platform API stays an attribute.**
+
+  **Four of the six feature crates have an `examples/` launcher.** The Cleaner proved the shape,
+  and Docker, the Database Explorer and the API Explorer repeat it: each mounts the real view,
+  reads real machine and persisted state, and keeps application-only dependencies under
   `[dev-dependencies]`. Their exact commands live together in README's "Running one feature on its
-  own" section.
+  own" section. The updater and the input method have none — neither is a pane you can look at on
+  its own: one *is* a dialog over the app and the other reads a file a separate OS process owns.
 
   **A feature crate does not make the build faster, and this one was measured to find out.**
   "Splitting the binary into crates" in `docs/build-optimization.md` is the authority — the method,
@@ -701,7 +748,8 @@ Ten things about build and release that catch people:
   unreachable. So a Windows-only mistake in **`src/`** — the classic being a
   `#[cfg(target_os = "macos")]` item called from an `any(macos, windows)` block, which is exactly
   how `InputMethod::refresh_status` broke the Windows build — cannot be caught locally at all, and
-  a change to a `cfg`-shaped part of `src/input_method/`, `src/tray/` or `src/layout.rs` is worth
+  a change to a `cfg`-shaped part of `crates/dodo-input-method/`, `src/tray/` or `src/layout.rs`
+  is worth
   auditing by hand before it reaches the captain's Windows machine.
 - **`fmt` and `clippy` are blocking jobs; keep them green.** Run `cargo fmt --all` and
   `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
@@ -763,7 +811,7 @@ touches a module never pays for its internals. This table is the single index; t
 | `dodo-api-explorer-internals` | Touching anything under `crates/dodo-api-explorer/` — the send pipeline, scripting/sandbox, consent gating, codegen/curl, collections, or tab/column layout. |
 | `dodo-docker-internals` | Touching anything under `crates/dodo-docker/` — engine discovery, the four list pages, polling, the detail dialog, or a "Coming soon" placeholder. |
 | `dodo-database-internals` | Touching anything under `crates/dodo-database/` — the connection tree, query execution, the `Driver` trait, or result-grid layout. |
-| `dodo-build-release-internals` | Touching `src/updater/`, `.github/workflows/`, `Cargo.toml`'s dependencies, `docs/release.md`, `docs/macos-signing.md`, `docs/build-optimization.md`, `scripts/generate-icons.py`, `tools/update-manifest/`, `deny.toml`, or `THIRD-PARTY-NOTICES.md`; preparing or debugging a release. |
+| `dodo-build-release-internals` | Touching `crates/dodo-updater/`, `.github/workflows/`, `Cargo.toml`'s dependencies, `docs/release.md`, `docs/macos-signing.md`, `docs/build-optimization.md`, `scripts/generate-icons.py`, `tools/update-manifest/`, `deny.toml`, or `THIRD-PARTY-NOTICES.md`; preparing or debugging a release. |
 | `gpui-component-recipes` | Writing or editing any `render` / `new` that builds a gpui-component widget (input, code editor, diagnostics, select, dialog, settings panel, sidebar, button, icon); a widget call will not compile; a widget builds but nothing appears on screen; or a code editor draws uncoloured text. |
 | `dodo-tool-view` | Adding, renaming, reordering or removing a sidebar tool — one row in the `tools!` table in `src/tools.rs`; a new sidebar entry does not appear or renders blank; part of a tool page is unreachable at a small window (the pane's scroll container only reveals a tool that reports its own height). |
 | `dodo-i18n-text` | Writing or changing **any** text a user reads — a label, title, placeholder, description, error, dropdown option; or an `i18n` / `i18n_lint` test fails. |

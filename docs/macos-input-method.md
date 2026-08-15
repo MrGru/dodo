@@ -182,7 +182,7 @@ the wrong letter. Textareas and ordinary in-page inputs have no such selection
 and were already correct. Safari reproduces it as readily as Chrome, so this is
 not a Chromium quirk.
 
-`src/input_method/models/browser_rewrite.rs` is the authority and is pure. Two
+`crates/dodo-input-method/src/models/browser_rewrite.rs` is the authority and is pure. Two
 strategies, because Blink and WebKit do not clear a selection the same way:
 
 - **Chromium family** (Chrome, Chrome Canary, Chromium, Brave, Edge, Vivaldi,
@@ -412,11 +412,11 @@ other two platforms because the bundle it installs is an InputMethodKit object.
 The captain asked for that on 2026-08-09, and the move took the whole surface —
 the backend choice, status line, install button and four engine settings are on
 the pane and nowhere else, so no control is reachable from two places.
-`src/input_method/` is the implementation and its module docs are the authority;
+`crates/dodo-input-method/src/` is the implementation and its module docs are the authority;
 this is what the button does and why.
 
 The six steps, in this order, are §2's recipe as code —
-`src/input_method/models/install.rs` holds them as data with a test each, and
+`crates/dodo-input-method/src/models/install.rs` holds them as data with a test each, and
 `services/installer.rs` is a driver with no judgement in it:
 
 1. **Verify the source signature** with `codesign --verify --deep --strict`.

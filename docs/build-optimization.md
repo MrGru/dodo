@@ -405,7 +405,7 @@ tool does.
 
 ### What the in-app updater cost
 
-The round after that one added the consumer side: `src/updater/` (the manifest
+The round after that one added the consumer side: `crates/dodo-updater/src/` (the manifest
 parse, SemVer and channels, an incremental SHA-256, `updater.json`, the state
 machine, the pipeline, three platform installers and the dialog), a
 cross-platform `src/paths.rs`, and 40 new `Str` variants in both languages.
