@@ -46,7 +46,7 @@ use super::document::ToolRecord;
 /// One tool in the sidebar, and whether it is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Feature {
-    /// A [`crate::layout::View::code`] — the same stable identifier
+    /// A [`crate::tools::View::code`] — the same stable identifier
     /// `session.json` files the open tool under.
     pub code: &'static str,
     pub enabled: bool,

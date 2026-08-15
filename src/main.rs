@@ -142,6 +142,13 @@ mod paths {
 mod quick_nav;
 mod session;
 mod settings;
+// **The tool table.** One row per sidebar tool — its code, title, icon, the
+// platforms it exists on, its view entity and the pastes it accepts — from
+// which `View`, `View::ALL` and the `Panes` holding every view are generated.
+// Adding a tool is a row here plus its own crate or module; `layout.rs` is the
+// shell around whatever the table declares. Unrelated to the repo-root `tools/`
+// directory, which holds the standalone `update-manifest` crate.
+mod tools;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
 mod updater;

@@ -204,7 +204,7 @@ pub enum WindowMode {
 /// The main pane and the sidebar around it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
-    /// A tool's stable code — `layout::View::code`. A code this build does not
+    /// A tool's stable code — `tools::View::code`. A code this build does not
     /// know, or one naming a tool the user has since switched off, opens the
     /// first tool the sidebar *does* list rather than failing to start; that is
     /// `View::shown`'s job, over [`super::features::Features::active`].
@@ -231,7 +231,7 @@ pub struct Workspace {
 /// position; there is no separate index to disagree with it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolRecord {
-    /// A [`crate::layout::View::code`]. The same compatibility surface it is
+    /// A [`crate::tools::View::code`]. The same compatibility surface it is
     /// everywhere else: a code that has shipped may not be reused for a
     /// different tool.
     pub code: String,

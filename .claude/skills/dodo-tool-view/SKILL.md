@@ -1,13 +1,22 @@
 ---
 name: dodo-tool-view
-description: End-to-end checklist for adding a new tool to dodo's sidebar (a new src/<tool>.rs module, the View enum entry, its icon SVG and AppIcon variant, and wiring it into Layout), plus the rule deciding whether a tool's root fills the pane or is scrolled by it. Load when asked to add, rename, reorder or remove a tool view, when a new sidebar entry does not appear or renders blank, or when part of a tool page is unreachable at a small window size (clipped, cut off, will not scroll).
+description: End-to-end checklist for adding a new tool to dodo's sidebar (a new src/<tool>.rs module or crate, one row in the tools! table in src/tools.rs, and its icon SVG and AppIcon variant), plus the rule deciding whether a tool's root fills the pane or is scrolled by it. Load when asked to add, rename, reorder or remove a tool view, when a new sidebar entry does not appear or renders blank, or when part of a tool page is unreachable at a small window size (clipped, cut off, will not scroll).
 ---
 
-A tool is a self-contained module under `src/` exposing an entity with
-`new(&mut Window, &mut Context<Self>)` plus `Render`. `src/layout.rs` owns the `View` enum that
-drives both the sidebar menu and the main pane. Views are constructed **once** in `Layout::new`
-and kept alive for the process, so switching tabs preserves editor contents and scroll position —
-never rebuild a view on selection.
+A tool is a self-contained module under `src/` — or, once it outgrows one file, its own crate
+under `crates/` — exposing an entity with `new(&mut Window, &mut Context<Self>)` plus `Render`.
+
+**`src/tools.rs` is where a tool is declared, and it is one row.** The `tools!` table there
+generates the `View` enum, `View::ALL`, `View::title` / `icon` / `code` / `codes` / `lookup` /
+`for_detector`, and the `Panes` struct holding one entity per tool — everything that used to be
+five hand-maintained edits in `src/layout.rs`. `layout.rs` is now the shell *around* whatever the
+table declares: the sidebar, the pane, the width rule and quick navigation's routing. Views are
+constructed **once**, by `Panes::new` from `Layout::new`, and kept alive for the process, so
+switching tabs preserves editor contents and scroll position — never rebuild a view on selection.
+
+Read `src/tools.rs`'s module doc before adding a row; it is the authority on what each field of a
+row means and on the two rules that outrank tidiness (a `code:` is a compatibility surface, and
+`hosts:` is the only way to say a tool is platform-conditional).
 
 ## Checklist
 
@@ -28,50 +37,76 @@ never rebuild a view on selection.
    is arbitrary. Watch the existing `Palette => "icons/palatte.svg"` — filename typo, variant
    spelled correctly. **The glyph has to be the tool's own**, not one already on another row:
    collapsed to the rail the icon is the entire row, and
-   `layout::tests::no_two_tools_wear_the_same_icon` fails if you borrow one. Borrowing is the easy
+   `tools::tests::no_two_tools_wear_the_same_icon` fails if you borrow one. Borrowing is the easy
    mistake — the input method drew `Globe`, which is the API Explorer's, until it stopped being a
    settings page and moved into the sidebar beside it. `scripts/generate-icons.py` is **not**
    involved: it derives the *application* icon from `assets/branding/`, and `assets/icons/*.svg`
    are hand-written and committed.
-5. **`src/layout.rs`** — five edits, four of which the compiler will demand:
-   - a `View` variant;
-   - bump the arity and contents of `const ALL: [View; N]` (this one is silent if you forget —
-     the menu simply will not list your tool). `ALL` is the **default** order, not the order the
-     sidebar draws: since the Features settings page landed, that is the user's, held by
-     `Layout::features`. Where you insert your tool decides where it appears for someone who has
-     never reordered anything, and — through `Features::resolve` — which existing tool it turns up
-     next to for someone who has;
-   - an arm in `View::title` and in `View::icon`;
-   - **an arm in `View::code`**, which is what `session.json` stores so the tool can be reopened
-     on next launch. This one is a **compatibility surface**, not just another match arm: pick a
-     kebab-case identifier, never a title, and never reuse a code that has shipped for a different
-     tool. `View::shown` (over `Features::active`) resolves anything it does not recognise to the
-     first tool the sidebar *does* list, so a removed or renamed tool degrades to "opens on
-     something" rather than failing to start. Changing a shipped code now costs more than it used
-     to: it is also the tool's identity in the user's stored order and on/off list, so everyone who
-     had reordered or hidden it gets it back at its default position, switched on.
-   - a `Entity<YourTool>` field on `Layout`, initialised in `Layout::new`, and an arm in the
-     main-pane `match self.active` inside `Layout::render`.
+5. **`src/tools.rs`** — **one row** in the `tools!` table, in the position you want the tool to
+   have in the *default* sidebar order:
 
-   **A tool that only exists on one platform is a `cfg` on every one of those**, and
-   `View::InputMethod` is the worked example — the variant, the field, the initialiser and each
-   `match` arm carry `#[cfg(target_os = "macos")]`, and `const ALL` is written out twice because
-   stable Rust has no attribute on an array element. Do that only when the tool genuinely cannot
-   work elsewhere (it installs an InputMethodKit bundle); a tool that is merely *unfinished* on a
-   platform shows a "Coming later" pane instead, which is what `crates/dodo-cleaner/src/` does. Nothing else
-   breaks: `Features::resolve` drops a stored tool the running build does not have and hands it
-   back beside its default neighbour on a build that does, so one `session.json` moves between
-   platforms without losing anything permanently.
+   ```rust
+   YourTool {
+       code: "your-tool",
+       title: shell::Text::YourToolTitle,
+       icon: AppIcon::YourTool,
+       pane: your_tool: crate::your_tool::YourTool,
+   }
+   ```
+
+   That row is the `View` variant, the entry in `View::ALL`, the arms of `View::title`,
+   `View::icon` and `View::code`, the `Entity<YourTool>` field on `Panes`, its constructor and the
+   main-pane arm — all of them generated, so there is nothing that can be silently forgotten. The
+   only requirement on the type is the one every tool already meets: `new(window, cx)` plus
+   `Render`.
+
+   Three things about a row are decisions rather than syntax:
+
+   - **`code:` is a compatibility surface**, not just another string. It is what `session.json`
+     stores, so pick a kebab-case identifier, never a title, and never reuse a code that has
+     shipped for a different tool. Since the Features settings page it is also the tool's identity
+     in the user's stored sidebar order and on/off list, so changing a shipped code does not merely
+     send whoever had it open back to the default — it drops the tool out of their order and puts
+     it back at its default position, switched on. `View::shown` (over `Features::active`) resolves
+     anything it does not recognise to the first tool the sidebar *does* list, so a removed or
+     renamed tool degrades to "opens on something" rather than failing to start.
+     `tools::tests::every_declared_tool_has_its_own_stable_code` pins the exact set; if you are
+     editing that test to make it pass rather than to add a line, stop.
+   - **Where you put the row is the default order** — not the order the sidebar draws, which is the
+     user's and lives in `Layout::features`. It decides where the tool appears for someone who has
+     never reordered anything and, through `Features::resolve`, which existing tool it turns up
+     *next to* for someone who has.
+   - **A tool that only exists on some platforms takes `hosts:`, and nothing else.**
+     `hosts: any(target_os = "macos", target_os = "windows")` on the Input method's row is the
+     worked example. Do **not** put a `#[cfg]` on the row: `hosts:` is answered by
+     `View::available`, a `const fn` over `cfg!(..)`, so the tool's variant, title, icon and code
+     stay compiled and asserted on *every* target while `View::ALL` is const-filtered down to what
+     this build has. That matters because two of dodo's four release targets cannot be compiled
+     from a Mac — a mistake that only exists on the branch you cannot build is a mistake the
+     captain finds. Only the three lines naming the view type stay `#[cfg]`-gated, because the type
+     itself does not exist there, and the generated `cfg(not(..))` arm keeps `Panes::place`
+     exhaustive on every target. `tools::tests::platform_probe` compiles both halves of all of that
+     from any machine, using rows whose `hosts:` is `all()` (true everywhere) and `any()` (false
+     everywhere).
+
+     Use `hosts:` only when the tool genuinely cannot work elsewhere (it installs an
+     InputMethodKit bundle); a tool that is merely *unfinished* on a platform shows a "Coming
+     later" pane instead, which is what `crates/dodo-cleaner/src/` does. Nothing else breaks:
+     `Features::resolve` drops a stored tool the running build does not have and hands it back
+     beside its default neighbour on a build that does, so one `session.json` moves between
+     platforms without losing anything permanently.
 
    **You do not have to touch the Features settings page.** It is generated from `View::codes()`,
    so a new tool appears there with a switch and its two move buttons for free — and is switchable
    off like any other. Nothing needs to opt in, and nothing should try to opt out: a tool that
    cannot be hidden would be a special case in `session::models::features` and there are none.
 
-   One more thing if the tool needs to *start something* when it becomes active — Docker's polling
-   is the existing case. `Layout::activate` is the normal path, but a restored session opens
-   straight onto the tool with no click, and there is no `self` to call `activate` on inside the
-   constructor. `Layout::new` builds the Docker entity first and tells it by hand; copy that.
+   **`src/layout.rs` is untouched by an ordinary tool.** The two things that would still take an
+   edit there are the two that are not properties of a tool: a *pasted payload* (step 7), and
+   *starting something when the tool becomes active* — Docker's polling is the only existing case.
+   `Layout::activate` is the normal path for the second, but a restored session opens straight onto
+   the tool with no click, and there is no `self` to call `activate` on inside the constructor, so
+   `Layout::new` tells the Docker entity by hand right after `Panes::new`; copy that.
 
 6. **`crates/dodo-i18n/`** — `View::title` returns a `Str`, not a string, so the tool needs a variant for
    its sidebar title (in the `shell` area, which owns the sidebar) and one for every label inside
@@ -83,20 +118,24 @@ never rebuild a view on selection.
 
 7. **`src/quick_nav/` — only if the tool can accept a pasted value.** Optional, and skipping it
    costs nothing: the tool simply is not a quick-navigation target. If it should be one, it is
-   four small edits and no more — a `Detector` variant with its arm in `models/detect.rs`, a
-   `Route` variant in `models/route.rs` with its arm in `Route::detector`, an arm in
-   `View::for_detector`, and an arm in `Layout::apply_route`, which is the one place a route meets
-   a `View`. Three rules there are not negotiable: **where the tool's format already has a real
+   three small edits plus one field on the row you already wrote — a `Detector` variant with its
+   arm in `models/detect.rs`, a `Route` variant in `models/route.rs` with its arm in
+   `Route::detector`, `pastes: [YourDetector]` on the tool's row in `src/tools.rs` (which is the
+   whole of `View::for_detector` now, and is exhaustive over `Detector` by the compiler), and an
+   arm in `Layout::apply_route`, which is the one place a route meets a `View` and the one thing
+   the table cannot carry — every tool unpacks its payload differently. Three rules there are not
+   negotiable: **where the tool's format already has a real
    parser, attempting that parser is the detector** (a regex is not an improvement on a tested
    parser); **the position you insert into `Detector::ORDER` has to be argued in that module's
    doc** — the order is most-specific-first and every existing position is forced by an overlap
    below it, and it is emphatically *not* the sidebar's order, which the user can now drag around;
-   and **`View::for_detector` must name the same tool the route lands in**, because
-   `Layout::allowed_detectors` reads it *before* detection to drop the detectors of switched-off
-   tools. Get that wrong and hiding one tool silences another's paste, silently.
+   and **a `pastes:` entry must sit on the row whose tool the route actually lands in**, because
+   `Layout::allowed_detectors` reads `View::for_detector` *before* detection to drop the detectors
+   of switched-off tools. Get that wrong and hiding one tool silences another's paste, silently.
 
-`cargo build` catches every step except the `ALL` array. If the tool builds but no sidebar row
-appears, that is the one you missed.
+`cargo build` now catches every step: the row *is* the `View::ALL` entry, so the "builds but no
+sidebar row appears" failure the old five-edit shape had is not reachable. `cargo test` is still
+the one that catches a missing i18n sample (step 6).
 
 ## Things worth knowing before you start
 

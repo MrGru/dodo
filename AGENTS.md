@@ -12,6 +12,24 @@ comments there are the authority on structure. This file is only a map — for a
 map's resolution, load the matching skill from the table below rather than reading a whole module
 cold.
 
+**`src/tools.rs` is the tool table, and adding a tool is one row in it.** Its `tools!` macro
+generates the `View` enum, `View::ALL`, `title`/`icon`/`code`/`codes`/`lookup`/`for_detector` and
+the `Panes` struct holding one entity per tool — the five scattered edits `layout.rs` used to
+demand, from a single declaration carrying a tool's code, title, icon, platforms, view type and
+accepted pastes. `layout.rs` is the shell *around* whatever the table declares. It is a table and
+deliberately **not a registry**: `View` stays an ordinary persisted enum, matched on exhaustively,
+with no trait objects, no distributed slices and no build script — the win is co-location. Two
+things there are decisions rather than details. **A `code:` is a compatibility surface** —
+`session.json` stores it as the open tool *and* as the user's identity for their sidebar order and
+on/off list, so changing one drops that tool out of everyone's stored order; the literal lives in
+the row and a test pins the exact set. And **`hosts:` is how a tool says it is
+platform-conditional**, answered by a `const fn` over `cfg!` rather than a `#[cfg]` on the row, so
+the Input method's title, icon, code and detectors are compiled and asserted on every target while
+`View::ALL` is const-filtered — which matters because two of the four release targets cannot be
+built from a Mac. `tools::tests::platform_probe` compiles both halves of that machinery from any
+machine. Load `dodo-tool-view` before adding, renaming, reordering or removing one. (Unrelated to
+the repo-root `tools/` directory, which holds the standalone `update-manifest` crate.)
+
 **`_bmad/`, `_bmad-output/` and `bmad.config.yaml` are tracked, and are not the authority for
 anything.** They are bmad scaffolding kept for contributors who work that way; the repo owner does
 not, and decided on 2026-08-05 that they stay — so their presence is settled, not an oversight.
@@ -158,8 +176,9 @@ detectors before `detect_among` runs, so a pasted `curl` with the API Explorer o
 rather than reopening it. The last one is the trap: `detect_among`'s allowed list is a **membership
 test and never an order**, because `Detector::ORDER` is a correctness property (most specific first)
 and the sidebar's order is a preference. `Layout::features` is the live list, `View::for_detector` is
-the single mapping both `apply_route` and `allowed_detectors` read, and `settings::features_page`
-builds the rows by hand because a `SettingItem` cannot carry a position. Adding the field is also
+the single mapping both `apply_route` and `allowed_detectors` read — generated from the `pastes:`
+field of each row in `src/tools.rs`, and exhaustive over `Detector` by the compiler — and
+`settings::features_page` builds the rows by hand because a `SettingItem` cannot carry a position. Adding the field is also
 what took `session.json` to **schema version 2**; an older build would have read it, dropped the key
 and written it back pruned. The historical tray language field took it to **3** for the same
 reason — and forced the fix that makes the claim true: `parse_document` now stamps
@@ -328,9 +347,10 @@ deliberate.
 about.** It is a **tool, not a Settings page** — the captain asked on 2026-08-09 — and the move took
 the whole surface: backend choice, status, install button and the four engine settings are on the
 pane and nowhere else, so no control is reachable twice. That makes `View::InputMethod` the **first
-platform-conditional tool**, so `View::ALL` is written out twice and every `match` on `View` carries
-a `cfg` arm; the row draws `AppIcon::Keyboard`, deliberately not the globe, which is the API
-Explorer's. The pane holds **no setting at all** — `Layout::new` builds it before
+and still only platform-conditional tool**, which its row in `src/tools.rs` says with one
+`hosts: any(target_os = "macos", target_os = "windows")` field — no `#[cfg]` on the row, and no
+per-platform `View::ALL`; the row draws `AppIcon::Keyboard`, deliberately not the globe, which is
+the API Explorer's. The pane holds **no setting at all** — `Layout::new` builds it before
 `input_method::load` has read the file, so every control reads the global in `render` and the two
 either/or settings are radio groups rather than dropdowns, whose `SelectState` would be a second
 copy of the setting; the shortcut recorder's three fields are the exception that proves it, holding
@@ -745,7 +765,7 @@ touches a module never pays for its internals. This table is the single index; t
 | `dodo-database-internals` | Touching anything under `crates/dodo-database/` — the connection tree, query execution, the `Driver` trait, or result-grid layout. |
 | `dodo-build-release-internals` | Touching `src/updater/`, `.github/workflows/`, `Cargo.toml`'s dependencies, `docs/release.md`, `docs/macos-signing.md`, `docs/build-optimization.md`, `scripts/generate-icons.py`, `tools/update-manifest/`, `deny.toml`, or `THIRD-PARTY-NOTICES.md`; preparing or debugging a release. |
 | `gpui-component-recipes` | Writing or editing any `render` / `new` that builds a gpui-component widget (input, code editor, diagnostics, select, dialog, settings panel, sidebar, button, icon); a widget call will not compile; a widget builds but nothing appears on screen; or a code editor draws uncoloured text. |
-| `dodo-tool-view` | Adding, renaming, reordering or removing a sidebar tool; a new sidebar entry does not appear or renders blank; part of a tool page is unreachable at a small window (the pane's scroll container only reveals a tool that reports its own height). |
+| `dodo-tool-view` | Adding, renaming, reordering or removing a sidebar tool — one row in the `tools!` table in `src/tools.rs`; a new sidebar entry does not appear or renders blank; part of a tool page is unreachable at a small window (the pane's scroll container only reveals a tool that reports its own height). |
 | `dodo-i18n-text` | Writing or changing **any** text a user reads — a label, title, placeholder, description, error, dropdown option; or an `i18n` / `i18n_lint` test fails. |
 | `dodo-theming-settings` | Adding or changing a setting, adding or removing a theme or a language, or a settings change does not apply until restart. |
 | `dodo-build-validate` | First `cargo` invocation of a session, adding tests, a build or `cargo test` failing oddly, or being asked whether a UI change actually works. |

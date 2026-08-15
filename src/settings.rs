@@ -60,11 +60,12 @@ use crate::app_icon::AppIcon;
 use crate::assets::Assets;
 use crate::dialog_slot::{self, SingleDialog};
 use crate::i18n::{Language, LanguageExt, Str, shell, t};
-use crate::layout::{Layout, View};
+use crate::layout::Layout;
 use crate::quick_nav::QuickNav;
 use crate::quick_nav::models::detect::Detector;
 use crate::session::Session;
 use crate::session::models::features::FeatureError;
+use crate::tools::View;
 
 /// Base text size in px, largest first. `Theme::font_size` drives the window's
 /// rem size (see the library's `Root::render`), so these scale the whole UI.

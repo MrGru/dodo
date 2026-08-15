@@ -1,3 +1,16 @@
+//! The shell: the sidebar, the main pane, the width rule between them, and the
+//! quick-navigation bindings that live on the pane.
+//!
+//! **Which tools exist is not decided here.** [`crate::tools`] is the table —
+//! one row per tool carrying its code, title, icon, platforms, view type and
+//! accepted pastes — and [`View`] and [`Panes`] are generated from it. This file
+//! draws whatever that table declares, in whatever order
+//! [`Layout::features`](Layout::features) says the user wants, and knows about a
+//! particular tool in exactly two places: [`pane_title`] and
+//! [`Layout::activate`], which are Docker's rail heading and Docker's polling
+//! lifecycle; and [`Layout::apply_route`], which unpacks a pasted payload into
+//! the one method the receiving tool has for it.
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
@@ -7,229 +20,20 @@ use gpui_component::sidebar::{
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme, Collapsible, StyledExt as _, h_flex, v_flex};
 
-use crate::api_explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::cleaner::CleanerView;
-use crate::database::DatabaseView;
-use crate::docker::{DockerPage, DockerView};
-use crate::encoder_decoder::{EncoderDecoder, Format};
-use crate::i18n::{Str, docker, shell, t};
+use crate::docker::DockerPage;
+use crate::encoder_decoder::Format;
+use crate::i18n::{Str, shell, t};
 #[cfg(target_os = "macos")]
 use crate::input_method::InputMethod;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-use crate::input_method::views::InputMethodView;
-use crate::json_formatter::JsonFormatter;
 use crate::quick_nav::models::detect::Detector;
 use crate::quick_nav::models::route::Route;
 use crate::quick_nav::{self, LeaveInsertMode, QuickNav, QuickNavigate};
 use crate::session::Session;
 use crate::session::models::features::{FeatureError, Features};
 use crate::settings;
+use crate::tools::{Panes, View};
 use crate::updater;
-
-/// Which tool is currently shown in the main pane. Selecting a sidebar item
-/// switches the active view.
-///
-/// Every tool is one flat row, Docker included: its four pages moved onto the
-/// tab rail inside [`DockerView`] because a nested sidebar group renders no
-/// children at all once the sidebar collapses to icons, which made those pages
-/// unreachable.
-///
-/// Adding a tool means: a variant here, a row in [`View::ALL`], an arm in
-/// [`View::title`]/[`View::icon`]/[`View::code`], a field on [`Layout`] holding
-/// the view entity, and an arm in the main-pane `match` of [`Layout::render`].
-///
-/// [`View::code`] is what `session.json` stores, so it is the one of those that
-/// is a **compatibility surface**: a code that has shipped may not be reused
-/// for a different tool, and renaming a variant should keep its code unless
-/// losing everyone's restored tool is the intent. A code this build does not
-/// know opens a tool it does have rather than failing to start — see
-/// [`View::shown`].
-///
-/// **The Features settings page made that code cost one thing more.** A tool's
-/// code is now also its identity in the user's sidebar order and in their
-/// on/off list, so changing one does not merely send whoever had that tool open
-/// back to the default — it drops the tool out of their stored order and puts it
-/// back where `Features::resolve` says a tool this build knows but the file
-/// does not belongs. [`View::ALL`] stays the *default* order, and is no longer
-/// the order anything renders in; [`Layout::features`] is.
-///
-/// **If the new tool can also accept a pasted value**, quick navigation costs
-/// four more small things and nothing else: a `Detector` variant with its arm
-/// in `quick_nav::models::detect`, a `Route` variant with its arm in
-/// `Route::detector`, an arm in [`View::for_detector`], and an arm in
-/// [`Layout::apply_route`] — which is still the one place a route meets a
-/// `View`. `quick_nav::models::detect`'s module doc is where the *order* it goes
-/// in has to be argued, and that order is emphatically not this list's.
-///
-/// **One tool is platform-conditional**, which nothing here was before. The
-/// Input method installs an InputMethodKit bundle, so off macOS there is no row
-/// for it rather than a row whose only button could not work — the call its
-/// settings page had already made, kept when it became a tool. Everything that
-/// matches on this enum therefore carries a `cfg` arm, and [`View::ALL`] is
-/// written out twice. The cost stops there: a `session.json` written on a Mac
-/// and opened on Linux loses the entry, because
-/// [`Features::resolve`](crate::session::models::features::Features::resolve)
-/// drops a stored tool this build does not have, and gets it back on the Mac
-/// beside its default neighbour.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum View {
-    JsonFormatter,
-    EncoderDecoder,
-    ApiExplorer,
-    Cleaner,
-    Docker,
-    Database,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    InputMethod,
-}
-
-impl View {
-    /// The tool dodo opens on when nothing has been saved, and the one an
-    /// unrecognised saved code falls back to.
-    const DEFAULT: View = View::JsonFormatter;
-
-    /// Every tool, in **default** sidebar order.
-    ///
-    /// No longer the order the sidebar draws: that is the user's, held by
-    /// [`Layout::features`]. This is what a stored order is resolved against —
-    /// the list of what exists, and where a tool the stored order never mentions
-    /// belongs.
-    /// Written twice rather than once with a `cfg` on one element: an attribute
-    /// on an array element is not a thing stable Rust has, and a `Vec` here
-    /// would cost every caller the fixed length [`View::codes`] returns.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    const ALL: [View; 7] = [
-        View::JsonFormatter,
-        View::EncoderDecoder,
-        View::ApiExplorer,
-        View::Cleaner,
-        View::Docker,
-        View::Database,
-        // Last, which is also where its settings page sat. It is the one tool
-        // most people will open once, install from, and never come back to.
-        View::InputMethod,
-    ];
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    const ALL: [View; 6] = [
-        View::JsonFormatter,
-        View::EncoderDecoder,
-        View::ApiExplorer,
-        View::Cleaner,
-        View::Docker,
-        View::Database,
-    ];
-
-    /// Every tool's code, in default sidebar order — what a stored order is
-    /// placed against by
-    /// [`Features::resolve`](crate::session::models::features::Features::resolve).
-    fn codes() -> [&'static str; View::ALL.len()] {
-        View::ALL.map(View::code)
-    }
-
-    /// The tool's own name — what the sidebar row reads. The main pane's title
-    /// goes through [`pane_title`] instead, because Docker titles itself after
-    /// the rail's selected page.
-    pub fn title(self) -> Str {
-        match self {
-            View::JsonFormatter => shell::Text::JsonFormatterTitle.into(),
-            View::EncoderDecoder => shell::Text::EncoderDecoderTitle.into(),
-            View::ApiExplorer => shell::Text::ApiExplorerTitle.into(),
-            View::Cleaner => shell::Text::CleanerTitle.into(),
-            View::Docker => docker::Text::Docker.into(),
-            View::Database => shell::Text::DatabaseTitle.into(),
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            View::InputMethod => shell::Text::InputMethod.into(),
-        }
-    }
-
-    /// The glyph on the sidebar row — which, collapsed to the rail, is the only
-    /// thing the row is.
-    ///
-    /// **No two tools share one.** The Input method used to draw
-    /// [`AppIcon::Globe`] on its settings page, which is the API Explorer's row;
-    /// as a tool beside it that would have been two unrelated things under one
-    /// mark. `keyboard` is what the thing *is*, and
-    /// [`tests::no_two_tools_wear_the_same_icon`] is what keeps the next
-    /// borrowing from happening.
-    pub fn icon(self) -> AppIcon {
-        match self {
-            View::JsonFormatter => AppIcon::Json,
-            View::EncoderDecoder => AppIcon::Binary,
-            View::ApiExplorer => AppIcon::Globe,
-            View::Cleaner => AppIcon::Cleaner,
-            View::Docker => AppIcon::Container,
-            View::Database => AppIcon::Database,
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            View::InputMethod => AppIcon::Keyboard,
-        }
-    }
-
-    /// The tool's stable identifier in `session.json`.
-    ///
-    /// Never a localized title and never the variant name: a title changes with
-    /// the language and a variant name changes with a refactor, and this has to
-    /// survive both. See the type's own doc for what that costs.
-    pub fn code(self) -> &'static str {
-        match self {
-            View::JsonFormatter => "json-formatter",
-            View::EncoderDecoder => "encoder-decoder",
-            View::ApiExplorer => "api-explorer",
-            View::Cleaner => "cleaner",
-            View::Docker => "docker",
-            View::Database => "database",
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            View::InputMethod => "input-method",
-        }
-    }
-
-    /// The tool this code names, if this build has one.
-    ///
-    /// The strict half of [`View::shown`], and the way back from a [`Features`]
-    /// entry — whose codes came out of [`View::codes`], so there it is total.
-    pub fn lookup(code: &str) -> Option<View> {
-        View::ALL.into_iter().find(|view| view.code() == code)
-    }
-
-    /// The tool to show, given the one that was asked for.
-    ///
-    /// **The single answer to three questions**: a `session.json` naming a tool
-    /// this build does not have, one naming a tool the user has since switched
-    /// off, and the tool that is open right now being switched off.
-    /// [`Features::active`] decides all three — the asked-for tool if the
-    /// sidebar still lists it, and otherwise the first tool it does list — and
-    /// this only maps the answer back onto a variant.
-    ///
-    /// **Anything unrecognised therefore opens the app rather than refusing
-    /// to**, which is what the `from_code` this replaced existed for.
-    /// [`View::DEFAULT`] is the last resort for a build with no tools at all,
-    /// and is unreachable while [`View::ALL`] is non-empty.
-    fn shown(features: &Features, wanted: Option<&str>) -> View {
-        features
-            .active(wanted)
-            .and_then(View::lookup)
-            .unwrap_or(View::DEFAULT)
-    }
-
-    /// The tool a detected paste belongs to.
-    ///
-    /// **The one mapping from `quick_nav`'s list onto this one**, read twice
-    /// and for two different reasons: [`Layout::apply_route`] uses it to decide
-    /// where a route goes, and [`Layout::allowed_detectors`] uses it *before*
-    /// detection to decide which detectors a switched-off tool has taken out of
-    /// play. Two copies could disagree, and the disagreement would be silent.
-    ///
-    /// Not injective: the Encoder/Decoder answers for both JWT and Base64.
-    fn for_detector(detector: Detector) -> View {
-        match detector {
-            Detector::Curl => View::ApiExplorer,
-            Detector::DatabaseUri => View::Database,
-            Detector::Jwt | Detector::Base64 => View::EncoderDecoder,
-            Detector::Json => View::JsonFormatter,
-        }
-    }
-}
 
 /// The heading above the main pane. Docker names the page its rail has selected
 /// — the sidebar row says "Docker", the heading says "Containers" — so the
@@ -584,14 +388,11 @@ pub struct Layout {
     /// Re-checks macOS Accessibility after Dodo returns from System Settings.
     #[cfg(target_os = "macos")]
     _activation: Subscription,
-    json_formatter: Entity<JsonFormatter>,
-    encoder_decoder: Entity<EncoderDecoder>,
-    api_explorer: Entity<ApiExplorer>,
-    cleaner: Entity<CleanerView>,
-    docker: Entity<DockerView>,
-    database: Entity<DatabaseView>,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    input_method: Entity<InputMethodView>,
+    /// One live view per tool, built once and never rebuilt — the [`tools!`]
+    /// table's own struct, so the pane a row declares is the pane this holds.
+    ///
+    /// [`tools!`]: crate::tools
+    panes: Panes,
 }
 
 impl Layout {
@@ -635,13 +436,16 @@ impl Layout {
             None => SidebarState::new(),
         };
 
-        let docker = cx.new(|cx| DockerView::new(window, cx));
+        // Every tool's view at once, in the table's order. The `Panes` struct
+        // is generated from the same rows the sidebar is, so there is no list
+        // here to fall out of step with the list up there.
+        let panes = Panes::new(window, cx);
         // What [`Layout::activate`] would have done, done by hand because there
         // is no `self` to call it on yet: opening straight onto Docker has to
         // start its polling, or the restored session shows an empty list until
         // the user clicks something else and back.
         if active == View::Docker {
-            docker.update(cx, |docker, cx| docker.activate(cx));
+            panes.docker.update(cx, |docker, cx| docker.activate(cx));
         }
 
         Self {
@@ -670,14 +474,7 @@ impl Layout {
                     InputMethod::reconcile_event_tap_after_activation(cx);
                 }
             }),
-            json_formatter: cx.new(|cx| JsonFormatter::new(window, cx)),
-            encoder_decoder: cx.new(|cx| EncoderDecoder::new(window, cx)),
-            api_explorer: cx.new(|cx| ApiExplorer::new(window, cx)),
-            cleaner: cx.new(|cx| CleanerView::new(window, cx)),
-            docker,
-            database: cx.new(|cx| DatabaseView::new(window, cx)),
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            input_method: cx.new(|cx| InputMethodView::new(window, cx)),
+            panes,
         }
     }
 
@@ -688,7 +485,7 @@ impl Layout {
     /// leaves the app in exactly the state a click would have.
     fn activate(&mut self, view: View, cx: &mut Context<Self>) {
         self.active = view;
-        self.docker.update(cx, |docker, cx| match view {
+        self.panes.docker.update(cx, |docker, cx| match view {
             View::Docker => docker.activate(cx),
             _ => docker.set_section_active(false, cx),
         });
@@ -823,11 +620,12 @@ impl Layout {
 
         match route {
             Route::Json(text) => {
-                self.json_formatter
+                self.panes
+                    .json_formatter
                     .update(cx, |view, cx| view.accept_text(text, window, cx));
             }
             Route::Jwt(token) => {
-                self.encoder_decoder.update(cx, |view, cx| {
+                self.panes.encoder_decoder.update(cx, |view, cx| {
                     view.accept_decode(token, Format::Jwt, window, cx)
                 });
             }
@@ -837,15 +635,18 @@ impl Layout {
                 } else {
                     Format::Base64
                 };
-                self.encoder_decoder
+                self.panes
+                    .encoder_decoder
                     .update(cx, |view, cx| view.accept_decode(text, format, window, cx));
             }
             Route::Curl(snapshot) => {
-                self.api_explorer
+                self.panes
+                    .api_explorer
                     .update(cx, |view, cx| view.accept_curl(*snapshot, window, cx));
             }
             Route::Database(parsed) => {
-                self.database
+                self.panes
+                    .database
                     .update(cx, |view, cx| view.accept_uri(&parsed, cx));
             }
         }
@@ -926,7 +727,7 @@ impl Render for Layout {
         self.sidebar = self.sidebar.resize(window.viewport_size().width);
 
         let icon_collapsed = self.sidebar.collapsed && self.collapsible == SidebarCollapsible::Icon;
-        let title = pane_title(self.active, self.docker.read(cx).page());
+        let title = pane_title(self.active, self.panes.docker.read(cx).page());
 
         h_flex()
             // The pane is where quick navigation's key bindings live, and
@@ -1038,16 +839,14 @@ impl Render for Layout {
                     )
                     // The tool scrolls rather than being squeezed, and how
                     // that is arranged is [`main_pane`] and [`tool_box`].
-                    .child(main_pane().child(tool_box().map(|this| match self.active {
-                        View::JsonFormatter => this.child(self.json_formatter.clone()),
-                        View::EncoderDecoder => this.child(self.encoder_decoder.clone()),
-                        View::ApiExplorer => this.child(self.api_explorer.clone()),
-                        View::Cleaner => this.child(self.cleaner.clone()),
-                        View::Docker => this.child(self.docker.clone()),
-                        View::Database => this.child(self.database.clone()),
-                        #[cfg(any(target_os = "macos", target_os = "windows"))]
-                        View::InputMethod => this.child(self.input_method.clone()),
-                    }))),
+                    // …and which tool goes in the box is the table's answer,
+                    // not a `match` here: `Panes::place` is generated from the
+                    // same rows the sidebar walks, so a tool cannot be listed
+                    // in one and missing from the other.
+                    .child(
+                        main_pane()
+                            .child(tool_box().map(|this| self.panes.place(self.active, this))),
+                    ),
             )
     }
 }
@@ -1055,19 +854,20 @@ impl Render for Layout {
 #[cfg(test)]
 mod tests {
 
-    use gpui::{Display, FlexDirection, Length, Overflow, SharedString, Styled as _, px, relative};
+    use gpui::{Display, FlexDirection, Length, Overflow, Styled as _, px, relative};
+    use gpui_component::Collapsible as _;
     use gpui_component::sidebar::SidebarMenuItem;
-    use gpui_component::{Collapsible as _, IconNamed as _};
 
     use super::{
         AUTO_COLLAPSE_WIDTH, Layout, MAIN_MIN_HEIGHT, MAIN_MIN_WIDTH, PANE_CHROME_HEIGHT,
-        PANE_CHROME_WIDTH, SIDEBAR_RAIL_WIDTH, SIDEBAR_WIDTH, SidebarState, ToolItem, View,
-        main_pane, pane_title, tool_box, window_min_size,
+        PANE_CHROME_WIDTH, SIDEBAR_RAIL_WIDTH, SIDEBAR_WIDTH, SidebarState, ToolItem, main_pane,
+        pane_title, tool_box, window_min_size,
     };
     use crate::docker::DockerPage;
     use crate::i18n::{Str, docker};
     use crate::quick_nav::models::detect::{Detector, Patterns, detect_among};
     use crate::session::models::features::Features;
+    use crate::tools::View;
 
     /// A width comfortably on each side of the breakpoint. 1280 and 520 are the
     /// two the layout is reviewed at.
@@ -1098,248 +898,7 @@ mod tests {
         }
     }
 
-    /// The default order, in full. `View::ALL` is written out per platform, so
-    /// this is written out per platform too — asserting a prefix would let a
-    /// tool be dropped from the middle of one of them unnoticed.
-    #[test]
-    fn the_sidebar_lists_every_tool_once_with_docker_flat_and_last() {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        assert_eq!(
-            View::ALL,
-            [
-                View::JsonFormatter,
-                View::EncoderDecoder,
-                View::ApiExplorer,
-                View::Cleaner,
-                View::Docker,
-                View::Database,
-                View::InputMethod,
-            ]
-        );
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        assert_eq!(
-            View::ALL,
-            [
-                View::JsonFormatter,
-                View::EncoderDecoder,
-                View::ApiExplorer,
-                View::Cleaner,
-                View::Docker,
-                View::Database,
-            ]
-        );
-
-        // One row per tool: Docker and Database are each a single entry, not a
-        // group of children — an icon-collapsed sidebar renders no children at
-        // all, which is what made Docker's four pages unreachable.
-        assert_eq!(
-            View::ALL.len(),
-            if cfg!(any(target_os = "macos", target_os = "windows")) {
-                7
-            } else {
-                6
-            }
-        );
-    }
-
-    /// Input method is a tool only where a native host exists. Linux remains
-    /// hidden until it has its own host rather than showing a dead install row.
-    #[test]
-    fn the_input_method_is_a_native_host_tool_only() {
-        assert_eq!(
-            View::codes().contains(&"input-method"),
-            cfg!(any(target_os = "macos", target_os = "windows")),
-        );
-        assert_eq!(
-            View::lookup("input-method").is_some(),
-            cfg!(any(target_os = "macos", target_os = "windows")),
-        );
-    }
-
-    /// Registered exactly once. `View::ALL` is what `Features::resolve` places a
-    /// stored order against, and a tool listed twice there would be two sidebar
-    /// rows opening one pane — and two entries fighting over one code in
-    /// `session.json`.
-    #[test]
-    fn no_tool_is_registered_twice() {
-        for view in View::ALL {
-            assert_eq!(
-                View::ALL.iter().filter(|other| **other == view).count(),
-                1,
-                "{view:?} appears in View::ALL more than once",
-            );
-        }
-        assert_eq!(
-            everything().all().len(),
-            View::ALL.len(),
-            "the resolved tool list has one entry per tool",
-        );
-    }
-
-    /// Every tool's sidebar row is a *different* glyph, which collapsed to the
-    /// icon rail is the only thing distinguishing one row from another.
-    ///
-    /// This is what the Input method's move cost: its settings page drew
-    /// `AppIcon::Globe`, which is the API Explorer's row, and a settings page
-    /// sitting in a different dialog could get away with that. Two tools side by
-    /// side in one rail cannot.
-    #[test]
-    fn no_two_tools_wear_the_same_icon() {
-        // `AppIcon` is not `PartialEq`; its asset path is the identity that
-        // matters anyway, since that is what gpui rasterizes.
-        let mut paths: Vec<SharedString> =
-            View::ALL.iter().map(|view| view.icon().path()).collect();
-        let total = paths.len();
-        paths.sort_unstable();
-        paths.dedup();
-        assert_eq!(paths.len(), total, "two sidebar rows draw the same glyph");
-
-        assert_eq!(View::ApiExplorer.icon().path(), "icons/globe.svg");
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        assert_eq!(View::InputMethod.icon().path(), "icons/keyboard.svg");
-    }
-
-    /// With nothing chosen, the sidebar is exactly what it was before the
-    /// Features page existed: every tool, in `View::ALL` order.
-    #[test]
-    fn an_untouched_feature_list_is_the_sidebar_as_it_always_was() {
-        let visible: Vec<View> = everything().visible().filter_map(View::lookup).collect();
-        assert_eq!(visible, View::ALL);
-    }
-
-    /// The user's order and their on/off choices are what the sidebar draws —
-    /// `View::codes` is only what those choices are resolved against.
-    #[test]
-    fn the_sidebar_draws_the_users_order_and_skips_what_they_hid() {
-        let mut features = everything();
-        features.move_to(View::Docker.code(), 0);
-        features
-            .set_enabled(View::Cleaner.code(), false)
-            .expect("the others remain");
-
-        let visible: Vec<View> = features.visible().filter_map(View::lookup).collect();
-        // A prefix rather than the whole list, because the tail is
-        // platform-dependent: the moved tool leads, the hidden one is gone, and
-        // everything else keeps `View::ALL`'s order.
-        assert_eq!(
-            &visible[..5],
-            &[
-                View::Docker,
-                View::JsonFormatter,
-                View::EncoderDecoder,
-                View::ApiExplorer,
-                View::Database,
-            ]
-        );
-        assert!(!visible.contains(&View::Cleaner));
-        assert_eq!(visible.len(), View::ALL.len() - 1);
-    }
-
-    /// Every tool's `session.json` code is stable, unique, and reads as an
-    /// identifier rather than a title. It is a compatibility surface: changing
-    /// one silently sends everyone who had that tool open back to the default.
-    #[test]
-    fn every_tool_has_its_own_stable_code() {
-        let codes: Vec<&str> = View::ALL.iter().map(|view| view.code()).collect();
-
-        let mut expected = vec![
-            "json-formatter",
-            "encoder-decoder",
-            "api-explorer",
-            "cleaner",
-            "docker",
-            "database",
-        ];
-        if cfg!(any(target_os = "macos", target_os = "windows")) {
-            expected.push("input-method");
-        }
-        assert_eq!(codes, expected);
-
-        let mut unique = codes.clone();
-        unique.sort_unstable();
-        unique.dedup();
-        assert_eq!(unique.len(), codes.len(), "two tools share a code");
-    }
-
-    #[test]
-    fn a_saved_code_comes_back_as_the_tool_that_wrote_it() {
-        for view in View::ALL {
-            assert_eq!(View::lookup(view.code()), Some(view));
-            assert_eq!(View::shown(&everything(), Some(view.code())), view);
-        }
-    }
-
-    /// The requirement that keeps a renamed or removed tool from being a failure
-    /// to start: anything unrecognised opens the first tool the sidebar lists.
-    #[test]
-    fn an_unknown_or_absent_code_falls_back_to_the_first_visible_tool() {
-        for code in [
-            None,
-            Some(""),
-            Some("graphql-explorer"),
-            Some("JsonFormatter"),
-            Some("json_formatter"),
-            Some("JSON Formatter"),
-        ] {
-            assert_eq!(
-                View::shown(&everything(), code),
-                View::DEFAULT,
-                "{code:?} must not stop dodo opening",
-            );
-            assert!(code.and_then(View::lookup).is_none());
-        }
-        assert_eq!(View::DEFAULT, View::JsonFormatter);
-    }
-
-    /// Trap 2, at the seam `session::models::features` cannot reach: a
-    /// remembered tool the user has since switched off opens the first tool
-    /// they *did* leave visible, not a pane with no sidebar row above it.
-    #[test]
-    fn a_remembered_tool_that_is_now_hidden_opens_the_first_visible_one() {
-        let mut features = everything();
-        features
-            .set_enabled(View::JsonFormatter.code(), false)
-            .expect("five others remain");
-
-        assert_eq!(
-            View::shown(&features, Some(View::JsonFormatter.code())),
-            View::EncoderDecoder,
-        );
-    }
-
-    /// …and it follows the user's own order, not `View::ALL`'s.
-    #[test]
-    fn the_fallback_follows_the_users_own_sidebar_order() {
-        let mut features = everything();
-        features.move_to(View::Database.code(), 0);
-        features
-            .set_enabled(View::Docker.code(), false)
-            .expect("five others remain");
-
-        assert_eq!(View::shown(&features, None), View::Database);
-        assert_eq!(
-            View::shown(&features, Some(View::Docker.code())),
-            View::Database,
-        );
-    }
-
     // ---- quick navigation meets the tool list ------------------------------
-
-    /// The mapping both `apply_route` and `allowed_detectors` read. If a
-    /// detector ever answered for a different tool than the route it produces
-    /// lands in, switching that tool off would silence the wrong detector.
-    #[test]
-    fn every_detector_names_the_tool_its_route_lands_in() {
-        for (detector, view) in [
-            (Detector::Curl, View::ApiExplorer),
-            (Detector::DatabaseUri, View::Database),
-            (Detector::Jwt, View::EncoderDecoder),
-            (Detector::Json, View::JsonFormatter),
-            (Detector::Base64, View::EncoderDecoder),
-        ] {
-            assert_eq!(View::for_detector(detector), view);
-        }
-    }
 
     /// Trap 4, and the captain's own example: pasting a `curl` with the API
     /// Explorer switched off. The detector is not tried at all, so the text
@@ -1423,55 +982,6 @@ mod tests {
                 "a cURL command carrying JSON belongs to the API Explorer wherever its row is",
             );
         }
-    }
-
-    /// **Every tool is an ordinary tool here**, with no exception for the one
-    /// still being built. The Cleaner is a legitimate thing to switch off —
-    /// arguably the most likely one — and a special case for it would be a rule
-    /// `session::models::features` does not have and should not gain.
-    #[test]
-    fn every_tool_can_be_switched_off_including_the_unfinished_one() {
-        for view in View::ALL {
-            let mut features = everything();
-            assert!(features.can_toggle(view.code()), "{view:?}");
-            features
-                .set_enabled(view.code(), false)
-                .unwrap_or_else(|_| panic!("{view:?} is not the last of six"));
-
-            assert!(!features.is_enabled(view.code()));
-            assert_eq!(
-                features.all().len(),
-                View::ALL.len(),
-                "it is hidden, not gone"
-            );
-            assert_ne!(View::shown(&features, Some(view.code())), view);
-        }
-        assert!(View::ALL.contains(&View::Cleaner));
-    }
-
-    /// Trap 7: the Features page can only ever hide a **tool**, and the
-    /// Settings and Check-for-updates buttons are not tools — they are footer
-    /// buttons drawn beside the menu, not rows in it. If either ever became a
-    /// `View`, this fails and someone has to think about how a user gets their
-    /// tools back.
-    #[test]
-    fn settings_is_not_a_tool_and_so_cannot_be_switched_off() {
-        let codes = View::codes();
-        for reserved in ["settings", "check-for-updates"] {
-            assert!(
-                !codes.contains(&reserved),
-                "`{reserved}` is a sidebar footer button; making it a tool would let \
-                 the Features page hide the only way back to itself",
-            );
-        }
-
-        let source = include_str!("layout.rs");
-        let footer = item_source(source, "fn render(&mut self, window: &mut Window");
-        assert!(
-            footer.contains("\"open-settings\""),
-            "the Settings button has left the sidebar footer; the Features page \
-             assumes it is always reachable",
-        );
     }
 
     /// The sidebar's restored flag is the user's own choice and nothing else.
@@ -1619,6 +1129,21 @@ mod tests {
         assert!(!item.is_collapsed());
         assert!(item.clone().collapsed(true).is_collapsed());
         assert!(!item.collapsed(true).collapsed(false).is_collapsed());
+    }
+
+    /// Trap 7's second half. `crate::tools` proves neither footer button is a
+    /// row in the table; this proves the Settings button is still *in* the
+    /// footer, because the Features page it opens is the only way back from a
+    /// sidebar the user has cut down to one tool.
+    #[test]
+    fn settings_stays_in_the_sidebar_footer() {
+        let source = include_str!("layout.rs");
+        let footer = item_source(source, "fn render(&mut self, window: &mut Window");
+        assert!(
+            footer.contains("\"open-settings\""),
+            "the Settings button has left the sidebar footer; the Features page \
+             assumes it is always reachable",
+        );
     }
 
     #[test]

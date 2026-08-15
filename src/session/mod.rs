@@ -155,7 +155,7 @@ impl Session {
         Self::read(cx, |document| document.appearance.border_radius)
     }
 
-    /// The tool that was open, by [`crate::layout::View`] code. An unknown code
+    /// The tool that was open, by [`crate::tools::View`] code. An unknown code
     /// is the caller's to fall back on.
     pub fn active_tool(cx: &App) -> Option<String> {
         Self::read(cx, |document| document.workspace.active_tool.clone())
@@ -819,7 +819,7 @@ mod tests {
     }
 
     /// Clicking the tool already open is the common case, and it must not cost
-    /// a write. `layout::View::shown` is where an unknown or switched-off code
+    /// a write. `tools::View::shown` is where an unknown or switched-off code
     /// is turned back into a tool; that fallback is tested there.
     #[gpui::test]
     fn re_selecting_the_open_tool_writes_nothing(cx: &mut TestAppContext) {
