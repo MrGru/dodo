@@ -632,6 +632,12 @@ Ten things about build and release that catch people:
   dependency to leave with its crate is the wrong instinct. Its `paths` seam guards three files.
   With this one the binary's own test count falls from 976 to 477.
 
+  **Only the Cleaner has an `examples/` launcher so far.** Docker, the Database Explorer and the
+  API Explorer were extracted as pure moves and deliberately gained nothing the binary did not
+  already have, so `cargo run -p dodo-cleaner --example cleaner` still has no sibling. Adding the
+  other three is open work, not an oversight — the launcher bullet above is the shape to copy, and
+  each one costs the same two `[dev-dependencies]` and the same screenful of `src/app.rs`.
+
   **A feature crate does not make the build faster, and this one was measured to find out.**
   "Splitting the binary into crates" in `docs/build-optimization.md` is the authority — the method,
   the per-unit breakdown, and why a non-interleaved A/B of build times lies. The summary, from three
