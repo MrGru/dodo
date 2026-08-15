@@ -3,8 +3,8 @@ name: dodo-theming-settings
 description: How dodo's themes, font size, border radius and language switching actually work - where vendored theme JSON lives, how it reaches ThemeRegistry, why writing gpui_component::Theme applies live, how to add a language, and which library widgets cache their strings and need sync_language. Load when adding or changing a setting, adding/removing a theme or a language, or when a settings change does not take effect until restart. For adding or changing user-facing text, load `dodo-i18n-text` instead.
 ---
 
-Two files own all of this: `src/settings.rs` (the dialog and the app-level state it edits) and
-`src/i18n.rs` (localization).
+Two things own all of this: `src/settings.rs` (the dialog and the app-level state it edits) and
+`src/i18n/` (localization).
 
 **Everything on this page is persisted across restarts except one setting.** Theme, font size,
 border radius and language are saved to `session.json` — the captain asked for session restoration
@@ -126,10 +126,12 @@ rule, the steps, the exemptions and the two `cargo test` guards all live there. 
 only what localization has to do with *settings*: switching the language, and adding a new one.
 
 **Add a language**: a `Language` variant, a row in `Language::ALL`, arms in `code()` and `label()`,
-and a column in every `Str::text` row (and in `JwtPart::name`) — the compiler enumerates the ones
-you missed. `code()` is the stable dropdown value; `label()` is the language's name *in* that
-language, so it is deliberately not translated. Expect `cargo test i18n` to then fail on any row
-you filled in by pasting the English text; that is the guard working.
+one arm in the `areas!` dispatch in `src/i18n/mod.rs`, and one new `<area>/xx.rs` per area — the
+compiler enumerates every area and every string you missed, and **no existing translation is
+touched**. `dodo-i18n-text` has the file-by-file version. `code()` is the stable dropdown value;
+`label()` is the language's name *in* that language, so it is deliberately not translated. Expect
+`cargo test i18n` to then fail on any row you filled in by pasting the English text; that is the
+guard working.
 
 `Language::set` does `cx.set_global(self)` then `cx.refresh_windows()`, the same live-apply
 trick as `Theme`. Because `t()` is called during `render`, already-painted strings pick up the

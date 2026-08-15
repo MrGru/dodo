@@ -396,6 +396,30 @@ bite (never pair `release` with a second `close_dialog`, and the window rather t
 decides). No other dodo dialog needs it: the rest are opened from a control the modal overlay
 covers.
 
+**`src/i18n/` is one directory per *area of the app*, not one file per language of the whole
+app**, and that shape is the answer to a defect rather than a preference. It used to be a single
+7,595-line `src/i18n.rs` whose `Str::text` matched on the *pair* `(Str, Language)`, so a third
+language meant editing all 937 strings instead of adding files. Now `<area>/mod.rs` owns that
+area's `Text` enum, `<area>/en.rs` and `<area>/vi.rs` are each an exhaustive `match` over it, and
+`Str` — still holdable, comparable and re-translating, which is what `ConsoleEntry` relies on — is
+a thin sum over the twenty area enums with a `From` for each, so `t()` takes `impl Into<Str>` and a
+call site reads `t(cleaner::Text::Scan, cx)`. Four things there are decisions rather than details.
+**Adding a language touches no existing string**: one `Language` variant, one arm in the `areas!`
+dispatch in `src/i18n/mod.rs`, and one new file per area — and the compiler names every area that
+has not been given one. **The area boundaries follow `src/`, and the four biggest modules are split
+further** along their own view boundaries (`api_explorer` / `api_scripts` / `api_variables` /
+`api_response` / `api_collections`, `database` / `db_query` / `db_catalog` / `db_connection`), which
+is what keeps every file under 250 lines; a string more than one *area* draws lives in `shared`
+rather than being duplicated. **`std::mem::discriminant` on a `Str` no longer identifies a
+string** — every string in an area shares one `Str` variant — so a test that means "same variant,
+ignoring runtime values" has to reach into the area's own enum; `docker::models::inspect` and
+`input_method::models::status` are the two that do. And **the sample table is generated together
+with its own exhaustiveness check** by the `samples!` macro, which replaced a 940-line
+hand-numbered `position()`: one entry per variant produces both the list the tests walk and an
+exhaustive `match` over `Text`, so a variant with no sample is a compile error and no index number
+survives. `src/i18n_lint.rs` stays put at the top of `src/` because its 34 `include_str!` paths are
+relative to that directory. See the `dodo-i18n-text` skill before writing any user-facing string.
+
 `data_dir()` lives in `src/paths.rs`, not under `api_explorer/` any more, and it knows all
 three platforms: `~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME` or
 `~/.config`. The macOS path is frozen — changing it orphans every existing installation's saved
@@ -520,8 +544,9 @@ Eight things about build and release that catch people:
   do not delete. `.githooks/pre-push` runs `fmt`, `clippy` and `cargo test --locked` and refuses
   the push if any fails; it is opt-in per clone with `git config core.hooksPath .githooks`
   (see "Pre-push checks" in `README.md` for its cost and the `--no-verify` bypass).
-  Note that `cargo build` alone does **not** prove the tree is green — `src/i18n.rs`'s test module
-  is exhaustive over `Str`, so new strings break `cargo test` while the app still builds.
+  Note that `cargo build` alone does **not** prove the tree is green — `src/i18n/`'s per-area
+  sample tables are exhaustive over each area's `Text`, so new strings break `cargo test` while
+  the app still builds.
   The original `build (windows-x64)` failure was a `#[cfg(unix)]`-only bollard connector;
   the platform split in `docker/services/engine.rs` fixed it, and release run `31655518790`
   later built and smoke-tested both Windows x64 and macOS x64. Those rows remain

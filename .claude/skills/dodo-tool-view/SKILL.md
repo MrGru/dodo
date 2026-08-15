@@ -73,9 +73,12 @@ never rebuild a view on selection.
    straight onto the tool with no click, and there is no `self` to call `activate` on inside the
    constructor. `Layout::new` builds the Docker entity first and tells it by hand; copy that.
 
-6. **`src/i18n.rs`** — `View::title` returns a `Str`, not a string, so the tool needs a `Str`
-   variant for its sidebar title and one for every label inside it. Load `dodo-i18n-text` before
-   writing that text; `cargo test i18n` will fail until each new variant is registered there.
+6. **`src/i18n/`** — `View::title` returns a `Str`, not a string, so the tool needs a variant for
+   its sidebar title (in the `shell` area, which owns the sidebar) and one for every label inside
+   it (in the tool's own area, which is a new `src/i18n/<tool>/` directory of four small files:
+   `mod.rs`, `en.rs`, `vi.rs`, `samples.rs`, plus one line in `src/i18n/mod.rs`'s `areas!`). Load
+   `dodo-i18n-text` before writing that text; `cargo test i18n` will fail until each new variant
+   has a sample.
 
 7. **`src/quick_nav/` — only if the tool can accept a pasted value.** Optional, and skipping it
    costs nothing: the tool simply is not a quick-navigation target. If it should be one, it is
