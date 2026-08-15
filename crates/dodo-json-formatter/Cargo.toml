@@ -1,0 +1,28 @@
+[package]
+name = "dodo-json-formatter"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "dodo's JSON formatter tool."
+
+# These are exactly the dependencies the tool used in `src/json_formatter.rs`.
+[dependencies]
+dodo-i18n = { path = "../dodo-i18n", features = ["gpui"] }
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+# The standalone launcher only. JSON highlighting matches the full app.
+gpui-component = { git = "https://github.com/longbridge/gpui-component", features = [
+    "tree-sitter",
+] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
+    "font-kit",
+] }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+
+[[example]]
+name = "json_formatter"
+path = "examples/json_formatter.rs"

@@ -38,8 +38,14 @@
 /// modules have no text sinks and are not worth scanning.
 const SOURCES: [(&str, &str); 41] = [
     ("src/layout.rs", include_str!("layout.rs")),
-    ("src/json_formatter.rs", include_str!("json_formatter.rs")),
-    ("src/encoder_decoder.rs", include_str!("encoder_decoder.rs")),
+    (
+        "crates/dodo-json-formatter/src/lib.rs",
+        include_str!("../crates/dodo-json-formatter/src/lib.rs"),
+    ),
+    (
+        "crates/dodo-encoder-decoder/src/lib.rs",
+        include_str!("../crates/dodo-encoder-decoder/src/lib.rs"),
+    ),
     ("src/settings/mod.rs", include_str!("settings/mod.rs")),
     (
         "src/settings/appearance.rs",

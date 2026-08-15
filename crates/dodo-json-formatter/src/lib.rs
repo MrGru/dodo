@@ -1,3 +1,10 @@
+//! dodo's JSON formatter tool, moved whole from `src/json_formatter.rs`.
+//!
+//! The binary consumes [`JsonFormatter`] and aliases this crate back to
+//! `crate::json_formatter`, so its tool-table call site is unchanged.
+
+use dodo_i18n as i18n;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};

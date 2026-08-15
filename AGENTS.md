@@ -53,18 +53,14 @@ not a callback that force-quits) plus a macOS-only `cmd-w` binding, needed becau
 no menu bar for that shortcut to hang off. The doc comments there carry the reasoning. The Windows `--build-info` path has
 run on a release runner; interactive window lifecycle still needs captain testing.
 
-Most tools are a single `src/<tool>.rs`. **`crates/dodo-api-explorer/`, `crates/dodo-database/`
-and `crates/dodo-docker/` are the exceptions** and the pattern to copy when a tool outgrows one
-file: `models/` (plain data, no GPUI, unit tested), `services/` (the trait that is the only place
-naming the outside-world crate), `state/`, `components/`, `views/`. Each one's own `lib.rs` doc
-comments are the authority on its split and what shipped when; the matching skill below is where
-the non-obvious parts of each are written down — load it before changing anything in one of these
-three rather than inferring the design from the files cold. **All three have followed the Cleaner
-out of the binary**, and so, on the same day, have `crates/dodo-updater/` and
-`crates/dodo-input-method/` — **nothing that outgrew one file is a `src/` module any more**, and
-`src/` is now the shell (`main.rs`, `layout.rs`, `tools.rs`, `settings.rs`, `session/`,
-`quick_nav/`, `tray/`) plus the two single-file tools. See the feature-crate entry below for the
-rules the six moves settled.
+Every tool now lives in a feature crate under `crates/`: the single-file
+`dodo-json-formatter` and `dodo-encoder-decoder`, plus `dodo-cleaner`, `dodo-api-explorer`,
+`dodo-database`, `dodo-docker` and `dodo-input-method`; the updater is a feature crate too. The
+larger crates use `models/` (plain data, no GPUI, unit tested), `services/` (the only layer naming
+outside-world crates), `state/`, `components/` and `views/`; each crate's `lib.rs` docs and matching
+skill below are the authority. `main.rs` aliases every crate back to its former module name so the
+binary consumers keep their old paths. `src/` is now the application shell and cross-feature
+services only. See the feature-crate entry below before extracting another whole feature.
 
 **`crates/dodo-cleaner/` is the same shape but started unfinished, rounds have been landing
 since, and on 2026-08-15 it moved out of the binary entirely** — it was `src/cleaner/`, and any
@@ -565,7 +561,7 @@ Ten things about build and release that catch people:
   `[target.'cfg(target_os = "macos")'.dependencies]` table — a plain `[dependencies]` entry would
   make the Linux and Windows `cargo check` rows build AppKit bindings. And `workspace.exclude`
   matches **paths, not globs** — `tools/*` there excludes nothing, which is why it is spelled out.
-  `cargo metadata --no-deps` at the root lists eight packages, not one.
+  `cargo metadata --no-deps` at the root lists seventeen packages, not one.
 
 - **`crates/` also holds dodo's *kernel* crates, and the rule for what earns one is use plus
   independence.** `dodo-i18n` (every user-visible string), `dodo-app-icon` (the icon set) and
@@ -594,12 +590,11 @@ Ten things about build and release that catch people:
   A kernel crate is code many tools share; a feature crate is one whole tool of the app, lifted out
   in one piece. `dodo-cleaner` left `src/` on 2026-08-15 — 93 files, 25,646 lines, the largest
   feature dodo has — and the shape it landed in is the shape to copy. **The seam is what qualifies
-  a feature, not its size**: measure it first with `grep -rhoE "crate::[a-z_0-9]+" src/<tool>`, and
-  extract only if every outbound edge is already a crate (the Cleaner's were exactly `app_icon`,
-  `i18n` and `paths`) and the inbound surface is one or two files (`layout.rs`). A `use crate::…`
-  inside a doc comment is not an edge — the Cleaner had three of those, and one of them says
-  `src/cleaner/` must never gain a real `crate::docker` edge. Five rules, each of which this crate
-  demonstrates:
+  a feature, not its size**: before extraction, measure outbound `crate::…` edges and binary
+  consumers; extract only when every outbound edge is already a crate and the inbound surface is
+  small. The Cleaner's outbound edges were exactly `app_icon`, `i18n` and `paths`; the JSON
+  formatter and Encoder/Decoder each had only `i18n`. A `use crate::…` inside a doc comment is not
+  an edge. The conventions are:
   - **Both sides keep their spelling.** `main.rs` does `use dodo_cleaner as cleaner;` — the same
     aliasing `dodo_app_icon` already got — so `layout.rs` still reads
     `use crate::cleaner::CleanerView`, and inside the crate `use dodo_app_icon as app_icon;` /
@@ -662,11 +657,8 @@ Ten things about build and release that catch people:
   `models::script_consent::ConsentPolicy`) and `quick_nav` (`models::snapshot::RequestSnapshot`,
   `services::curl`). Applying the Database rule to that surface leaves **both** `models` and
   `services` `pub`, with `components`, `state` and `views` `pub(crate)`. Only `rquickjs` left the
-  root `Cargo.toml` entirely; `reqwest`, `base64` and `percent-encoding` are now declared in two
-  manifests each, because the updater, the Encoder/Decoder and quick navigation still name them in
-  the binary — **a duplicated dependency line is not a duplicated package**, and expecting every
-  dependency to leave with its crate is the wrong instinct. Its `paths` seam guards three files.
-  With this one the binary's own test count falls from 976 to 477.
+  root `Cargo.toml` entirely. Its `paths` seam guards three files. With this one the binary's own
+  test count falls from 976 to 477.
 
   **`crates/dodo-updater` is the fifth**, and it is the one that shows what to do when a feature
   needs something *only a binary is given*. `build_info` reads the `env!("DODO_*")` variables
@@ -680,7 +672,7 @@ Ten things about build and release that catch people:
   out of the root manifest**: dodo the binary now names no HTTP client at all, the same shape
   `bollard` and `tokio` took when Docker left.
 
-  **`crates/dodo-input-method` is the sixth and the last**, and the only one whose edges were not
+  **`crates/dodo-input-method` is the sixth**, and the only one whose edges were not
   all outbound. `src/tray` reads it (five call sites) *and* it told the tray — a cycle no crate
   boundary can hold — so the **notification** inverted: `observe_languages` takes a plain `fn`
   pointer, `main.rs` hands over `tray::set_active_languages`, and a platform with no tray registers
@@ -690,7 +682,13 @@ Ten things about build and release that catch people:
   to compile. **Copy that pair of moves before reaching for anything cleverer**: an inbound edge
   becomes a handed-in `fn`, and an unreachable constant becomes a mirrored one with a test.
 
-  **All six feature crates keep their platform gates, and moving one is the moment to check them.**
+  **`crates/dodo-json-formatter` and `crates/dodo-encoder-decoder` are the seventh and eighth**,
+  proving that a clean seam rather than size earns a feature crate: each is its former single source
+  file plus the `dodo-i18n` alias, with no restructuring. Encoder/Decoder took
+  `percent-encoding` out of the root manifest; `base64` remains there solely for quick navigation's
+  detector. `src/i18n_lint.rs` still scans both moved files by their crate paths.
+
+  **All eight feature crates keep their platform gates, and moving one is the moment to check them.**
   115 platform attributes came across with the input method; 11 of them only *selected a value* and
   are now 5 `cfg!` sites, so both arms type-check from a Mac — the four `MODIFIER_*` glyph/word
   constants, the backend radio group's two rows, and the tray call above. The other 104 declare or
@@ -698,12 +696,12 @@ Ten things about build and release that catch people:
   none of which `cfg!` can express, so they stay. That is the rule: **a gate that picks a value
   becomes `cfg!`; a gate in front of a platform API stays an attribute.**
 
-  **Four of the six feature crates have an `examples/` launcher.** The Cleaner proved the shape,
-  and Docker, the Database Explorer and the API Explorer repeat it: each mounts the real view,
-  reads real machine and persisted state, and keeps application-only dependencies under
-  `[dev-dependencies]`. Their exact commands live together in README's "Running one feature on its
-  own" section. The updater and the input method have none — neither is a pane you can look at on
-  its own: one *is* a dialog over the app and the other reads a file a separate OS process owns.
+  **Six of the eight feature crates have an `examples/` launcher.** The four stateful tools mount
+  the real view and read the same real machine and persisted state; the JSON formatter and
+  Encoder/Decoder are stateless. All keep launcher-only dependencies under `[dev-dependencies]`.
+  Their exact commands live in README's "Running one feature on its own". The updater and input
+  method have none — one is a dialog over the app and the other reads a file a separate OS process
+  owns.
 
   **A feature crate does not make the build faster, and this one was measured to find out.**
   "Splitting the binary into crates" in `docs/build-optimization.md` is the authority — the method,

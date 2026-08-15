@@ -1,7 +1,7 @@
 # `crates/` holds code that shares this lockfile, which is what separates it
 # from `tools/`.
 #
-# There are fourteen members, in three groups.
+# There are sixteen members, in three groups.
 #
 # `crates/dodo-app-icon`, `crates/dodo-i18n`, `crates/dodo-paths` and
 # `crates/dodo-dialog-slot` are *kernel* crates: code many of dodo's modules
@@ -15,23 +15,13 @@
 # a copy on each side of a crate boundary would be two unrelated slots — the
 # same argument that put `t()` and the active-language global in `dodo-i18n`.
 #
-# `crates/dodo-cleaner`, `crates/dodo-docker`, `crates/dodo-database`,
-# `crates/dodo-api-explorer`, `crates/dodo-updater` and
-# `crates/dodo-input-method` are *feature* crates — whole tools of the app,
-# lifted out of the binary rather than pieces many tools share. The Cleaner was the first and is the shape the others copy:
-# their only outbound edges were the kernel crates above, their inbound surface
-# was one or two files, and `main.rs` aliases each back to `crate::cleaner` /
-# `crate::docker` / `crate::database` / `crate::api_explorer` /
-# `crate::updater` / `crate::input_method` so neither side's call sites
-# changed. Two of them needed more than the usual `paths` seam. The updater's
-# `build_info` reads `env!("DODO_*")` variables only a binary is handed, so
-# `init` takes the two fields it uses as an argument rather than any crate
-# growing a build script. And the input method had an edge back *into* the
-# binary — `src/tray` reads it and it told the tray — so the notification half
-# inverted: `main.rs` hands `tray::set_active_languages` over as a `fn`
-# pointer. `AGENTS.md`'s "feature crate" entry records what the moves bought and
-# what they did not — and it is explicit that build speed was measured and is
-# not among it.
+# The eight *feature* crates are whole app features lifted out of the binary:
+# Cleaner, Docker, Database, API Explorer, updater, input method, JSON formatter
+# and Encoder/Decoder. The Cleaner established the shape: each crate owns one
+# feature, and `main.rs` aliases it back to its old module name so neither side's
+# call sites change. `AGENTS.md` records the extra seams the updater and input
+# method needed, what the moves bought and what they did not — and is explicit
+# that build speed was measured and is not among it.
 #
 # The other four are the input method. `crates/dodo-ime-core` is the engine,
 # linked *into* dodo. `crates/dodo-ime-ipc` is the settings and identifier
@@ -46,7 +36,7 @@
 # bundle types with would be two different resolutions that nothing compares. One
 # workspace, one `Cargo.lock`, one `--locked`.
 #
-# `default-members` names all fifteen (the root package and every crate), so a bare
+# `default-members` names all seventeen (the root package and every crate), so a bare
 # `cargo test` / `cargo clippy --all-targets` at the root covers each crate's own
 # tests. **Adding a crate means adding it here in the same commit**; without it
 # cargo defaults to the root package alone and the new crate's tests silently
@@ -69,12 +59,14 @@ default-members = [
     "crates/dodo-database",
     "crates/dodo-dialog-slot",
     "crates/dodo-docker",
+    "crates/dodo-encoder-decoder",
     "crates/dodo-i18n",
     "crates/dodo-ime-core",
     "crates/dodo-ime-ipc",
     "crates/dodo-ime-macos",
     "crates/dodo-ime-windows",
     "crates/dodo-input-method",
+    "crates/dodo-json-formatter",
     "crates/dodo-paths",
     "crates/dodo-updater",
 ]
@@ -176,13 +168,13 @@ dodo-docker = { path = "crates/dodo-docker" }
 # `models::script_consent::ConsentPolicy` for the "Run scripts" row, and
 # `quick_nav`'s `models::snapshot::RequestSnapshot` / `services::curl` for
 # routing a pasted cURL command. `main.rs` aliases the crate back to
-# `crate::api_explorer`. `rquickjs` went with it and left this file entirely;
-# `base64` and `percent-encoding` are declared in both, because the
-# Encoder/Decoder and quick navigation still name them here. `reqwest` was on
-# that list until the updater left too, and is now declared by
-# `crates/dodo-api-explorer` and `crates/dodo-updater` alone. See that crate's
-# `lib.rs` for the seam.
+# `crate::api_explorer`. See that crate's `lib.rs` for the seam.
 dodo-api-explorer = { path = "crates/dodo-api-explorer" }
+# The Encoder/Decoder, whole. `layout.rs` names `Format` and the tool table
+# names `EncoderDecoder`; this alias keeps both old module paths unchanged.
+dodo-encoder-decoder = { path = "crates/dodo-encoder-decoder" }
+# The JSON formatter, whole. The tool table is its only consumer.
+dodo-json-formatter = { path = "crates/dodo-json-formatter" }
 # The Database Explorer, whole. The binary names four items from it —
 # `layout.rs`'s `DatabaseView`, `main.rs`'s `database::init`, and
 # `quick_nav`'s `models::uri` / `ParsedUri` for routing a pasted connection
@@ -242,13 +234,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # Reads macOS app-bundle Info.plist files and Mail metadata conservatively.
 plist = "1"
-# The Encoder/Decoder tool and quick navigation's Base64 detector.
-# `crates/dodo-api-explorer` declares the same line for Basic authorization.
+# Quick navigation's Base64 detector. The Encoder/Decoder and API Explorer
+# crates declare the same line; all three resolve to one package.
 base64 = "0.22.1"
-# The Encoder/Decoder tool's URL encode/decode. `crates/dodo-api-explorer` and
-# `crates/dodo-database` declare the same line; all three resolve to one
-# package.
-percent-encoding = "2.3.2"
 nucleo-matcher = "0.3"
 unicode-normalization = "0.1"
 # Quick navigation's user-editable detector patterns. **This adds no crate to

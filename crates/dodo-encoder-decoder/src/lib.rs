@@ -1,3 +1,10 @@
+//! dodo's Encoder/Decoder tool, moved whole from `src/encoder_decoder.rs`.
+//!
+//! The binary consumes [`EncoderDecoder`] and [`Format`] and aliases this
+//! crate back to `crate::encoder_decoder`, so its call sites are unchanged.
+
+use dodo_i18n as i18n;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};

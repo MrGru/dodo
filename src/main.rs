@@ -48,7 +48,9 @@ use dodo_dialog_slot as dialog_slot;
 // keeps all three lines reading `crate::docker::…`. There is no `src/docker/`
 // any more.
 use dodo_docker as docker;
-mod encoder_decoder;
+// The Encoder/Decoder is a feature crate. `layout.rs` names `Format` and the
+// tool table names `EncoderDecoder`; this alias keeps both paths unchanged.
+use dodo_encoder_decoder as encoder_decoder;
 // Every string dodo shows, plus the three UI-bound pieces (`t`, the active-
 // language global, `Language::current` / `set`) that the crate's `gpui`
 // feature switches on. Both halves are `crates/dodo-i18n` now: a feature
@@ -60,8 +62,7 @@ use dodo_i18n as i18n;
 #[cfg(test)]
 mod i18n_lint;
 // dodo's end of the input method is a *feature* crate —
-// `crates/dodo-input-method`, the sixth and last module taken out of this
-// binary. `layout.rs` names `InputMethod`, `tools.rs` names
+// `crates/dodo-input-method`. `layout.rs` names `InputMethod`, `tools.rs` names
 // `views::InputMethodView`, `run_app` below calls `init` and `load`, and this
 // alias is what keeps all four lines reading `crate::input_method::…`. There
 // is no `src/input_method/` any more.
@@ -72,7 +73,8 @@ mod i18n_lint;
 // which dodo does not link at all. What that crate links is `dodo-ime-ipc`,
 // the contract between the two processes.
 use dodo_input_method as input_method;
-mod json_formatter;
+// The JSON formatter is a feature crate whose only consumer is the tool table.
+use dodo_json_formatter as json_formatter;
 mod layout;
 // Where dodo writes its files. Every rule is in `crates/dodo-paths`, which is
 // pure, has no dependencies and no build script; what cannot be pure is the one

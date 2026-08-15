@@ -174,21 +174,23 @@ This opens a 900x620 centered window mounting the `DodoApp`.
 
 ### Running one feature on its own
 
-Each feature crate can be launched by itself, in a window containing nothing
-but that feature:
+Six feature crates can be launched by themselves, in a window containing
+nothing but that feature:
 
 ```sh
 cargo run -p dodo-cleaner --example cleaner --locked
 cargo run -p dodo-docker --example docker --locked
 cargo run -p dodo-database --example database --locked
 cargo run -p dodo-api-explorer --example api_explorer --locked
+cargo run -p dodo-json-formatter --example json_formatter --locked
+cargo run -p dodo-encoder-decoder --example encoder_decoder --locked
 ```
 
-These are the same views the app mounts, reading the same data directory and
-real machine state — there is no fixture mode. They are `examples/` targets, so
-nothing a shipped build compiles can reach them and the app's dependency graph
-is unchanged by their existence. See `crates/dodo-cleaner/examples/cleaner.rs`
-for the shared wiring each view genuinely needs.
+These are the same views the app mounts. The stateful four read the same data
+directory and real machine state; the JSON formatter and Encoder/Decoder need
+neither. They are `examples/` targets, so nothing a shipped build compiles can
+reach them and the app's dependency graph is unchanged by their existence. See
+`crates/dodo-cleaner/examples/cleaner.rs` for the shared wiring each view needs.
 
 ## Pre-push checks
 
@@ -242,19 +244,14 @@ already know about. CI still runs the same checks.
 │   ├── dodo-i18n/      # Every user-facing string, in each supported language
 │   ├── dodo-app-icon/  # AppIcon enum mapping icon names to embedded SVG paths
 │   ├── dodo-paths/     # Where persisted files live, per platform
-│   └── dodo-ime-*/     # The input method: engine, contract, macOS and Windows hosts
+│   ├── dodo-{api-explorer,cleaner,database,docker,input-method,updater}/ # Feature crates
+│   ├── dodo-{json-formatter,encoder-decoder}/       # Single-file feature crates
+│   └── dodo-ime-*/     # Input-method engine, contract, macOS and Windows hosts
 ├── src/
 │   ├── main.rs         # Entry point: GPUI init, --version/--build-info, the window
 │   ├── app.rs          # DodoApp: top-level view holding the Layout
 │   ├── layout.rs       # Sidebar + main pane; the View enum that lists the tools
-│   ├── settings.rs     # The Settings dialog
-│   ├── i18n.rs         # dodo's end of dodo-i18n: t(), the global, LanguageExt
-│   ├── json_formatter.rs
-│   ├── encoder_decoder.rs
-│   ├── api_explorer/   # HTTP client   ┐
-│   ├── docker/         # Docker/Podman ├ each: models, services, state,
-│   ├── database/       # Databases     ┘ components, views
-│   ├── updater/        # The in-app updater, same five layers
+│   ├── settings/       # The Settings dialog
 │   ├── quick_nav/      # Clipboard detection and the normal-mode key bindings
 │   ├── session/        # session.json: appearance, window, open tool, tool list
 │   ├── assets.rs       # rust-embed AssetSource that loads embedded icons

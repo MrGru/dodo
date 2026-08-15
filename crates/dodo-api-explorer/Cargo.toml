@@ -62,11 +62,11 @@ reqwest = { version = "0.13", default-features = false, features = [
 rquickjs = { version = "0.12.1", default-features = false, features = ["std"] }
 # Basic authorization's credential encoding, and the Binary body type's
 # round-trip through a request snapshot. The binary keeps its own line for
-# `encoder_decoder` and `quick_nav`.
+# `quick_nav`; `dodo-encoder-decoder` has the other direct use.
 base64 = "0.22.1"
-# Encoding a query parameter and a form field on the way out. The binary keeps
-# its own line for `encoder_decoder`, and `dodo-database` has one for its URI
-# parser; all three resolve to one package.
+# Encoding a query parameter and a form field on the way out.
+# `dodo-encoder-decoder` and `dodo-database` have the other direct uses; all
+# three resolve to one package.
 percent-encoding = "2.3.2"
 # `collections.json`, `environments.json` and `script-consent.json` — their
 # documents and, for the latter two, their explicit `"version"` field — plus
