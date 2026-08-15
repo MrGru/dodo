@@ -53,13 +53,10 @@ use crate::i18n::{Str, input_method, t, tray};
 use crate::input_method::InputMethod;
 #[cfg(target_os = "macos")]
 use crate::input_method::Install;
-#[cfg(target_os = "macos")]
 use crate::input_method::models::event_tap::EventTapStatus;
-#[cfg(target_os = "windows")]
 use crate::input_method::models::keyboard_hook::KeyboardHookStatus;
 #[cfg(target_os = "macos")]
 use crate::input_method::models::status::status_message;
-#[cfg(target_os = "windows")]
 use crate::input_method::models::windows::{
     WindowsInstall, WindowsInstallFailure, WindowsInstallOutcome,
 };
@@ -124,27 +121,6 @@ impl InputMethodView {
     #[cfg(target_os = "windows")]
     const BACKENDS: [Backend; 2] = [Backend::Native, Backend::KeyboardHook];
 
-    /// The one sentence about the input method's standing state.
-    ///
-    /// Assembles the four arguments [`status_message`] decides from and does
-    /// nothing else. `describes_a_live_process` is the one call that cannot move
-    /// into the model: it is `kill(pid, 0)`, a syscall, and the model is pure.
-    #[cfg(target_os = "macos")]
-    fn status_line(cx: &App) -> Str {
-        let status = InputMethod::status(cx);
-        let running = status
-            .as_ref()
-            .filter(|status| status.describes_a_live_process())
-            .map(|status| status.bundle_version.clone());
-
-        status_message(
-            &InputMethod::install_state(cx),
-            InputMethod::is_installed(cx),
-            InputMethod::settings_applied(cx),
-            running.as_deref(),
-        )
-    }
-
     /// Install, or reinstall, or nothing while one is running.
     #[cfg(target_os = "macos")]
     fn install_button(cx: &App) -> Button {
@@ -173,6 +149,20 @@ impl InputMethodView {
     /// that are each half an answer.
     #[cfg(target_os = "macos")]
     fn status_card(cx: &App) -> impl IntoElement {
+        // `describes_a_live_process` is the one part that cannot move into the
+        // pure status model: it is `kill(pid, 0)`, a syscall.
+        let status = InputMethod::status(cx);
+        let running = status
+            .as_ref()
+            .filter(|status| status.describes_a_live_process())
+            .map(|status| status.bundle_version.clone());
+        let status_line = status_message(
+            &InputMethod::install_state(cx),
+            InputMethod::is_installed(cx),
+            InputMethod::settings_applied(cx),
+            running.as_deref(),
+        );
+
         h_flex()
             .items_center()
             .gap_3()
@@ -190,7 +180,7 @@ impl InputMethodView {
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t(Self::status_line(cx), cx)),
+                            .child(t(status_line, cx)),
                     ),
             )
             .child(div().flex_shrink_0().child(Self::install_button(cx)))
@@ -242,31 +232,28 @@ impl InputMethodView {
             .child(div().flex_shrink_0().child(control))
     }
 
-    #[cfg(target_os = "macos")]
     fn description() -> Str {
-        input_method::Text::Description.into()
-    }
-
-    #[cfg(target_os = "windows")]
-    fn description() -> Str {
-        input_method::Text::WindowsDescription
+        let description = if cfg!(target_os = "windows") {
+            input_method::Text::WindowsDescription
+        } else {
+            input_method::Text::Description
+        };
+        description.into()
     }
 
     fn backend_label(backend: Backend) -> Str {
-        match backend {
+        let label = match backend {
             Backend::Native => {
-                #[cfg(target_os = "macos")]
-                {
-                    input_method::Text::Native.into()
-                }
-                #[cfg(target_os = "windows")]
-                {
+                if cfg!(target_os = "windows") {
                     input_method::Text::NativeTsf
+                } else {
+                    input_method::Text::Native
                 }
             }
-            Backend::EventTap => input_method::Text::EventTap.into(),
-            Backend::KeyboardHook => input_method::Text::KeyboardHook.into(),
-        }
+            Backend::EventTap => input_method::Text::EventTap,
+            Backend::KeyboardHook => input_method::Text::KeyboardHook,
+        };
+        label.into()
     }
 
     /// The two real transformation hosts. The radio reads the global on every
@@ -286,17 +273,19 @@ impl InputMethodView {
             })
     }
 
-    #[cfg(target_os = "macos")]
-    fn event_tap_status_line(cx: &App) -> Str {
-        match InputMethod::event_tap_status(cx) {
-            EventTapStatus::Inactive => input_method::Text::EventTapInactive.into(),
-            EventTapStatus::WaitingForNative => input_method::Text::EventTapWaitingForNative.into(),
-            EventTapStatus::NeedsAccessibility => {
-                input_method::Text::EventTapNeedsAccessibility.into()
-            }
-            EventTapStatus::Running => input_method::Text::EventTapRunning.into(),
-            EventTapStatus::Failed => input_method::Text::EventTapFailed.into(),
-        }
+    #[allow(
+        dead_code,
+        reason = "kept portable so every target type-checks each platform's label conversion"
+    )]
+    fn event_tap_status_line(status: EventTapStatus) -> Str {
+        let label = match status {
+            EventTapStatus::Inactive => input_method::Text::EventTapInactive,
+            EventTapStatus::WaitingForNative => input_method::Text::EventTapWaitingForNative,
+            EventTapStatus::NeedsAccessibility => input_method::Text::EventTapNeedsAccessibility,
+            EventTapStatus::Running => input_method::Text::EventTapRunning,
+            EventTapStatus::Failed => input_method::Text::EventTapFailed,
+        };
+        label.into()
     }
 
     /// Event Tap has no install action: macOS owns both the request and the
@@ -324,14 +313,20 @@ impl InputMethodView {
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t(Self::event_tap_status_line(cx), cx)),
+                            .child(t(
+                                Self::event_tap_status_line(InputMethod::event_tap_status(cx)),
+                                cx,
+                            )),
                     ),
             )
     }
 
-    #[cfg(target_os = "windows")]
-    fn windows_tsf_status_line(cx: &App) -> Str {
-        match InputMethod::windows_install_state(cx) {
+    #[allow(
+        dead_code,
+        reason = "kept portable so every target type-checks each platform's label conversion"
+    )]
+    fn windows_tsf_status_line(state: WindowsInstall, installed: bool) -> Str {
+        let label = match state {
             WindowsInstall::Installing => input_method::Text::Installing,
             WindowsInstall::Uninstalling => input_method::Text::Uninstalling,
             WindowsInstall::Done(WindowsInstallOutcome::Ready) => {
@@ -352,11 +347,10 @@ impl InputMethodView {
             WindowsInstall::Done(WindowsInstallOutcome::Failed(
                 WindowsInstallFailure::Unregister { detail },
             )) => input_method::Text::WindowsTsfUnregisterFailed(detail),
-            WindowsInstall::Idle if InputMethod::is_installed(cx) => {
-                input_method::Text::WindowsTsfInstalled
-            }
+            WindowsInstall::Idle if installed => input_method::Text::WindowsTsfInstalled,
             WindowsInstall::Idle => input_method::Text::WindowsTsfNotInstalled,
-        }
+        };
+        label.into()
     }
 
     #[cfg(target_os = "windows")]
@@ -391,7 +385,13 @@ impl InputMethodView {
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t(Self::windows_tsf_status_line(cx), cx)),
+                            .child(t(
+                                Self::windows_tsf_status_line(
+                                    InputMethod::windows_install_state(cx),
+                                    InputMethod::is_installed(cx),
+                                ),
+                                cx,
+                            )),
                     ),
             )
             .child(
@@ -666,13 +666,17 @@ impl InputMethodView {
         self.stop_recording(cx);
     }
 
-    #[cfg(target_os = "windows")]
-    fn keyboard_hook_status_line(cx: &App) -> Str {
-        match InputMethod::keyboard_hook_status(cx) {
+    #[allow(
+        dead_code,
+        reason = "kept portable so every target type-checks each platform's label conversion"
+    )]
+    fn keyboard_hook_status_line(status: KeyboardHookStatus) -> Str {
+        let label = match status {
             KeyboardHookStatus::Inactive => input_method::Text::KeyboardHookInactive,
             KeyboardHookStatus::Running => input_method::Text::KeyboardHookRunning,
             KeyboardHookStatus::Failed => input_method::Text::KeyboardHookFailed,
-        }
+        };
+        label.into()
     }
 
     #[cfg(target_os = "windows")]
@@ -698,7 +702,12 @@ impl InputMethodView {
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t(Self::keyboard_hook_status_line(cx), cx)),
+                            .child(t(
+                                Self::keyboard_hook_status_line(InputMethod::keyboard_hook_status(
+                                    cx,
+                                )),
+                                cx,
+                            )),
                     ),
             )
     }

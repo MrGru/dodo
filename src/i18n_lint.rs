@@ -393,9 +393,143 @@ fn findings() -> Vec<String> {
     findings
 }
 
+/// Lines where a platform `cfg` attribute hides a function returning `Str`.
+///
+/// Such a function is invisible to the other platforms' type checkers, which
+/// lets a bare area `Text` be returned where `Str` was promised. Platform-only
+/// API calls belong in an element-building caller; the value-selection helper
+/// stays portable and ends with one conversion to `Str`.
+fn platform_gated_str_functions(source: &str) -> Vec<usize> {
+    let hidden_on_macos = |attribute: &str| {
+        let compact: String = attribute.chars().filter(|c| !c.is_whitespace()).collect();
+        compact.contains("target_os")
+            && (!compact.contains("target_os=\"macos\"")
+                || compact.contains("not(target_os=\"macos\")"))
+    };
+    let lines: Vec<&str> = source.lines().collect();
+    let mut findings = Vec::new();
+    let mut line = 0;
+
+    while line < lines.len() {
+        let trimmed = lines[line].trim();
+        if !trimmed.starts_with("#[cfg") {
+            line += 1;
+            continue;
+        }
+
+        let cfg_line = line + 1;
+        let mut attribute = String::new();
+        loop {
+            attribute.push_str(lines[line].trim());
+            line += 1;
+            if attribute.matches('[').count() == attribute.matches(']').count()
+                || line == lines.len()
+            {
+                break;
+            }
+        }
+        if !hidden_on_macos(&attribute) {
+            continue;
+        }
+
+        while line < lines.len()
+            && (lines[line].trim().is_empty()
+                || lines[line].trim().starts_with("//")
+                || lines[line].trim().starts_with("#["))
+        {
+            line += 1;
+        }
+        if line == lines.len()
+            || !lines[line]
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .any(|word| word == "fn")
+        {
+            continue;
+        }
+
+        let mut signature = String::new();
+        while line < lines.len() {
+            signature.push_str(lines[line]);
+            line += 1;
+            if signature.contains('{') || signature.contains(';') {
+                break;
+            }
+        }
+        let compact: String = signature.chars().filter(|c| !c.is_whitespace()).collect();
+        if compact.find("->Str").is_some_and(|at| {
+            !compact[at + 5..].starts_with(|c: char| c == '_' || c.is_alphanumeric())
+        }) {
+            findings.push(cfg_line);
+        }
+    }
+
+    // A portable `Str` function can hide one branch just as effectively by
+    // putting the attribute inside its body. Rustfmt makes the function's
+    // closing brace the next `}` at the signature's indentation, so this pass
+    // can inspect that body without pretending to parse Rust.
+    let mut line = 0;
+    while line < lines.len() {
+        let indent = lines[line].len() - lines[line].trim_start().len();
+        if !lines[line]
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .any(|word| word == "fn")
+        {
+            line += 1;
+            continue;
+        }
+
+        let mut signature = String::new();
+        while line < lines.len() {
+            signature.push_str(lines[line]);
+            line += 1;
+            if signature.contains('{') || signature.contains(';') {
+                break;
+            }
+        }
+        let compact: String = signature.chars().filter(|c| !c.is_whitespace()).collect();
+        if !compact.find("->Str").is_some_and(|at| {
+            !compact[at + 5..].starts_with(|c: char| c == '_' || c.is_alphanumeric())
+        }) || signature.contains(';')
+        {
+            continue;
+        }
+
+        while line < lines.len() {
+            let body_line = lines[line];
+            let trimmed = body_line.trim();
+            let body_indent = body_line.len() - body_line.trim_start().len();
+            if body_indent == indent && trimmed.starts_with('}') {
+                break;
+            }
+            if trimmed.starts_with("#[cfg") {
+                let cfg_line = line + 1;
+                let mut attribute = String::new();
+                loop {
+                    attribute.push_str(lines[line].trim());
+                    line += 1;
+                    if attribute.matches('[').count() == attribute.matches(']').count()
+                        || line == lines.len()
+                    {
+                        break;
+                    }
+                }
+                if hidden_on_macos(&attribute) {
+                    findings.push(cfg_line);
+                }
+                continue;
+            }
+            line += 1;
+        }
+    }
+
+    findings.sort_unstable();
+    findings.dedup();
+    findings
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{enclosing_call, findings, string_literals};
+    use super::{enclosing_call, findings, platform_gated_str_functions, string_literals};
 
     /// The guard itself: no view may draw a string that did not come from
     /// `Str`.
@@ -460,6 +594,77 @@ mod tests {
                 "{path} no longer renders anything — it does not belong in SOURCES"
             );
         }
+    }
+
+    /// Every platform's labels must be type-checked on this Mac. A platform
+    /// attribute may still guard callers that use native APIs, but never the
+    /// `Str`-returning value-selection helper itself.
+    #[test]
+    fn no_platform_gate_hides_a_str_returning_function() {
+        fn visit(directory: &std::path::Path, root: &std::path::Path, found: &mut Vec<String>) {
+            const SKIP: [&str; 4] = [".git", "target", "_bmad", "_bmad-output"];
+
+            for entry in std::fs::read_dir(directory).expect("the repository is readable") {
+                let path = entry.expect("a readable directory entry").path();
+                if path.is_dir() {
+                    if !path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| SKIP.contains(&name))
+                    {
+                        visit(&path, root, found);
+                    }
+                } else if path.extension().is_some_and(|extension| extension == "rs")
+                    && path.file_name().is_none_or(|name| name != "i18n_lint.rs")
+                {
+                    let source = std::fs::read_to_string(&path).expect("Rust source is readable");
+                    let relative = path
+                        .strip_prefix(root)
+                        .expect("walked from the repository root")
+                        .display();
+                    found.extend(
+                        platform_gated_str_functions(&source)
+                            .into_iter()
+                            .map(|line| format!("{relative}:{line}")),
+                    );
+                }
+            }
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut found = Vec::new();
+        visit(root, root, &mut found);
+        assert!(
+            found.is_empty(),
+            "platform `cfg` hides `Str`-returning function(s):\n  {}\n\
+             move native API calls into the gated caller and keep label selection portable",
+            found.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn the_platform_gate_classifier_is_positional() {
+        let source = concat!(
+            "#[",
+            "cfg(target_os = \"windows\")]\n",
+            "fn hidden() -> ",
+            "Str { Text::Windows }\n\n",
+            "#[cfg(\n    target_os = \"linux\"\n)]\n",
+            "fn multiline(\n) -> ",
+            "Str {\n    Text::Linux\n}\n\n",
+            "#[",
+            "cfg(target_os = \"windows\")]\n{\n    let value = Text::Windows;\n}\n\n",
+            "// #[",
+            "cfg(target_os = \"windows\")]\n",
+            "fn commented_out() -> ",
+            "Str { unreachable!() }\n\n",
+            "fn portable() -> ",
+            "Str {\n    #[",
+            "cfg(target_os = \"windows\")]\n    { Text::Windows }\n}\n\n",
+            "#[cfg(test)]\nfn ordinary_test() -> ",
+            "Str { unreachable!() }\n",
+        );
+        assert_eq!(platform_gated_str_functions(source), [1, 4, 21]);
     }
 
     /// The classifier is the whole guard; if it drifts, the guard silently
