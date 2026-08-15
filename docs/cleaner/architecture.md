@@ -7,7 +7,7 @@ deliberately not yet implemented — see "What's deferred" below.
 
 - `crates/dodo-cleaner/src/core/`: domain contracts, scan-root definitions, filesystem aggregation, and safety
   helpers with **no GPUI dependency** — unit-testable without a window, and this is checked by hand at
-  every phase rather than by an automated grep the way `src/database/`'s self-contained-module
+  every phase rather than by an automated grep the way `crates/dodo-database/`'s self-contained-module
   invariant is.
 - `crates/dodo-cleaner/src/state/`: scan orchestration and UI state transitions (`CleanerState`, `CleanerStatus`).
 - `crates/dodo-cleaner/src/views/`: GPUI rendering only — no filesystem traversal happens here.

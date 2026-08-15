@@ -25,7 +25,7 @@ Six things about the module that are not obvious from any one file:
 - **`services/` is the only place that may name `bollard`**, and the only place dodo
   **constructs a tokio runtime**. (The precision matters since the Database Explorer landed: the
   `postgres` crate builds a private current-thread runtime *per client*, and
-  `src/database/services/postgres.rs` never names `tokio` — so this is the only runtime dodo
+  `crates/dodo-database/src/services/postgres.rs` never names `tokio` — so this is the only runtime dodo
   builds, not the only one that exists.) `bollard` is async, so `BollardEngine` drives every call
   with `Runtime::block_on` on the background executor, keeping the blocking-by-contract discipline
   `Transport` follows. Inspect

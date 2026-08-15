@@ -22,7 +22,13 @@ mod build_info;
 // item from it, `CleanerView`, and this alias is what keeps that line reading
 // `use crate::cleaner::CleanerView`. There is no `src/cleaner/` any more.
 use dodo_cleaner as cleaner;
-mod database;
+// The Database Explorer is a *feature* crate — `crates/dodo-database`, the
+// third module taken out of this binary. `layout.rs` names `DatabaseView`,
+// `run_app` below calls `database::init`, and `quick_nav` reads
+// `models::uri` to route a pasted connection string; this alias is what keeps
+// all four lines reading `crate::database::…`. There is no `src/database/` any
+// more.
+use dodo_database as database;
 mod dialog_slot;
 // The Docker/Podman tool is a *feature* crate — `crates/dodo-docker`, the
 // second module taken out of this binary. `layout.rs` names `DockerPage` and
@@ -100,6 +106,17 @@ mod paths {
         #[test]
         fn the_docker_crate_resolves_the_same_host_as_this_binary() {
             assert_eq!(super::current(), dodo_docker::paths::current());
+        }
+
+        /// `dodo_database::paths` is the third copy of the same seam, and the
+        /// one where a disagreement would be worst: a `data_dir()` that did
+        /// not match the binary's would leave `connections.json` and
+        /// `query-data.json` behind on the next launch, so every saved
+        /// connection and every saved query would silently vanish.
+        #[test]
+        fn the_database_crate_resolves_the_same_host_as_this_binary() {
+            assert_eq!(super::current(), dodo_database::paths::current());
+            assert_eq!(super::data_dir(), dodo_database::paths::data_dir());
         }
     }
 }

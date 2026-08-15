@@ -1,12 +1,12 @@
 ---
 name: dodo-database-internals
-description: Deep internals of src/database/ that no single file makes obvious - the one-tree-many-roots connection model, why a connection hover card can never carry a password, DataTable's shared row-height knob, the self-contained-module invariant and its grep check, why the Driver capability set only grows with a control that reads it, the object tree as a driver-answered question rather than a hard-coded ladder, the placeholder-child trick for an unopened tree node, PageBuffer's memory bound and why no LIMIT is ever injected, round 5's write-boundary types, PostgreSQL's binary row decoding, the MySQL/MariaDB driver, the Redis non-SQL driver, round 6's query-data persistence and catalog search, the plain-text credential posture, and how a pasted connection URI fills the form. Load before touching anything under src/database/.
+description: Deep internals of crates/dodo-database/ that no single file makes obvious - the one-tree-many-roots connection model, why a connection hover card can never carry a password, DataTable's shared row-height knob, the self-contained-module invariant and its grep check, why the Driver capability set only grows with a control that reads it, the object tree as a driver-answered question rather than a hard-coded ladder, the placeholder-child trick for an unopened tree node, PageBuffer's memory bound and why no LIMIT is ever injected, round 5's write-boundary types, PostgreSQL's binary row decoding, the MySQL/MariaDB driver, the Redis non-SQL driver, round 6's query-data persistence and catalog search, the plain-text credential posture, and how a pasted connection URI fills the form. Load before touching anything under crates/dodo-database/.
 ---
 
-**`src/database/`** is the Database Explorer — create a connection, browse its objects, run a
+**`crates/dodo-database/`** is the Database Explorer — create a connection, browse its objects, run a
 query, read the result, and safely edit identified SQL rows — **PostgreSQL, SQLite, MySQL/MariaDB
 and Redis as of round 6**. Same five-layer split as the other multi-file tools;
-**`src/database/mod.rs` is the authority** on the structure, shipped rounds and deliberate cuts.
+**`crates/dodo-database/src/lib.rs` is the authority** on the structure, shipped rounds and deliberate cuts.
 Sixteen things worth knowing before touching it:
 
 - **The left panel is one tree and the connections are its roots**, not a list stacked on a
@@ -27,7 +27,7 @@ Sixteen things worth knowing before touching it:
   four unit tests check rather than something eyeballed once.
 - **It is self-contained, and the invariant is checkable.** No `use crate::` line in the module
   names another tool — only `crate::{database,i18n,app_icon,paths}` — so
-  `grep -rn '^use crate::' src/database/ | grep -vE 'crate::(database|i18n|app_icon|paths)'`
+  `grep -rn '^use crate::' crates/dodo-database/src/ | grep -vE 'crate::(i18n|app_icon|paths)'`
   returns nothing. (Other modules are *mentioned* in its doc comments; a pointer is not an edge.)
   The design report proposed a "detect running database containers" prefill on the connection form
   and it was dropped in *every* round, precisely so no compile-time edge exists between two tools.

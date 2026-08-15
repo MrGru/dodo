@@ -35,14 +35,14 @@ not a callback that force-quits) plus a macOS-only `cmd-w` binding, needed becau
 no menu bar for that shortcut to hang off. The doc comments there carry the reasoning. The Windows `--build-info` path has
 run on a release runner; interactive window lifecycle still needs captain testing.
 
-Most tools are a single `src/<tool>.rs`. **`src/api_explorer/`, `src/database/` and
+Most tools are a single `src/<tool>.rs`. **`src/api_explorer/`, `crates/dodo-database/` and
 `crates/dodo-docker/` are the exceptions** and the pattern to copy when a tool outgrows one file:
 `models/` (plain data, no GPUI, unit tested), `services/` (the trait that is the only place naming
 the outside-world crate), `state/`, `components/`, `views/`. Each one's own `mod.rs` / `lib.rs` doc
 comments are the authority on its split and what shipped when; the matching skill below is where
 the non-obvious parts of each are written down — load it before changing anything in one of these
-three rather than inferring the design from the files cold. Docker is the first of the three to
-follow the Cleaner out of the binary; see the feature-crate entry below.
+three rather than inferring the design from the files cold. Docker and the Database Explorer have
+followed the Cleaner out of the binary; see the feature-crate entry below.
 
 **`crates/dodo-cleaner/` is the same shape but started unfinished, rounds have been landing
 since, and on 2026-08-15 it moved out of the binary entirely** — it was `src/cleaner/`, and any
@@ -607,6 +607,17 @@ Ten things about build and release that catch people:
   **the seam only needs what the crate actually asks**: nothing under `crates/dodo-docker` writes a
   file, so its `paths` module exposes `current()` and no `data_dir()`, and `main.rs`'s
   host-consistency test compares the one spelling there is.
+
+  **`crates/dodo-database` is the third**, extracted the same day and the same way: 52 files, the
+  four driver crates plus `sqlformat` and the two rustls lines moving out of the root
+  `Cargo.toml` with it. It is the one that shows what to do when the inbound surface is *not* one
+  file. `quick_nav` reads `models::uri` to route a pasted connection string, so `models` stays
+  `pub` while `components`, `services`, `state` and `views` become `pub(crate)` — **the rule is
+  what the binary names, not a uniform `pub(crate)` sweep**. Its `paths` seam is also the one where
+  the two spellings agreeing matters most: a `data_dir()` that disagreed with the binary's would
+  leave `connections.json` and `query-data.json` behind, so every saved connection and query would
+  silently vanish on the next launch. `src/i18n_lint.rs` reaches across to its twelve view and
+  component files the same way it already did for the Cleaner's three.
   **A feature crate does not make the build faster, and this one was measured to find out.**
   "Splitting the binary into crates" in `docs/build-optimization.md` is the authority — the method,
   the per-unit breakdown, and why a non-interleaved A/B of build times lies. The summary, from three
@@ -711,7 +722,7 @@ touches a module never pays for its internals. This table is the single index; t
 |---|---|
 | `dodo-api-explorer-internals` | Touching anything under `src/api_explorer/` — the send pipeline, scripting/sandbox, consent gating, codegen/curl, collections, or tab/column layout. |
 | `dodo-docker-internals` | Touching anything under `crates/dodo-docker/` — engine discovery, the four list pages, polling, the detail dialog, or a "Coming soon" placeholder. |
-| `dodo-database-internals` | Touching anything under `src/database/` — the connection tree, query execution, the `Driver` trait, or result-grid layout. |
+| `dodo-database-internals` | Touching anything under `crates/dodo-database/` — the connection tree, query execution, the `Driver` trait, or result-grid layout. |
 | `dodo-build-release-internals` | Touching `src/updater/`, `.github/workflows/`, `Cargo.toml`'s dependencies, `docs/release.md`, `docs/macos-signing.md`, `docs/build-optimization.md`, `scripts/generate-icons.py`, `tools/update-manifest/`, `deny.toml`, or `THIRD-PARTY-NOTICES.md`; preparing or debugging a release. |
 | `gpui-component-recipes` | Writing or editing any `render` / `new` that builds a gpui-component widget (input, code editor, diagnostics, select, dialog, settings panel, sidebar, button, icon); a widget call will not compile; a widget builds but nothing appears on screen; or a code editor draws uncoloured text. |
 | `dodo-tool-view` | Adding, renaming, reordering or removing a sidebar tool; a new sidebar entry does not appear or renders blank; part of a tool page is unreachable at a small window (the pane's scroll container only reveals a tool that reports its own height). |

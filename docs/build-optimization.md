@@ -449,7 +449,7 @@ compiled into the shipped binary at all.
 
 ### What the Database Explorer cost
 
-Round 1 of `src/database/`: the five layers, the `Driver` trait, the PostgreSQL
+Round 1 of the Database Explorer (then `src/database/`): the five layers, the `Driver` trait, the PostgreSQL
 and SQLite drivers, `connections.json`, the lazy object tree, the query editor
 and the bounded result grid — roughly 7,000 lines, about half of them tests,
 plus 82 new `Str` variants in both languages. **It is by far the largest single

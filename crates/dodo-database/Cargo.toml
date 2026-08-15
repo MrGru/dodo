@@ -1,0 +1,109 @@
+[package]
+name = "dodo-database"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "dodo's Database Explorer: the Driver trait and its four backends, the connection forest, the query tabs and the bounded result grid."
+
+# Every dependency below is one the Database Explorer already had while it was
+# `src/database/`; nothing was added by the move and nothing was left behind.
+# The list is longer than the other feature crates' only because `services` is
+# four independent database clients — every one of them blocking, for the
+# reason the `[dependencies]` header for the drivers records below.
+[dependencies]
+# The tree glyphs, toolbar icons and status marks `views` and `components`
+# draw. Re-exported as `crate::app_icon` in `lib.rs` so every call site still
+# reads `crate::app_icon::AppIcon`.
+dodo-app-icon = { path = "../dodo-app-icon" }
+# Every string the Database Explorer shows. The `gpui` feature is what brings
+# `t()` and the active-language global with it: the catalogue itself is pure,
+# but the view files render a `Str` into a `SharedString` and that needs an
+# `App`. See that crate's `Cargo.toml` for why the feature exists at all.
+dodo-i18n = { path = "../dodo-i18n", features = ["gpui"] }
+# `data_dir()`, where `services::connection_store` writes `connections.json`
+# and `services::query_store` writes `query-data.json`. `src/paths.rs` here is
+# the seam that resolves the host; see its module doc, and note that this is
+# the crate where the two spellings agreeing matters most — a disagreement
+# would orphan every saved connection.
+dodo-paths = { path = "../dodo-paths" }
+# Only the seventeen files under `views/` and `components/` may name these two.
+# The other 35 — `models`, `services` and `state` — are gpui-free on purpose:
+# the URI parser, the identity/write boundary, the value decoding, the four
+# drivers and the connection forest are all tested with no `App` and no frame.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+
+# ---------------------------------------------------------------------------
+# The four backends.
+#
+# **Only `services` may name the driver crates below**, the containment rule
+# `lib.rs` states. Everything above that layer sees the `Driver` trait and
+# `models`' plain data.
+#
+# All of them are *blocking* clients, chosen over `sqlx` for one decisive
+# reason recorded in the design report: every SQL backend here exposes a real
+# out-of-band query cancel (`Client::cancel_token`, `sqlite3_interrupt`,
+# `KILL QUERY`) and `sqlx` exposes none, so "Cancel" could only ever mean "drop
+# the future and let the server keep grinding".
+# ---------------------------------------------------------------------------
+
+# PostgreSQL. A *synchronous façade* over `tokio-postgres`: it builds a private
+# **current-thread** runtime per `Client` and blocks on it, so it adds no
+# threads and no scheduler — the calling thread is already one of GPUI's
+# background-executor threads. `services/postgres.rs` never names `tokio`.
+postgres = "0.19"
+# The TLS connector for the above. rustls only: no `openssl-sys` and no
+# `native-tls` enters the graph by this route, so dodo's OpenSSL-free posture
+# is unchanged.
+tokio-postgres-rustls = "0.14"
+# Named directly only to build the one `ClientConfig` the connector above
+# needs. Both were already in dodo's graph transitively via `reqwest`'s
+# `rustls` feature, at the same versions, so naming them costs no new crate —
+# and the platform verifier is what makes a hosted Postgres (which requires
+# TLS) work without dodo shipping its own root store.
+rustls = "0.23"
+rustls-platform-verifier = "0.7"
+# SQLite. `bundled` compiles the SQLite C amalgamation into the binary, which
+# is the single largest line item in this tool's size: deliberate, because the
+# alternative is linking the host's `libsqlite3`, whose version varies by
+# platform and which is absent on Windows. `column_metadata` turns on
+# `SQLITE_ENABLE_COLUMN_METADATA`, which is what lets a result column report
+# the base table and column it came from — the precondition for editing a
+# result safely. `column_decltype` is what reports a result column's declared
+# type, the second line of every grid header.
+rusqlite = { version = "0.40", features = [
+    "bundled",
+    "column_decltype",
+    "column_metadata",
+] }
+# MySQL and MariaDB, through their shared wire protocol. Defaults include
+# native-tls; keep only the pure-Rust compression backend and rustls using the
+# aws-lc provider already present in dodo's graph. No pool is built or used.
+mysql = { version = "28", default-features = false, features = [
+    "minimal-rust",
+    "rustls-tls",
+] }
+# Redis/Valkey's synchronous client only. Defaults add command-family helpers
+# this crate does not use; no aio feature means no async runtime enters it.
+redis = { version = "1.5", default-features = false }
+
+# The Format action in the query editor. A real SQL formatter for four crates,
+# two of which (`winnow`, `memchr`) dodo already links — the opposite of the
+# `dprint-plugin-typescript` situation that made the API Explorer's script
+# formatter a deliberately narrow hand-rolled re-indenter, because SQL
+# formatting as developers want it is tokenize-and-reindent rather than
+# parse-and-print. `models::sql_format` is the only module that may name it.
+sqlformat = "0.5"
+# Decoding the percent-escapes in a pasted connection URI's user, password and
+# path segments. `models::uri` is the only module that may name it.
+percent-encoding = "2.3.2"
+# `connections.json` and `query-data.json` — their documents, their explicit
+# `"version"` field, and the JSON/CSV a result grid exports.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+# `views::database`'s two mount tests need a `TestAppContext`.
+gpui = { git = "https://github.com/zed-industries/zed", features = [
+    "test-support",
+] }

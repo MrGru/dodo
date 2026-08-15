@@ -124,55 +124,55 @@ const SOURCES: [(&str, &str); 34] = [
     // and need no exception. Everything a user reads as language here is a
     // label, a placeholder, a status word or an error.
     (
-        "src/database/views/database.rs",
-        include_str!("database/views/database.rs"),
+        "crates/dodo-database/src/views/database.rs",
+        include_str!("../crates/dodo-database/src/views/database.rs"),
     ),
     (
-        "src/database/views/connections_panel.rs",
-        include_str!("database/views/connections_panel.rs"),
+        "crates/dodo-database/src/views/connections_panel.rs",
+        include_str!("../crates/dodo-database/src/views/connections_panel.rs"),
     ),
     (
-        "src/database/views/connection_form.rs",
-        include_str!("database/views/connection_form.rs"),
+        "crates/dodo-database/src/views/connection_form.rs",
+        include_str!("../crates/dodo-database/src/views/connection_form.rs"),
     ),
     (
-        "src/database/views/query_pane.rs",
-        include_str!("database/views/query_pane.rs"),
+        "crates/dodo-database/src/views/query_pane.rs",
+        include_str!("../crates/dodo-database/src/views/query_pane.rs"),
     ),
     (
-        "src/database/views/object_detail.rs",
-        include_str!("database/views/object_detail.rs"),
+        "crates/dodo-database/src/views/object_detail.rs",
+        include_str!("../crates/dodo-database/src/views/object_detail.rs"),
     ),
     (
-        "src/database/views/result_grid.rs",
-        include_str!("database/views/result_grid.rs"),
+        "crates/dodo-database/src/views/result_grid.rs",
+        include_str!("../crates/dodo-database/src/views/result_grid.rs"),
     ),
     (
-        "src/database/views/history.rs",
-        include_str!("database/views/history.rs"),
+        "crates/dodo-database/src/views/history.rs",
+        include_str!("../crates/dodo-database/src/views/history.rs"),
     ),
     (
-        "src/database/views/saved_queries.rs",
-        include_str!("database/views/saved_queries.rs"),
+        "crates/dodo-database/src/views/saved_queries.rs",
+        include_str!("../crates/dodo-database/src/views/saved_queries.rs"),
     ),
     (
-        "src/database/views/saved_query_form.rs",
-        include_str!("database/views/saved_query_form.rs"),
+        "crates/dodo-database/src/views/saved_query_form.rs",
+        include_str!("../crates/dodo-database/src/views/saved_query_form.rs"),
     ),
     (
-        "src/database/views/catalog_search.rs",
-        include_str!("database/views/catalog_search.rs"),
+        "crates/dodo-database/src/views/catalog_search.rs",
+        include_str!("../crates/dodo-database/src/views/catalog_search.rs"),
     ),
     // The two shared elements. They take text that is already translated, so a
     // literal in one of them would be a new, untranslated string rather than a
     // pass-through — which is exactly what this scan is for.
     (
-        "src/database/components/notice.rs",
-        include_str!("database/components/notice.rs"),
+        "crates/dodo-database/src/components/notice.rs",
+        include_str!("../crates/dodo-database/src/components/notice.rs"),
     ),
     (
-        "src/database/components/states.rs",
-        include_str!("database/components/states.rs"),
+        "crates/dodo-database/src/components/states.rs",
+        include_str!("../crates/dodo-database/src/components/states.rs"),
     ),
     // The Input method tool. Scanned on every platform even though it only
     // *compiles* on macOS: `include_str!` reads the file, not the build, which

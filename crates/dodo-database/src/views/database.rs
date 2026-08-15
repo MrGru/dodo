@@ -1,0 +1,2597 @@
+//! The Database Explorer's page: one tree on the left, the query editor and its
+//! result on the right.
+//!
+//! # The connections *are* the tree's roots
+//!
+//! Not a connection list above an object tree — one tree, whose top level is
+//! the saved connections and whose branches are their databases, schemas and
+//! tables. That is why nothing here clears "the tree": every connection has its
+//! own, they are all open at once, and
+//! [`Forest`](crate::state::tree::Forest) holds the lot. Selecting a
+//! connection therefore costs nothing, which is what lets the user read one
+//! database's columns while the editor runs against another.
+//!
+//! The per-connection actions — Connect, Disconnect, Edit, Duplicate, Delete —
+//! are a **right-click context menu on the root row**, built by
+//! `connections_panel`, not buttons on the row. The row itself carries the
+//! engine's mark, the status dot, and a hover card with the connection's
+//! details.
+//!
+//! # Everything that touches a database happens off the UI thread
+//!
+//! Connecting, pinging, expanding a tree node, running a statement and writing
+//! `connections.json` are all blocking, and every one of them is spawned onto
+//! GPUI's background executor. Nothing in this file calls a
+//! [`Driver`](crate::services::Driver) method directly.
+//!
+//! # The live handles live here, not in `state/`
+//!
+//! `state::connections` holds what is *saved* and what each connection's status
+//! is; the `Arc<dyn Driver>` handles are this view's, keyed by profile id. That
+//! is what keeps the state layer testable with no server, and it is why
+//! disconnecting is "drop the handle and clear the tree" in one place.
+//!
+//! # The object tree is rebuilt from the model, never mutated in the widget
+//!
+//! `TreeState::set_items` replaces the widget's items — and their expanded
+//! flags — so the widget cannot be the authority on what is open.
+//! [`Forest`](crate::state::tree::Forest) is, and this view rebuilds
+//! the items from it whenever it changes. `state::tree`'s module doc has the
+//! second, sharper reason.
+//!
+//! # Several query tabs, one result grid
+//!
+//! [`QueryTabs`] holds them: each tab has its own editor entity, its own run in
+//! flight and its own [`QueryState`]. The `TableState` is **shared** — only one
+//! grid is ever on screen — so switching tabs re-fills the delegate from the
+//! newly active tab's result ([`DatabaseView::show_active_result`]). A
+//! background run therefore has to look its tab up **by id**, not by index: the
+//! user may close a tab to its left, or switch away, while it is still running.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use gpui::{
+    App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, Hsla,
+    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, ScrollStrategy,
+    SharedString, Styled as _, Subscription, Task, Window, div, px,
+};
+use gpui_component::button::ButtonVariant;
+use gpui_component::dialog::DialogButtonProps;
+use gpui_component::input::InputState;
+use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
+use gpui_component::table::TableState;
+use gpui_component::tree::{TreeEvent, TreeItem, TreeState};
+use gpui_component::{ActiveTheme as _, WindowExt as _};
+
+use crate::app_icon::AppIcon;
+use crate::i18n::{Language, LanguageExt, Str, database, db_catalog, db_connection, db_query, t};
+use crate::models::catalog::{NodeId, NodeKind, NodeLabel};
+use crate::models::connection::ConnectionProfile;
+use crate::models::detail::{DetailRequest, DetailTarget};
+use crate::models::engine::{Address, Engine};
+use crate::models::library::{HistoryOutcome, QueryDataDocument, QueryScope, SavedQuery};
+use crate::models::page::PageBudget;
+use crate::models::sql_format;
+use crate::models::statement::{GeneratedBatch, generate};
+use crate::models::uri::ParsedUri;
+use crate::models::value::{ColumnMeta, Value};
+use crate::paths::data_dir;
+use crate::services::connection_store::{ConnectionStore, DiskConnectionStore};
+use crate::services::export::{self, ExportFormat};
+use crate::services::query_store::{DiskQueryStore, QueryStore};
+use crate::services::{self, Driver};
+use crate::state::catalog_search::{CatalogIndex, CatalogSearchEntry, CatalogSource};
+use crate::state::connections::{ConnectionsState, Status};
+use crate::state::detail::{self, DetailLoad, DetailState};
+use crate::state::edit::{EditError, PendingGrid};
+use crate::state::history::History;
+use crate::state::query::{self, QueryState};
+use crate::state::saved_queries::SavedQueries;
+use crate::state::tabs::{QueryTab, QueryTabs};
+use crate::state::tree::{Content, Forest, Notice, Outline, RowRef};
+use crate::views::catalog_search;
+use crate::views::commit_dialog;
+use crate::views::connection_form::{self, ConnectionForm, FormEvent};
+use crate::views::history;
+use crate::views::result_grid::ResultDelegate;
+use crate::views::row_editor::{self, Action as RowEditorAction, Draft as RowEditorDraft};
+use crate::views::{saved_queries, saved_query_form};
+use crate::{DatabaseCopyCell, DatabaseCopyRow, KEY_CONTEXT};
+
+/// The left panel's default width, and the range the divider allows.
+const PANEL_WIDTH: Pixels = px(280.);
+const PANEL_MIN: Pixels = px(200.);
+const PANEL_MAX: Pixels = px(520.);
+
+/// The query editor's default height. The result grid takes the rest, because
+/// the result is what grows.
+pub(super) const EDITOR_HEIGHT: Pixels = px(200.);
+pub(super) const EDITOR_MIN: Pixels = px(90.);
+
+/// How far each tree level is indented, and the padding of the first.
+pub(super) const TREE_INDENT: Pixels = px(14.);
+pub(super) const TREE_PADDING: Pixels = px(8.);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum MutationTarget {
+    Query(u64),
+    Detail(DetailRequest),
+}
+
+pub struct DatabaseView {
+    pub(super) connections: ConnectionsState,
+    /// The live handles. Present exactly for the connections whose status is
+    /// [`Status::Connected`].
+    drivers: HashMap<u64, Arc<dyn Driver>>,
+    store: Arc<dyn ConnectionStore>,
+
+    /// One [`CatalogTree`](crate::state::tree::CatalogTree) per
+    /// connection, plus which connection roots are open. The panel is one tree
+    /// whose roots are the connections; this is that arrangement.
+    pub(super) forest: Forest,
+    pub(super) tree_state: Entity<TreeState>,
+
+    /// The open query tabs. Always at least one.
+    pub(super) tabs: QueryTabs,
+    /// Round 2's bounded execution list, now restored from disk on launch.
+    history: History,
+    saved_queries: SavedQueries,
+    query_store: Arc<dyn QueryStore>,
+    query_store_loaded: bool,
+    /// False after a corrupt/newer document. In-memory query work remains
+    /// usable, but nothing overwrites the unreadable file silently.
+    query_store_writable: bool,
+    query_save_dirty: bool,
+    /// Shared by query results and object detail, because only one grid is ever
+    /// on screen.
+    pub(super) table: Entity<TableState<ResultDelegate>>,
+    pub(super) detail: Option<DetailState>,
+
+    outer_split: Entity<ResizableState>,
+    pub(super) inner_split: Entity<ResizableState>,
+
+    /// The open connection form, kept so its subscription outlives the dialog.
+    form: Option<Entity<ConnectionForm>>,
+    _form_subscription: Option<Subscription>,
+    _tree_subscription: Subscription,
+
+    /// In-flight work, held so a new request replaces the old one. A query's
+    /// task is **not** here: it belongs to its tab, so a run in one tab is not
+    /// cancelled by a run in another.
+    connect_task: Option<Task<()>>,
+    children_task: Option<Task<()>>,
+    detail_task: Option<Task<()>>,
+    mutation_task: Option<Task<()>>,
+    save_task: Option<Task<()>>,
+    query_save_task: Option<Task<()>>,
+
+    /// A failure from the store itself — the file could not be read or written.
+    /// Held as a [`Str`] rather than rendered text so it re-translates.
+    pub(super) store_error: Option<Str>,
+    pub(super) query_store_error: Option<Str>,
+    /// Result/detail mutation feedback, held untranslated so language changes
+    /// update a message already on screen.
+    pub(super) edit_notice: Option<(Str, bool)>,
+
+    focus_handle: FocusHandle,
+    language: Language,
+}
+
+impl DatabaseView {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let tree_state = cx.new(|cx| TreeState::new(cx));
+        let tree_subscription =
+            cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| match event {
+                TreeEvent::Expanded(id) => this.on_expanded(id.to_string(), cx),
+                TreeEvent::Collapsed(id) => this.on_collapsed(id.to_string(), cx),
+            });
+
+        let table = cx.new(|cx| {
+            TableState::new(ResultDelegate::default(), window, cx)
+                .cell_selectable(true)
+                .row_header(false)
+        });
+
+        let mut this = Self {
+            connections: ConnectionsState::new(),
+            drivers: HashMap::new(),
+            store: Arc::new(DiskConnectionStore::new()),
+            forest: Forest::new(),
+            tree_state,
+            tabs: QueryTabs::new(),
+            history: History::default(),
+            saved_queries: SavedQueries::default(),
+            query_store: Arc::new(DiskQueryStore::new()),
+            query_store_loaded: false,
+            query_store_writable: false,
+            query_save_dirty: false,
+            table,
+            detail: None,
+            outer_split: cx.new(|_| ResizableState::default()),
+            inner_split: cx.new(|_| ResizableState::default()),
+            form: None,
+            _form_subscription: None,
+            _tree_subscription: tree_subscription,
+            connect_task: None,
+            children_task: None,
+            detail_task: None,
+            mutation_task: None,
+            save_task: None,
+            query_save_task: None,
+            store_error: None,
+            query_store_error: None,
+            edit_notice: None,
+            focus_handle: cx.focus_handle(),
+            language: Language::current(cx),
+        };
+        // The page always has an editor: an empty tab strip with nothing under
+        // it is a dead end with no way back.
+        this.open_tab(window, cx);
+        this.load_saved(cx);
+        this.load_query_data(cx);
+        this
+    }
+
+    // ---- query tabs ------------------------------------------------------
+
+    /// Builds one editor. Every tab gets its own, so a switch keeps each tab's
+    /// cursor, scroll position and undo history.
+    fn new_editor(&self, window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
+        let placeholder = t(database::Text::QueryPlaceholder, cx);
+        cx.new(|cx| {
+            InputState::new(window, cx)
+                // `code_editor` first: it *replaces* the mode, so anything set
+                // before it is discarded.
+                .code_editor(Engine::PostgreSql.editor_language())
+                .multi_line(true)
+                .line_number(true)
+                .soft_wrap(false)
+                .placeholder(placeholder)
+        })
+    }
+
+    /// Opens a new tab and makes it the one on screen.
+    pub(super) fn open_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = self.new_editor(window, cx);
+        let (id, number) = self.tabs.allocate();
+        self.tabs.push(QueryTab::new(id, number, editor));
+        // The new tab has no result, so the shared grid must stop showing the
+        // old tab's rows under it.
+        self.show_active_result(cx);
+        cx.notify();
+    }
+
+    pub(super) fn open_tab_with_statement(
+        &mut self,
+        statement: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_tab(window, cx);
+        if let Some(editor) = self.tabs.active().map(|tab| tab.editor.clone()) {
+            editor.update(cx, |state, cx| state.set_value(statement, window, cx));
+        }
+    }
+
+    pub(super) fn open_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        history::open(
+            self.history.snapshot(),
+            self.query_store_writable,
+            cx.entity(),
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn open_saved_queries(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        saved_queries::open(self.saved_queries.snapshot(), cx.entity(), window, cx);
+    }
+
+    pub(super) fn pin_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.query_store_writable {
+            return;
+        }
+        let Some(profile) = self.connections.selected() else {
+            return;
+        };
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let statement = tab.editor.read(cx).value().to_string();
+        let draft = SavedQuery {
+            id: 0,
+            name: String::new(),
+            statement,
+            scope: QueryScope::from_profile(profile),
+        };
+        saved_query_form::open(cx.entity(), draft, false, window, cx);
+    }
+
+    pub(super) fn edit_saved_query(
+        &mut self,
+        query: SavedQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.query_store_writable {
+            saved_query_form::open(cx.entity(), query, true, window, cx);
+        }
+    }
+
+    pub(super) fn save_saved_query(&mut self, query: SavedQuery, cx: &mut Context<Self>) -> bool {
+        if !self.query_store_writable || !self.saved_queries.save(query) {
+            return false;
+        }
+        self.persist_query_data(cx);
+        cx.notify();
+        true
+    }
+
+    pub(super) fn delete_saved_query(
+        &mut self,
+        query: SavedQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.query_store_writable {
+            return;
+        }
+        let id = query.id;
+        let name = query.name;
+        let view = cx.entity();
+        // An alert dialog for the same reason `delete` uses one: a plain
+        // `Dialog` draws no confirm button for `on_ok`.
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let view = view.clone();
+            alert
+                .title(t(database::Text::SavedQueryDeleteTitle, cx))
+                .description(t(database::Text::SavedQueryDeleteMessage(name.clone()), cx))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t(db_query::Text::SavedQueryDelete, cx))
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(t(db_connection::Text::Cancel, cx))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _, cx| {
+                    view.update(cx, |this, cx| {
+                        if this.saved_queries.delete(id) {
+                            this.persist_query_data(cx);
+                        }
+                    });
+                    true
+                })
+        });
+    }
+
+    pub(super) fn confirm_clear_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.query_store_writable || self.history.snapshot().is_empty() {
+            return;
+        }
+        let view = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let view = view.clone();
+            alert
+                .title(t(database::Text::HistoryClearTitle, cx))
+                .description(t(database::Text::HistoryClearMessage, cx))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t(db_query::Text::HistoryClear, cx))
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(t(db_connection::Text::Cancel, cx))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _, cx| {
+                    view.update(cx, |this, cx| {
+                        if this.history.clear() {
+                            this.persist_query_data(cx);
+                        }
+                    });
+                    true
+                })
+        });
+    }
+
+    pub(super) fn open_scoped_statement(
+        &mut self,
+        scope: QueryScope,
+        statement: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let matches = self
+            .connections
+            .find(scope.connection_id)
+            .is_some_and(|profile| scope.matches_profile(profile));
+        if matches {
+            self.select(scope.connection_id, cx);
+        }
+        self.open_tab_with_statement(statement, window, cx);
+        if !matches && let Some(tab) = self.tabs.active_mut() {
+            tab.notice =
+                Some(database::Text::SavedQueryScopeMismatch(scope.connection_name).into());
+            tab.notice_success = false;
+        }
+        cx.notify();
+    }
+
+    pub(super) fn query_store_writable(&self) -> bool {
+        self.query_store_writable
+    }
+
+    pub(super) fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index == self.tabs.active_index() {
+            return;
+        }
+        self.tabs.select(index);
+        self.show_active_result(cx);
+        cx.notify();
+    }
+
+    /// Closes the tab at `index`.
+    ///
+    /// Closing the **last** tab empties it rather than removing it: the page
+    /// must always have an editor. `QueryTabs::close` refuses that case and
+    /// this is where the replacement happens.
+    ///
+    /// Either way the tab's run is **cancelled at the server** first. Dropping
+    /// its task only stops dodo waiting; the statement would keep burning
+    /// server CPU and holding the connection for a tab nobody can see any more.
+    pub(super) fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.tabs().get(index).is_some_and(
+            |tab| matches!(&tab.query, QueryState::Done(outcome) if outcome.grid.has_pending()),
+        ) {
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
+            cx.notify();
+            return;
+        }
+        self.stop_tab(index, cx);
+        if self.tabs.close(index).is_none() {
+            if index >= self.tabs.len() {
+                return;
+            }
+            let editor = self.new_editor(window, cx);
+            let (id, number) = self.tabs.allocate();
+            let tabs = &mut self.tabs;
+            tabs.select(0);
+            if let Some(tab) = tabs.active_mut() {
+                *tab = QueryTab::new(id, number, editor);
+            }
+        }
+        self.show_active_result(cx);
+        cx.notify();
+    }
+
+    /// Stops whatever the tab at `index` is running and forgets its handle.
+    ///
+    /// Detached rather than held, because the tab that would have held the task
+    /// is about to be dropped — and the request still has to reach the server.
+    /// Nothing waits for the answer: there is no tab left to tell.
+    fn stop_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(handle) = self.tabs.tab_mut(index).and_then(|tab| tab.cancel.take()) else {
+            return;
+        };
+        cx.background_executor()
+            .spawn(async move {
+                let _ = handle.cancel();
+            })
+            .detach();
+    }
+
+    /// Re-fills the shared grid from the active tab's result.
+    ///
+    /// One `TableState` serves every tab, so this is what stops a switched-to
+    /// tab showing the rows of the tab that was on screen before it.
+    fn show_active_result(&mut self, cx: &mut Context<Self>) {
+        if self.detail.is_some() {
+            return;
+        }
+        let result = match self.tabs.active().map(|tab| &tab.query) {
+            Some(QueryState::Done(outcome)) => {
+                Some((outcome.columns.clone(), outcome.grid.rows().to_vec()))
+            }
+            _ => None,
+        };
+        self.table.update(cx, |state, cx| {
+            match result {
+                Some((columns, rows)) => state.delegate_mut().set(columns, rows),
+                None => state.delegate_mut().clear(),
+            }
+            state.refresh(cx);
+        });
+    }
+
+    // ---- persistence -----------------------------------------------------
+
+    /// Reads `connections.json` on the background executor. Never on the UI
+    /// thread: the file is read once at startup and a slow disk must not hold
+    /// the first frame.
+    fn load_saved(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { store.load() })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                match loaded {
+                    Ok(document) => this.connections.adopt(document),
+                    Err(error) => {
+                        // Still mark the list loaded: an unreadable file is not
+                        // a reason to leave the panel showing a spinner
+                        // forever, and the banner says what happened.
+                        this.connections.adopt(Default::default());
+                        this.store_error = Some(error.message());
+                    }
+                }
+                this.sync_tree_items(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Writes the document back. Called after every change to the list, so a
+    /// crash never loses more than the edit in progress.
+    fn persist(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let document = self.connections.document().clone();
+        self.save_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { store.persist(&document) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.store_error = result.err().map(|error| error.message());
+                this.save_task = None;
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Loads `query-data.json` without ever risking the editor's usability.
+    /// A corrupt or newer document is reported and left untouched; query runs
+    /// continue in memory, but saves are disabled for that launch.
+    fn load_query_data(&mut self, cx: &mut Context<Self>) {
+        let store = self.query_store.clone();
+        cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { store.load() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.query_store_loaded = true;
+                match loaded {
+                    Ok(document) => {
+                        // A query may finish during startup. Keep it ahead of
+                        // the persisted entries rather than replacing it.
+                        let mut history = this.history.snapshot();
+                        let had_session_entries = !history.is_empty();
+                        history.extend(document.history);
+                        this.history.adopt(history);
+                        this.saved_queries.adopt(document.saved_queries);
+                        this.query_store_writable = true;
+                        if had_session_entries {
+                            this.persist_query_data(cx);
+                        }
+                    }
+                    Err(error) => {
+                        this.query_store_error = Some(error.message());
+                        this.query_store_writable = false;
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn query_data_document(&self) -> QueryDataDocument {
+        QueryDataDocument {
+            saved_queries: self.saved_queries.snapshot(),
+            history: self.history.snapshot(),
+            ..QueryDataDocument::default()
+        }
+    }
+
+    /// Coalesces frequent history writes into one ordered background stream.
+    /// This avoids two saves racing on the same temporary file when queries
+    /// finish close together.
+    fn persist_query_data(&mut self, cx: &mut Context<Self>) {
+        if !self.query_store_loaded || !self.query_store_writable {
+            return;
+        }
+        self.query_save_dirty = true;
+        if self.query_save_task.is_none() {
+            self.start_query_save(cx);
+        }
+    }
+
+    fn start_query_save(&mut self, cx: &mut Context<Self>) {
+        self.query_save_dirty = false;
+        let store = self.query_store.clone();
+        let document = self.query_data_document();
+        self.query_save_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { store.persist(&document) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.query_save_task = None;
+                if let Err(error) = result {
+                    this.query_store_error = Some(error.message());
+                    this.query_store_writable = false;
+                    this.query_save_dirty = false;
+                } else if this.query_save_dirty {
+                    this.start_query_save(cx);
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    // ---- global catalog search -------------------------------------------
+
+    pub(super) fn can_search_catalogs(&self) -> bool {
+        !self.drivers.is_empty()
+    }
+
+    pub(super) fn open_catalog_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let sources = self
+            .connections
+            .profiles()
+            .iter()
+            .filter_map(|profile| {
+                self.drivers
+                    .get(&profile.id)
+                    .cloned()
+                    .map(|driver| CatalogSource {
+                        scope: QueryScope::from_profile(profile),
+                        driver,
+                    })
+            })
+            .collect::<Vec<_>>();
+        if !sources.is_empty() {
+            catalog_search::open(sources, cx.entity(), window, cx);
+        }
+    }
+
+    pub(super) fn navigate_catalog_result(
+        &mut self,
+        entry: CatalogSearchEntry,
+        index: Arc<CatalogIndex>,
+        cx: &mut Context<Self>,
+    ) {
+        let valid = self
+            .connections
+            .find(entry.scope.connection_id)
+            .is_some_and(|profile| entry.scope.matches_profile(profile))
+            && self.drivers.contains_key(&entry.scope.connection_id);
+        if !valid {
+            self.edit_notice = Some((
+                database::Text::CatalogSearchConnectionUnavailable(entry.scope.connection_name)
+                    .into(),
+                false,
+            ));
+            cx.notify();
+            return;
+        }
+
+        let connection = entry.scope.connection_id;
+        self.select(connection, cx);
+        self.forest.open(connection);
+        index.reveal(&entry, self.forest.tree_mut(connection));
+        self.sync_tree_items(cx);
+
+        let row_id = SharedString::from(RowRef::child(connection, entry.node.id.as_str()));
+        let item = TreeItem::new(row_id.clone(), row_id.clone());
+        self.tree_state.update(cx, |state, cx| {
+            state.set_selected_item(Some(&item), cx);
+            state.reveal_item(&row_id, ScrollStrategy::Center, cx);
+        });
+
+        if let (NodeLabel::Name(name), NodeKind::Table | NodeKind::View | NodeKind::Key) =
+            (&entry.node.label, entry.node.kind)
+        {
+            self.open_detail(
+                connection,
+                DetailTarget::new(entry.node.id, entry.node.kind, name.clone()),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    // ---- connections -----------------------------------------------------
+
+    /// Makes `id` the connection the query editor runs against.
+    ///
+    /// Selecting no longer touches the tree, and that is the point of one tree
+    /// with several roots: every connection's objects stay loaded and open
+    /// while the user reads one of them and runs a statement against another.
+    pub(super) fn select(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.connections.selected_id() == Some(id) {
+            return;
+        }
+        self.connections.select(Some(id));
+        self.sync_tree_items(cx);
+        self.persist(cx);
+        cx.notify();
+    }
+
+    pub(super) fn connect(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.connection_has_pending(id) {
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
+            cx.notify();
+            return;
+        }
+        let Some(profile) = self.connections.find(id).cloned() else {
+            return;
+        };
+        if self.connections.status(id).is_busy() {
+            return;
+        }
+
+        self.connections.set_status(id, Status::Connecting);
+        cx.notify();
+
+        self.connect_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { services::connect(&profile) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(driver) => {
+                        this.drivers.insert(id, driver);
+                        this.connections.set_status(id, Status::Connected);
+                        // Only if the user has the root open. Connecting from
+                        // the context menu with the root shut should not load a
+                        // catalog nobody is looking at.
+                        if this.forest.is_open(id) {
+                            this.ensure_tree(id, cx);
+                        }
+                    }
+                    Err(error) => {
+                        this.drivers.remove(&id);
+                        this.connections.set_status(id, Status::Error(error));
+                    }
+                }
+                this.connect_task = None;
+                this.sync_tree_items(cx);
+                cx.notify();
+            });
+        }));
+    }
+
+    pub(super) fn disconnect(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.connection_has_pending(id) {
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
+            cx.notify();
+            return;
+        }
+        self.drivers.remove(&id);
+        self.close_detail_for(id, cx);
+        self.connections.set_status(id, Status::Disconnected);
+        // The whole tree under this root goes: the next session may be a
+        // different database entirely, so keeping the shape would be keeping a
+        // stranger's. Every other connection's tree is untouched.
+        self.forest.forget(id);
+        self.sync_tree_items(cx);
+        cx.notify();
+    }
+
+    pub(super) fn open_form(
+        &mut self,
+        profile: ConnectionProfile,
+        editing: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if editing && self.connection_has_pending(profile.id) {
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
+            cx.notify();
+            return;
+        }
+        let form = connection_form::open(profile, editing, window, cx);
+        self._form_subscription = Some(cx.subscribe(&form, |this, _, event: &FormEvent, cx| {
+            let FormEvent::Saved(profile) = event;
+            this.on_form_saved(*profile.clone(), cx);
+        }));
+        self.form = Some(form);
+    }
+
+    fn on_form_saved(&mut self, profile: ConnectionProfile, cx: &mut Context<Self>) {
+        let id = profile.id;
+        // `save` reports whether the edit moved the connection somewhere else,
+        // in which case the live handle points at the old database and must go.
+        if self.connections.save(profile) {
+            self.drivers.remove(&id);
+            self.close_detail_for(id, cx);
+            self.forest.forget(id);
+        }
+        self.sync_tree_items(cx);
+        self.persist(cx);
+        cx.notify();
+    }
+
+    pub(super) fn duplicate(&mut self, id: u64, cx: &mut Context<Self>) {
+        let suffix = Str::from(database::Text::CopySuffix)
+            .text(Language::current(cx))
+            .into_owned();
+        if self.connections.duplicate(id, &suffix).is_some() {
+            self.sync_tree_items(cx);
+            self.persist(cx);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn delete(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.connection_has_pending(id) {
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
+            cx.notify();
+            return;
+        }
+        let Some(profile) = self.connections.find(id) else {
+            return;
+        };
+        let name = profile.display_name();
+        let view = cx.entity();
+
+        // An **alert** dialog, not a plain one: `Dialog` renders a footer only
+        // when it is given one, so a plain dialog carrying `on_ok` draws no
+        // confirm button at all and can be accepted only by the Enter key —
+        // every control the user can see on it cancels. `AlertDialog` is what
+        // builds the OK/Cancel footer from `button_props`. Same shape as
+        // `docker::views::containers`' delete confirmation.
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let view = view.clone();
+            alert
+                .title(t(database::Text::DeleteConnectionTitle, cx))
+                .description(t(database::Text::DeleteConnectionMessage(name.clone()), cx))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t(database::Text::DeleteConnection, cx))
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(t(db_connection::Text::Cancel, cx))
+                        .show_cancel(true),
+                )
+                // Returning `true` is what closes it: the library calls
+                // `close_dialog` for us, so closing it here as well would pop a
+                // second dialog off the stack.
+                .on_ok(move |_, _, cx| {
+                    view.update(cx, |this, cx| this.confirm_delete(id, cx));
+                    true
+                })
+        });
+    }
+
+    /// What confirming the deletion actually does, in the order the three
+    /// layers have to change: the live handle and anything drawn from it, then
+    /// the model, then the widget's rows, then the saved document.
+    fn confirm_delete(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.drivers.remove(&id);
+        self.close_detail_for(id, cx);
+        self.connections.delete(id);
+        self.forest.forget(id);
+        self.sync_tree_items(cx);
+        self.persist(cx);
+        cx.notify();
+    }
+
+    // ---- the object tree -------------------------------------------------
+
+    /// The driver behind the selected connection, if it is connected. What the
+    /// query editor runs against.
+    pub(super) fn active_driver(&self) -> Option<Arc<dyn Driver>> {
+        self.connections
+            .selected_id()
+            .and_then(|id| self.drivers.get(&id).cloned())
+    }
+
+    /// Starts one connection's root load if it is needed. Idempotent, so it is
+    /// safe to call from anywhere that might have made a tree relevant.
+    fn ensure_tree(&mut self, connection: u64, cx: &mut Context<Self>) {
+        let Some(driver) = self.drivers.get(&connection).cloned() else {
+            return;
+        };
+        if !self.forest.tree_mut(connection).needs_roots() {
+            return;
+        }
+        self.forest.tree_mut(connection).begin_roots();
+        self.sync_tree_items(cx);
+
+        self.children_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { driver.children(None) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.forest.tree_mut(connection).set_roots(result);
+                this.sync_tree_items(cx);
+                this.children_task = None;
+                cx.notify();
+            });
+        }));
+    }
+
+    /// A row was opened. Which row is [`RowRef`]'s to say: the tree carries
+    /// several connections and their node ids can legitimately collide.
+    fn on_expanded(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(row) = RowRef::parse(&id) else {
+            return;
+        };
+        match row.node {
+            None => self.on_connection_expanded(row.connection, cx),
+            Some(node) => self.on_node_expanded(row.connection, node, cx),
+        }
+    }
+
+    /// Quick navigation's entry point: a connection URI that was pasted at the
+    /// app rather than typed into the form.
+    ///
+    /// # What "an existing connection" means
+    ///
+    /// [`same_target`]: the same engine pointed at the same place — host, port
+    /// and database for a server, the file path for SQLite. Deliberately **not**
+    /// the credentials, and deliberately not the name: two saved connections
+    /// differing only in their password are the same database, and a pasted URI
+    /// naming a database you already have is a request to open it, not to
+    /// acquire a second copy of it.
+    ///
+    /// # A pasted password never overwrites a stored one
+    ///
+    /// When an existing connection matches, its profile is **not touched** —
+    /// not the password, not the user, not the SSL mode. A quick-navigation
+    /// paste is a navigation, and silently rewriting a stored credential from a
+    /// URI someone copied out of a chat message is not something a jump should
+    /// be able to do. If the paste carried a password that differs from the
+    /// stored one, the pane says so, so the user can go and change it
+    /// deliberately if that was the intent. Editing a connection is what the
+    /// form is for.
+    ///
+    /// A URI naming no saved connection creates one, named by
+    /// [`ParsedUri::suggested_name`], and *that* one keeps the pasted password:
+    /// there is nothing to overwrite.
+    ///
+    /// Either way the connection is then opened exactly as clicking its root
+    /// would open it — see [`Self::on_connection_expanded`].
+    pub fn accept_uri(&mut self, parsed: &ParsedUri, cx: &mut Context<Self>) {
+        let existing = self
+            .connections
+            .profiles()
+            .iter()
+            .find(|saved| same_target(saved, &parsed.profile))
+            .cloned();
+
+        let (connection, notice) = match existing {
+            Some(saved) => {
+                let pasted = parsed.profile.password.trim();
+                let overwritten = !pasted.is_empty() && pasted != saved.password.trim();
+                let name = saved.display_name();
+                (
+                    saved.id,
+                    if overwritten {
+                        database::Text::QuickNavKeptStoredPassword(name)
+                    } else {
+                        database::Text::QuickNavOpenedConnection(name)
+                    },
+                )
+            }
+            None => {
+                // `adopt` replaces the whole document when the load lands, so
+                // creating before it would write a connection that the next
+                // moment discards. Milliseconds at startup, but silent data loss
+                // is not worth the shortcut.
+                if !self.connections.loaded() {
+                    self.edit_notice =
+                        Some((database::Text::QuickNavConnectionsLoading.into(), false));
+                    cx.notify();
+                    return;
+                }
+
+                let mut profile = parsed.profile.clone();
+                profile.id = self.connections.document().next_id();
+                profile.name = parsed.suggested_name();
+                let (id, name) = (profile.id, profile.display_name());
+
+                self.connections.save(profile);
+                self.persist(cx);
+                (id, database::Text::QuickNavCreatedConnection(name))
+            }
+        };
+
+        self.edit_notice = Some((notice.into(), true));
+        self.on_connection_expanded(connection, cx);
+    }
+
+    /// Opening a connection root **connects it**, the way every database client
+    /// does. A root that opened onto a dead end saying "not connected" would be
+    /// a worse answer than the one the user obviously wanted, and the status dot
+    /// and the context menu still give explicit control either way.
+    fn on_connection_expanded(&mut self, connection: u64, cx: &mut Context<Self>) {
+        self.forest.open(connection);
+        // Opening a connection is also choosing it: the editor below now has an
+        // obvious target, and the alternative is a tree whose open branch and
+        // whose Execute button disagree.
+        self.select(connection, cx);
+
+        match self.connections.status(connection) {
+            Status::Connected => self.ensure_tree(connection, cx),
+            Status::Connecting => {}
+            // Including `Error`: opening a root that failed last time is the
+            // natural way to ask for another go.
+            Status::Disconnected | Status::Error(_) => self.connect(connection, cx),
+        }
+        self.sync_tree_items(cx);
+        cx.notify();
+    }
+
+    fn on_node_expanded(&mut self, connection: u64, node: NodeId, cx: &mut Context<Self>) {
+        // A placeholder row is not a node; the widget will not expand one, and
+        // it has no children to fetch.
+        if !self.forest.tree_mut(connection).expand(&node) {
+            self.sync_tree_items(cx);
+            cx.notify();
+            return;
+        }
+
+        let Some(driver) = self.drivers.get(&connection).cloned() else {
+            return;
+        };
+        self.forest.tree_mut(connection).begin_children(&node);
+        self.sync_tree_items(cx);
+
+        self.children_task = Some(cx.spawn(async move |this, cx| {
+            let lookup = node.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { driver.children(Some(&lookup)) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.forest.tree_mut(connection).set_children(&node, result);
+                this.sync_tree_items(cx);
+                this.children_task = None;
+                cx.notify();
+            });
+        }));
+    }
+
+    fn on_collapsed(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(row) = RowRef::parse(&id) else {
+            return;
+        };
+        match row.node {
+            // Closing a root is not disconnecting: what was loaded stays loaded,
+            // so opening it again is instant.
+            None => self.forest.close(row.connection),
+            Some(node) => self.forest.tree_mut(row.connection).collapse(&node),
+        }
+        cx.notify();
+    }
+
+    /// Re-reads the selected connection's catalog, keeping what the user has
+    /// opened. Nothing else in the tree is disturbed.
+    pub(super) fn refresh_tree(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.connections.selected_id() else {
+            return;
+        };
+        self.forest.tree_mut(id).refresh();
+        self.sync_tree_items(cx);
+        self.ensure_tree(id, cx);
+        cx.notify();
+    }
+
+    /// The whole panel as rows: one root per saved connection, in the order the
+    /// user arranged them, each carrying whatever its status allows.
+    ///
+    /// Both the widget's items and the per-row look map are built from this, so
+    /// the two cannot disagree about what is on screen.
+    pub(super) fn outline(&self) -> Vec<Outline> {
+        let statuses: Vec<(u64, Status)> = self
+            .connections
+            .profiles()
+            .iter()
+            .map(|profile| (profile.id, self.connections.status(profile.id).clone()))
+            .collect();
+        self.forest
+            .outline(statuses.iter().map(|(id, status)| (*id, status)))
+    }
+
+    /// Rebuilds the widget's items from [`Forest`].
+    fn sync_tree_items(&mut self, cx: &mut Context<Self>) {
+        let items: Vec<TreeItem> = self
+            .outline()
+            .iter()
+            .map(|row| build_item(row, &self.connections, cx))
+            .collect();
+        self.tree_state.update(cx, |state, cx| {
+            state.set_items(items, cx);
+        });
+    }
+
+    // ---- object detail --------------------------------------------------
+
+    pub(super) fn open_detail(
+        &mut self,
+        connection: u64,
+        target: DetailTarget,
+        cx: &mut Context<Self>,
+    ) {
+        if self.detail_has_pending() {
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
+            cx.notify();
+            return;
+        }
+        let Some(driver) = self.drivers.get(&connection).cloned() else {
+            return;
+        };
+        let capabilities = driver.capabilities();
+        if !capabilities.detail {
+            return;
+        }
+
+        self.select(connection, cx);
+        self.detail = Some(DetailState::new(connection, target, capabilities.ddl));
+        self.start_detail_load(driver, cx);
+    }
+
+    fn start_detail_load(&mut self, driver: Arc<dyn Driver>, cx: &mut Context<Self>) {
+        let Some(detail) = self.detail.as_mut() else {
+            return;
+        };
+        let connection = detail.connection;
+        let request = detail.begin();
+        self.show_detail_result(cx);
+        cx.notify();
+
+        self.detail_task = Some(cx.spawn(async move |this, cx| {
+            let background_request = request.clone();
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { detail::load(driver.as_ref(), &background_request) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                let applied = this.detail.as_mut().is_some_and(|detail| {
+                    detail.connection == connection && detail.apply(&request, loaded)
+                });
+                if applied {
+                    this.show_detail_result(cx);
+                    this.detail_task = None;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    pub(super) fn select_detail_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.detail_has_pending() {
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
+            cx.notify();
+            return;
+        }
+        let Some(tab) = self
+            .detail
+            .as_ref()
+            .and_then(|detail| detail.visible_tabs().nth(index))
+        else {
+            return;
+        };
+        let changed = self
+            .detail
+            .as_mut()
+            .is_some_and(|detail| detail.select(tab));
+        if !changed {
+            return;
+        }
+        let Some(driver) = self
+            .detail
+            .as_ref()
+            .and_then(|detail| self.drivers.get(&detail.connection))
+            .cloned()
+        else {
+            return;
+        };
+        self.start_detail_load(driver, cx);
+    }
+
+    pub(super) fn detail_previous(&mut self, cx: &mut Context<Self>) {
+        if self.detail_has_pending() {
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
+            cx.notify();
+            return;
+        }
+        if !self.detail.as_mut().is_some_and(DetailState::previous) {
+            return;
+        }
+        self.reload_detail(cx);
+    }
+
+    pub(super) fn detail_next(&mut self, cx: &mut Context<Self>) {
+        if self.detail_has_pending() {
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
+            cx.notify();
+            return;
+        }
+        if !self.detail.as_mut().is_some_and(DetailState::next) {
+            return;
+        }
+        self.reload_detail(cx);
+    }
+
+    fn reload_detail(&mut self, cx: &mut Context<Self>) {
+        let Some(driver) = self
+            .detail
+            .as_ref()
+            .and_then(|detail| self.drivers.get(&detail.connection))
+            .cloned()
+        else {
+            return;
+        };
+        self.start_detail_load(driver, cx);
+    }
+
+    pub(super) fn close_detail(&mut self, cx: &mut Context<Self>) {
+        if self.detail_has_pending() {
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
+            cx.notify();
+            return;
+        }
+        self.detail = None;
+        self.detail_task = None;
+        self.show_active_result(cx);
+        cx.notify();
+    }
+
+    fn close_detail_for(&mut self, connection: u64, cx: &mut Context<Self>) {
+        if self
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.connection == connection)
+        {
+            self.close_detail(cx);
+        }
+    }
+
+    fn show_detail_result(&mut self, cx: &mut Context<Self>) {
+        let result = self.detail.as_ref().and_then(|detail| match &detail.load {
+            DetailLoad::Grid(grid) => {
+                let mut columns = grid.columns.clone();
+                if let Some(fields) = &grid.fields {
+                    for (column, field) in columns.iter_mut().zip(fields) {
+                        column.name = t(field.label(), cx).to_string();
+                    }
+                }
+                Some((columns, grid.grid.rows().to_vec()))
+            }
+            _ => None,
+        });
+        self.table.update(cx, |state, cx| {
+            match result {
+                Some((columns, rows)) => state.delegate_mut().set(columns, rows),
+                None => state.delegate_mut().clear(),
+            }
+            state.refresh(cx);
+        });
+    }
+
+    // ---- pending table-data mutations -----------------------------------
+
+    fn detail_has_pending(&self) -> bool {
+        self.detail.as_ref().is_some_and(
+            |detail| matches!(&detail.load, DetailLoad::Grid(grid) if grid.grid.has_pending()),
+        )
+    }
+
+    fn connection_has_pending(&self, connection: u64) -> bool {
+        self.detail.as_ref().is_some_and(|detail| {
+            detail.connection == connection
+                && matches!(&detail.load, DetailLoad::Grid(grid) if grid.grid.has_pending())
+        }) || self.tabs.tabs().iter().any(|tab| {
+            tab.result_connection == Some(connection)
+                && matches!(&tab.query, QueryState::Done(outcome) if outcome.grid.has_pending())
+        })
+    }
+
+    pub(super) fn active_grid(&self) -> Option<(&[ColumnMeta], &PendingGrid)> {
+        if let Some(detail) = &self.detail {
+            let DetailLoad::Grid(grid) = &detail.load else {
+                return None;
+            };
+            return Some((&grid.columns, &grid.grid));
+        }
+        let tab = self.tabs.active()?;
+        let QueryState::Done(outcome) = &tab.query else {
+            return None;
+        };
+        outcome
+            .has_grid()
+            .then_some((&outcome.columns, &outcome.grid))
+    }
+
+    fn with_active_grid_mut<R>(&mut self, edit: impl FnOnce(&mut PendingGrid) -> R) -> Option<R> {
+        if let Some(detail) = &mut self.detail {
+            let DetailLoad::Grid(grid) = &mut detail.load else {
+                return None;
+            };
+            return Some(edit(&mut grid.grid));
+        }
+        let tab = self.tabs.active_mut()?;
+        let QueryState::Done(outcome) = &mut tab.query else {
+            return None;
+        };
+        outcome.has_grid().then(|| edit(&mut outcome.grid))
+    }
+
+    fn active_mutation_driver(&self) -> Option<Arc<dyn Driver>> {
+        let connection = if let Some(detail) = &self.detail {
+            detail.connection
+        } else {
+            self.tabs.active()?.result_connection?
+        };
+        self.drivers.get(&connection).cloned()
+    }
+
+    fn mutation_target(&self) -> Option<MutationTarget> {
+        if let Some(detail) = &self.detail {
+            return Some(MutationTarget::Detail(detail.request()));
+        }
+        Some(MutationTarget::Query(self.tabs.active()?.id))
+    }
+
+    pub(super) fn is_committing(&self) -> bool {
+        self.mutation_task.is_some()
+    }
+
+    pub(super) fn selected_cell(&self, cx: &App) -> Option<(usize, usize)> {
+        self.table.read(cx).selected_cell()
+    }
+
+    pub(super) fn selected_row(&self, cx: &App) -> Option<usize> {
+        self.table
+            .read(cx)
+            .selected_cell()
+            .map(|(row, _)| row)
+            .or_else(|| self.table.read(cx).selected_row())
+    }
+
+    pub(super) fn edit_error_text(error: EditError) -> Str {
+        match error {
+            EditError::ReadOnly(reason) => reason.message(),
+            EditError::IdentityColumn => database::Text::EditIdentityColumn.into(),
+            EditError::IdentityUnavailable => database::Text::EditIdentityUnavailable.into(),
+            EditError::UnsupportedCell | EditError::MissingColumn | EditError::MissingRow => {
+                database::Text::EditUnsupportedCell.into()
+            }
+            EditError::MissingRequiredIdentity(columns) => {
+                db_query::Text::IdentityRequired(columns.join(", ")).into()
+            }
+        }
+    }
+
+    fn set_edit_error(&mut self, error: EditError, cx: &mut Context<Self>) {
+        self.edit_notice = Some((Self::edit_error_text(error), false));
+        cx.notify();
+    }
+
+    fn refresh_pending_grid(&mut self, cx: &mut Context<Self>) {
+        if self.detail.is_some() {
+            self.show_detail_result(cx);
+        } else {
+            self.show_active_result(cx);
+        }
+        self.edit_notice = None;
+        cx.notify();
+    }
+
+    pub(super) fn open_cell_editor(
+        &mut self,
+        row: usize,
+        column: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = self.active_grid().and_then(|(columns, grid)| {
+            grid.cell_error(row, column).map_or_else(
+                || Some(Ok((columns.to_vec(), grid.row(row)?.clone()))),
+                |error| Some(Err(error)),
+            )
+        });
+        let Some(snapshot) = snapshot else {
+            self.set_edit_error(EditError::MissingRow, cx);
+            return;
+        };
+        let (columns, values) = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.set_edit_error(error, cx);
+                return;
+            }
+        };
+        let title = database::Text::EditCellTitle(
+            columns
+                .get(column)
+                .map(|column| column.name.clone())
+                .unwrap_or_default(),
+        );
+        row_editor::open(
+            cx.entity(),
+            RowEditorDraft {
+                title: title.into(),
+                columns,
+                values,
+                included: vec![column],
+                required_identity: Vec::new(),
+                action: RowEditorAction::EditCell { row, column },
+            },
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn open_add_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let snapshot = self.active_grid().map(|(columns, grid)| {
+            let source = grid.source()?;
+            let values = grid.add_template()?;
+            let included = source
+                .columns()
+                .iter()
+                .filter(|column| !column.generated)
+                .map(|column| column.result_index)
+                .collect();
+            let required = grid.required_identity_columns()?;
+            Ok::<_, EditError>((columns.to_vec(), values, included, required))
+        });
+        let Some(snapshot) = snapshot else {
+            return;
+        };
+        let (columns, values, included, required) = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.set_edit_error(error, cx);
+                return;
+            }
+        };
+        row_editor::open(
+            cx.entity(),
+            RowEditorDraft {
+                title: database::Text::AddRowTitle.into(),
+                columns,
+                values,
+                included,
+                required_identity: required,
+                action: RowEditorAction::Insert,
+            },
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn open_duplicate_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.selected_row(cx) else {
+            self.edit_notice = Some((db_query::Text::EditSelectRow.into(), false));
+            cx.notify();
+            return;
+        };
+        let snapshot = self.active_grid().map(|(columns, grid)| {
+            let source = grid.source()?;
+            let values = grid.duplicate_template(row)?;
+            let included = source
+                .columns()
+                .iter()
+                .filter(|column| !column.generated)
+                .map(|column| column.result_index)
+                .collect();
+            let required = grid.required_identity_columns()?;
+            Ok::<_, EditError>((columns.to_vec(), values, included, required))
+        });
+        let Some(snapshot) = snapshot else {
+            return;
+        };
+        let (columns, values, included, required) = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.set_edit_error(error, cx);
+                return;
+            }
+        };
+        row_editor::open(
+            cx.entity(),
+            RowEditorDraft {
+                title: database::Text::DuplicateRowTitle.into(),
+                columns,
+                values,
+                included,
+                required_identity: required,
+                action: RowEditorAction::Insert,
+            },
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn apply_cell_edit(
+        &mut self,
+        row: usize,
+        column: usize,
+        value: Value,
+        cx: &mut Context<Self>,
+    ) {
+        match self.with_active_grid_mut(|grid| grid.edit(row, column, value)) {
+            Some(Ok(())) => self.refresh_pending_grid(cx),
+            Some(Err(error)) => self.set_edit_error(error, cx),
+            None => {}
+        }
+    }
+
+    pub(super) fn apply_insert(&mut self, values: Vec<(usize, Value)>, cx: &mut Context<Self>) {
+        let result = self.with_active_grid_mut(|grid| {
+            let mut row = grid.add_template()?;
+            for (column, value) in values {
+                let Some(cell) = row.get_mut(column) else {
+                    return Err(EditError::MissingColumn);
+                };
+                *cell = value;
+            }
+            grid.insert(row)
+        });
+        match result {
+            Some(Ok(())) => self.refresh_pending_grid(cx),
+            Some(Err(error)) => self.set_edit_error(error, cx),
+            None => {}
+        }
+    }
+
+    pub(super) fn delete_selected_row(&mut self, cx: &mut Context<Self>) {
+        let Some(row) = self.selected_row(cx) else {
+            self.edit_notice = Some((db_query::Text::EditSelectRow.into(), false));
+            cx.notify();
+            return;
+        };
+        match self.with_active_grid_mut(|grid| grid.delete(row)) {
+            Some(Ok(())) => self.refresh_pending_grid(cx),
+            Some(Err(error)) => self.set_edit_error(error, cx),
+            None => {}
+        }
+    }
+
+    pub(super) fn rollback_edits(&mut self, cx: &mut Context<Self>) {
+        if self.with_active_grid_mut(|grid| grid.rollback()).is_some() {
+            self.refresh_pending_grid(cx);
+        }
+    }
+
+    pub(super) fn open_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(driver) = self.active_mutation_driver() else {
+            return;
+        };
+        let Some(dialect) = driver.capabilities().mutation else {
+            self.edit_notice = Some((database::Text::EditUnsupported.into(), false));
+            cx.notify();
+            return;
+        };
+        let Some(target) = self.mutation_target() else {
+            return;
+        };
+        let batch = self.active_grid().and_then(|(_, grid)| {
+            let source = grid.source().ok()?;
+            let mutations = grid.mutations();
+            (!mutations.is_empty()).then(|| generate(source, &mutations, dialect))
+        });
+        let Some(Ok(batch)) = batch else {
+            self.edit_notice = Some((
+                if batch.is_none() {
+                    db_query::Text::EditNoPending.into()
+                } else {
+                    database::Text::CommitBuildFailed.into()
+                },
+                false,
+            ));
+            cx.notify();
+            return;
+        };
+        commit_dialog::open(cx.entity(), driver, batch, target, window, cx);
+    }
+
+    pub(super) fn start_commit(
+        &mut self,
+        driver: Arc<dyn Driver>,
+        batch: GeneratedBatch,
+        target: MutationTarget,
+        cx: &mut Context<Self>,
+    ) {
+        if self.mutation_task.is_some() {
+            return;
+        }
+        let expected = batch.expected_rows();
+        self.edit_notice = Some((db_query::Text::CommitRunning.into(), true));
+        cx.notify();
+        self.mutation_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { driver.commit(&batch) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.mutation_task = None;
+                match &target {
+                    MutationTarget::Query(id) => {
+                        let active = this.tabs.active().is_some_and(|tab| tab.id == *id);
+                        if let Some(tab) = this.tabs.find_mut(*id) {
+                            match result {
+                                Ok(()) => {
+                                    tab.query = QueryState::Idle;
+                                    tab.result_connection = None;
+                                    tab.notice =
+                                        Some(database::Text::CommitSucceeded(expected).into());
+                                    tab.notice_success = true;
+                                }
+                                Err(error) => {
+                                    tab.notice = Some(error.message());
+                                    tab.notice_success = false;
+                                }
+                            }
+                        }
+                        this.edit_notice = None;
+                        if active {
+                            this.show_active_result(cx);
+                        }
+                    }
+                    MutationTarget::Detail(request) => {
+                        let current = this
+                            .detail
+                            .as_ref()
+                            .is_some_and(|detail| detail.request() == *request);
+                        match result {
+                            Ok(()) => {
+                                this.edit_notice =
+                                    Some((database::Text::CommitSucceeded(expected).into(), true));
+                                if current {
+                                    this.reload_detail(cx);
+                                }
+                            }
+                            Err(error) => {
+                                this.edit_notice = Some((error.message(), false));
+                            }
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    // ---- the query -------------------------------------------------------
+
+    pub(super) fn execute(&mut self, cx: &mut Context<Self>) {
+        self.start_query(false, cx);
+    }
+
+    pub(super) fn explain(&mut self, cx: &mut Context<Self>) {
+        self.start_query(true, cx);
+    }
+
+    fn start_query(&mut self, explain: bool, cx: &mut Context<Self>) {
+        let Some(driver) = self.active_driver() else {
+            return;
+        };
+        if explain && !driver.capabilities().explain {
+            return;
+        }
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        if matches!(&tab.query, QueryState::Done(outcome) if outcome.grid.has_pending()) {
+            if let Some(tab) = self.tabs.active_mut() {
+                tab.notice = Some(database::Text::ResolvePending.into());
+                tab.notice_success = false;
+            }
+            cx.notify();
+            return;
+        }
+        if tab.is_running() {
+            return;
+        }
+
+        let id = tab.id;
+        let Some(profile) = self.connections.selected() else {
+            return;
+        };
+        let connection_id = profile.id;
+        let scope = QueryScope::from_profile(profile);
+        let buffer = tab.editor.read(cx).value().to_string();
+        let history_buffer = (!driver.statements(&buffer).is_empty()).then(|| buffer.clone());
+        let budget = PageBudget::default();
+        // **Before** the statement starts, not when Cancel is pressed: the
+        // driver's connection is locked for as long as the query runs, so a
+        // handle asked for later would block behind the query it must stop.
+        let cancel = driver.cancel_handle();
+
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.query = QueryState::Running;
+            tab.result_connection = None;
+            tab.cancel = cancel;
+            tab.notice = None;
+            tab.notice_success = false;
+        }
+        // The grid is shared, so a run that leaves the previous result on
+        // screen would attribute those rows to the statement now in flight.
+        self.show_active_result(cx);
+        cx.notify();
+
+        let task = cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    if explain {
+                        query::explain(driver.as_ref(), &buffer, budget)
+                    } else {
+                        query::run(driver.as_ref(), &buffer, budget)
+                    }
+                })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                if let Some(history_buffer) = history_buffer {
+                    let (outcome, duration_ms) = match &result {
+                        Ok(outcome) => (
+                            HistoryOutcome::Succeeded,
+                            Some(outcome.elapsed.as_millis().min(u128::from(u64::MAX)) as u64),
+                        ),
+                        Err(failure) if failure.is_cancelled() => (HistoryOutcome::Cancelled, None),
+                        Err(_) => (HistoryOutcome::Failed, None),
+                    };
+                    if this
+                        .history
+                        .record(scope, history_buffer, outcome, duration_ms)
+                    {
+                        this.persist_query_data(cx);
+                    }
+                }
+                // By id, not by index: the user may have closed a tab to the
+                // left of this one, or closed this one, while it ran.
+                let Some(tab) = this.tabs.find_mut(id) else {
+                    return;
+                };
+                tab.query = match result {
+                    Ok(outcome) => {
+                        tab.result_connection = Some(connection_id);
+                        QueryState::Done(outcome)
+                    }
+                    // The previous result stays cleared: leaving it on screen
+                    // beside a failure makes it look like the failed statement
+                    // produced it.
+                    Err(failure) => {
+                        tab.result_connection = None;
+                        QueryState::Failed(failure)
+                    }
+                };
+                // Nothing is running any more, so the handle would cancel
+                // whatever runs next.
+                tab.cancel = None;
+                // Only if this tab is the one being looked at — a run that
+                // finishes in a background tab must not repaint the grid the
+                // user is reading.
+                if this.tabs.active().is_some_and(|active| active.id == id) {
+                    this.show_active_result(cx);
+                }
+                cx.notify();
+            });
+        });
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.run_task = Some(task);
+        }
+    }
+
+    /// Asks the server to stop the active tab's statement.
+    ///
+    /// The handle is **not** taken from the tab: a cancel that lost the race is
+    /// not a reason to make a second press impossible, and the run's own
+    /// completion is what clears it. The call itself is blocking — PostgreSQL's
+    /// opens a second connection — so it goes to the background executor like
+    /// every other driver call in this file.
+    ///
+    /// Nothing here decides that the query stopped. The query says so, by
+    /// coming back as [`DbError::Cancelled`](crate::models::error::DbError::Cancelled)
+    /// from the server; until it does, the tab stays `Running` and the button
+    /// stays where it is.
+    pub(super) fn cancel(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let Some(handle) = tab.cancel.clone() else {
+            return;
+        };
+        let id = tab.id;
+
+        let task = cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { handle.cancel() })
+                .await;
+
+            // Only a failure to *reach* the server is worth saying anything
+            // about, and even then the query state is left alone: dodo could
+            // not ask, so it has no idea whether the statement is still
+            // running, and moving the tab out of `Running` would be a claim it
+            // cannot support.
+            if let Err(error) = result {
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(tab) = this.tabs.find_mut(id) {
+                        // Held as a `Str` rather than rendered text, so a
+                        // banner already on screen re-translates.
+                        tab.notice =
+                            Some(database::Text::CancelFailed(error.detail().to_string()).into());
+                        tab.notice_success = false;
+                    }
+                    cx.notify();
+                });
+            }
+        });
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.cancel_task = Some(task);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn can_export(&self) -> bool {
+        let Some(tab) = self.tabs.active() else {
+            return false;
+        };
+        !tab.is_running()
+            && matches!(&tab.query, QueryState::Done(outcome) if outcome.has_grid() && !outcome.grid.has_pending())
+            && tab
+                .result_connection
+                .is_some_and(|id| self.drivers.contains_key(&id))
+    }
+
+    /// Re-runs the statement behind the displayed grid into a file-backed sink.
+    /// The bounded rows on screen are never used as the export source, and the
+    /// run goes back to the connection that produced them rather than a root
+    /// the user selected afterwards.
+    pub(super) fn export(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        if !self.can_export() {
+            return;
+        }
+        let QueryState::Done(outcome) = &tab.query else {
+            return;
+        };
+        let Some(driver) = tab
+            .result_connection
+            .and_then(|connection| self.drivers.get(&connection))
+            .cloned()
+        else {
+            return;
+        };
+
+        let id = tab.id;
+        let statement = outcome.statement.clone();
+        let directory = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(data_dir);
+        let filename = format!("query.{}", format.extension());
+        let receiver = cx.prompt_for_new_path(&directory, Some(&filename));
+
+        let task = cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = receiver.await else {
+                return;
+            };
+
+            let cancel = driver.cancel_handle();
+            let Ok(started) = this.update(cx, |this, cx| {
+                let Some(tab) = this.tabs.find_mut(id) else {
+                    return false;
+                };
+                if tab.is_running() {
+                    return false;
+                }
+                tab.exporting = true;
+                tab.cancel = cancel;
+                tab.notice = None;
+                tab.notice_success = false;
+                cx.notify();
+                true
+            }) else {
+                return;
+            };
+            if !started {
+                return;
+            }
+
+            let shown_path = path.display().to_string();
+            let result = cx
+                .background_executor()
+                .spawn(async move { export::export(driver.as_ref(), &statement, &path, format) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                let Some(tab) = this.tabs.find_mut(id) else {
+                    return;
+                };
+                tab.exporting = false;
+                tab.cancel = None;
+                match result {
+                    Ok(rows) => {
+                        tab.notice = Some(
+                            database::Text::ExportSucceeded {
+                                rows,
+                                path: shown_path,
+                            }
+                            .into(),
+                        );
+                        tab.notice_success = true;
+                    }
+                    Err(error) if error.is_cancelled() => {
+                        tab.notice = Some(database::Text::ExportCancelled.into());
+                        tab.notice_success = false;
+                    }
+                    Err(error) => {
+                        tab.notice = Some(database::Text::ExportFailed(error.detail()).into());
+                        tab.notice_success = false;
+                    }
+                }
+                cx.notify();
+            });
+        });
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.run_task = Some(task);
+        }
+    }
+
+    fn copy_cell(&mut self, _: &DatabaseCopyCell, _: &mut Window, cx: &mut Context<Self>) {
+        let text = {
+            let table = self.table.read(cx);
+            table
+                .selected_cell()
+                .and_then(|(row, column)| table.delegate().copy_cell_text(row, column))
+        };
+        if let Some(text) = text {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    fn copy_row(&mut self, _: &DatabaseCopyRow, _: &mut Window, cx: &mut Context<Self>) {
+        let text = {
+            let table = self.table.read(cx);
+            table
+                .selected_cell()
+                .and_then(|(row, _)| table.delegate().copy_row_text(row))
+        };
+        if let Some(text) = text {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    pub(super) fn format(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let engine = self
+            .connections
+            .selected()
+            .map(|profile| profile.engine)
+            .unwrap_or_default();
+        let Some(editor) = self.tabs.active().map(|tab| tab.editor.clone()) else {
+            return;
+        };
+        let formatted = sql_format::format(&editor.read(cx).value(), engine);
+        editor.update(cx, |state, cx| {
+            // `replace_all` rather than `set_value`: formatting is undoable,
+            // which is what makes it safe to try.
+            state.replace_all(formatted, window, cx);
+        });
+    }
+
+    /// Re-points every tab's editor grammar at the selected connection's
+    /// language, and re-pushes the placeholder after a language change.
+    ///
+    /// This runs from `render`, so **both** halves below are load-bearing and
+    /// both were missing in round 1, which is why the editor drew black text:
+    /// `set_highlighter` throws the highlighter away and cancels its parse task
+    /// without scheduling a new one, so calling it every frame guaranteed there
+    /// was never a highlighter to paint with, and calling it *at all* without a
+    /// following `refresh` leaves the editor uncoloured until the next
+    /// keystroke.
+    /// [`EditorLanguage`](crate::state::editor::EditorLanguage) is
+    /// where the whole diagnosis is written down, and it is per tab because
+    /// each tab has its own editor to guard.
+    fn sync_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The *driver* is the authority once one is connected — that is what
+        // `Capabilities` is for, and it is how a backend whose console is not
+        // SQL stops being coloured as though it were. Before connecting there
+        // is no driver to ask, so the selected engine's answer stands in.
+        let language = match self.active_driver() {
+            Some(driver) => driver.capabilities().editor_language,
+            None => self
+                .connections
+                .selected()
+                .map(|profile| profile.engine.editor_language())
+                .unwrap_or_else(|| Engine::PostgreSql.editor_language()),
+        };
+
+        let current = Language::current(cx);
+        let retranslate = self.language != current;
+        self.language = current;
+        let placeholder = t(
+            if language == "sql" {
+                database::Text::QueryPlaceholder
+            } else {
+                database::Text::CommandPlaceholder
+            },
+            cx,
+        );
+
+        // Every tab, not just the active one: a background tab whose editor was
+        // never re-pointed would draw black text the moment it is switched to.
+        let editors: Vec<(usize, Entity<InputState>)> = self
+            .tabs
+            .tabs()
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| (index, tab.editor.clone()))
+            .collect();
+        for (index, editor) in editors {
+            let repoint = self
+                .tabs
+                .tab_mut(index)
+                .is_some_and(|tab| tab.language.adopt(language));
+            if repoint {
+                let placeholder = placeholder.clone();
+                editor.update(cx, |state, cx| {
+                    state.set_placeholder(placeholder, window, cx);
+                    state.set_highlighter(language, cx);
+                    // `refresh` is the only public way to say "re-run syntax
+                    // highlighting on the next render"; without it the grammar
+                    // is set and nothing ever parses with it.
+                    state.refresh(cx);
+                });
+            }
+            if retranslate && !repoint {
+                let placeholder = placeholder.clone();
+                editor.update(cx, |state, cx| {
+                    state.set_placeholder(placeholder, window, cx);
+                });
+            }
+        }
+        if retranslate && self.detail.is_some() {
+            self.show_detail_result(cx);
+        }
+    }
+}
+
+/// One outline row as a `TreeItem`.
+///
+/// The label carries only the identifier; everything else — the icon, the
+/// status dot, the dimmed detail, the hover card — is looked up by element id
+/// when the row is drawn (see [`DatabaseView::render_tree`]), because `TreeItem`
+/// has room for a string and nothing else.
+fn build_item(outline: &Outline, connections: &ConnectionsState, cx: &App) -> TreeItem {
+    let label: SharedString = match &outline.content {
+        // A connection's own name — data, never translated, and the same
+        // fallback the connection form shows.
+        Content::Connection(id) => connections
+            .find(*id)
+            .map(|profile| SharedString::from(profile.display_name()))
+            .unwrap_or_default(),
+        Content::Node(node) => match &node.label {
+            NodeLabel::Name(name) => name.clone().into(),
+            NodeLabel::Group(group) => t(group.text(), cx),
+        },
+        Content::Notice(notice) => notice_label(notice, cx),
+    };
+
+    let item = TreeItem::new(outline.id.clone(), label)
+        .expanded(outline.expanded)
+        // A placeholder is not selectable and cannot be expanded: it is a
+        // message, not an object.
+        .disabled(matches!(outline.content, Content::Notice(_)));
+
+    item.children(
+        outline
+            .children
+            .iter()
+            .map(|child| build_item(child, connections, cx))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn notice_label(notice: &Notice, cx: &App) -> SharedString {
+    match notice {
+        Notice::Loading => t(db_catalog::Text::TreeLoading, cx),
+        Notice::Empty => t(database::Text::TreeEmpty, cx),
+        Notice::Failed(error) => t(error.message(), cx),
+        Notice::NotConnected => t(database::Text::TreeNotConnected, cx),
+    }
+}
+
+/// How one tree row is drawn: everything `TreeItem`'s single label cannot hold.
+///
+/// A connection root needs strictly more than an object row — a status dot, a
+/// hover card, and which menu items apply — so the two are separate variants
+/// rather than one struct with four fields that are `None` most of the time.
+#[derive(Clone)]
+pub(super) enum RowLook {
+    Connection(ConnectionLook),
+    Object {
+        icon: AppIcon,
+        detail: Option<SharedString>,
+        muted: bool,
+        open: Option<DetailTarget>,
+    },
+}
+
+/// Everything a connection's root row draws, resolved once per frame.
+///
+/// Owned rather than borrowed, because the tree's render closure is `'static`
+/// and cannot hold a reference to the view.
+#[derive(Clone)]
+pub(super) struct ConnectionLook {
+    pub(super) id: u64,
+    pub(super) icon: AppIcon,
+    /// The status dot's colour, and the colour of the word beside it.
+    pub(super) dot: Hsla,
+    pub(super) status: SharedString,
+    /// The hover card's rows, already translated. **Never the password** — see
+    /// [`ConnectionProfile::details`].
+    pub(super) details: Vec<(SharedString, SharedString)>,
+    pub(super) connected: bool,
+    pub(super) busy: bool,
+    /// The last attempt failed. Only changes a menu label — Reconnect rather
+    /// than Connect — but that word is the difference between "start" and "try
+    /// that again".
+    pub(super) failed: bool,
+}
+
+/// The icon for a node kind. The only place a `NodeKind` is matched on, which
+/// is what "adding a backend does not change the views" means in practice: a
+/// new variant adds an arm here and nowhere else.
+pub(super) fn node_icon(kind: NodeKind) -> AppIcon {
+    match kind {
+        NodeKind::Database => AppIcon::Database,
+        NodeKind::Schema => AppIcon::Folder,
+        NodeKind::Table => AppIcon::Table,
+        NodeKind::View => AppIcon::Eye,
+        NodeKind::Column => AppIcon::Columns,
+        NodeKind::Index => AppIcon::SortAscending,
+        NodeKind::Constraint | NodeKind::Key => AppIcon::Key,
+        NodeKind::Namespace => AppIcon::Database,
+        NodeKind::Folder => AppIcon::FolderOpen,
+        NodeKind::Other => AppIcon::File,
+    }
+}
+
+/// The glyph on a connection's root row. The `Engine` → icon mapping lives here
+/// rather than on `Engine` because an icon is GPUI and `models/` names none.
+pub(super) fn engine_icon(engine: Engine) -> AppIcon {
+    match engine {
+        Engine::PostgreSql => AppIcon::PostgreSql,
+        Engine::Sqlite => AppIcon::Sqlite,
+        Engine::MySql => AppIcon::Database,
+        Engine::Redis => AppIcon::Key,
+    }
+}
+
+/// The look of every row in the outline, by element id.
+pub(super) fn row_looks(
+    outline: &[Outline],
+    connections: &ConnectionsState,
+    into: &mut HashMap<SharedString, RowLook>,
+    cx: &App,
+) {
+    for row in outline {
+        let look = match &row.content {
+            Content::Connection(id) => RowLook::Connection(connection_look(*id, connections, cx)),
+            Content::Node(node) => RowLook::Object {
+                icon: node_icon(node.kind),
+                detail: node.detail.clone().map(SharedString::from),
+                muted: false,
+                open: match (&node.label, node.kind) {
+                    (NodeLabel::Name(name), NodeKind::Table | NodeKind::View | NodeKind::Key) => {
+                        Some(DetailTarget::new(node.id.clone(), node.kind, name.clone()))
+                    }
+                    _ => None,
+                },
+            },
+            Content::Notice(notice) => RowLook::Object {
+                icon: match notice {
+                    Notice::Failed(_) => AppIcon::AlertTriangle,
+                    _ => AppIcon::Ellipsis,
+                },
+                detail: None,
+                muted: true,
+                open: None,
+            },
+        };
+        into.insert(SharedString::from(row.id.clone()), look);
+        row_looks(&row.children, connections, into, cx);
+    }
+}
+
+/// Whether two profiles point at the **same database**.
+///
+/// The engine, plus the address and nothing else: host, port and database for a
+/// server; the file path for SQLite. Credentials, the connection's name and the
+/// SSL mode are deliberately excluded — [`DatabaseView::accept_uri`] says why,
+/// and it is the only caller.
+///
+/// The host is compared case-insensitively because DNS is, and both sides are
+/// trimmed because a pasted URI carries whatever whitespace the copy did.
+///
+/// Deliberately **not** `points_elsewhere` from `state::connections`, which is
+/// its exact opposite in spirit: that one asks "did this edit move the
+/// connection somewhere else", so it must count a changed password as a move.
+/// Here a changed password is the same database with a different key.
+fn same_target(a: &ConnectionProfile, b: &ConnectionProfile) -> bool {
+    if a.engine != b.engine {
+        return false;
+    }
+    match a.engine.address() {
+        Address::File => a.file.trim() == b.file.trim(),
+        Address::Network => {
+            a.host.trim().eq_ignore_ascii_case(b.host.trim())
+                && a.port == b.port
+                && a.database.trim() == b.database.trim()
+        }
+    }
+}
+
+fn connection_look(id: u64, connections: &ConnectionsState, cx: &App) -> ConnectionLook {
+    let status = connections.status(id);
+    let dot = match status {
+        Status::Connected => cx.theme().success,
+        Status::Connecting => cx.theme().warning,
+        Status::Error(_) => cx.theme().danger,
+        Status::Disconnected => cx.theme().muted_foreground,
+    };
+    let profile = connections.find(id);
+
+    ConnectionLook {
+        id,
+        icon: profile
+            .map(|profile| engine_icon(profile.engine))
+            .unwrap_or(AppIcon::Database),
+        dot,
+        status: t(status.label(), cx),
+        details: profile
+            .map(|profile| {
+                profile
+                    .details()
+                    .into_iter()
+                    .map(|(field, value)| (t(field.label(), cx), SharedString::from(value)))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        connected: status.is_connected(),
+        busy: status.is_busy(),
+        failed: matches!(status, Status::Error(_)),
+    }
+}
+
+impl Focusable for DatabaseView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for DatabaseView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_editor(window, cx);
+
+        let panel = self.render_panel(cx);
+        let right = self.render_workspace(cx);
+
+        div()
+            .size_full()
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::copy_cell))
+            .on_action(cx.listener(Self::copy_row))
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .overflow_hidden()
+            .child(
+                h_resizable("db-split")
+                    .with_state(&self.outer_split)
+                    .child(
+                        resizable_panel()
+                            .size(PANEL_WIDTH)
+                            .size_range(PANEL_MIN..PANEL_MAX)
+                            .child(panel),
+                    )
+                    .child(resizable_panel().child(right)),
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use gpui_component::tree::TreeItem;
+
+    use super::{DatabaseView, same_target};
+    use crate::models::connection::{ConnectionDocument, ConnectionProfile, SslMode};
+    use crate::models::engine::Engine;
+    use crate::services::connection_store::{ConnectionStore, InMemoryConnectionStore};
+    use crate::state::connections::ConnectionsState;
+    use crate::state::tree::RowRef;
+
+    /// The page on a test window, with its constructor's disk load finished.
+    fn mount(cx: &mut TestAppContext) -> (Entity<DatabaseView>, VisualTestContext) {
+        cx.update(gpui_component::init);
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.new(|cx| DatabaseView::new(window, cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let database: Entity<DatabaseView> = window.root(&mut cx).unwrap();
+        cx.run_until_parked();
+        (database, cx)
+    }
+
+    fn saved(id: u64, name: &str) -> ConnectionProfile {
+        ConnectionProfile {
+            name: name.into(),
+            file: format!("/tmp/{name}.sqlite"),
+            ..ConnectionProfile::new(id, Engine::Sqlite)
+        }
+    }
+
+    /// Substitutes an isolated store holding `profiles` and adopts it through
+    /// the real asynchronous load, leaving the page as a launch would.
+    fn adopt(
+        database: &Entity<DatabaseView>,
+        profiles: Vec<ConnectionProfile>,
+        selected: Option<u64>,
+        cx: &mut VisualTestContext,
+    ) -> Arc<InMemoryConnectionStore> {
+        let store = Arc::new(InMemoryConnectionStore::default());
+        store
+            .persist(&ConnectionDocument {
+                connections: profiles,
+                selected,
+                ..ConnectionDocument::default()
+            })
+            .unwrap();
+        database.update(cx, |database, cx| {
+            database.store = store.clone();
+            database.connections = ConnectionsState::new();
+            database
+                .tree_state
+                .update(cx, |state, cx| state.set_items(Vec::new(), cx));
+            database.load_saved(cx);
+        });
+        cx.run_until_parked();
+        store
+    }
+
+    /// Whether the tree **widget** — not the model — holds a root row for `id`.
+    /// `set_selected_item` resolves by element id and leaves the selection
+    /// empty when the row is not there.
+    fn tree_has_root(database: &Entity<DatabaseView>, id: u64, cx: &mut VisualTestContext) -> bool {
+        let tree = database.read_with(cx, |database, _| database.tree_state.clone());
+        let root = TreeItem::new(RowRef::root(id), "");
+        tree.update(cx, |state, cx| {
+            state.set_selected_item(Some(&root), cx);
+        });
+        tree.read_with(cx, |state, _| {
+            state.selected_item().map(|item| item.id.to_string())
+        }) == Some(RowRef::root(id))
+    }
+
+    fn stored_ids(store: &Arc<InMemoryConnectionStore>) -> Vec<u64> {
+        store
+            .load()
+            .unwrap()
+            .connections
+            .iter()
+            .map(|profile| profile.id)
+            .collect()
+    }
+
+    // ---- what quick navigation counts as "the same connection" -------------
+
+    fn server(id: u64, host: &str, port: u16, database: &str) -> ConnectionProfile {
+        ConnectionProfile {
+            host: host.into(),
+            port,
+            database: database.into(),
+            ..ConnectionProfile::new(id, Engine::PostgreSql)
+        }
+    }
+
+    #[test]
+    fn the_same_server_and_database_is_the_same_connection() {
+        let saved = server(1, "db.example.com", 5432, "shop");
+        assert!(same_target(
+            &saved,
+            &server(99, "db.example.com", 5432, "shop")
+        ));
+
+        // DNS is case-insensitive, and a pasted URI carries whatever whitespace
+        // the copy did.
+        assert!(same_target(
+            &saved,
+            &server(99, "DB.Example.COM", 5432, "shop")
+        ));
+        assert!(same_target(
+            &saved,
+            &server(99, " db.example.com ", 5432, " shop ")
+        ));
+    }
+
+    #[test]
+    fn a_different_host_port_database_or_engine_is_a_different_connection() {
+        let saved = server(1, "db.example.com", 5432, "shop");
+
+        assert!(!same_target(
+            &saved,
+            &server(1, "other.example.com", 5432, "shop")
+        ));
+        assert!(!same_target(
+            &saved,
+            &server(1, "db.example.com", 6543, "shop")
+        ));
+        assert!(!same_target(
+            &saved,
+            &server(1, "db.example.com", 5432, "billing")
+        ));
+
+        let mysql = ConnectionProfile {
+            host: "db.example.com".into(),
+            port: 5432,
+            database: "shop".into(),
+            ..ConnectionProfile::new(1, Engine::MySql)
+        };
+        assert!(
+            !same_target(&saved, &mysql),
+            "same address, different engine: not the same database",
+        );
+    }
+
+    /// The rule that makes a pasted password safe: credentials are not part of
+    /// identity, so a URI carrying a different password opens the connection you
+    /// already have rather than creating a second one — and
+    /// [`DatabaseView::accept_uri`] then leaves the stored password alone.
+    #[test]
+    fn credentials_and_name_are_not_part_of_being_the_same_connection() {
+        let saved = ConnectionProfile {
+            name: "Production".into(),
+            user: "alice".into(),
+            password: "stored".into(),
+            ..server(1, "db.example.com", 5432, "shop")
+        };
+        let pasted = ConnectionProfile {
+            name: String::new(),
+            user: "bob".into(),
+            password: "pasted".into(),
+            ssl_mode: SslMode::Require,
+            ..server(0, "db.example.com", 5432, "shop")
+        };
+
+        assert!(same_target(&saved, &pasted));
+    }
+
+    #[test]
+    fn a_file_engine_is_identified_by_its_file() {
+        let file = saved(1, "app");
+        assert!(same_target(&file, &saved(99, "app")));
+        assert!(!same_target(&file, &saved(99, "other")));
+    }
+
+    #[gpui::test]
+    fn load_saved_populates_tree_and_new_connections_remain_visible(cx: &mut TestAppContext) {
+        let (database, mut cx) = mount(cx);
+        adopt(&database, vec![saved(7, "Saved SQLite")], Some(7), &mut cx);
+
+        assert_eq!(
+            database.read_with(&cx, |database, _| database.connections.profiles().len()),
+            1
+        );
+        assert!(tree_has_root(&database, 7, &mut cx));
+
+        database.update(&mut cx, |database, cx| {
+            database.on_form_saved(ConnectionProfile::new(8, Engine::Sqlite), cx);
+        });
+        assert!(tree_has_root(&database, 8, &mut cx));
+    }
+
+    /// Confirming the deletion has to move **all three** layers, and each one
+    /// is checked separately: a row that survives while the store is emptied is
+    /// a different bug from one where nothing is removed at all.
+    ///
+    /// The layers below this are unit tested on their own and pass; what this
+    /// covers is the composition — the real page, the real store, the profile
+    /// list adopted through the real asynchronous load, and the widget items
+    /// the panel actually draws from.
+    #[gpui::test]
+    fn confirming_delete_removes_the_row_the_profile_and_the_saved_document(
+        cx: &mut TestAppContext,
+    ) {
+        let (database, mut cx) = mount(cx);
+        let store = adopt(
+            &database,
+            vec![saved(7, "first"), saved(8, "second")],
+            Some(7),
+            &mut cx,
+        );
+        assert!(tree_has_root(&database, 7, &mut cx));
+        assert_eq!(stored_ids(&store), vec![7, 8]);
+
+        database.update(&mut cx, |database, cx| database.confirm_delete(7, cx));
+        cx.run_until_parked();
+
+        assert!(
+            database.read_with(&cx, |database, _| database.connections.find(7).is_none()),
+            "the profile is still in the model"
+        );
+        assert!(
+            !tree_has_root(&database, 7, &mut cx),
+            "the row is still in the tree"
+        );
+        assert!(
+            tree_has_root(&database, 8, &mut cx),
+            "the connection that was not deleted lost its row"
+        );
+        assert_eq!(
+            stored_ids(&store),
+            vec![8],
+            "the saved document still names the deleted connection"
+        );
+    }
+
+    /// The bug this file was fixed for: a plain `Dialog` renders a footer only
+    /// when it is given one, so a `window.open_dialog(..).on_ok(..)`
+    /// confirmation draws **no confirm button at all**. Everything the user can
+    /// click on it — the close cross, the backdrop — runs `on_cancel`; only the
+    /// Enter key reaches `on_ok`. `AlertDialog` is what builds the OK/Cancel
+    /// footer from `button_props`, which is why every confirmation here (and in
+    /// `docker::views`) is opened with `open_alert_dialog`.
+    ///
+    /// Source-level because it cannot be reached at runtime here:
+    /// `gpui_component::Root::new` installs a macOS accessibility hook that
+    /// dereferences a real `NSView`, so a GPUI test window cannot host a
+    /// `Root`, and without a `Root` there is no dialog layer to drive.
+    /// Only the production half is scanned, bounded by the **first**
+    /// `#[cfg(test)]` — the attribute on this module. This module's own text
+    /// names the pattern it forbids (including in this very sentence), and a
+    /// guard that fails on its own description is a guard nobody keeps.
+    #[test]
+    fn confirmations_use_an_alert_dialog_so_they_have_a_confirm_button() {
+        let source = include_str!("database.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields the leading half");
+
+        let offenders: Vec<usize> = production
+            .match_indices("window.open_dialog(")
+            .filter(|(at, _)| {
+                // Up to whatever opens the next overlay, so one builder's
+                // `on_ok` is not blamed on the call before it.
+                let rest = &production[at + 1..];
+                let builder = rest.split("window.open_").next().unwrap_or(rest);
+                builder.contains(".on_ok(") && !builder.contains(".footer(")
+            })
+            .map(|(at, _)| production[..at].lines().count())
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "plain `open_dialog` on line(s) {offenders:?} carries `on_ok` with no `footer`, so it \
+             renders no confirm button — use `open_alert_dialog` (see \
+             `docker::views::containers::confirm_delete`)"
+        );
+    }
+}

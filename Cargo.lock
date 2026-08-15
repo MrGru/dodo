@@ -1612,6 +1612,7 @@ dependencies = [
  "dispatch2",
  "dodo-app-icon",
  "dodo-cleaner",
+ "dodo-database",
  "dodo-docker",
  "dodo-i18n",
  "dodo-ime-core",
@@ -1624,7 +1625,6 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "image",
- "mysql",
  "nucleo-matcher",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -1634,19 +1634,12 @@ dependencies = [
  "object 0.39.1",
  "percent-encoding",
  "plist",
- "postgres",
- "redis",
  "regex",
  "reqwest",
  "rquickjs",
- "rusqlite",
  "rust-embed",
- "rustls",
- "rustls-platform-verifier",
  "serde",
  "serde_json",
- "sqlformat",
- "tokio-postgres-rustls",
  "trash",
  "tray-icon",
  "unicode-normalization",
@@ -1682,6 +1675,28 @@ dependencies = [
  "serde_json",
  "trash",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "dodo-database"
+version = "0.1.0"
+dependencies = [
+ "dodo-app-icon",
+ "dodo-i18n",
+ "dodo-paths",
+ "gpui",
+ "gpui-component",
+ "mysql",
+ "percent-encoding",
+ "postgres",
+ "redis",
+ "rusqlite",
+ "rustls",
+ "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "sqlformat",
+ "tokio-postgres-rustls",
 ]
 
 [[package]]
