@@ -4,7 +4,7 @@
 //! in, which identifier each one takes, where the bundle is copied from and to,
 //! how many times registration may be retried, and what each failure means —
 //! all of it decided here and asserted by unit tests, so that
-//! [`services::installer`](crate::input_method::services::installer) is a driver
+//! [`services::installer`](crate::services::installer) is a driver
 //! with no judgement in it and the UI callback is three lines.
 //!
 //! `docs/macos-input-method.md` §2 is the authority the tests here encode. Three

@@ -1,9 +1,9 @@
 //! Running the install, and the seam that lets it be tested without a machine.
 //!
 //! [`install`] is the driver: it walks
-//! [`InstallStep::ORDER`](crate::input_method::models::install::InstallStep::ORDER),
+//! [`InstallStep::ORDER`](crate::models::install::InstallStep::ORDER),
 //! retries registration until the source is visible, and decides nothing else.
-//! Every judgement is in [`models::install`](crate::input_method::models::install)
+//! Every judgement is in [`models::install`](crate::models::install)
 //! and every effect is behind [`InstallOps`], so the sequence — including the two
 //! parts that would otherwise only be provable by installing an input method on
 //! a real Mac and watching — is a unit test.
@@ -45,7 +45,7 @@
 
 use std::path::Path;
 
-use crate::input_method::models::install::{
+use crate::models::install::{
     InstallFailure, InstallOutcome, InstallPlan, InstallReport, InstallStep, REGISTER_ATTEMPTS,
     REGISTER_RETRY_DELAY, selectable_source,
 };
@@ -53,7 +53,7 @@ use crate::input_method::models::install::{
 /// Which bundle to install and where to put it, or why there is nothing to do.
 ///
 /// The one part of planning that cannot be pure: it asks the filesystem which of
-/// [`source_candidates`](crate::input_method::models::install::source_candidates)'
+/// [`source_candidates`](crate::models::install::source_candidates)'
 /// candidates is really there. Everything about *what* the candidates are is in
 /// `models::install` and tested without a disk.
 pub fn resolve_plan(
@@ -61,13 +61,12 @@ pub fn resolve_plan(
     working_directory: &Path,
     home: &Path,
 ) -> Result<InstallPlan, InstallFailure> {
-    let source =
-        crate::input_method::models::install::source_candidates(executable, working_directory)
-            .into_iter()
-            // `is_dir` rather than `exists`: an `.app` is a directory, and a stray file
-            // of that name is not a bundle.
-            .find(|candidate| candidate.is_dir())
-            .ok_or(InstallFailure::NoSourceBundle)?;
+    let source = crate::models::install::source_candidates(executable, working_directory)
+        .into_iter()
+        // `is_dir` rather than `exists`: an `.app` is a directory, and a stray file
+        // of that name is not a bundle.
+        .find(|candidate| candidate.is_dir())
+        .ok_or(InstallFailure::NoSourceBundle)?;
 
     Ok(InstallPlan {
         source,
@@ -105,7 +104,7 @@ pub trait InstallOps {
 
     /// Wait before the next registration attempt. **How long** is the driver's
     /// decision, not the implementation's — see
-    /// [`REGISTER_RETRY_DELAY`](crate::input_method::models::install::REGISTER_RETRY_DELAY).
+    /// [`REGISTER_RETRY_DELAY`](crate::models::install::REGISTER_RETRY_DELAY).
     fn wait(&self, delay: std::time::Duration);
 }
 
@@ -356,7 +355,7 @@ impl InstallOps for SystemOps {
 #[cfg(test)]
 mod tests {
     use super::{InstallOps, install};
-    use crate::input_method::models::install::{
+    use crate::models::install::{
         InstallFailure, InstallOutcome, InstallPlan, InstallStep, REGISTER_ATTEMPTS,
         REGISTER_RETRY_DELAY, parent_input_method, selectable_source,
     };
@@ -714,7 +713,7 @@ mod tests {
 
         assert_eq!(
             super::resolve_plan(&dir.join("target/debug/dodo"), &dir, &dir),
-            Err(crate::input_method::models::install::InstallFailure::NoSourceBundle)
+            Err(crate::models::install::InstallFailure::NoSourceBundle)
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -753,7 +752,7 @@ mod tests {
 
         assert_eq!(
             super::resolve_plan(&dir.join("dodo"), &dir, &dir),
-            Err(crate::input_method::models::install::InstallFailure::NoSourceBundle)
+            Err(crate::models::install::InstallFailure::NoSourceBundle)
         );
 
         let _ = std::fs::remove_dir_all(&dir);

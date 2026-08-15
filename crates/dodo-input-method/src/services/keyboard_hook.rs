@@ -53,14 +53,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
 };
 
-use crate::input_method::models::direct_output::OutputPlan;
-use crate::input_method::models::event_tap::DirectComposer;
-use crate::input_method::models::keyboard_hook::{
+use crate::models::direct_output::OutputPlan;
+use crate::models::event_tap::DirectComposer;
+use crate::models::keyboard_hook::{
     CapsLock, Handling, HookEvent, KeyboardHookStatus, PhysicalKeys, SuppressedKeyUps,
     TargetIdentity, adopt_after_send, handling, input_event_count, key_event as windows_key_event,
     layout_state, physical_modifiers, target_changed, vk, with_key_down,
 };
-use crate::input_method::models::live_switch::LiveSwitch;
+use crate::models::live_switch::LiveSwitch;
 
 const SYNTHETIC_EVENT_TAG: usize = 0x444f_444f_5748_4f4f;
 

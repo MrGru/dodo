@@ -198,8 +198,8 @@ const SOURCES: [(&str, &str); 41] = [
     // is exactly what a guard against untranslated text should do — a literal
     // there is no less untranslated for being behind a `cfg`.
     (
-        "src/input_method/views/input_method_view.rs",
-        include_str!("input_method/views/input_method_view.rs"),
+        "crates/dodo-input-method/src/views/input_method_view.rs",
+        include_str!("../crates/dodo-input-method/src/views/input_method_view.rs"),
     ),
 ];
 

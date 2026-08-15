@@ -33,7 +33,7 @@
 //!
 //! Native Input Method is still launched by macOS and keeps typing after dodo
 //! closes. Event Tap is dodo-owned, Accessibility-gated, and active only while
-//! selected. Every control writes `input-method.json`; [`crate::input_method`]
+//! selected. Every control writes `input-method.json`; [`crate`]
 //! is where exclusive ownership and lifecycle are decided. This file only reads
 //! that global and assembles the native status sentence.
 
@@ -49,17 +49,15 @@ use gpui_component::{
 use dodo_ime_core::LanguageId;
 use dodo_ime_ipc::settings::{Backend, Scheme, Shortcut, ShortcutKey, ShortcutModifiers, Tone};
 
+use crate::InputMethod;
+#[cfg(target_os = "macos")]
+use crate::Install;
 use crate::i18n::{Str, input_method, t, tray};
-use crate::input_method::InputMethod;
+use crate::models::event_tap::EventTapStatus;
+use crate::models::keyboard_hook::KeyboardHookStatus;
 #[cfg(target_os = "macos")]
-use crate::input_method::Install;
-use crate::input_method::models::event_tap::EventTapStatus;
-use crate::input_method::models::keyboard_hook::KeyboardHookStatus;
-#[cfg(target_os = "macos")]
-use crate::input_method::models::status::status_message;
-use crate::input_method::models::windows::{
-    WindowsInstall, WindowsInstallFailure, WindowsInstallOutcome,
-};
+use crate::models::status::status_message;
+use crate::models::windows::{WindowsInstall, WindowsInstallFailure, WindowsInstallOutcome};
 
 /// The key context the recorder claims **while it is capturing**, and gpui
 /// components' own name for a focused text field.
@@ -116,10 +114,16 @@ impl InputMethodView {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    const BACKENDS: [Backend; 2] = [Backend::Native, Backend::EventTap];
-    #[cfg(target_os = "windows")]
-    const BACKENDS: [Backend; 2] = [Backend::Native, Backend::KeyboardHook];
+    /// The radio group's two rows: Native, plus whichever no-install fallback
+    /// this platform has. A `cfg!` rather than two `#[cfg]` definitions, so
+    /// **both** arms typecheck wherever this file is compiled — a mistake in
+    /// the Windows arm is otherwise invisible from a Mac, which is exactly how
+    /// the platform-gated labels broke a build the day before this moved.
+    const BACKENDS: [Backend; 2] = if cfg!(target_os = "windows") {
+        [Backend::Native, Backend::KeyboardHook]
+    } else {
+        [Backend::Native, Backend::EventTap]
+    };
 
     /// Install, or reinstall, or nothing while one is running.
     #[cfg(target_os = "macos")]
@@ -872,23 +876,33 @@ fn shortcut_display(shortcut: Shortcut, cx: &App) -> String {
     parts.join(" ")
 }
 
-/// macOS prints the four modifiers as glyphs on the keys themselves.
-#[cfg(target_os = "macos")]
-const MODIFIER_CONTROL: &str = "⌃";
-#[cfg(target_os = "macos")]
-const MODIFIER_ALT: &str = "⌥";
-#[cfg(target_os = "macos")]
-const MODIFIER_SHIFT: &str = "⇧";
-#[cfg(target_os = "macos")]
-const MODIFIER_META: &str = "⌘";
-#[cfg(not(target_os = "macos"))]
-const MODIFIER_CONTROL: &str = "Ctrl";
-#[cfg(not(target_os = "macos"))]
-const MODIFIER_ALT: &str = "Alt";
-#[cfg(not(target_os = "macos"))]
-const MODIFIER_SHIFT: &str = "Shift";
-#[cfg(not(target_os = "macos"))]
-const MODIFIER_META: &str = "Win";
+/// macOS prints the four modifiers as glyphs on the keys themselves; every
+/// other platform spells them.
+///
+/// `cfg!` rather than eight `#[cfg]` definitions, so both spellings are
+/// compiled — and asserted — from whichever platform you are on. These are not
+/// `Str`: a modifier glyph is the same in every interface language, which is
+/// why `i18n_lint`'s scan sees no finding here.
+const MODIFIER_CONTROL: &str = if cfg!(target_os = "macos") {
+    "⌃"
+} else {
+    "Ctrl"
+};
+const MODIFIER_ALT: &str = if cfg!(target_os = "macos") {
+    "⌥"
+} else {
+    "Alt"
+};
+const MODIFIER_SHIFT: &str = if cfg!(target_os = "macos") {
+    "⇧"
+} else {
+    "Shift"
+};
+const MODIFIER_META: &str = if cfg!(target_os = "macos") {
+    "⌘"
+} else {
+    "Win"
+};
 
 /// `None` for the modifier-only shortcut, whose modifiers are the whole label.
 fn shortcut_key_label(key: ShortcutKey) -> Option<Str> {
@@ -1045,7 +1059,9 @@ mod tests {
 
     /// A key pressed at the recorder must be *recorded* and never also *obeyed*.
     /// `quick_nav::NORMAL_MODE` is the binding set that would otherwise take
-    /// `⌘V`, `p` and `Esc` out from under it.
+    /// `⌘V`, `p` and `Esc` out from under it. It lives in the binary, which a
+    /// crate cannot read, so this uses [`crate::QUICK_NAV_NORMAL_MODE`] — the
+    /// mirror dodo's own test keeps honest.
     #[test]
     fn a_recording_field_suppresses_every_normal_mode_binding() {
         let path = |contexts: &[&str]| -> Vec<KeyContext> {
@@ -1054,10 +1070,10 @@ mod tests {
                 .map(|name| KeyContext::parse(name).expect("a bare identifier parses"))
                 .collect()
         };
-        let normal_mode = KeyBindingContextPredicate::parse(crate::quick_nav::NORMAL_MODE)
+        let normal_mode = KeyBindingContextPredicate::parse(crate::QUICK_NAV_NORMAL_MODE)
             .expect("the predicate has to parse, or `KeyBinding::new` panics at startup");
 
-        let idle = path(&["Root", crate::quick_nav::KEY_CONTEXT, "InputMethod"]);
+        let idle = path(&["Root", crate::QUICK_NAV_KEY_CONTEXT, "InputMethod"]);
         assert!(
             normal_mode.depth_of(&idle).is_some(),
             "an idle pane is still normal mode"
@@ -1065,7 +1081,7 @@ mod tests {
 
         let recording = path(&[
             "Root",
-            crate::quick_nav::KEY_CONTEXT,
+            crate::QUICK_NAV_KEY_CONTEXT,
             "InputMethod",
             RECORDER_CONTEXT,
         ]);

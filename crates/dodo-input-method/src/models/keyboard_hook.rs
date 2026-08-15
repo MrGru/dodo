@@ -17,8 +17,8 @@ use std::collections::HashSet;
 use dodo_ime_core::{Key, KeyEvent, Modifiers};
 use dodo_ime_ipc::settings::Backend;
 
-use crate::input_method::models::direct_output::OutputPlan;
-use crate::input_method::models::event_tap::DirectComposer;
+use crate::models::direct_output::OutputPlan;
+use crate::models::event_tap::DirectComposer;
 
 /// What the pane can honestly report about the dodo-lifetime-only fallback.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -430,9 +430,9 @@ mod tests {
         TargetIdentity, adopt_after_send, desired_status, handling, input_event_count, key_event,
         layout_state, modifiers, physical_modifiers, target_changed, vk, with_key_down,
     };
-    use crate::input_method::models::direct_output::OutputPlan;
-    use crate::input_method::models::event_tap::DirectComposer;
-    use crate::input_method::models::live_switch::LiveSwitch;
+    use crate::models::direct_output::OutputPlan;
+    use crate::models::event_tap::DirectComposer;
+    use crate::models::live_switch::LiveSwitch;
     use dodo_ime_core::{ActiveLanguages, Key, KeyEvent, LanguageId, Modifiers, VietnameseConfig};
     use dodo_ime_ipc::settings::{
         Backend, LanguageSwitch, SettingsDocument, Shortcut, ShortcutKey, ShortcutModifiers,

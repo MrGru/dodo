@@ -8,7 +8,7 @@
 //!
 //! # It is a copy, and `input-method.json` is still the one source of truth
 //!
-//! [`InputMethod::edit`](crate::input_method::InputMethod::edit) hands the
+//! [`InputMethod::edit`](crate::InputMethod::edit) hands the
 //! *whole* document to [`LiveSwitch::adopt`] before it returns, so replacing the
 //! shortcut takes effect on the next key rather than after the write, the
 //! notification, or a restart. Nothing is registered twice and nothing is

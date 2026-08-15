@@ -73,11 +73,72 @@
 //! Linux still has no input-method host, so its sidebar has no row. macOS and
 //! Windows both call this module: macOS installs InputMethodKit and can select
 //! Event Tap; Windows installs a TSF DLL and can select Keyboard Hook.
+//!
+//! # This is a *feature* crate, and the one whose edges were not all outbound
+//!
+//! It was `src/input_method/` until 2026-08-15, when it moved out whole,
+//! following the shape `dodo-cleaner` set: the binary links it and names four
+//! items — [`InputMethod`], [`init`], [`load`] and
+//! [`views::InputMethodView`] — while `main.rs` aliases the crate back to
+//! `crate::input_method`, so no call site on either side of the seam changed.
+//! [`paths`] is the seam every feature crate has: the one impure input
+//! `dodo-paths`' pure rules take.
+//!
+//! Unlike the other five it had an edge **back into the binary**, and it is
+//! the reason [`observe_languages`] exists. `src/tray` reads this module (five
+//! call sites) and [`InputMethod::edit`] told the tray, which is a cycle no
+//! crate boundary can hold. The direction that had to invert is the
+//! *notification*: `main.rs` hands over `tray::set_active_languages` as a
+//! plain `fn` pointer, this module calls whatever it was given, and Linux —
+//! which has no tray — hands over nothing and is called back never. That also
+//! retired a platform attribute: the gate is now the presence of an observer,
+//! so the line type-checks on every target.
 #![cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 
 pub mod models;
+pub mod paths;
 pub mod services;
 pub mod views;
+
+// The string catalogue is a crate; this alias is what keeps every
+// `crate::i18n::{Str, t, input_method}` in the four files below spelled the
+// way it was inside the binary.
+use dodo_i18n as i18n;
+
+/// The binary's quick-navigation key contexts, as this crate's tests assume
+/// them.
+///
+/// `src/quick_nav` owns the real definitions and a crate cannot read them;
+/// dodo's own test asserts the two spellings stay one answer, which is the
+/// same guard [`paths`] keeps for the platform. They are here rather than
+/// inlined in the test that needs them because two literals nothing compares
+/// is exactly the shape that drifts silently — and what would drift is the
+/// rule that a key pressed at the shortcut recorder is *recorded* and never
+/// also obeyed.
+pub const QUICK_NAV_KEY_CONTEXT: &str = "Dodo";
+/// See [`QUICK_NAV_KEY_CONTEXT`].
+pub const QUICK_NAV_NORMAL_MODE: &str = "Dodo && !Input";
+
+/// What to tell when the active languages, or the selected one, change.
+///
+/// A plain `fn` pointer rather than a boxed closure or a gpui `Global`,
+/// because there is exactly one caller with exactly this signature —
+/// `tray::set_active_languages` — and the smallest possible inversion is the
+/// one least likely to grow into a second event system. See the crate doc for
+/// why the edge had to invert at all.
+type LanguagesObserver = fn(ActiveLanguages, LanguageId, &mut App);
+
+static LANGUAGES_OBSERVER: std::sync::OnceLock<LanguagesObserver> = std::sync::OnceLock::new();
+
+/// Registers the one thing that wants to hear about a language change.
+///
+/// Called from `main.rs` on the platforms that have a tray, and on no others;
+/// a second call is ignored. Registering *before* [`init`] is not required —
+/// nothing reads a language until the user changes one — but `main.rs` does it
+/// anyway, so the two lines cannot drift apart.
+pub fn observe_languages(observer: LanguagesObserver) {
+    let _ = LANGUAGES_OBSERVER.set(observer);
+}
 
 use std::sync::Arc;
 
@@ -96,20 +157,16 @@ use gpui::{App, AsyncApp, BorrowAppContext as _, Global, Task};
 
 use crate::i18n::Str;
 #[cfg(target_os = "macos")]
-use crate::input_method::models::event_tap::{
-    EventTapStatus, desired_status, should_request_accessibility,
-};
+use crate::models::event_tap::{EventTapStatus, desired_status, should_request_accessibility};
 #[cfg(target_os = "macos")]
-use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallReport};
+use crate::models::install::{InstallFailure, InstallOutcome, InstallReport};
 #[cfg(target_os = "windows")]
-use crate::input_method::models::keyboard_hook::{
-    KeyboardHookStatus, desired_status as hook_status,
-};
+use crate::models::keyboard_hook::{KeyboardHookStatus, desired_status as hook_status};
 #[cfg(target_os = "macos")]
-pub use crate::input_method::models::status::Install;
+pub use crate::models::status::Install;
 #[cfg(target_os = "windows")]
-use crate::input_method::models::windows::{WindowsInstall, WindowsInstallOutcome};
-use crate::input_method::services::store::{DiskInputMethodStore, InputMethodStore, message_for};
+use crate::models::windows::{WindowsInstall, WindowsInstallOutcome};
+use crate::services::store::{DiskInputMethodStore, InputMethodStore, message_for};
 
 /// How long after a settings change to ask the bundle what it applied.
 ///
@@ -480,8 +537,13 @@ impl InputMethod {
                 }
             }));
         });
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        crate::tray::set_active_languages(Self::active_languages(cx), Self::language(cx), cx);
+        // The tray, if there is one. `set_active_languages` was called
+        // directly here while this was `src/input_method/`; it is handed in
+        // now — see `observe_languages` — and on a platform with no tray
+        // nothing is registered and nothing is computed.
+        if let Some(observe) = LANGUAGES_OBSERVER.get() {
+            observe(Self::active_languages(cx), Self::language(cx), cx);
+        }
         cx.refresh_windows();
     }
 
@@ -700,7 +762,7 @@ impl InputMethod {
     /// System Settings is the narrow lifecycle point that can observe a grant
     /// and start the already-selected fallback without another save.
     #[cfg(target_os = "macos")]
-    pub(crate) fn reconcile_event_tap_after_activation(cx: &mut App) {
+    pub fn reconcile_event_tap_after_activation(cx: &mut App) {
         Self::reconcile_event_tap(cx);
     }
 
@@ -1032,8 +1094,8 @@ pub async fn load(cx: &mut AsyncApp) {
 #[cfg(test)]
 mod tests {
     use super::{InputMethod, LanguageId};
-    use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallStep};
-    use crate::input_method::services::store::{InMemoryInputMethodStore, InputMethodStore};
+    use crate::models::install::{InstallFailure, InstallOutcome, InstallStep};
+    use crate::services::store::{InMemoryInputMethodStore, InputMethodStore};
     use dodo_ime_ipc::settings::{Backend, Scheme, SettingsDocument, Tone, VietnameseSettings};
     use dodo_ime_ipc::status::StatusDocument;
     use std::sync::Arc;

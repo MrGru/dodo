@@ -294,6 +294,20 @@ mod tests {
             .is_some()
     }
 
+    /// `crates/dodo-input-method` asserts that a key pressed at its shortcut
+    /// recorder is *recorded* and never also obeyed, which means naming the
+    /// binding set that would otherwise take `⌘V`, `p` and `Esc` — and a crate
+    /// cannot read a `const` of this binary. It mirrors both strings instead;
+    /// this is the guard that keeps the two spellings one answer, the same one
+    /// `paths` keeps for the platform. A drift here would not fail to compile:
+    /// the crate's test would quietly assert something about a predicate dodo
+    /// no longer binds.
+    #[test]
+    fn the_input_method_crate_mirrors_this_binarys_key_contexts() {
+        assert_eq!(KEY_CONTEXT, dodo_input_method::QUICK_NAV_KEY_CONTEXT);
+        assert_eq!(NORMAL_MODE, dodo_input_method::QUICK_NAV_NORMAL_MODE);
+    }
+
     /// The whole definition of normal mode, checked without a window.
     ///
     /// `KeyBinding::new` unwraps its predicate, so a typo here is a panic during

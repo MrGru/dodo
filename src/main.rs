@@ -59,13 +59,19 @@ use dodo_i18n as i18n;
 /// Guards the rule that `i18n` only enforces halfway; test-only.
 #[cfg(test)]
 mod i18n_lint;
-// dodo's end of the input method: installing the macOS bundle and writing the
-// settings it reads. The *engine* is deliberately not here — it is the
-// `dodo-ime-core` crate under `crates/`, because the macOS/Windows/Linux hosts
-// that drive it load into other processes and must link it without linking gpui —
-// and neither is the host, which dodo does not link at all. What this module
-// links is `dodo-ime-ipc`, the contract between the two processes.
-mod input_method;
+// dodo's end of the input method is a *feature* crate —
+// `crates/dodo-input-method`, the sixth and last module taken out of this
+// binary. `layout.rs` names `InputMethod`, `tools.rs` names
+// `views::InputMethodView`, `run_app` below calls `init` and `load`, and this
+// alias is what keeps all four lines reading `crate::input_method::…`. There
+// is no `src/input_method/` any more.
+//
+// The *engine* is deliberately not there either — it is the `dodo-ime-core`
+// crate, because the macOS/Windows/Linux hosts that drive it load into other
+// processes and must link it without linking gpui — and neither is a host,
+// which dodo does not link at all. What that crate links is `dodo-ime-ipc`,
+// the contract between the two processes.
+use dodo_input_method as input_method;
 mod json_formatter;
 mod layout;
 // Where dodo writes its files. Every rule is in `crates/dodo-paths`, which is
@@ -129,6 +135,18 @@ mod paths {
         fn the_database_crate_resolves_the_same_host_as_this_binary() {
             assert_eq!(super::current(), dodo_database::paths::current());
             assert_eq!(super::data_dir(), dodo_database::paths::data_dir());
+        }
+
+        /// `dodo_input_method::paths` is the sixth and last copy of the same
+        /// seam, and it guards the one file dodo writes for *another process*
+        /// to read: a `data_dir()` that did not match the binary's would put
+        /// `input-method.json` where no native host looks, so every engine
+        /// setting and the selected keyboard language would be silently
+        /// ignored and the bundle would type with `DEFAULT_CONFIG`.
+        #[test]
+        fn the_input_method_crate_resolves_the_same_host_as_this_binary() {
+            assert_eq!(super::current(), dodo_input_method::paths::current());
+            assert_eq!(super::data_dir(), dodo_input_method::paths::data_dir());
         }
 
         /// `dodo_updater::paths` is the fifth copy of the same seam, and the
@@ -302,6 +320,14 @@ fn main() {
         // Event Tap and Keyboard Hook start only after their stored selection
         // has been reconciled. Same post-`gpui_component::init` position as the
         // rest.
+        // The tray is the one thing that wants to hear about a language
+        // change, and it lives here rather than in the crate — `src/tray`
+        // already reads the input method, so the notification is what had to
+        // invert when the module became a crate. Handed over before `init` so
+        // the two lines cannot drift apart; a platform with no tray registers
+        // nothing and is called back never.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        input_method::observe_languages(tray::set_active_languages);
         input_method::init(cx);
         init_close_window_binding(cx);
         // Read this while the OS launch arguments are still the only startup

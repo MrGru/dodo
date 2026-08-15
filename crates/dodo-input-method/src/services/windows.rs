@@ -12,7 +12,7 @@ use windows_sys::Win32::System::Registry::{
     HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW,
 };
 
-use crate::input_method::models::windows::{
+use crate::models::windows::{
     WindowsInstallFailure, WindowsInstallOutcome, WindowsInstallPlan, installed_dll,
     registration_key, source_candidates,
 };

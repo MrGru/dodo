@@ -14,7 +14,7 @@ use dodo_ime_core::{
 };
 use dodo_ime_ipc::settings::Backend;
 
-pub use crate::input_method::models::direct_output::OutputPlan;
+pub use crate::models::direct_output::OutputPlan;
 
 const MAX_RAW_KEYS: usize = 32;
 // Bound a separator run as well as the retained raw word on the callback path.

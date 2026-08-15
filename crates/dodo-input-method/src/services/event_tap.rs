@@ -55,13 +55,13 @@ use objc2_core_graphics::{
 };
 use objc2_foundation::{NSNotification, NSNotificationCenter};
 
-use crate::input_method::models::browser_rewrite::BrowserRewrite;
-use crate::input_method::models::direct_output::OutputPlan;
-use crate::input_method::models::event_tap::{
+use crate::models::browser_rewrite::BrowserRewrite;
+use crate::models::direct_output::OutputPlan;
+use crate::models::event_tap::{
     DirectComposer, EventTapStatus, Handling, TapEvent, handling, invalidates_composer,
     is_synthetic_event, synthetic_event_tag,
 };
-use crate::input_method::models::live_switch::LiveSwitch;
+use crate::models::live_switch::LiveSwitch;
 
 const DELETE_KEY_CODE: u16 = 0x33;
 /// `kVK_LeftArrow`, the other half of the Chromium-family workaround.
@@ -994,7 +994,7 @@ mod tests {
         event_mask, key_event, modifier_event, single_character, synthetic_event_descriptors,
         tag_event,
     };
-    use crate::input_method::models::browser_rewrite::SELECTION_COMMIT_CHARACTER;
+    use crate::models::browser_rewrite::SELECTION_COMMIT_CHARACTER;
     use dodo_ime_core::{ActiveLanguages, Key, KeyEvent, LanguageId, Modifiers, VietnameseConfig};
     use dodo_ime_ipc::settings::{
         LanguageSwitch, SettingsDocument, Shortcut, ShortcutKey, ShortcutModifiers,
@@ -1095,7 +1095,7 @@ mod tests {
         );
         assert_eq!(
             classify_tap_event(CGEventType::FlagsChanged, false),
-            crate::input_method::models::event_tap::TapEvent::ModifiersChanged
+            crate::models::event_tap::TapEvent::ModifiersChanged
         );
 
         let (sender, mut received) = futures_channel::mpsc::unbounded();
@@ -1178,7 +1178,7 @@ mod tests {
         ] {
             assert_eq!(
                 classify_tap_event(event, false),
-                crate::input_method::models::event_tap::TapEvent::MouseDown,
+                crate::models::event_tap::TapEvent::MouseDown,
             );
         }
         state.reset_after_pass_through(classify_tap_event(

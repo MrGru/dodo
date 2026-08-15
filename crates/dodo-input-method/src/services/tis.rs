@@ -14,7 +14,7 @@
 //! next best thing is done instead: the declarations are confined to this file
 //! behind a safe typed façade, nothing here decides anything — which identifier
 //! to enable is
-//! [`models::install`](crate::input_method::models::install)'s answer, tested
+//! [`models::install`](crate::models::install)'s answer, tested
 //! without a machine — and every pointer that crosses the boundary is either a
 //! `CFRetained` this function owns or a borrow that outlives the call.
 //!
@@ -50,7 +50,7 @@
 //!   to do with the source.** On the machine this was written on it does so for
 //!   Apple's own Vietnamese Telex too. This module reports the status and forms
 //!   no opinion; the caller's is in
-//!   [`InstallOutcome`](crate::input_method::models::install::InstallOutcome).
+//!   [`InstallOutcome`](crate::models::install::InstallOutcome).
 
 use std::path::Path;
 use std::ptr::NonNull;
@@ -219,7 +219,7 @@ pub fn select(source_id: &str) -> Option<OSStatus> {
 #[cfg(test)]
 mod tests {
     use super::{PARAM_ERR, is_visible, locked, matching};
-    use crate::input_method::models::install::{parent_input_method, selectable_source};
+    use crate::models::install::{parent_input_method, selectable_source};
 
     #[test]
     fn param_err_is_the_number_the_docs_record() {

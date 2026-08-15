@@ -1,7 +1,7 @@
 # `crates/` holds code that shares this lockfile, which is what separates it
 # from `tools/`.
 #
-# There are thirteen members, in three groups.
+# There are fourteen members, in three groups.
 #
 # `crates/dodo-app-icon`, `crates/dodo-i18n`, `crates/dodo-paths` and
 # `crates/dodo-dialog-slot` are *kernel* crates: code many of dodo's modules
@@ -16,16 +16,20 @@
 # same argument that put `t()` and the active-language global in `dodo-i18n`.
 #
 # `crates/dodo-cleaner`, `crates/dodo-docker`, `crates/dodo-database`,
-# `crates/dodo-api-explorer` and `crates/dodo-updater` are *feature* crates —
-# whole tools of the app, lifted out of the binary rather than pieces many
-# tools share. The Cleaner was the first and is the shape the others copy:
+# `crates/dodo-api-explorer`, `crates/dodo-updater` and
+# `crates/dodo-input-method` are *feature* crates — whole tools of the app,
+# lifted out of the binary rather than pieces many tools share. The Cleaner was the first and is the shape the others copy:
 # their only outbound edges were the kernel crates above, their inbound surface
 # was one or two files, and `main.rs` aliases each back to `crate::cleaner` /
 # `crate::docker` / `crate::database` / `crate::api_explorer` /
-# `crate::updater` so neither side's call sites changed. The updater is the one
-# that needed a second seam: `build_info` reads `env!("DODO_*")` variables only
-# a binary is handed, so `init` takes the two fields it uses as an argument
-# rather than any crate growing a build script. `AGENTS.md`'s "feature crate" entry records what the moves bought and
+# `crate::updater` / `crate::input_method` so neither side's call sites
+# changed. Two of them needed more than the usual `paths` seam. The updater's
+# `build_info` reads `env!("DODO_*")` variables only a binary is handed, so
+# `init` takes the two fields it uses as an argument rather than any crate
+# growing a build script. And the input method had an edge back *into* the
+# binary — `src/tray` reads it and it told the tray — so the notification half
+# inverted: `main.rs` hands `tray::set_active_languages` over as a `fn`
+# pointer. `AGENTS.md`'s "feature crate" entry records what the moves bought and
 # what they did not — and it is explicit that build speed was measured and is
 # not among it.
 #
@@ -42,7 +46,7 @@
 # bundle types with would be two different resolutions that nothing compares. One
 # workspace, one `Cargo.lock`, one `--locked`.
 #
-# `default-members` names all fourteen (the root package and every crate), so a bare
+# `default-members` names all fifteen (the root package and every crate), so a bare
 # `cargo test` / `cargo clippy --all-targets` at the root covers each crate's own
 # tests. **Adding a crate means adding it here in the same commit**; without it
 # cargo defaults to the root package alone and the new crate's tests silently
@@ -66,6 +70,7 @@ default-members = [
     "crates/dodo-dialog-slot",
     "crates/dodo-docker",
     "crates/dodo-i18n",
+    "crates/dodo-input-method",
     "crates/dodo-ime-core",
     "crates/dodo-ime-ipc",
     "crates/dodo-ime-macos",
@@ -197,6 +202,16 @@ dodo-updater = { path = "crates/dodo-updater" }
 # in the Input method settings page and nothing else; the engine itself only ever
 # runs inside a host process. See `crates/dodo-ime-core/src/lib.rs`.
 dodo-ime-core = { path = "crates/dodo-ime-core" }
+# dodo's end of the native input methods, whole — the settings it writes for
+# them, the two installers, the two dodo-lifetime-only fallbacks and the tool's
+# pane. The binary names four items: `layout.rs`'s `InputMethod`, `tools.rs`'s
+# `views::InputMethodView`, and `main.rs`'s `init` / `load`. `main.rs` aliases
+# the crate back to `crate::input_method`, and also hands it
+# `tray::set_active_languages` — the one edge that pointed back into this
+# binary. The AppKit/CoreGraphics and Win32 bindings went with it; the binary
+# keeps its own copies of the ones `src/window_icon.rs`, `src/tray` and the
+# Cleaner still name. See that crate's `lib.rs` for the seam.
+dodo-input-method = { path = "crates/dodo-input-method" }
 # The contract with the macOS input-method bundle: the identifiers macOS looks it
 # up by, the two JSON files the two processes exchange, the notification between
 # them. dodo links this and **not** `dodo-ime-macos` — linking the host would

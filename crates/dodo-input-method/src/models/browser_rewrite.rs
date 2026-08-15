@@ -44,7 +44,7 @@
 //! Backspace rewrite is already deleting the wrong characters, so neither
 //! strategy is what broke it.
 
-use crate::input_method::models::direct_output::OutputPlan;
+use crate::models::direct_output::OutputPlan;
 
 /// The invisible character [`Strategy::CommitSuggestion`] types to make a
 /// browser commit and dismiss its inline suggestion.
@@ -208,7 +208,7 @@ impl BrowserRewrite {
 #[cfg(test)]
 mod tests {
     use super::{BROWSERS, BrowserRewrite, SELECTION_COMMIT_CHARACTER, Strategy};
-    use crate::input_method::models::direct_output::OutputPlan;
+    use crate::models::direct_output::OutputPlan;
 
     /// A tone mark: replace the last *n* graphemes with a composed string.
     fn tone(delete_before: usize) -> OutputPlan {

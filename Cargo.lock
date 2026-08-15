@@ -1619,6 +1619,7 @@ dependencies = [
  "dodo-i18n",
  "dodo-ime-core",
  "dodo-ime-ipc",
+ "dodo-input-method",
  "dodo-paths",
  "dodo-updater",
  "futures-channel",
@@ -1791,6 +1792,28 @@ dependencies = [
  "dodo-ime-ipc",
  "windows 0.57.0",
  "windows-core 0.57.0",
+]
+
+[[package]]
+name = "dodo-input-method"
+version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "dispatch2",
+ "dodo-i18n",
+ "dodo-ime-core",
+ "dodo-ime-ipc",
+ "dodo-paths",
+ "futures-channel",
+ "futures-util",
+ "gpui",
+ "gpui-component",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -22,7 +22,7 @@
 //! [`StatusDocument`]: dodo_ime_ipc::status::StatusDocument
 
 use crate::i18n::{Str, input_method};
-use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallStep};
+use crate::models::install::{InstallFailure, InstallOutcome, InstallStep};
 
 /// Whether an install is running, and what the last one did.
 ///
@@ -99,7 +99,7 @@ mod tests {
 
     use super::{Install, status_message};
     use crate::i18n::{Str, input_method};
-    use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallStep};
+    use crate::models::install::{InstallFailure, InstallOutcome, InstallStep};
 
     fn said(
         install: &Install,
