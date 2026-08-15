@@ -1,0 +1,630 @@
+use std::collections::BTreeMap;
+use std::os::unix::fs::MetadataExt as _;
+use std::path::PathBuf;
+
+use crate::ai_apps;
+use crate::core::category::CleanerCategory;
+use crate::core::errors::CleanupError;
+use crate::core::item::CleanableItem;
+use crate::core::report::{CleanupItemFailure, CleanupItemSuccess, CleanupReport};
+use crate::core::safety::{AllowedRoot, DeletionPolicy, dedupe_nested_paths, validate_path};
+use crate::macos::applications::locations;
+use crate::macos::platform::move_to_trash;
+use crate::macos::scanners::{homebrew_cache, mail_files, xcode_junk};
+use crate::node_tooling_cache;
+use crate::paths::{self, HostOs};
+
+pub fn empty_trash_items(items: &[CleanableItem]) -> CleanupReport {
+    let mut successes = Vec::new();
+    let mut failures = Vec::new();
+    for item in items {
+        match empty_trash_root(item.path.as_path()) {
+            Ok(()) => successes.push(CleanupItemSuccess {
+                id: item.id,
+                path: item.path.clone(),
+                trashed_path: None,
+                logical_size: item.logical_size,
+            }),
+            Err(message) => failures.push(CleanupItemFailure {
+                id: item.id,
+                path: item.path.clone(),
+                error: CleanupError::ExternalOperationFailed {
+                    operation: "empty trash".into(),
+                    message,
+                },
+            }),
+        }
+    }
+    CleanupReport {
+        estimated_reclaimed_bytes: successes.iter().map(|item| item.logical_size).sum(),
+        successes,
+        failures,
+    }
+}
+
+fn empty_trash_root(root: &std::path::Path) -> Result<(), String> {
+    if !is_trash_root(root) {
+        return Err(format!(
+            "refusing to empty unrecognized Trash root {}",
+            root.display()
+        ));
+    }
+    if std::fs::symlink_metadata(root)
+        .map_err(|error| error.to_string())?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(format!("refusing symlinked Trash root {}", root.display()));
+    }
+    for entry in std::fs::read_dir(root).map_err(|error| error.to_string())? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.is_dir() {
+            std::fs::remove_dir_all(path).map_err(|error| error.to_string())?;
+        } else {
+            std::fs::remove_file(path).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn is_trash_root(path: &std::path::Path) -> bool {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home_trash = home.as_ref().map(|home| home.join(".Trash"));
+    let uid = home
+        .as_deref()
+        .and_then(|home| std::fs::metadata(home).ok())
+        .map(|metadata| metadata.uid().to_string());
+    home_trash.as_deref() == Some(path)
+        || uid
+            .as_deref()
+            .is_some_and(|uid| path.file_name().is_some_and(|name| name == uid))
+            && path
+                .parent()
+                .is_some_and(|parent| parent.ends_with(".Trashes"))
+            && path
+                .parent()
+                .and_then(std::path::Path::parent)
+                .is_some_and(|volume| volume.starts_with("/Volumes"))
+}
+
+pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
+    let mut by_path = BTreeMap::new();
+    for item in items {
+        by_path.insert(item.path.clone(), item);
+    }
+
+    let mut successes = Vec::new();
+    let mut failures = Vec::new();
+    let host = paths::current();
+    let policy = items.first().map(policy_for);
+    for path in dedupe_nested_paths(host, by_path.keys().cloned().collect()) {
+        let Some(item) = by_path.get(&path) else {
+            continue;
+        };
+        let Some(policy) = policy.as_ref() else {
+            continue;
+        };
+        match validate_path(host, path.as_path(), item.category, policy) {
+            Ok(()) => match move_to_trash(path.as_path()) {
+                Ok(receipt) => successes.push(CleanupItemSuccess {
+                    id: item.id,
+                    path: receipt.original_path,
+                    trashed_path: receipt.trashed_path,
+                    logical_size: item.logical_size,
+                }),
+                Err(message) => failures.push(CleanupItemFailure {
+                    id: item.id,
+                    path: path.clone(),
+                    error: CleanupError::Trash(message),
+                }),
+            },
+            Err(error) => failures.push(CleanupItemFailure {
+                id: item.id,
+                path: path.clone(),
+                error: CleanupError::Safety(error),
+            }),
+        }
+    }
+
+    CleanupReport {
+        estimated_reclaimed_bytes: successes.iter().map(|success| success.logical_size).sum(),
+        successes,
+        failures,
+    }
+}
+
+fn policy_for(item: &CleanableItem) -> DeletionPolicy {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let node_environment = (item.category == CleanerCategory::NodeToolingCache)
+        .then(|| node_tooling_cache::snapshot_environment(HostOs::MacOs, home.as_deref()));
+    let ai_environment = (item.category == CleanerCategory::AiApps)
+        .then(|| ai_apps::environment(HostOs::MacOs, home.as_deref()));
+    let mut allowed_roots = Vec::new();
+    if let Some(home) = home.as_ref() {
+        allowed_roots.push(AllowedRoot {
+            path: home.join("Library").join("Caches"),
+            allowed_categories: vec![CleanerCategory::UserCache],
+        });
+        allowed_roots.push(AllowedRoot {
+            path: home.join(".cache"),
+            allowed_categories: vec![CleanerCategory::UserCache],
+        });
+        allowed_roots.push(AllowedRoot {
+            path: home.join("Library").join("Logs"),
+            allowed_categories: vec![CleanerCategory::SystemJunk],
+        });
+        for folder in ["Downloads", "Desktop", "Documents", "Movies"] {
+            allowed_roots.push(AllowedRoot {
+                path: home.join(folder),
+                allowed_categories: vec![CleanerCategory::LargeOldFiles],
+            });
+        }
+        for root in mail_files::attachment_roots(Some(home.as_path())) {
+            allowed_roots.push(AllowedRoot {
+                path: root.path,
+                allowed_categories: vec![CleanerCategory::MailFiles],
+            });
+        }
+
+        // Uninstall review (Phase 9): the app bundle itself, plus every
+        // *user*-scope leftover location it may have matched. System-scope
+        // locations (`/Library/...`) are deliberately absent — they are
+        // scan-only until a privileged helper exists, so anything under them
+        // fails `OutsideAllowedRoot` regardless of what the review dialog
+        // shows or what the user selects.
+        for root in [home.join("Applications"), PathBuf::from("/Applications")] {
+            allowed_roots.push(AllowedRoot {
+                path: root,
+                allowed_categories: vec![CleanerCategory::InstalledApps],
+            });
+        }
+        // Phase 10 orphan candidates are found under this exact same
+        // user-scope leftover root list (see
+        // `macos::applications::orphans::find_orphans_from`), so they share
+        // these `AllowedRoot` entries with the uninstall review workflow
+        // rather than getting a second, duplicate set. System-scope orphan
+        // candidates stay scan-only for the same reason Phase 9's do:
+        // nothing below adds `/Library/...` for `OrphanedFiles` either.
+        for root in locations::user_scope_leftover_roots(home.as_path()) {
+            allowed_roots.push(AllowedRoot {
+                path: root,
+                allowed_categories: vec![
+                    CleanerCategory::InstalledApps,
+                    CleanerCategory::OrphanedFiles,
+                ],
+            });
+        }
+
+        // Xcode Junk (Phase 11): only the three sub-paths
+        // `xcode_junk::cleanup_allowed_roots` marks "normally recreatable" —
+        // DerivedData, the SwiftUI preview cache and CoreSimulator's own
+        // `Caches` — are allow-listed. Archives, iOS DeviceSupport,
+        // CoreSimulator Devices, XCTestDevices and the SwiftPM cache stay
+        // scan-only; see `macos::scanners::xcode_junk` and
+        // `docs/cleaner/known-limitations.md`.
+        for root in xcode_junk::cleanup_allowed_roots(home.as_path()) {
+            allowed_roots.push(AllowedRoot {
+                path: root,
+                allowed_categories: vec![CleanerCategory::XcodeJunk],
+            });
+        }
+
+        // Homebrew Cache (Phase 11): scoped to the exact detected cache root
+        // only — never `/opt/homebrew` or `/usr/local` broadly, and never the
+        // Cellar. Reuses the scanner's own detection order (the
+        // `HOMEBREW_CACHE` environment variable, else the default location)
+        // so cleanup can never authorize a root the scan itself did not use.
+        if let Some(cache_root) = homebrew_cache::resolve_cache_root(
+            std::env::var_os("HOMEBREW_CACHE").map(PathBuf::from),
+            Some(home.as_path()),
+        ) {
+            allowed_roots.push(AllowedRoot {
+                path: cache_root,
+                allowed_categories: vec![CleanerCategory::HomebrewCache],
+            });
+        }
+
+        // Node Tooling Cache (Phase 11): allow-lists only the locations
+        // `node_tooling_cache::cleanup_allowed_roots` marks `allow_cleanup:
+        // true` for the exact same environment snapshot the scan itself
+        // would take. pnpm's shared store, and anything a future Nub
+        // detection might ever report, are never included — see
+        // `cleaner::node_tooling_cache` and
+        // `docs/cleaner/known-limitations.md`.
+        if let Some(environment) = node_environment.as_ref() {
+            for root in node_tooling_cache::cleanup_allowed_roots(environment) {
+                allowed_roots.push(AllowedRoot {
+                    path: root,
+                    allowed_categories: vec![CleanerCategory::NodeToolingCache],
+                });
+            }
+        }
+
+        // AI Apps (Phase 12): only locations `AiAppRole::allow_cleanup`
+        // permits — Logs and Cache — are allow-listed. Models, Application
+        // support and Chat history stay scan-only; see
+        // `cleaner::ai_apps` and `docs/cleaner/known-limitations.md`.
+        if let Some(environment) = ai_environment.as_ref() {
+            for root in ai_apps::cleanup_allowed_roots(environment) {
+                allowed_roots.push(AllowedRoot {
+                    path: root,
+                    allowed_categories: vec![CleanerCategory::AiApps],
+                });
+            }
+        }
+    }
+    allowed_roots.push(AllowedRoot {
+        path: PathBuf::from("/tmp"),
+        allowed_categories: vec![CleanerCategory::SystemJunk],
+    });
+
+    let mut protected_paths = vec![
+        PathBuf::from("/"),
+        PathBuf::from("/Applications"),
+        PathBuf::from("/System"),
+        PathBuf::from("/Library"),
+        PathBuf::from("/Users"),
+        PathBuf::from("/Volumes"),
+        PathBuf::from("/private"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/sbin"),
+        PathBuf::from("/usr"),
+        paths::data_dir(),
+    ];
+    if let Some(home) = home.as_ref() {
+        protected_paths.push(home.clone());
+    }
+    if let Some(environment) = node_environment.as_ref() {
+        protected_paths.extend(node_tooling_cache::cleanup_denied_roots(environment));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        protected_paths.push(exe);
+    }
+
+    DeletionPolicy {
+        allowed_roots,
+        protected_paths,
+        user_home: home,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::core::category::CleanerCategory;
+    use crate::core::errors::SafetyError;
+    use crate::core::item::{CleanableItem, CleanableItemId, ItemMetadata};
+    use crate::core::risk::{RiskLevel, SelectionPolicy};
+    use crate::core::safety::validate_path;
+    use crate::macos::cleanup::policy_for;
+    use crate::paths::HostOs;
+
+    fn sample_item(category: CleanerCategory, path: PathBuf) -> CleanableItem {
+        CleanableItem {
+            id: CleanableItemId(1),
+            category,
+            group: None,
+            display_name: String::new(),
+            path,
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::SafeRecreatable,
+            selection_policy: SelectionPolicy::SelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        }
+    }
+
+    /// The ticket's "Home-directory rejection" and "Application-directory
+    /// rejection" safety tests, run against the *real* policy `policy_for`
+    /// builds (not a synthetic one), so this fails the moment a future edit
+    /// ever drops `/Users/<name>` or `/Applications` from `protected_paths`.
+    #[test]
+    fn the_real_policy_protects_home_and_applications_regardless_of_category() {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .expect("HOME must be set to run this test");
+        let policy = policy_for(&sample_item(CleanerCategory::UserCache, home.clone()));
+
+        assert!(
+            matches!(
+                validate_path(
+                    HostOs::MacOs,
+                    home.as_path(),
+                    CleanerCategory::UserCache,
+                    &policy
+                ),
+                Err(SafetyError::ProtectedPath(_))
+            ),
+            "the home directory itself must never validate for deletion"
+        );
+        assert!(
+            matches!(
+                validate_path(
+                    HostOs::MacOs,
+                    std::path::Path::new("/Applications"),
+                    CleanerCategory::InstalledApps,
+                    &policy
+                ),
+                Err(SafetyError::RootDeletionRejected(_))
+            ),
+            "/Applications itself must never validate for deletion, even for the one category \
+             whose allowed roots live inside it"
+        );
+        assert!(
+            matches!(
+                validate_path(
+                    HostOs::MacOs,
+                    std::path::Path::new("/System"),
+                    CleanerCategory::SystemJunk,
+                    &policy
+                ),
+                Err(SafetyError::ProtectedPath(_))
+            ),
+            "/System must never validate for deletion"
+        );
+    }
+
+    #[test]
+    fn user_cache_policy_has_explicit_allowed_roots() {
+        let policy = policy_for(&CleanableItem {
+            id: CleanableItemId(1),
+            category: CleanerCategory::UserCache,
+            group: None,
+            display_name: String::new(),
+            path: PathBuf::from("/tmp/cache"),
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::SafeRecreatable,
+            selection_policy: SelectionPolicy::SelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        });
+
+        assert!(
+            policy.allowed_roots.iter().any(|root| {
+                root.allowed_categories
+                    .contains(&CleanerCategory::LargeOldFiles)
+                    && root.path.ends_with("Downloads")
+            }),
+            "large-and-old cleanup must stay limited to explicit user folders"
+        );
+    }
+
+    #[test]
+    fn installed_apps_policy_covers_user_scope_leftovers_but_not_system_scope() {
+        let policy = policy_for(&CleanableItem {
+            id: CleanableItemId(1),
+            category: CleanerCategory::InstalledApps,
+            group: None,
+            display_name: String::new(),
+            path: PathBuf::from("/Applications/Example.app"),
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::ReviewRecommended,
+            selection_policy: SelectionPolicy::NotSelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        });
+
+        let app_roots: Vec<_> = policy
+            .allowed_roots
+            .iter()
+            .filter(|root| {
+                root.allowed_categories
+                    .contains(&CleanerCategory::InstalledApps)
+            })
+            .collect();
+        assert!(
+            app_roots
+                .iter()
+                .any(|root| root.path.as_path() == std::path::Path::new("/Applications")),
+            "the app bundle root must be allow-listed for InstalledApps"
+        );
+        assert!(
+            app_roots
+                .iter()
+                .any(|root| root.path.ends_with("Library/Application Support")),
+            "user-scope leftover roots must be allow-listed for InstalledApps"
+        );
+        assert!(
+            app_roots
+                .iter()
+                .all(|root| !root.path.starts_with("/Library")),
+            "system-scope leftover locations must stay scan-only, never allow-listed"
+        );
+    }
+
+    #[test]
+    fn orphaned_files_policy_covers_the_same_user_scope_leftovers_but_not_system_scope() {
+        let policy = policy_for(&CleanableItem {
+            id: CleanableItemId(1),
+            category: CleanerCategory::OrphanedFiles,
+            group: None,
+            display_name: String::new(),
+            path: PathBuf::from("/tmp/orphan"),
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::ReviewRecommended,
+            selection_policy: SelectionPolicy::NotSelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        });
+
+        let orphan_roots: Vec<_> = policy
+            .allowed_roots
+            .iter()
+            .filter(|root| {
+                root.allowed_categories
+                    .contains(&CleanerCategory::OrphanedFiles)
+            })
+            .collect();
+        assert!(
+            orphan_roots
+                .iter()
+                .any(|root| root.path.ends_with("Library/Application Support")),
+            "user-scope leftover roots must be allow-listed for OrphanedFiles"
+        );
+        assert!(
+            !orphan_roots
+                .iter()
+                .any(|root| root.path.as_path() == std::path::Path::new("/Applications")),
+            "OrphanedFiles never includes an app bundle root — only leftover locations"
+        );
+        assert!(
+            orphan_roots
+                .iter()
+                .all(|root| !root.path.starts_with("/Library")),
+            "system-scope leftover locations must stay scan-only, never allow-listed"
+        );
+    }
+
+    #[test]
+    fn xcode_junk_policy_covers_only_the_three_recreatable_subpaths() {
+        let policy = policy_for(&CleanableItem {
+            id: CleanableItemId(1),
+            category: CleanerCategory::XcodeJunk,
+            group: None,
+            display_name: String::new(),
+            path: PathBuf::from("/tmp/derived-data"),
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::SafeRecreatable,
+            selection_policy: SelectionPolicy::SelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        });
+
+        let xcode_roots: Vec<_> = policy
+            .allowed_roots
+            .iter()
+            .filter(|root| {
+                root.allowed_categories
+                    .contains(&CleanerCategory::XcodeJunk)
+            })
+            .collect();
+        assert_eq!(
+            xcode_roots.len(),
+            3,
+            "only DerivedData, Previews and CoreSimulator/Caches may be allow-listed"
+        );
+        assert!(
+            xcode_roots
+                .iter()
+                .any(|root| root.path.ends_with("DerivedData"))
+        );
+        assert!(
+            xcode_roots
+                .iter()
+                .any(|root| root.path.ends_with("Previews"))
+        );
+        assert!(
+            xcode_roots
+                .iter()
+                .any(|root| root.path.ends_with("CoreSimulator/Caches"))
+        );
+        assert!(
+            !xcode_roots
+                .iter()
+                .any(|root| root.path.ends_with("Archives")),
+            "Xcode Archives must stay scan-only"
+        );
+    }
+
+    #[test]
+    fn homebrew_cache_policy_covers_the_detected_cache_root_only() {
+        let policy = policy_for(&CleanableItem {
+            id: CleanableItemId(1),
+            category: CleanerCategory::HomebrewCache,
+            group: None,
+            display_name: String::new(),
+            path: PathBuf::from("/tmp/homebrew-cache"),
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::SafeRecreatable,
+            selection_policy: SelectionPolicy::SelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        });
+
+        let homebrew_roots: Vec<_> = policy
+            .allowed_roots
+            .iter()
+            .filter(|root| {
+                root.allowed_categories
+                    .contains(&CleanerCategory::HomebrewCache)
+            })
+            .collect();
+        assert_eq!(
+            homebrew_roots.len(),
+            1,
+            "exactly one detected cache root should be allow-listed"
+        );
+        assert!(
+            homebrew_roots
+                .iter()
+                .all(|root| !root.path.ends_with("Cellar")),
+            "the Cellar must never be allow-listed"
+        );
+    }
+
+    #[test]
+    fn node_tooling_cache_policy_never_allow_lists_the_pnpm_store() {
+        let policy = policy_for(&CleanableItem {
+            id: CleanableItemId(1),
+            category: CleanerCategory::NodeToolingCache,
+            group: None,
+            display_name: String::new(),
+            path: PathBuf::from("/tmp/node-tooling-cache"),
+            logical_size: 0,
+            allocated_size: None,
+            modified_at: None,
+            last_accessed_at: None,
+            risk: RiskLevel::SafeRecreatable,
+            selection_policy: SelectionPolicy::SelectedByDefault,
+            capabilities: Vec::new(),
+            explanation: String::new(),
+            warnings: Vec::new(),
+            metadata: ItemMetadata::Generic,
+        });
+
+        let node_roots: Vec<_> = policy
+            .allowed_roots
+            .iter()
+            .filter(|root| {
+                root.allowed_categories
+                    .contains(&CleanerCategory::NodeToolingCache)
+            })
+            .collect();
+        assert!(
+            node_roots.iter().all(|root| !root.path.ends_with("store")),
+            "pnpm's content-addressable store must never be allow-listed"
+        );
+    }
+}

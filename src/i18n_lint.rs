@@ -42,16 +42,16 @@ const SOURCES: [(&str, &str); 34] = [
     ("src/encoder_decoder.rs", include_str!("encoder_decoder.rs")),
     ("src/settings.rs", include_str!("settings.rs")),
     (
-        "src/cleaner/views/cleaner_view.rs",
-        include_str!("cleaner/views/cleaner_view.rs"),
+        "crates/dodo-cleaner/src/views/cleaner_view.rs",
+        include_str!("../crates/dodo-cleaner/src/views/cleaner_view.rs"),
     ),
     (
-        "src/cleaner/views/results_table.rs",
-        include_str!("cleaner/views/results_table.rs"),
+        "crates/dodo-cleaner/src/views/results_table.rs",
+        include_str!("../crates/dodo-cleaner/src/views/results_table.rs"),
     ),
     (
-        "src/cleaner/views/uninstall_review_dialog.rs",
-        include_str!("cleaner/views/uninstall_review_dialog.rs"),
+        "crates/dodo-cleaner/src/views/uninstall_review_dialog.rs",
+        include_str!("../crates/dodo-cleaner/src/views/uninstall_review_dialog.rs"),
     ),
     (
         "src/api_explorer/views/explorer.rs",

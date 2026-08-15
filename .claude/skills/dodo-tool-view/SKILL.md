@@ -58,7 +58,7 @@ never rebuild a view on selection.
    `match` arm carry `#[cfg(target_os = "macos")]`, and `const ALL` is written out twice because
    stable Rust has no attribute on an array element. Do that only when the tool genuinely cannot
    work elsewhere (it installs an InputMethodKit bundle); a tool that is merely *unfinished* on a
-   platform shows a "Coming later" pane instead, which is what `src/cleaner/` does. Nothing else
+   platform shows a "Coming later" pane instead, which is what `crates/dodo-cleaner/src/` does. Nothing else
    breaks: `Features::resolve` drops a stored tool the running build does not have and hands it
    back beside its default neighbour on a build that does, so one `session.json` moves between
    platforms without losing anything permanently.

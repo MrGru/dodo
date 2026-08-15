@@ -5,11 +5,24 @@ edition = "2024"
 license = "MIT"
 description = "Every string dodo shows a user, as one enum per area of the app with one file per language inside it. No UI framework: the catalogue is plain data so a pure module can hold a translated message and a test can render it without a window."
 
-# **Deliberately empty, and the point of the crate.** `dodo-i18n` must not
-# depend on `gpui`: a `Str` is held by pure models (a `ConsoleEntry`, a
-# `DbError`) that are tested with no `App` and no frame, and every module that
-# later moves out of the binary has to be able to name its own strings without
-# dragging a windowing library behind it. The three UI-bound pieces — the gpui
-# `Global` holding the active language, `Language::current` / `set`, and `t()` —
-# stay in dodo's own `src/i18n.rs`.
+# **Empty by default, and that is the point of the crate.** A `Str` is held by
+# pure models (a `ConsoleEntry`, a `DbError`) that are tested with no `App` and
+# no frame, and any module that moves out of the binary has to be able to name
+# its own strings without dragging a windowing library behind it. `cargo build
+# -p dodo-i18n` resolves to a crate with no dependencies whatsoever, and the
+# catalogue itself will never name `gpui`.
+#
+# The `gpui` feature is the deliberate exception, and it is opt-in for that
+# reason. It switches on `src/ui.rs` alone — the gpui `Global` holding the
+# active language, `Language::current` / `set`, and `t()`. Those three were
+# dodo's `src/i18n.rs` until `crates/dodo-cleaner` came out of the binary on
+# 2026-08-15. A gpui `Global` is identified by its *type*, so a feature crate
+# that defined its own copy would read a different global and never see a
+# language change; there can be exactly one, somewhere the binary and every
+# feature crate can both name, and this crate is the only such place. Consumers
+# that hold a `Str` without rendering it must keep leaving the feature off.
+[features]
+gpui = ["dep:gpui"]
+
 [dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", optional = true }

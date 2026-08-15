@@ -19,20 +19,20 @@ Results are returned as typed `CategoryScanResult` values.
 
 ## Current scanner set
 
-- `src/cleaner/macos/scanners/user_cache.rs` is a real scanner.
-- `src/cleaner/macos/scanners/system_junk.rs` is a second real scanner for safe recreatable junk roots.
-- `src/cleaner/macos/scanners/large_old_files.rs` provides analysis for user folders with non-default selection.
-- `src/cleaner/macos/scanners/mail_files.rs` provides Full-Disk-Access-gated Mail attachment/download analysis.
-- `src/cleaner/macos/scanners/trash_bins.rs` analyzes Trash bins as review-only items.
-- `src/cleaner/macos/scanners/installed_apps.rs` provides first-pass installed-app indexing.
-- `src/cleaner/macos/scanners/orphaned_files.rs` provides Full-Disk-Access-gated orphan detection
+- `crates/dodo-cleaner/src/macos/scanners/user_cache.rs` is a real scanner.
+- `crates/dodo-cleaner/src/macos/scanners/system_junk.rs` is a second real scanner for safe recreatable junk roots.
+- `crates/dodo-cleaner/src/macos/scanners/large_old_files.rs` provides analysis for user folders with non-default selection.
+- `crates/dodo-cleaner/src/macos/scanners/mail_files.rs` provides Full-Disk-Access-gated Mail attachment/download analysis.
+- `crates/dodo-cleaner/src/macos/scanners/trash_bins.rs` analyzes Trash bins as review-only items.
+- `crates/dodo-cleaner/src/macos/scanners/installed_apps.rs` provides first-pass installed-app indexing.
+- `crates/dodo-cleaner/src/macos/scanners/orphaned_files.rs` provides Full-Disk-Access-gated orphan detection
   (Phase 10), reusing Phase 9's identity/location/confidence machinery in reverse.
-- `src/cleaner/macos/scanners/xcode_junk.rs` provides Xcode/CoreSimulator developer-cache analysis
+- `crates/dodo-cleaner/src/macos/scanners/xcode_junk.rs` provides Xcode/CoreSimulator developer-cache analysis
   (Phase 11).
-- `src/cleaner/macos/scanners/homebrew_cache.rs` provides Homebrew download-cache analysis (Phase 11).
-- `src/cleaner/node_tooling_cache.rs` provides shared Node.js package-manager cache analysis across
-  providers under `src/cleaner/node_tooling/` on macOS, Windows and Linux.
-- `src/cleaner/state/mock.rs` remains for unit tests that validate the orchestration layer in isolation.
+- `crates/dodo-cleaner/src/macos/scanners/homebrew_cache.rs` provides Homebrew download-cache analysis (Phase 11).
+- `crates/dodo-cleaner/src/node_tooling_cache.rs` provides shared Node.js package-manager cache analysis across
+  providers under `crates/dodo-cleaner/src/node_tooling/` on macOS, Windows and Linux.
+- `crates/dodo-cleaner/src/state/mock.rs` remains for unit tests that validate the orchestration layer in isolation.
 
 ### User Cache scanner
 
@@ -101,7 +101,7 @@ Current behavior:
 - grants `ItemCapability::UninstallApplication` to every non-system app, and withholds it entirely
   from `/System/Applications` bundles — the "Begin uninstall review" action has nothing to gate on
   for a system app rather than needing a separate risk check at click time;
-- delegates `Info.plist` parsing to `src/cleaner/macos/applications/bundle.rs`, shared with the
+- delegates `Info.plist` parsing to `crates/dodo-cleaner/src/macos/applications/bundle.rs`, shared with the
   Phase 9 uninstall review workflow (see `docs/cleaner/application-matching.md` for identity
   normalization, leftover matching, confidence scoring and the review dialog).
 
@@ -179,7 +179,7 @@ Current behavior:
 
 ### Node Tooling Cache scanner
 
-`src/cleaner/node_tooling_cache.rs` and `src/cleaner/node_tooling/` are shared by macOS, Windows and
+`crates/dodo-cleaner/src/node_tooling_cache.rs` and `crates/dodo-cleaner/src/node_tooling/` are shared by macOS, Windows and
 Linux. The `NodeToolCacheProvider` trait and `NodeCacheLocation` were already platform-neutral; the
 old `NodeToolEnvironment` and three providers were not, because their fallbacks assumed
 `~/Library`. The environment now carries resolved host cache directories plus successful tool-query
@@ -208,8 +208,8 @@ directory, not the store.
 
 ### AI Apps scanner
 
-One shared scanner (`src/cleaner/ai_apps.rs`) consumes resolved Ollama and LM Studio definitions
-from `src/cleaner/ai_apps/definitions/{macos,windows,linux}.rs`. The old core policy seam was useful,
+One shared scanner (`crates/dodo-cleaner/src/ai_apps.rs`) consumes resolved Ollama and LM Studio definitions
+from `crates/dodo-cleaner/src/ai_apps/definitions/{macos,windows,linux}.rs`. The old core policy seam was useful,
 but its static `~` paths, bundle identifiers and direct macOS activity call were not actually
 cross-platform; those are now resolved inputs and a thin injected activity probe. Judgment remains
 centralized on `AiAppRole` — Logs, Temporary downloads, Cache, Models, Application support and Chat
@@ -257,13 +257,13 @@ Current behavior:
 
 ### Docker Cache scanner
 
-`src/cleaner/docker_cache.rs` — a scanner shared by macOS, Windows and Linux for dangling/unused
+`crates/dodo-cleaner/src/docker_cache.rs` — a scanner shared by macOS, Windows and Linux for dangling/unused
 images, stopped containers, and unused volumes/networks, via the `docker` CLI (fixed argument
 vectors, no shell).
 **Deliberately does not reuse `crate::docker::services::DockerEngine`** even though `src/docker/`
 already resolves a daemon connection and lists all four resource types: dodo's "self-contained-module
 invariant" (see `dodo-database-internals`, which dropped a "detect running database containers"
-feature in every design round to avoid exactly this) forbids `src/cleaner/` from gaining a `use
+feature in every design round to avoid exactly this) forbids `crates/dodo-cleaner/src/` from gaining a `use
 crate::docker` edge. This scanner is therefore a second, much smaller, independent Docker client —
 line-delimited JSON (`--format '{{json .}}'`) parsed with `serde_json::Value`, no `bollard`, no second
 tokio runtime.
@@ -305,7 +305,7 @@ usage totals, Docker Desktop's own log files, image-usage matching precision).
 
 ### Universal Binaries scanner (analysis-only)
 
-`src/cleaner/macos/scanners/universal_binaries.rs` — discovers which installed app's *main*
+`crates/dodo-cleaner/src/macos/scanners/universal_binaries.rs` — discovers which installed app's *main*
 executable (`Contents/MacOS/<CFBundleExecutable>`) is a universal (fat) Mach-O binary, via the
 `object` crate (`read`, `macho` features only — no `write`, since this phase never mutates a binary).
 **Analysis only**, per the ticket: no removal exists yet, and none is planned until Phase 16 lands a
@@ -339,7 +339,7 @@ Current behavior:
 
 ### Language Files scanner (analysis-only)
 
-`src/cleaner/macos/scanners/language_files.rs` — one item per `<App>.app/Contents/Resources/*.lproj`
+`crates/dodo-cleaner/src/macos/scanners/language_files.rs` — one item per `<App>.app/Contents/Resources/*.lproj`
 localization folder, grouped by app (`CleanableItem::group`). **Analysis only**, the same posture as
 Universal Binaries: no removal exists yet, and `SelectionPolicy::NeverBulkSelect` on every item —
 protected or not — reflects that there is nothing to select *for*.

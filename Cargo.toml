@@ -1,7 +1,7 @@
 # `crates/` holds code that shares this lockfile, which is what separates it
 # from `tools/`.
 #
-# There are seven members, in two groups.
+# There are eight members, in three groups.
 #
 # `crates/dodo-app-icon`, `crates/dodo-i18n` and `crates/dodo-paths` are *kernel*
 # crates: code many of dodo's modules use, lifted out so it can be depended on
@@ -10,6 +10,13 @@
 # have no dependencies at all. They deliberately do not depend on each other
 # either: the graph is wide and shallow, because a chain of small crates compiles
 # more slowly than one big one.
+#
+# `crates/dodo-cleaner` is a *feature* crate — a whole tool of the app, lifted
+# out of the binary rather than a piece many tools share. It is the first, and
+# it is the shape to copy: its only outbound edges were the three kernel crates
+# above, `layout.rs` was its only inbound one, and `main.rs` aliases it back to
+# `crate::cleaner` so neither side's call sites changed. `AGENTS.md`'s "feature
+# crate" entry records what the move bought and what it did not.
 #
 # The other four are the input method. `crates/dodo-ime-core` is the engine,
 # linked *into* dodo. `crates/dodo-ime-ipc` is the settings and identifier
@@ -24,7 +31,7 @@
 # bundle types with would be two different resolutions that nothing compares. One
 # workspace, one `Cargo.lock`, one `--locked`.
 #
-# `default-members` names all eight (the root package and every crate), so a bare
+# `default-members` names all nine (the root package and every crate), so a bare
 # `cargo test` / `cargo clippy --all-targets` at the root covers each crate's own
 # tests. **Adding a crate means adding it here in the same commit**; without it
 # cargo defaults to the root package alone and the new crate's tests silently
@@ -42,6 +49,7 @@ members = ["crates/*"]
 default-members = [
     ".",
     "crates/dodo-app-icon",
+    "crates/dodo-cleaner",
     "crates/dodo-i18n",
     "crates/dodo-ime-core",
     "crates/dodo-ime-ipc",
@@ -115,11 +123,18 @@ dodo-app-icon = { path = "crates/dodo-app-icon" }
 # environment. `main.rs`'s own `paths` module is the seam: it reads the one thing
 # a pure crate cannot — the target triple `build.rs` embedded — and hands it over.
 dodo-paths = { path = "crates/dodo-paths" }
-# Every string dodo shows a user. Extracted so the catalogue is reachable
-# without `gpui`: a pure model holds a `Str` and a test renders it with no
-# window. `src/i18n.rs` is dodo's end of it — the gpui global, `Language::current`
-# / `set` and `t()` — and re-exports the rest, so a call site is unchanged.
-dodo-i18n = { path = "crates/dodo-i18n" }
+# Every string dodo shows a user. The catalogue is reachable without `gpui` —
+# a pure model holds a `Str` and a test renders it with no window — which is why
+# the UI half (the gpui global, `Language::current` / `set`, `t()`) is behind the
+# `gpui` feature this line switches on rather than in the crate proper. It used
+# to be `src/i18n.rs`; it moved when `dodo-cleaner` needed to render a `Str`
+# from outside this binary. `main.rs` aliases the crate to `crate::i18n`, so
+# every call site is unchanged.
+dodo-i18n = { path = "crates/dodo-i18n", features = ["gpui"] }
+# The Cleaner, whole. The binary names exactly one item from it —
+# `layout.rs`'s `CleanerView` — and `main.rs` aliases the crate back to
+# `crate::cleaner`. See that crate's `lib.rs` for the seam.
+dodo-cleaner = { path = "crates/dodo-cleaner" }
 # dodo's input-method engine, kept out of this crate so the three OS hosts can
 # link it without linking everything below. dodo names its configuration types
 # in the Input method settings page and nothing else; the engine itself only ever

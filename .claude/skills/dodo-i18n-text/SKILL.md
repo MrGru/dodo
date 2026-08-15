@@ -37,12 +37,15 @@ file past 250 lines.
 `From<area::Text> for Str` for each. `t()` takes `impl Into<Str>`, so a view writes
 `t(cleaner::Text::Scan, cx)`.
 
-**`t()` itself is not in the crate — `src/i18n.rs` is.** That file is dodo's end of the split: it
-re-exports everything above (so `use crate::i18n::{cleaner, t}` is unchanged), and adds the three
-pieces that need gpui — `t()`, the `ActiveLanguage` global, and `LanguageExt`, which is what keeps
-`Language::current(cx)` and `.set(cx)` spelled as they always were. A file that calls either has to
-have `LanguageExt` in scope; the compiler says so if it does not. Adding a *string* never touches
-this file. `Str` itself stays holdable and comparable: `ConsoleEntry` keeps
+**`t()` is in the crate too, but behind a feature — `dodo-i18n`'s `gpui`, which switches on
+`crates/dodo-i18n/src/ui.rs` alone.** That module holds the three pieces that need gpui: `t()`, the
+`ActiveLanguage` global, and `LanguageExt`, which is what keeps `Language::current(cx)` and
+`.set(cx)` spelled as they always were. A file that calls either has to have `LanguageExt` in
+scope; the compiler says so if it does not. `main.rs` aliases the crate with
+`use dodo_i18n as i18n;`, so `use crate::i18n::{cleaner, t}` is unchanged and there is no
+`src/i18n.rs` any more. The feature is off by default and must stay off for anything that only
+*holds* a `Str`; it is on for `dodo` and for `dodo-cleaner`, the two crates that draw one. Adding a
+*string* never touches any of this. `Str` itself stays holdable and comparable: `ConsoleEntry` keeps
 dodo's own lines as an unrendered `Str` so they re-translate when the language changes.
 
 **`std::mem::discriminant` on a `Str` no longer identifies a string.** Every string in an area

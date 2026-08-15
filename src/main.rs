@@ -17,12 +17,22 @@ mod app;
 use dodo_app_icon as app_icon;
 mod assets;
 mod build_info;
-mod cleaner;
+// The Cleaner is a *feature* crate — `crates/dodo-cleaner`, the first module
+// big enough to be worth taking out of this binary. `layout.rs` names one
+// item from it, `CleanerView`, and this alias is what keeps that line reading
+// `use crate::cleaner::CleanerView`. There is no `src/cleaner/` any more.
+use dodo_cleaner as cleaner;
 mod database;
 mod dialog_slot;
 mod docker;
 mod encoder_decoder;
-mod i18n;
+// Every string dodo shows, plus the three UI-bound pieces (`t`, the active-
+// language global, `Language::current` / `set`) that the crate's `gpui`
+// feature switches on. Both halves are `crates/dodo-i18n` now: a feature
+// crate outside this binary has to be able to render a `Str`, and a gpui
+// `Global` is identified by its type, so there can only be one of it. This
+// alias is what keeps all 100-odd `use crate::i18n::{…}` lines unchanged.
+use dodo_i18n as i18n;
 /// Guards the rule that `i18n` only enforces halfway; test-only.
 #[cfg(test)]
 mod i18n_lint;
@@ -57,6 +67,23 @@ mod paths {
     /// first.
     pub fn data_dir() -> PathBuf {
         resolve(current(), &Environment::from_env())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        /// `dodo_cleaner::paths` has to answer this question too, and cannot
+        /// answer it the same way: a library crate is handed no target triple,
+        /// so it names the platform with `cfg!` instead. Two spellings of one
+        /// fact is exactly the shape that drifts silently — a Cleaner scanning
+        /// as if it were on Windows would hide half the categories — so this is
+        /// the test that keeps them one answer. It is the same guard
+        /// `dodo-paths` already keeps against `dodo-ime-ipc`'s own copy of the
+        /// macOS rule.
+        #[test]
+        fn the_cleaner_crate_resolves_the_same_host_as_this_binary() {
+            assert_eq!(super::current(), dodo_cleaner::paths::current());
+            assert_eq!(super::data_dir(), dodo_cleaner::paths::data_dir());
+        }
     }
 }
 mod quick_nav;

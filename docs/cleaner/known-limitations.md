@@ -88,8 +88,8 @@
     to produce its own group. This duplicates some directory traversal rather than adding an
     exclusion-list concept to the shared `scan_root` engine for one scanner's need.
 - Phase 11 also adds **Node Tooling Cache**, six providers (npm, Yarn Classic, Yarn Berry, pnpm,
-  Bun, Nub) behind one `NodeToolCacheProvider` trait (`src/cleaner/core/node_tool_provider.rs`),
-  driven by shared `src/cleaner/node_tooling_cache.rs` on all three hosts. Scan+preview only,
+  Bun, Nub) behind one `NodeToolCacheProvider` trait (`crates/dodo-cleaner/src/core/node_tool_provider.rs`),
+  driven by shared `crates/dodo-cleaner/src/node_tooling_cache.rs` on all three hosts. Scan+preview only,
   same as every
   other category. Deliberate scope cuts:
   - **Configured roots use fixed-argv CLI queries.** npm, both Yarn generations, pnpm and Bun are
@@ -180,7 +180,7 @@
     this scanner introduces.
   - **Does not reuse `crate::docker::services::DockerEngine`, by design, not oversight** — see
     `docs/cleaner/scanners.md`'s Docker Cache section for why: dodo's self-contained-module invariant
-    forbids `src/cleaner/` from depending on `src/docker/`, so this is an independent, much smaller
+    forbids `crates/dodo-cleaner/src/` from depending on `src/docker/`, so this is an independent, much smaller
     Docker client (the CLI, not `bollard`) rather than a shared one.
 - **Universal Binaries (Phase 14, analysis-only)** — `macos::scanners::universal_binaries`:
   - **Only the app's one main executable is inspected.** Nested frameworks, plugins, XPC services and
@@ -216,13 +216,13 @@
 - **Cross-cutting hardening gaps (Phase 17)** — all 14 scanner categories exist and are
   fmt/clippy/test clean, but the following are deliberately not done this pass:
   - ~~**No result-table virtualization.**~~ **Done in a later pass** — the migration this entry
-    described as future work has landed: `src/cleaner/views/results_table.rs` is the `TableDelegate`
+    described as future work has landed: `crates/dodo-cleaner/src/views/results_table.rs` is the `TableDelegate`
     driving `gpui_component::table::DataTable`, which builds only the rows inside the current scroll
     viewport. That module's doc comment is the authority; this entry is kept, struck through, only
     so the Phase 17 list stays readable against its own history.
 
     **Virtualized rows were not the whole cost, and this entry claimed they were.** Until
-    `src/cleaner/views/results_sync.rs` landed, `CleanerView::sync_results_table` deep-cloned the
+    `crates/dodo-cleaner/src/views/results_sync.rs` landed, `CleanerView::sync_results_table` deep-cloned the
     whole active result — every item, and for application rows the whole TIFF icon payload — into
     the delegate at the top of *every* `render`, however few rows the grid then drew. So the
     large-item-count categories named here (System Junk, Large & Old Files, User Cache) did still
@@ -262,7 +262,7 @@
   - **Keyboard/accessibility**: Cleaner adds no custom key bindings or `KeyContext` of its own — it
     relies entirely on gpui-component's default widget focus/activation behavior (`Button`,
     checkbox-style toggles) the same as most other simple tool views in dodo. This was verified, not
-    assumed (`grep -n 'KeyContext\|key_context\|actions!' src/cleaner/views/cleaner_view.rs` returns
+    assumed (`grep -n 'KeyContext\|key_context\|actions!' crates/dodo-cleaner/src/views/cleaner_view.rs` returns
     nothing) — it is not a claim that dedicated accessibility work happened this phase, only an
     accurate statement that Cleaner does not fight the platform defaults either.
 

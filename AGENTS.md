@@ -43,16 +43,17 @@ comments are the authority on its split and what shipped when; the matching skil
 the non-obvious parts of each are written down — load it before changing anything in one of these
 three modules rather than inferring the design from the files cold.
 
-**`src/cleaner/` is the same shape but started unfinished, and rounds have been landing since.**
-Its `mod.rs` doc comment is the authority on what has shipped; do not assume it is still round 1
-without checking. `core/` still carries `#[allow(dead_code)]` on items ahead of what constructs
+**`crates/dodo-cleaner/` is the same shape but started unfinished, rounds have been landing
+since, and on 2026-08-15 it moved out of the binary entirely** — it was `src/cleaner/`, and any
+path below that still says so is stale. Its `lib.rs` doc comment is the authority on what has
+shipped and on the two seams the move added; do not assume it is still round 1 without checking. `core/` still carries `#[allow(dead_code)]` on items ahead of what constructs
 them — **those are pending work, not dead code to delete** — but the allow comes off as each
 producer lands: `core::safety` now has the real deletion boundary used by all three cleanup paths:
 host-aware lexical normalization plus canonical allowed-root containment rejects traversal,
 symlink/junction escapes, filesystem roots, declared roots and the user's home; its deny-by-default
 `DeletionPolicy` authorizes nothing until a scanner root is named. `core::permissions` is still the
 one whole-module allow marking an area that does not exist at all yet. Three things named in
-`src/cleaner/mod.rs` are worth knowing before touching the module: an item's
+`crates/dodo-cleaner/src/lib.rs` are worth knowing before touching it: an item's
 application icon is a **bounded, `Arc`-shared** `core::icon::IconRaster` and never a raw `Vec<u8>`
 (what it replaced measured 70.5 MiB *per app* and could not be decoded at all — `core::icon` has
 the numbers); `core::category::CleanerCategory::hidden_for(HostOs)` is the whole switch deciding
@@ -68,7 +69,7 @@ system Flatpaks and Snap are scan-only, and only user Flatpaks and bounded AppIm
 Neither platform deletes package-managed install locations. Taking a `HostOs` rather than splitting
 on `cfg` is what lets every platform answer be asserted from this Mac. AI Apps keeps each host's
 Ollama/LM Studio paths in
-`src/cleaner/ai_apps/definitions/<host>.rs`; every Windows/Linux location is explicitly inferred
+`crates/dodo-cleaner/src/ai_apps/definitions/<host>.rs`; every Windows/Linux location is explicitly inferred
 until captain validation, and models, chats and settings remain scan-only user data.
 Language Files stays macOS-only
 unless a safe equivalent appears; Orphaned Files stays unavailable on Windows and may return on
@@ -81,7 +82,7 @@ rate.** A dirty view marks its whole *ancestor* path dirty, and an ancestor re-r
 `Window::refreshing`, which bypasses the element cache for every *descendant* — so a child view
 scrolling, a 120 ms progress tick, or a redraw anywhere above re-runs a view's `render` with
 nothing of its own changed. Any `render` that copies a whole collection is therefore paying that
-copy per frame, however well the rows themselves are virtualized: `src/cleaner/views/results_sync.rs`
+copy per frame, however well the rows themselves are virtualized: `crates/dodo-cleaner/src/views/results_sync.rs`
 is the fix, the measurements and the decision table, and is the pattern to copy — stamp a revision
 where the data is mutated, compare it before re-copying. Cheap `render` bodies are not an
 optimisation in dodo; they are the contract.
@@ -419,13 +420,19 @@ hand-numbered `position()`: one entry per variant produces both the list the tes
 exhaustive `match` over `Text`, so a variant with no sample is a compile error and no index number
 survives. `src/i18n_lint.rs` stays put at the top of `src/` because its 34 `include_str!` paths are
 relative to that directory, and every file it reads is a *view*, so the catalogue moving out did not
-touch it. **The catalogue is a crate and the UI half is not**: `dodo-i18n` depends on nothing at all
-and `gpui` is the dependency it may never grow, because a `Str` is held unrendered by pure models
-that are tested with no `App` and no frame. `src/i18n.rs` is dodo's end of it and re-exports the
-crate, so a call site still reads `use crate::i18n::{cleaner, t}`. Two things there could not move as
-they were, both forced by the orphan rule: the gpui global is an `ActiveLanguage` newtype rather than
-`Language` itself, and `Language::current` / `set` are `LanguageExt`'s associated functions — the
-call sites are unchanged, but a file that calls one has to import the trait. See the
+touch it. **The catalogue depends on nothing and the UI half is one opt-in feature away**:
+`dodo-i18n`'s default build has no dependencies at all, because a `Str` is held unrendered by pure
+models that are tested with no `App` and no frame, and the catalogue itself will never name `gpui`.
+Its `gpui` feature switches on `src/ui.rs` alone — the active-language global, `Language::current` /
+`set`, and `t()`. Those three were `src/i18n.rs` until `dodo-cleaner` left the binary: a gpui
+`Global` is identified by its *type*, so a feature crate defining its own copy would read a
+different global and never see a language change, which means there can be exactly one and it has
+to sit where the binary and every feature crate can both name it. `main.rs` aliases the crate to
+`crate::i18n`, so a call site still reads `use crate::i18n::{cleaner, t}` and `src/i18n.rs` no
+longer exists. Two things could not move as they were, both forced by the orphan rule: the gpui
+global is an `ActiveLanguage` newtype rather than `Language` itself, and `Language::current` / `set`
+are `LanguageExt`'s associated functions — the call sites are unchanged, but a file that calls one
+has to import the trait. **Leave the feature off** in anything that only *holds* a `Str`. See the
 `dodo-i18n-text` skill before writing any user-facing string.
 
 `data_dir()` is `crate::paths::data_dir()` and knows all three platforms:
@@ -504,7 +511,7 @@ experimental ones included, because a silently absent platform means those users
 an update; and the publish step is **create-or-update**, because `gh release create` cannot repair
 a tag that already exists and tags here are immutable. `src/updater/` is what reads it.
 
-Nine things about build and release that catch people:
+Ten things about build and release that catch people:
 
 - **The repo is a cargo workspace, and `crates/` vs `tools/` is the rule for which shape a new
   crate takes.** It gained `[workspace]` on 2026-08-08 when the input-method engine moved to
@@ -524,7 +531,7 @@ Nine things about build and release that catch people:
   `[target.'cfg(target_os = "macos")'.dependencies]` table — a plain `[dependencies]` entry would
   make the Linux and Windows `cargo check` rows build AppKit bindings. And `workspace.exclude`
   matches **paths, not globs** — `tools/*` there excludes nothing, which is why it is spelled out.
-  `cargo metadata --no-deps` at the root lists seven packages, not one.
+  `cargo metadata --no-deps` at the root lists eight packages, not one.
 
 - **`crates/` also holds dodo's *kernel* crates, and the rule for what earns one is use plus
   independence.** `dodo-i18n` (every user-visible string), `dodo-app-icon` (the icon set) and
@@ -537,11 +544,53 @@ Nine things about build and release that catch people:
   **Purity is the deliverable, not the file count** — `dodo-i18n` exists so a pure model can hold a
   translated message without a windowing library, which is why its `Cargo.toml` has an empty
   `[dependencies]` and a comment saying so. And **what cannot be pure stays in the binary**: the
-  gpui `Global` behind `Language`, and the one read of `build_info::VERSION_INFO.target`, live in
-  `src/i18n.rs` and `main.rs`'s `paths` module respectively, so the crates need no build script and
-  no gpui. `src/dialog_slot.rs`, `src/assets.rs` and `src/build_info.rs` were measured and
+  one read of `build_info::VERSION_INFO.target` lives in `main.rs`'s `paths` module, so no kernel
+  crate needs a build script. The gpui `Global` behind `Language` was the other half of that rule
+  and **is no longer**: `dodo-cleaner` has to render a `Str` from outside the binary, so it moved
+  into `dodo-i18n` behind an opt-in `gpui` feature (see the i18n entry above). The default build of
+  every kernel crate is still dependency-free. `src/dialog_slot.rs`, `src/assets.rs` and `src/build_info.rs` were measured and
   deliberately **not** extracted: two users each is not a crate, `assets.rs` embeds `./assets` by a
   path relative to its crate root, and `build_info.rs` reads the `env!` variables `build.rs` sets.
+
+- **`crates/` also holds *feature* crates, and `crates/dodo-cleaner` is the worked example.**
+  A kernel crate is code many tools share; a feature crate is one whole tool of the app, lifted out
+  in one piece. `dodo-cleaner` left `src/` on 2026-08-15 — 93 files, 25,646 lines, the largest
+  feature dodo has — and the shape it landed in is the shape to copy. **The seam is what qualifies
+  a feature, not its size**: measure it first with `grep -rhoE "crate::[a-z_0-9]+" src/<tool>`, and
+  extract only if every outbound edge is already a crate (the Cleaner's were exactly `app_icon`,
+  `i18n` and `paths`) and the inbound surface is one or two files (`layout.rs`). A `use crate::…`
+  inside a doc comment is not an edge — the Cleaner had three of those, and one of them says
+  `src/cleaner/` must never gain a real `crate::docker` edge. Five rules, each of which this crate
+  demonstrates:
+  - **Both sides keep their spelling.** `main.rs` does `use dodo_cleaner as cleaner;` — the same
+    aliasing `dodo_app_icon` already got — so `layout.rs` still reads
+    `use crate::cleaner::CleanerView`, and inside the crate `use dodo_app_icon as app_icon;` /
+    `use dodo_i18n as i18n;` keep every `crate::app_icon::AppIcon` and `crate::i18n::t` unchanged.
+    Rewriting `crate::cleaner::` to `crate::` was the entire source change; 91 of the 93 files are
+    byte-identical to their `src/` versions once rustfmt has re-wrapped the shortened `use` lines.
+  - **`pub mod` becomes `pub(crate) mod`, and that is not a narrowing.** Inside a binary `pub`
+    already meant "dodo and nowhere else". Leave the modules `pub` and the crate suddenly exports
+    its internals — which is also what makes `clippy::new_without_default` start firing on twelve
+    scanner constructors that were never public before. The crate's whole surface is `CleanerView`
+    and `paths`.
+  - **What was impure in the binary needs a seam in the crate.** `paths::current()` reads
+    `build_info::VERSION_INFO.target`, which a library is not handed, so
+    `dodo-cleaner/src/paths.rs` names the platform with `cfg!` instead — and `main.rs`'s `paths`
+    module carries the test asserting the two spellings are one answer, the same guard `dodo-paths`
+    already keeps against `dodo-ime-ipc`.
+  - **The pure/UI split is a contract, not an accident.** 90 of the 93 files name no UI framework;
+    only the three under `views/` may `use gpui`. Its `Cargo.toml` says why each dependency is
+    there, and nothing was added or dropped by the move.
+  - **`src/i18n_lint.rs` reaches across with `include_str!("../crates/dodo-cleaner/src/views/…")`**,
+    so the three Cleaner views are still scanned for untranslated literals from the binary's tests.
+  **What the split bought, measured** (medians of three, `cargo build --locked`, warm cargo caches,
+  this Mac): clean build **128.01s → 114.05s** (−10.9%); touching a leaf file *inside* the Cleaner
+  **3.97s → 3.89s** (−2%, inside the noise); touching `src/layout.rs` **4.18s → 3.11s** (−26%).
+  **Read the middle number before extracting anything for build speed.** Moving a feature out does
+  not make editing *that feature* cheaper, because `dodo` depends on `dodo-cleaner` and so recompiles
+  in full anyway — the work moved, it did not shrink. What shrank is the binary, so every edit to a
+  file that is *still* in `src/` got a quarter faster. Extract for boundaries, testability and the
+  binary's own rebuild; do not expect the extracted crate's own edit loop to improve.
 
 - **Two of the four `cargo check` targets cannot be run from this Mac at all.**
   Linux and Windows both die in `aws-lc-sys`'s C build script (no cross C toolchain, no

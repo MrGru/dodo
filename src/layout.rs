@@ -1426,7 +1426,7 @@ mod tests {
     }
 
     /// **Every tool is an ordinary tool here**, with no exception for the one
-    /// still being built. `src/cleaner/` is a legitimate thing to switch off —
+    /// still being built. The Cleaner is a legitimate thing to switch off —
     /// arguably the most likely one — and a special case for it would be a rule
     /// `session::models::features` does not have and should not gain.
     #[test]

@@ -1,7 +1,7 @@
 # Application matching (Phase 9, extended in Phase 10)
 
 Identity normalization, leftover-location matching, confidence scoring and the uninstall review
-workflow now live under `src/cleaner/macos/applications/`, a sibling of `scanners/` rather than a
+workflow now live under `crates/dodo-cleaner/src/macos/applications/`, a sibling of `scanners/` rather than a
 member of it — the code here is shared by the `InstalledApps` scanner (`bundle::parse_bundle`) and
 the uninstall review workflow, and none of it is itself a `CleanerScanner`.
 

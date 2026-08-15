@@ -25,12 +25,19 @@
 //!
 //! # What is *not* here
 //!
-//! This crate has no dependencies at all, and `gpui` is the one it may never
-//! grow: a [`Str`] is held by pure models that are tested with no `App` and no
-//! frame. The three pieces that need the UI — the gpui `Global` holding the
-//! active language, `Language::current` / `set`, and `t()` — live in dodo's own
-//! `src/i18n.rs`, which re-exports everything below so a call site still reads
-//! `t(cleaner::Text::Scan, cx)`.
+//! The catalogue names no UI framework and never will: a [`Str`] is held by
+//! pure models that are tested with no `App` and no frame. By default this
+//! crate has no dependencies at all.
+//!
+//! The three pieces that *do* need the UI — the gpui `Global` holding the
+//! active language, `Language::current` / `set`, and [`t`] — are [`ui`], behind
+//! the opt-in `gpui` feature. They were dodo's own `src/i18n.rs` until
+//! `crates/dodo-cleaner` came out of the binary and needed to render a [`Str`]
+//! from outside it; `Cargo.toml` records why a second copy of that global is
+//! not an option. Leave the feature off unless you are *drawing* a string.
+//!
+//! [`t`]: ui::t
+//! [`ui`]: ui
 
 use std::borrow::Cow;
 
@@ -196,6 +203,11 @@ pub mod shared;
 pub mod shell;
 pub mod tray;
 pub mod updater;
+// The UI half, behind the feature that switches its one dependency on.
+#[cfg(feature = "gpui")]
+pub mod ui;
+#[cfg(feature = "gpui")]
+pub use ui::{ActiveLanguage, LanguageExt, t};
 
 areas! {
     api_collections => ApiCollections,

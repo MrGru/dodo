@@ -562,7 +562,7 @@ Two costs the round deliberately did **not** pay:
   `--features production` builds that differ from what was tested in name only.
 - **`docker`, gating the whole Docker module.** This one is real — it would
   remove `bollard`, `tokio` and `futures-util` and their transitive graph — but
-  the module is woven through `src/i18n.rs` (roughly 550 `Str` variants and
+  the module is woven through the string catalogue (roughly 550 `Str` variants and
   their exhaustive match arms) and `src/i18n_lint.rs` (which `include_str!`s
   the Docker view sources). Gating it means `#[cfg]` on all of that, and the
   i18n guard tests exist precisely to make that surface hard to get wrong. The

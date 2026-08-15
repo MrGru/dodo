@@ -9,7 +9,7 @@
 
 ## Current behavior
 
-- macOS now has a concrete permission service under `src/cleaner/macos/permissions/`.
+- macOS now has a concrete permission service under `crates/dodo-cleaner/src/macos/permissions/`.
 - Full Disk Access is checked by attempting real access to protected roots such as:
   - `~/Library/Mail`
   - `~/Library/Safari`

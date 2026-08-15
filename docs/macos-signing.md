@@ -372,7 +372,7 @@ more thing to keep correct.
 
 **A related thing that is not an entitlement, and is worth checking when signing
 lands.** dodo's Cleaner scans `~/Downloads`, `~/Desktop`, `~/Documents` and
-`~/Movies` (`src/cleaner/macos/cleanup.rs`, `scanners/large_old_files.rs` —
+`~/Movies` (`crates/dodo-cleaner/src/macos/cleanup.rs`, `scanners/large_old_files.rs` —
 **VERIFIED** by reading them). Those are TCC-protected directories. TCC consent
 is orthogonal to signing and to the hardened runtime — the prompt happens either
 way — but `Info.plist` usage-description strings

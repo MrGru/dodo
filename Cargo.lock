@@ -1612,6 +1612,7 @@ dependencies = [
  "bollard",
  "dispatch2",
  "dodo-app-icon",
+ "dodo-cleaner",
  "dodo-i18n",
  "dodo-ime-core",
  "dodo-ime-ipc",
@@ -1663,8 +1664,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "dodo-cleaner"
+version = "0.1.0"
+dependencies = [
+ "dodo-app-icon",
+ "dodo-i18n",
+ "dodo-paths",
+ "gpui",
+ "gpui-component",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "object 0.39.1",
+ "plist",
+ "serde",
+ "serde_json",
+ "trash",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "dodo-i18n"
 version = "0.1.0"
+dependencies = [
+ "gpui",
+]
 
 [[package]]
 name = "dodo-ime-core"

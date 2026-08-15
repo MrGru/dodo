@@ -7,11 +7,11 @@ future change that breaks one is easy to re-verify with the same command.
 ## No network capability in Cleaner's own code
 
 ```
-grep -rln "reqwest\|TcpStream\|std::net::" src/cleaner/
+grep -rln "reqwest\|TcpStream\|std::net::" crates/dodo-cleaner/src/
 ```
 
 returns nothing. dodo as a whole links `reqwest` (the in-app updater) and `tokio` (the PostgreSQL
-driver), but nothing under `src/cleaner/` imports either — this is not a policy Cleaner promises to
+driver), but nothing under `crates/dodo-cleaner/src/` imports either — this is not a policy Cleaner promises to
 follow, it is a fact about which crates its own source names. There is no code path by which a scan
 result, a file path, or a cleanup report could reach the network, because no networking API is ever
 called from this module.
@@ -54,7 +54,7 @@ Verified per category, by reading what each scanner actually opens with `fs::rea
 No scanner in the current 14-category set reads a credential file's contents. The closest name-only
 mentions — `~/.npmrc`, `~/.bunfig.toml`, Docker's `config.json`/certificates — are all documented as
 explicitly out of scope in their respective scanner's doc comment, and `grep`ing for those filenames
-across `src/cleaner/` turns up only those doc comments, never a `fs::read` call against them.
+across `crates/dodo-cleaner/src/` turns up only those doc comments, never a `fs::read` call against them.
 
 ## Logging never carries sensitive content
 

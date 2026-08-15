@@ -5,16 +5,16 @@ package or workspace member. As of Phase 17, all 14 scanner categories the ticke
 9-15 landed after the Phase 1-8 groundwork below); Phase 16 (real architecture/language removal) is
 deliberately not yet implemented — see "What's deferred" below.
 
-- `src/cleaner/core/`: domain contracts, scan-root definitions, filesystem aggregation, and safety
+- `crates/dodo-cleaner/src/core/`: domain contracts, scan-root definitions, filesystem aggregation, and safety
   helpers with **no GPUI dependency** — unit-testable without a window, and this is checked by hand at
   every phase rather than by an automated grep the way `src/database/`'s self-contained-module
   invariant is.
-- `src/cleaner/state/`: scan orchestration and UI state transitions (`CleanerState`, `CleanerStatus`).
-- `src/cleaner/views/`: GPUI rendering only — no filesystem traversal happens here.
-- `src/cleaner/{macos,windows,linux}/`: target implementation boundaries for filesystem roots,
+- `crates/dodo-cleaner/src/state/`: scan orchestration and UI state transitions (`CleanerState`, `CleanerStatus`).
+- `crates/dodo-cleaner/src/views/`: GPUI rendering only — no filesystem traversal happens here.
+- `crates/dodo-cleaner/src/{macos,windows,linux}/`: target implementation boundaries for filesystem roots,
   native Trash/Finder calls, permissions and app identity. CLI/path-policy scanners that genuinely
-  share behavior live directly under `src/cleaner/`.
-- `src/cleaner/services/`: the one persisted store this module owns (`cleaner-ignored-items.json`),
+  share behavior live directly under `crates/dodo-cleaner/src/`.
+- `crates/dodo-cleaner/src/services/`: the one persisted store this module owns (`cleaner-ignored-items.json`),
   behind a trait, following the same convention as dodo's other seven persisted files.
 
 ## Sidebar and routing integration
@@ -29,11 +29,11 @@ Cleaner is wired as a top-level tool in:
 
 ## Data flow
 
-1. UI triggers a scan from [`CleanerView`](../../src/cleaner/views/cleaner_view.rs).
-2. [`CleanerState`](../../src/cleaner/state/cleaner_state.rs) moves `Idle -> Scanning`.
+1. UI triggers a scan from [`CleanerView`](../../crates/dodo-cleaner/src/views/cleaner_view.rs).
+2. [`CleanerState`](../../crates/dodo-cleaner/src/state/cleaner_state.rs) moves `Idle -> Scanning`.
 3. Smart Care scans every category; other sections scan only the selected category.
 4. Registered scanners run on the background executor via
-   [`CleanerScanner`](../../src/cleaner/core/scanner.rs) — never the UI thread.
+   [`CleanerScanner`](../../crates/dodo-cleaner/src/core/scanner.rs) — never the UI thread.
 5. Progress reaches the UI through a per-category capacity-one, latest-wins slot
    (`core::progress::LatestProgress`) that one shared 120 ms pump takes from — at most one update
    applied per category per tick, never one `cx.notify()` per file. A scan's result, cancellation
@@ -97,7 +97,7 @@ Cleaner is wired as a top-level tool in:
 | Language Files (analysis-only) | `language_files.rs` |
 
 The table above includes the macOS-specific set. Docker Cache, Node Tooling Cache and AI Apps live
-directly under `src/cleaner/` because all three are shared by every host. Node and AI Apps receive
+directly under `crates/dodo-cleaner/src/` because all three are shared by every host. Node and AI Apps receive
 resolved platform locations; AI process activity stays a thin target probe. Each platform's
 `scanners/mod.rs` registers its set; `state::registry` picks the compiled target's registry.
 
@@ -135,11 +135,11 @@ resolved platform locations; AI process activity stays a thin target probe. Each
   usefully, and the ticket's own benchmarking asks (worker-count sweeps, sequential-vs-parallel
   comparisons) need a real-hardware run to mean anything regardless.
 - **Result-table virtualization has since landed** — this section's earlier "not done" entry is
-  stale. `src/cleaner/views/results_table.rs` is a `TableDelegate` driving
+  stale. `crates/dodo-cleaner/src/views/results_table.rs` is a `TableDelegate` driving
   `gpui_component::table::DataTable`, so only rows inside the scroll viewport are built each frame;
   its module doc is the authority. Virtualizing the rows was not on its own enough to make a large
   result cheap to *display*: the view also handed the delegate a fresh deep clone of the entire
-  result every frame, which `src/cleaner/views/results_sync.rs` now does only when the result or
+  result every frame, which `crates/dodo-cleaner/src/views/results_sync.rs` now does only when the result or
   the selection actually changed. Read that module before adding any other per-`render` copy.
 
   **The grid uses fixed columns and horizontal scrolling.** A self-sizing version briefly measured

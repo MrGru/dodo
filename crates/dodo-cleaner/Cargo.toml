@@ -1,0 +1,98 @@
+[package]
+name = "dodo-cleaner"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "dodo's Cleaner tool: the scanners, the deletion-safety boundary, the scan state machine and the panel that draws them. The largest feature in the app, and the first to live outside the binary."
+
+# Every dependency below is one the Cleaner already had while it was
+# `src/cleaner/`; nothing was added by the move and nothing was left behind.
+# The list is short because the feature's outbound edges are: three kernel
+# crates, the UI framework its three view files need, and the handful of
+# format/platform crates its scanners parse and call with.
+[dependencies]
+# The category glyphs and row icons `views::results_table` and
+# `views::cleaner_view` draw. Re-exported as `crate::app_icon` in `lib.rs` so
+# every call site still reads `crate::app_icon::AppIcon`.
+dodo-app-icon = { path = "../dodo-app-icon" }
+# Every string the Cleaner shows. The `gpui` feature is what brings `t()` and
+# the active-language global with it: the catalogue itself is pure, but the
+# three view files render a `Str` into a `SharedString` and that needs an
+# `App`. See that crate's `Cargo.toml` for why the feature exists at all.
+dodo-i18n = { path = "../dodo-i18n", features = ["gpui"] }
+# `HostOs` — which the whole module treats as a *parameter* rather than a `cfg`
+# split, so all three platforms' answers are asserted from whichever one you
+# are on — and `data_dir()`, where `services::ignore_store` writes
+# `cleaner-ignored-items.json`. `src/paths.rs` here is the seam that resolves
+# the host; see its module doc.
+dodo-paths = { path = "../dodo-paths" }
+# Only `views::{cleaner_view, results_table, uninstall_review_dialog}` may name
+# these two. The other 90 files in this crate are gpui-free on purpose: the
+# scanners, the safety boundary and the state machine are all tested with no
+# `App` and no frame.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+# `core::ignore`'s persisted document, and the JSON `docker_cache`,
+# `services::ignore_store` and Windows' Installed Apps inventory read.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# `Info.plist` — read by `macos::applications::bundle` for an application's
+# identity and by `macos::scanners::language_files`. A macOS format, but the
+# parser is portable and the fixtures run on any host, so it is not
+# target-gated.
+plist = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# `macos::platform` — Finder reveal, the running-application check the Xcode
+# Junk scanner needs, move-to-trash, and the bounded icon raster
+# `core::icon::IconRaster` holds. Feature lists name exactly the classes those
+# four files use; features are additive across the graph, so this costs
+# nothing that dodo's own list does not already switch on.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSBitmapImageRep",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "NSRunningApplication",
+    "NSWorkspace",
+] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = [
+    "NSArray",
+    "NSDictionary",
+    "NSFileManager",
+    "NSGeometry",
+    "NSString",
+    "NSURL",
+] }
+# `macos::scanners::universal_binaries` reads Mach-O headers to size the
+# architecture slices it would strip. Read-only, no linking, no writing.
+object = { version = "0.39", default-features = false, features = [
+    "read_core",
+    "macho",
+    "std",
+] }
+
+# Move-to-trash on the two platforms that do not have `NSFileManager`
+# (`windows::platform`, `linux::platform`). macOS keeps its direct AppKit call.
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+trash = "5.2"
+
+# `windows::platform`'s read-only process snapshot and
+# `windows::scanners::installed_apps`' uninstall-key inventory. Nothing here
+# writes to the registry.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+# One test only: `views::cleaner_view`'s headless layout-state regression test
+# needs a `TestAppContext`.
+gpui = { git = "https://github.com/zed-industries/zed", features = [
+    "test-support",
+] }
