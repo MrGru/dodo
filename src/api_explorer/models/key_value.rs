@@ -4,7 +4,7 @@
 //! name more than once (`Set-Cookie`, `Accept`), and so does a query string, so
 //! collapsing to a map would silently drop the user's second row.
 
-use crate::i18n::Str;
+use crate::i18n::{Str, api_explorer};
 
 /// What a row's value *is*.
 ///
@@ -24,8 +24,8 @@ impl FieldKind {
 
     pub fn label(self) -> Str {
         match self {
-            FieldKind::Text => Str::FieldKindText,
-            FieldKind::File => Str::FieldKindFile,
+            FieldKind::Text => api_explorer::Text::FieldKindText.into(),
+            FieldKind::File => api_explorer::Text::FieldKindFile.into(),
         }
     }
 }

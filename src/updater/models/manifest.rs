@@ -46,7 +46,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::i18n::Str;
+use crate::i18n::{Str, updater};
 use crate::updater::models::platform::PlatformKey;
 use crate::updater::models::sha256::is_hex_digest;
 use crate::updater::models::version::{Channel, Version};
@@ -119,22 +119,26 @@ pub enum ManifestError {
 impl ManifestError {
     pub fn message(&self) -> Str {
         match self {
-            ManifestError::Malformed(detail) => Str::UpdateErrorManifestMalformed(detail.clone()),
-            ManifestError::MissingVersion => Str::UpdateErrorManifestMissingVersion,
+            ManifestError::Malformed(detail) => {
+                updater::Text::ErrorManifestMalformed(detail.clone()).into()
+            }
+            ManifestError::MissingVersion => updater::Text::ErrorManifestMissingVersion.into(),
             ManifestError::UnsupportedVersion { found, supported } => {
-                Str::UpdateErrorManifestUnsupportedVersion {
+                updater::Text::ErrorManifestUnsupportedVersion {
                     found: *found,
                     supported: *supported,
                 }
+                .into()
             }
             ManifestError::UnreadableVersion(text) => {
-                Str::UpdateErrorManifestUnreadableVersion(text.clone())
+                updater::Text::ErrorManifestUnreadableVersion(text.clone()).into()
             }
             ManifestError::InvalidFile { platform, detail } => {
-                Str::UpdateErrorManifestInvalidFile {
+                updater::Text::ErrorManifestInvalidFile {
                     platform: platform.clone(),
                     detail: Box::new(detail.clone()),
                 }
+                .into()
             }
         }
     }
@@ -185,17 +189,17 @@ fn validate_file(platform: &str, file: &ManifestFile) -> Result<(), ManifestErro
     };
 
     if !is_hex_digest(&file.sha256) {
-        return Err(invalid(Str::UpdateErrorManifestBadDigest(
-            file.sha256.clone(),
-        )));
+        return Err(invalid(
+            updater::Text::ErrorManifestBadDigest(file.sha256.clone()).into(),
+        ));
     }
     if file.size == 0 {
-        return Err(invalid(Str::UpdateErrorManifestZeroSize));
+        return Err(invalid(updater::Text::ErrorManifestZeroSize.into()));
     }
     if !file.url.starts_with("https://") {
-        return Err(invalid(Str::UpdateErrorManifestInsecureUrl(
-            file.url.clone(),
-        )));
+        return Err(invalid(
+            updater::Text::ErrorManifestInsecureUrl(file.url.clone()).into(),
+        ));
     }
     Ok(())
 }

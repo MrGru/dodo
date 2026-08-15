@@ -14,7 +14,7 @@ use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex};
 
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{api_explorer, t};
 
 impl ApiExplorer {
     pub(super) fn render_tab_strip(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -64,7 +64,7 @@ impl ApiExplorer {
                                     .ghost()
                                     .xsmall()
                                     .icon(AppIcon::Close)
-                                    .tooltip(t(Str::CloseRequest, cx))
+                                    .tooltip(t(api_explorer::Text::CloseRequest, cx))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.close_tab(index, cx);
                                     })),
@@ -97,7 +97,7 @@ impl ApiExplorer {
                                     .ghost()
                                     .xsmall()
                                     .icon(AppIcon::Plus)
-                                    .tooltip(t(Str::NewRequest, cx))
+                                    .tooltip(t(api_explorer::Text::NewRequest, cx))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_tab(window, cx);
                                     })),

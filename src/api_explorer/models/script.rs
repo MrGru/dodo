@@ -14,7 +14,7 @@
 //! about a script that hands the host a hundred megabytes of console output.
 //! [`limits`] states what one run may produce, and the engine truncates against
 //! it. Every truncation is counted and said out loud, never silently dropped —
-//! the rule `Str::BodyTruncated` already follows in the response viewer.
+//! the rule `api_scripts::Text::BodyTruncated` already follows in the response viewer.
 
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api_explorer::models::console::ConsoleEntry;
 use crate::api_explorer::models::test_result::TestResult;
-use crate::i18n::Str;
+use crate::i18n::{Str, api_scripts};
 
 /// What one run may produce before the engine starts truncating.
 pub mod limits {
@@ -167,11 +167,13 @@ pub enum ScriptError {
 impl ScriptError {
     pub fn message(&self) -> Str {
         match self {
-            ScriptError::Threw { detail } => Str::ScriptThrew(detail.clone()),
-            ScriptError::Deadline { seconds } => Str::ScriptDeadline(*seconds),
-            ScriptError::OutOfMemory => Str::ScriptOutOfMemory,
-            ScriptError::Unsupported { name } => Str::ScriptUnsupported(name.clone()),
-            ScriptError::NoEngine => Str::ScriptNoEngine,
+            ScriptError::Threw { detail } => api_scripts::Text::Threw(detail.clone()).into(),
+            ScriptError::Deadline { seconds } => api_scripts::Text::Deadline(*seconds).into(),
+            ScriptError::OutOfMemory => api_scripts::Text::OutOfMemory.into(),
+            ScriptError::Unsupported { name } => {
+                api_scripts::Text::Unsupported(name.clone()).into()
+            }
+            ScriptError::NoEngine => api_scripts::Text::NoEngine.into(),
         }
     }
 }
@@ -188,8 +190,8 @@ pub enum SkipReason {
 impl SkipReason {
     pub fn message(&self) -> Str {
         match self {
-            SkipReason::PolicyDisabled => Str::ScriptSkippedByPolicy,
-            SkipReason::ConsentDeclined => Str::ScriptSkippedByConsent,
+            SkipReason::PolicyDisabled => api_scripts::Text::SkippedByPolicy.into(),
+            SkipReason::ConsentDeclined => api_scripts::Text::SkippedByConsent.into(),
         }
     }
 }

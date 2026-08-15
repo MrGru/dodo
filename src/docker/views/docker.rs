@@ -27,7 +27,7 @@ use crate::docker::views::images::ImagesView;
 use crate::docker::views::networks::NetworksView;
 use crate::docker::views::runtime::RuntimesView;
 use crate::docker::views::volumes::VolumesView;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, docker, t};
 
 /// The rail's width. Wide enough for the longest page name at `text_xs` on one
 /// line — the four names are terms of art and identical in every language, so
@@ -75,11 +75,11 @@ impl DockerPage {
     /// the header keeps naming the page rather than the section.
     pub fn title(self) -> Str {
         match self {
-            DockerPage::Containers => Str::Containers,
-            DockerPage::Images => Str::Images,
-            DockerPage::Volumes => Str::Volumes,
-            DockerPage::Networks => Str::Networks,
-            DockerPage::Runtimes => Str::Runtimes,
+            DockerPage::Containers => docker::Text::Containers.into(),
+            DockerPage::Images => docker::Text::Images.into(),
+            DockerPage::Volumes => docker::Text::Volumes.into(),
+            DockerPage::Networks => docker::Text::Networks.into(),
+            DockerPage::Runtimes => docker::Text::Runtimes.into(),
         }
     }
 
@@ -308,10 +308,9 @@ impl Render for DockerView {
 
 #[cfg(test)]
 mod tests {
-    use std::mem::{Discriminant, discriminant};
 
     use super::{DockerPage, should_poll};
-    use crate::i18n::Str;
+    use crate::i18n::{Str, docker};
 
     #[test]
     fn only_the_active_visible_page_polls() {
@@ -358,20 +357,16 @@ mod tests {
 
     #[test]
     fn every_page_has_its_own_title_icon_and_tab_id() {
-        // `Str` carries runtime values in some variants and so derives no
-        // `PartialEq`; the discriminant is what identifies a plain one.
-        let titles: Vec<Discriminant<Str>> = DockerPage::ALL
-            .iter()
-            .map(|page| discriminant(&page.title()))
-            .collect();
+        // Page titles carry no runtime values, so they compare as themselves.
+        let titles: Vec<Str> = DockerPage::ALL.iter().map(|page| page.title()).collect();
         assert_eq!(
             titles,
             vec![
-                discriminant(&Str::Containers),
-                discriminant(&Str::Images),
-                discriminant(&Str::Volumes),
-                discriminant(&Str::Networks),
-                discriminant(&Str::Runtimes),
+                docker::Text::Containers.into(),
+                docker::Text::Images.into(),
+                docker::Text::Volumes.into(),
+                docker::Text::Networks.into(),
+                docker::Text::Runtimes.into(),
             ]
         );
 

@@ -28,7 +28,7 @@ use crate::api_explorer::state::request::RowTable;
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{api_explorer, api_scripts, shared, t};
 
 impl ApiExplorer {
     pub(super) fn request_body_pane(
@@ -57,7 +57,10 @@ impl ApiExplorer {
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .bg(cx.theme().muted.opacity(0.4))
-                            .child(t(Str::MethodSendsNoBody(method.as_str().to_string()), cx)),
+                            .child(t(
+                                api_explorer::Text::MethodSendsNoBody(method.as_str().to_string()),
+                                cx,
+                            )),
                     )
                 },
             )
@@ -103,7 +106,7 @@ impl ApiExplorer {
                             Button::new("format-body")
                                 .ghost()
                                 .xsmall()
-                                .label(t(Str::FormatButton, cx))
+                                .label(t(shared::Text::FormatButton, cx))
                                 .on_click(cx.listener(move |_, _, window, cx| {
                                     format_tab.update(cx, |state, cx| {
                                         state.format_body(window, cx);
@@ -118,7 +121,7 @@ impl ApiExplorer {
                                 .ghost()
                                 .xsmall()
                                 .icon(AppIcon::Copy)
-                                .tooltip(t(Str::Copy, cx))
+                                .tooltip(t(api_scripts::Text::Copy, cx))
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     // Read here rather than each frame: pulling
                                     // the whole document out of the rope is
@@ -208,8 +211,8 @@ impl ApiExplorer {
 
         empty_state(
             AppIcon::SquareCode,
-            t(Str::NoBodyTitle, cx),
-            Some(t(Str::NoBodyHint, cx)),
+            t(api_explorer::Text::NoBodyTitle, cx),
+            Some(t(api_explorer::Text::NoBodyHint, cx)),
             cx,
         )
         .into_any_element()
@@ -286,7 +289,7 @@ impl ApiExplorer {
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(t(Str::BinaryBodyHint, cx)),
+                        .child(t(api_explorer::Text::BinaryBodyHint, cx)),
                 )
             })
             .child(
@@ -299,9 +302,9 @@ impl ApiExplorer {
                             .small()
                             .icon(AppIcon::File)
                             .label(if chosen {
-                                t(Str::ReplaceFile, cx)
+                                t(api_explorer::Text::ReplaceFile, cx)
                             } else {
-                                t(Str::ChooseFile, cx)
+                                t(api_explorer::Text::ChooseFile, cx)
                             })
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 file_picker::choose_file(
@@ -323,7 +326,7 @@ impl ApiExplorer {
                                 .ghost()
                                 .small()
                                 .icon(AppIcon::Close)
-                                .tooltip(t(Str::ClearFile, cx))
+                                .tooltip(t(api_explorer::Text::ClearFile, cx))
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     clear_tab.update(cx, |state, cx| {
                                         state.request.binary_path.clear();

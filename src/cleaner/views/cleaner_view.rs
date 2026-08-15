@@ -43,7 +43,7 @@ use crate::cleaner::views::results_sync::{ResultsSync, ResultsSyncKey, ResultsSy
 use crate::cleaner::views::results_table::{ResultsTableDelegate, category_icon};
 #[cfg(target_os = "macos")]
 use crate::cleaner::views::uninstall_review_dialog;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, cleaner, shell, t};
 
 pub struct CleanerView {
     /// Navigation (which category/sections are showing) and every category's
@@ -355,12 +355,12 @@ impl CleanerView {
         window.open_alert_dialog(cx, move |alert, _, cx| {
             let service = service.clone();
             alert
-                .title(t(Str::CleanerPermissionTitle, cx))
-                .description(t(Str::CleanerPermissionExplanation, cx))
+                .title(t(cleaner::Text::PermissionTitle, cx))
+                .description(t(cleaner::Text::PermissionExplanation, cx))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t(Str::CleanerPermissionOpenSettings, cx))
-                        .cancel_text(t(Str::CleanerPermissionNotNow, cx))
+                        .ok_text(t(cleaner::Text::PermissionOpenSettings, cx))
+                        .cancel_text(t(cleaner::Text::PermissionNotNow, cx))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _, _cx| {
@@ -496,7 +496,7 @@ impl CleanerView {
         if let Err(error) = result {
             window.open_alert_dialog(cx, move |alert, _, cx| {
                 alert
-                    .title(t(Str::CleanerStatusFailed, cx))
+                    .title(t(cleaner::Text::StatusFailed, cx))
                     .description(error.clone())
             });
         }
@@ -517,9 +517,9 @@ impl CleanerView {
             let confirm_view = view.clone();
             let items = items.clone();
             alert
-                .title(t(Str::CleanerEmptyTrashConfirmTitle, cx))
+                .title(t(cleaner::Text::EmptyTrashConfirmTitle, cx))
                 .description(t(
-                    Str::CleanerEmptyTrashConfirmMessage {
+                    cleaner::Text::EmptyTrashConfirmMessage {
                         count,
                         size: size.clone(),
                     },
@@ -527,9 +527,9 @@ impl CleanerView {
                 ))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t(Str::CleanerEmptyTrash, cx))
+                        .ok_text(t(cleaner::Text::EmptyTrash, cx))
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text(t(Str::CleanerCancelScan, cx))
+                        .cancel_text(t(cleaner::Text::CancelScan, cx))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _, cx| {
@@ -552,9 +552,9 @@ impl CleanerView {
             let confirm_view = view.clone();
             let (title, description) = if is_docker {
                 (
-                    t(Str::CleanerDockerCleanupConfirmTitle, cx),
+                    t(cleaner::Text::DockerCleanupConfirmTitle, cx),
                     t(
-                        Str::CleanerDockerCleanupConfirmMessage {
+                        cleaner::Text::DockerCleanupConfirmMessage {
                             count,
                             size: size.clone(),
                         },
@@ -563,9 +563,9 @@ impl CleanerView {
                 )
             } else {
                 (
-                    t(Str::CleanerCleanupConfirmTitle, cx),
+                    t(cleaner::Text::CleanupConfirmTitle, cx),
                     t(
-                        Str::CleanerCleanupConfirmMessage {
+                        cleaner::Text::CleanupConfirmMessage {
                             count,
                             size: size.clone(),
                         },
@@ -578,9 +578,9 @@ impl CleanerView {
                 .description(description)
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t(Str::CleanerCleanSelected, cx))
+                        .ok_text(t(cleaner::Text::CleanSelected, cx))
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text(t(Str::CleanerCancelScan, cx))
+                        .cancel_text(t(cleaner::Text::CancelScan, cx))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _, cx| {
@@ -737,7 +737,7 @@ impl CleanerView {
             if let Err(error) = crate::cleaner::windows::platform::open_installed_apps_settings() {
                 window.open_alert_dialog(cx, move |alert, _, cx| {
                     alert
-                        .title(t(Str::CleanerStatusFailed, cx))
+                        .title(t(cleaner::Text::StatusFailed, cx))
                         .description(error.clone())
                 });
             }
@@ -751,10 +751,10 @@ impl CleanerView {
                 return;
             };
             let ok_text = match action {
-                InstalledAppAction::FlatpakUser { .. } => Str::CleanerUninstallApplication,
-                InstalledAppAction::AppImage => Str::CleanerUninstallMoveToTrash,
+                InstalledAppAction::FlatpakUser { .. } => cleaner::Text::UninstallApplication,
+                InstalledAppAction::AppImage => cleaner::Text::UninstallMoveToTrash,
             };
-            let title = Str::CleanerUninstallReviewTitle {
+            let title = cleaner::Text::UninstallReviewTitle {
                 name: item.display_name.clone(),
             };
             let view = cx.entity();
@@ -767,7 +767,7 @@ impl CleanerView {
                         DialogButtonProps::default()
                             .ok_text(t(ok_text.clone(), cx))
                             .ok_variant(ButtonVariant::Danger)
-                            .cancel_text(t(Str::CleanerCancelScan, cx))
+                            .cancel_text(t(cleaner::Text::CancelScan, cx))
                             .show_cancel(true),
                     )
                     .on_ok(move |_, _, cx| {
@@ -816,9 +816,9 @@ impl CleanerView {
 
     fn section_label(section: CleanerSection) -> Str {
         match section {
-            CleanerSection::Cleanup => Str::CleanerSectionCleanup,
-            CleanerSection::Applications => Str::CleanerSectionApplications,
-            CleanerSection::Advanced => Str::CleanerSectionAdvanced,
+            CleanerSection::Cleanup => cleaner::Text::SectionCleanup.into(),
+            CleanerSection::Applications => cleaner::Text::SectionApplications.into(),
+            CleanerSection::Advanced => cleaner::Text::SectionAdvanced.into(),
         }
     }
 
@@ -832,20 +832,20 @@ impl CleanerView {
 
     fn category_label(category: CleanerCategory) -> Str {
         match category {
-            CleanerCategory::SystemJunk => Str::CleanerCategorySystemJunk,
-            CleanerCategory::UserCache => Str::CleanerCategoryUserCache,
-            CleanerCategory::MailFiles => Str::CleanerCategoryMailFiles,
-            CleanerCategory::TrashBins => Str::CleanerCategoryTrashBins,
-            CleanerCategory::LargeOldFiles => Str::CleanerCategoryLargeOldFiles,
-            CleanerCategory::InstalledApps => Str::CleanerCategoryInstalledApps,
-            CleanerCategory::OrphanedFiles => Str::CleanerCategoryOrphanedFiles,
-            CleanerCategory::AiApps => Str::CleanerCategoryAiApps,
-            CleanerCategory::XcodeJunk => Str::CleanerCategoryXcodeJunk,
-            CleanerCategory::HomebrewCache => Str::CleanerCategoryHomebrewCache,
-            CleanerCategory::NodeToolingCache => Str::CleanerCategoryNodeToolingCache,
-            CleanerCategory::DockerCache => Str::CleanerCategoryDockerCache,
-            CleanerCategory::UniversalBinaries => Str::CleanerCategoryUniversalBinaries,
-            CleanerCategory::LanguageFiles => Str::CleanerCategoryLanguageFiles,
+            CleanerCategory::SystemJunk => cleaner::Text::CategorySystemJunk.into(),
+            CleanerCategory::UserCache => cleaner::Text::CategoryUserCache.into(),
+            CleanerCategory::MailFiles => cleaner::Text::CategoryMailFiles.into(),
+            CleanerCategory::TrashBins => cleaner::Text::CategoryTrashBins.into(),
+            CleanerCategory::LargeOldFiles => cleaner::Text::CategoryLargeOldFiles.into(),
+            CleanerCategory::InstalledApps => cleaner::Text::CategoryInstalledApps.into(),
+            CleanerCategory::OrphanedFiles => cleaner::Text::CategoryOrphanedFiles.into(),
+            CleanerCategory::AiApps => cleaner::Text::CategoryAiApps.into(),
+            CleanerCategory::XcodeJunk => cleaner::Text::CategoryXcodeJunk.into(),
+            CleanerCategory::HomebrewCache => cleaner::Text::CategoryHomebrewCache.into(),
+            CleanerCategory::NodeToolingCache => cleaner::Text::CategoryNodeToolingCache.into(),
+            CleanerCategory::DockerCache => cleaner::Text::CategoryDockerCache.into(),
+            CleanerCategory::UniversalBinaries => cleaner::Text::CategoryUniversalBinaries.into(),
+            CleanerCategory::LanguageFiles => cleaner::Text::CategoryLanguageFiles.into(),
         }
     }
 
@@ -855,19 +855,19 @@ impl CleanerView {
             ScanCompleteness::Partial {
                 reason: PartialScanReason::PermissionDenied,
                 ..
-            } => Some(Str::CleanerPartialPermissionDenied),
+            } => Some(cleaner::Text::PartialPermissionDenied.into()),
             ScanCompleteness::Partial {
                 reason: PartialScanReason::RootUnavailable,
                 ..
-            } => Some(Str::CleanerPartialRootUnavailable),
+            } => Some(cleaner::Text::PartialRootUnavailable.into()),
             ScanCompleteness::Partial {
                 reason: PartialScanReason::Cancelled,
                 ..
-            } => Some(Str::CleanerPartialCancelled),
+            } => Some(cleaner::Text::PartialCancelled.into()),
             ScanCompleteness::Partial {
                 reason: PartialScanReason::UnsupportedEnvironment,
                 ..
-            } => Some(Str::CleanerPartialUnsupported),
+            } => Some(cleaner::Text::PartialUnsupported.into()),
         }
     }
 
@@ -1108,12 +1108,12 @@ impl CleanerView {
                     .text_color(cx.theme().muted_foreground)
                     .max_w(px(360.))
                     .text_center()
-                    .child(t(Str::CleanerScanDescription, cx)),
+                    .child(t(cleaner::Text::ScanDescription, cx)),
             )
             .child(
                 Button::new("cleaner-scan")
                     .primary()
-                    .label(t(Str::CleanerScan, cx))
+                    .label(t(cleaner::Text::Scan, cx))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.start_scan(category, window, cx)
                     })),
@@ -1147,7 +1147,7 @@ impl CleanerView {
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child(Spinner::new().xsmall())
-                        .child(t(Str::CleanerStatusCleaning, cx)),
+                        .child(t(cleaner::Text::StatusCleaning, cx)),
                 )
             })
             .when_some(state.error(), |container, message| {
@@ -1210,9 +1210,9 @@ impl CleanerView {
                     .text_color(cx.theme().muted_foreground)
                     .child(t(
                         if state.scan_state() == ScanState::Cancelling {
-                            Str::CleanerStatusCancelling
+                            cleaner::Text::StatusCancelling
                         } else {
-                            Str::CleanerStatusScanning
+                            cleaner::Text::StatusScanning
                         },
                         cx,
                     )),
@@ -1250,9 +1250,9 @@ impl CleanerView {
                     .child(Spinner::new().xsmall().color(cx.theme().primary))
                     .child(div().font_bold().child(t(
                         if cancelling {
-                            Str::CleanerStatusCancelling
+                            cleaner::Text::StatusCancelling
                         } else {
-                            Str::CleanerStatusScanning
+                            cleaner::Text::StatusScanning
                         },
                         cx,
                     ))),
@@ -1264,11 +1264,11 @@ impl CleanerView {
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child(t(
-                            Str::CleanerEntriesScannedCount(progress.scanned_entries),
+                            cleaner::Text::EntriesScannedCount(progress.scanned_entries),
                             cx,
                         ))
                         .child(t(
-                            Str::CleanerBytesDiscovered(Self::format_bytes(
+                            cleaner::Text::BytesDiscovered(Self::format_bytes(
                                 progress.discovered_bytes,
                             )),
                             cx,
@@ -1280,7 +1280,7 @@ impl CleanerView {
                     Button::new("cleaner-cancel")
                         .ghost()
                         .disabled(cancelling)
-                        .label(t(Str::CleanerCancelScan, cx))
+                        .label(t(cleaner::Text::CancelScan, cx))
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.cancel_scan(category, cx)),
                         ),
@@ -1303,22 +1303,22 @@ impl CleanerView {
             ScanState::Completed => (
                 AppIcon::CircleCheck,
                 cx.theme().success,
-                Str::CleanerStatusCompleted,
+                cleaner::Text::StatusCompleted,
             ),
             ScanState::CompletedWithWarnings => (
                 AppIcon::AlertTriangle,
                 cx.theme().warning,
-                Str::CleanerStatusCompletedWithWarnings,
+                cleaner::Text::StatusCompletedWithWarnings,
             ),
             ScanState::PartiallyCompleted => (
                 AppIcon::AlertTriangle,
                 cx.theme().warning,
-                Str::CleanerStatusPartial,
+                cleaner::Text::StatusPartial,
             ),
             ScanState::Cancelled => (
                 AppIcon::CircleX,
                 cx.theme().muted_foreground,
-                Str::CleanerStatusCancelled,
+                cleaner::Text::StatusCancelled,
             ),
             ScanState::Failed
             | ScanState::NotScanned
@@ -1326,7 +1326,7 @@ impl CleanerView {
             | ScanState::Cancelling => (
                 AppIcon::CircleX,
                 cx.theme().danger,
-                Str::CleanerStatusFailed,
+                cleaner::Text::StatusFailed,
             ),
         };
         let result = state.result();
@@ -1369,7 +1369,7 @@ impl CleanerView {
                         Button::new("cleaner-rescan")
                             .ghost()
                             .disabled(is_busy)
-                            .label(t(Str::CleanerRescan, cx))
+                            .label(t(cleaner::Text::Rescan, cx))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.start_scan(category, window, cx)
                             })),
@@ -1381,13 +1381,13 @@ impl CleanerView {
                         .gap_4()
                         .text_sm()
                         .child(t(
-                            Str::CleanerReclaimableAmount(Self::format_bytes(reclaimable)),
+                            cleaner::Text::ReclaimableAmount(Self::format_bytes(reclaimable)),
                             cx,
                         ))
-                        .child(t(Str::CleanerItemsFound(items_count), cx))
-                        .child(t(Str::CleanerSafeItemsCount(safe_count), cx))
+                        .child(t(cleaner::Text::ItemsFound(items_count), cx))
+                        .child(t(cleaner::Text::SafeItemsCount(safe_count), cx))
                         .when(warnings_count > 0, |row| {
-                            row.child(t(Str::CleanerWarningCount(warnings_count), cx))
+                            row.child(t(cleaner::Text::WarningCount(warnings_count), cx))
                         })
                         .when_some(Self::scan_duration_label(state), |row, duration| {
                             row.child(
@@ -1432,7 +1432,7 @@ impl CleanerView {
                                     .size_4()
                                     .text_color(cx.theme().danger),
                             )
-                            .child(div().text_sm().child(t(Str::CleanerStatusFailed, cx))),
+                            .child(div().text_sm().child(t(cleaner::Text::StatusFailed, cx))),
                     )
                     .child(
                         Button::new("cleaner-error-toggle")
@@ -1440,9 +1440,9 @@ impl CleanerView {
                             .xsmall()
                             .label(t(
                                 if expanded {
-                                    Str::CleanerScanWarningsHideDetails
+                                    cleaner::Text::ScanWarningsHideDetails
                                 } else {
-                                    Str::CleanerScanWarningsShowDetails
+                                    cleaner::Text::ScanWarningsShowDetails
                                 },
                                 cx,
                             ))
@@ -1496,7 +1496,7 @@ impl CleanerView {
                                     .text_color(cx.theme().warning),
                             )
                             .child(div().text_sm().child(t(
-                                Str::CleanerScanWarningsSummary(result.warnings.len()),
+                                cleaner::Text::ScanWarningsSummary(result.warnings.len()),
                                 cx,
                             ))),
                     )
@@ -1506,9 +1506,9 @@ impl CleanerView {
                             .xsmall()
                             .label(t(
                                 if expanded {
-                                    Str::CleanerScanWarningsHideDetails
+                                    cleaner::Text::ScanWarningsHideDetails
                                 } else {
-                                    Str::CleanerScanWarningsShowDetails
+                                    cleaner::Text::ScanWarningsShowDetails
                                 },
                                 cx,
                             ))
@@ -1525,7 +1525,7 @@ impl CleanerView {
                     div()
                         .font_bold()
                         .text_sm()
-                        .child(t(Str::CleanerWarnings, cx)),
+                        .child(t(cleaner::Text::Warnings, cx)),
                 )
                 .children(result.warnings.iter().map(|warning| {
                     div()
@@ -1548,13 +1548,13 @@ impl CleanerView {
             .border_1()
             .border_color(cx.theme().border)
             .p_2()
-            .child(div().font_bold().child(t(Str::CleanerCleanupReport, cx)))
+            .child(div().font_bold().child(t(cleaner::Text::CleanupReport, cx)))
             .child(div().text_sm().child(t(
-                Str::CleanerCleanupSuccessCount(report.successes.len()),
+                cleaner::Text::CleanupSuccessCount(report.successes.len()),
                 cx,
             )))
             .child(div().text_sm().child(t(
-                Str::CleanerCleanupFailureCount(report.failures.len()),
+                cleaner::Text::CleanupFailureCount(report.failures.len()),
                 cx,
             )))
             .when(!report.failures.is_empty(), |list| {
@@ -1589,7 +1589,7 @@ impl CleanerView {
                 div()
                     .text_lg()
                     .font_bold()
-                    .child(t(Str::CleanerItemsFound(count as usize), cx)),
+                    .child(t(cleaner::Text::ItemsFound(count as usize), cx)),
             )
             .child(
                 div()
@@ -1601,7 +1601,7 @@ impl CleanerView {
                 Button::new("cleaner-empty-trash")
                     .danger()
                     .disabled(busy || count == 0)
-                    .label(t(Str::CleanerEmptyTrash, cx))
+                    .label(t(cleaner::Text::EmptyTrash, cx))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.confirm_empty_trash(window, cx)),
                     ),
@@ -1635,7 +1635,7 @@ impl CleanerView {
                                 Button::new("cleaner-select-safe")
                                     .ghost()
                                     .disabled(is_busy)
-                                    .label(t(Str::CleanerSelectSafeItems, cx))
+                                    .label(t(cleaner::Text::SelectSafeItems, cx))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.select_safe_items(category, cx)
                                     })),
@@ -1646,7 +1646,7 @@ impl CleanerView {
                                         .text_sm()
                                         .text_color(cx.theme().muted_foreground)
                                         .child(t(
-                                            Str::CleanerSelectedSummary {
+                                            cleaner::Text::SelectedSummary {
                                                 count: selected_count,
                                                 size: Self::format_bytes(selected_bytes),
                                             },
@@ -1662,14 +1662,14 @@ impl CleanerView {
                             .disabled(is_busy || selected_count == 0)
                             .label(if selected_count > 0 {
                                 t(
-                                    Str::CleanerCleanCount {
+                                    cleaner::Text::CleanCount {
                                         count: selected_count,
                                         size: Self::format_bytes(selected_bytes),
                                     },
                                     cx,
                                 )
                             } else {
-                                t(Str::CleanerCleanSelected, cx)
+                                t(cleaner::Text::CleanSelected, cx)
                             })
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.confirm_cleanup(window, cx)),
@@ -1701,11 +1701,11 @@ impl Render for CleanerView {
                         .justify_center()
                         .items_center()
                         .gap_2()
-                        .child(div().font_bold().child(t(Str::CleanerTitle, cx)))
+                        .child(div().font_bold().child(t(shell::Text::CleanerTitle, cx)))
                         .child(
                             div()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(t(Str::CleanerUnsupportedPlatform, cx)),
+                                .child(t(cleaner::Text::UnsupportedPlatform, cx)),
                         ),
                 )
             })

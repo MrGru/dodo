@@ -48,7 +48,7 @@ use crate::docker::{
     DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp, DockerOpenDetail,
     DockerRefreshList, KEY_CONTEXT, POLL_INTERVAL,
 };
-use crate::i18n::{Language, Str, t};
+use crate::i18n::{Language, docker, shared, t};
 
 /// Fixed column widths shared by the header and every row so they line up.
 /// Repository takes the remaining width as the one flex column and truncates.
@@ -92,7 +92,7 @@ pub struct ImagesView {
 
 impl ImagesView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let placeholder = t(Str::DockerSearchImages, cx);
+        let placeholder = t(docker::Text::SearchImages, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
 
         cx.subscribe(&search, |this, state, event: &InputEvent, cx| {
@@ -349,13 +349,13 @@ impl ImagesView {
             let entity = entity.clone();
             let id = id.clone();
             alert
-                .title(t(Str::DockerDeleteTitle, cx))
-                .description(t(Str::DockerDeleteMessage(name.clone()), cx))
+                .title(t(docker::Text::DeleteTitle, cx))
+                .description(t(docker::Text::DeleteMessage(name.clone()), cx))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t(Str::Delete, cx))
+                        .ok_text(t(shared::Text::Delete, cx))
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text(t(Str::DockerCancel, cx))
+                        .cancel_text(t(docker::Text::Cancel, cx))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _window, cx| {
@@ -372,7 +372,7 @@ impl ImagesView {
             return;
         }
         self.language = language;
-        let placeholder = t(Str::DockerSearchImages, cx);
+        let placeholder = t(docker::Text::SearchImages, cx);
         self.search.update(cx, |state, cx| {
             state.set_placeholder(placeholder, window, cx);
         });
@@ -388,7 +388,7 @@ impl ImagesView {
                 Button::new("docker-images-refresh")
                     .small()
                     .icon(AppIcon::Refresh)
-                    .label(t(Str::DockerRefresh, cx))
+                    .label(t(docker::Text::Refresh, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
             // Pull and Build are the registry/creation flows a later round adds:
@@ -396,13 +396,13 @@ impl ImagesView {
             .child(coming_soon_button(
                 "docker-images-pull".into(),
                 AppIcon::Import,
-                t(Str::DockerPull, cx),
+                t(docker::Text::Pull, cx),
                 cx,
             ))
             .child(coming_soon_button(
                 "docker-images-build".into(),
                 AppIcon::Layers,
-                t(Str::DockerBuild, cx),
+                t(docker::Text::Build, cx),
                 cx,
             ))
     }
@@ -434,8 +434,8 @@ impl ImagesView {
         if self.state.is_empty() {
             return empty_state(
                 AppIcon::Layers,
-                t(Str::NoImages, cx),
-                Some(t(Str::NoImagesHint, cx)),
+                t(docker::Text::NoImages, cx),
+                Some(t(docker::Text::NoImagesHint, cx)),
                 cx,
             )
             .into_any_element();
@@ -444,12 +444,12 @@ impl ImagesView {
     }
 
     fn render_error(&self, message: SharedString, cx: &mut Context<Self>) -> gpui::AnyElement {
-        error_state(t(Str::DockerUnreachableTitle, cx), message, cx)
+        error_state(t(docker::Text::UnreachableTitle, cx), message, cx)
             .child(
                 Button::new("docker-images-retry")
                     .small()
                     .icon(AppIcon::Refresh)
-                    .label(t(Str::DockerRetry, cx))
+                    .label(t(docker::Text::Retry, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
             .into_any_element()
@@ -459,7 +459,8 @@ impl ImagesView {
         let rows = self.state.visible();
         // Rows exist but the search hides them all: a centred empty note.
         if rows.is_empty() {
-            return empty_state(AppIcon::Layers, t(Str::NoImages, cx), None, cx).into_any_element();
+            return empty_state(AppIcon::Layers, t(docker::Text::NoImages, cx), None, cx)
+                .into_any_element();
         }
         let now = now_unix();
 
@@ -500,37 +501,37 @@ impl ImagesView {
             .font_medium()
             .text_color(cx.theme().muted_foreground)
             .child(
-                header_cell(t(Str::DockerColumnRepository, cx))
+                header_cell(t(docker::Text::ColumnRepository, cx))
                     .flex_1()
                     .min_w_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnTag, cx))
+                header_cell(t(docker::Text::ColumnTag, cx))
                     .w(TAG_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnImageId, cx))
+                header_cell(t(docker::Text::ColumnImageId, cx))
                     .w(ID_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnSize, cx))
+                header_cell(t(docker::Text::ColumnSize, cx))
                     .w(SIZE_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnCreated, cx))
+                header_cell(t(docker::Text::ColumnCreated, cx))
                     .w(CREATED_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnContainersUsing, cx))
+                header_cell(t(docker::Text::ColumnContainersUsing, cx))
                     .w(USING_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnActions, cx))
+                header_cell(t(docker::Text::ColumnActions, cx))
                     .w(ACTIONS_W)
                     .flex_shrink_0(),
             )
@@ -539,11 +540,11 @@ impl ImagesView {
     fn render_row(&self, row: Image, now: i64, cx: &mut Context<Self>) -> impl IntoElement {
         let repository = match &row.repository {
             Some(repo) => SharedString::from(repo.clone()),
-            None => t(Str::DockerNone, cx),
+            None => t(docker::Text::None, cx),
         };
         let tag = match &row.tag {
             Some(tag) => SharedString::from(tag.clone()),
-            None => t(Str::DockerNone, cx),
+            None => t(docker::Text::None, cx),
         };
         let short_id = SharedString::from(row.short_id());
         let size = SharedString::from(format_size(row.size));
@@ -582,7 +583,7 @@ impl ImagesView {
                 name_cell(
                     SharedString::from(format!("iname-{}", row.id)),
                     repository,
-                    t(Str::DockerOpenDetails, cx),
+                    t(docker::Text::OpenDetails, cx),
                     cx.listener({
                         let id = row.id.clone();
                         move |this, _, window, cx| this.open_detail(id.clone(), window, cx)
@@ -630,7 +631,7 @@ impl ImagesView {
         h_flex().gap_1().child(action_button(
             SharedString::from(format!("delete-{}", row.id)),
             AppIcon::Trash,
-            t(Str::Delete, cx),
+            t(shared::Text::Delete, cx),
             true,
             ButtonVariant::Danger,
             cx.listener({

@@ -30,7 +30,7 @@
 
 use std::path::PathBuf;
 
-use crate::i18n::Str;
+use crate::i18n::{Str, updater};
 use crate::updater::models::manifest::{Manifest, ManifestError, ManifestFile};
 use crate::updater::models::platform::PlatformKey;
 use crate::updater::models::version::{Channel, Version};
@@ -143,9 +143,9 @@ pub enum ManualReason {
 impl ManualReason {
     pub fn message(self) -> Str {
         match self {
-            ManualReason::NotABundle => Str::UpdateManualNotABundle,
-            ManualReason::NotWritable => Str::UpdateManualNotWritable,
-            ManualReason::ReadOnlyLocation => Str::UpdateManualReadOnly,
+            ManualReason::NotABundle => updater::Text::ManualNotABundle.into(),
+            ManualReason::NotWritable => updater::Text::ManualNotWritable.into(),
+            ManualReason::ReadOnlyLocation => updater::Text::ManualReadOnly.into(),
         }
     }
 }
@@ -184,20 +184,24 @@ pub enum UpdateError {
 impl UpdateError {
     pub fn message(&self) -> Str {
         match self {
-            UpdateError::Network(detail) => Str::UpdateErrorNetwork(detail.clone()),
+            UpdateError::Network(detail) => updater::Text::ErrorNetwork(detail.clone()).into(),
             UpdateError::Manifest(error) => error.message(),
-            UpdateError::PlatformMissing(key) => Str::UpdateErrorPlatformMissing(key.clone()),
-            UpdateError::Download(detail) => Str::UpdateErrorDownload(detail.clone()),
-            UpdateError::ChecksumMismatch { expected, actual } => Str::UpdateErrorChecksum {
+            UpdateError::PlatformMissing(key) => {
+                updater::Text::ErrorPlatformMissing(key.clone()).into()
+            }
+            UpdateError::Download(detail) => updater::Text::ErrorDownload(detail.clone()).into(),
+            UpdateError::ChecksumMismatch { expected, actual } => updater::Text::ErrorChecksum {
                 expected: expected.clone(),
                 actual: actual.clone(),
-            },
-            UpdateError::SizeMismatch { expected, actual } => Str::UpdateErrorSize {
+            }
+            .into(),
+            UpdateError::SizeMismatch { expected, actual } => updater::Text::ErrorSize {
                 expected: *expected,
                 actual: *actual,
-            },
-            UpdateError::Install(detail) => Str::UpdateErrorInstall(detail.clone()),
-            UpdateError::Io(detail) => Str::UpdateErrorIo(detail.clone()),
+            }
+            .into(),
+            UpdateError::Install(detail) => updater::Text::ErrorInstall(detail.clone()).into(),
+            UpdateError::Io(detail) => updater::Text::ErrorIo(detail.clone()).into(),
         }
     }
 }

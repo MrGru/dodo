@@ -6,7 +6,7 @@ use std::time::Duration;
 use gpui::{App, Hsla};
 use gpui_component::ActiveTheme as _;
 
-use crate::i18n::Str;
+use crate::i18n::{Str, api_response};
 
 /// The class of an HTTP status code, which is what the badge is coloured by
 /// and what the caption beside it names.
@@ -38,12 +38,12 @@ impl StatusClass {
     /// reference).
     pub fn label(self) -> Str {
         match self {
-            StatusClass::Informational => Str::StatusClassInfo,
-            StatusClass::Success => Str::StatusClassSuccess,
-            StatusClass::Redirect => Str::StatusClassRedirect,
-            StatusClass::ClientError => Str::StatusClassClientError,
-            StatusClass::ServerError => Str::StatusClassServerError,
-            StatusClass::Unknown => Str::StatusClassUnknown,
+            StatusClass::Informational => api_response::Text::StatusClassInfo.into(),
+            StatusClass::Success => api_response::Text::StatusClassSuccess.into(),
+            StatusClass::Redirect => api_response::Text::StatusClassRedirect.into(),
+            StatusClass::ClientError => api_response::Text::StatusClassClientError.into(),
+            StatusClass::ServerError => api_response::Text::StatusClassServerError.into(),
+            StatusClass::Unknown => api_response::Text::StatusClassUnknown.into(),
         }
     }
 

@@ -69,7 +69,7 @@ use crate::api_explorer::models::variables::{Variable, VariableScope, VariableSe
 use crate::api_explorer::services::Transport;
 use crate::api_explorer::services::http::{prepare, resolve};
 use crate::api_explorer::services::script::{ScriptContext, ScriptEngine};
-use crate::i18n::Str;
+use crate::i18n::{Str, api_explorer};
 
 /// What the send path should do about this request's pre-request script.
 ///
@@ -155,7 +155,7 @@ pub fn send(job: SendJob, engine: &dyn ScriptEngine, transport: &dyn Transport) 
             if run.dropped_logs > 0 {
                 logs.push(ConsoleEntry::runtime(
                     ConsoleLevel::Warn,
-                    Str::ConsoleRunTruncated(run.dropped_logs),
+                    api_explorer::Text::ConsoleRunTruncated(run.dropped_logs).into(),
                 ));
             }
             // Kept even when the run then failed: a test that ran is a fact.
@@ -176,14 +176,15 @@ pub fn send(job: SendJob, engine: &dyn ScriptEngine, transport: &dyn Transport) 
 
             logs.push(ConsoleEntry::runtime(
                 ConsoleLevel::Debug,
-                Str::ScriptFinished {
+                api_explorer::Text::ScriptFinished {
                     millis: millis(run.duration),
-                },
+                }
+                .into(),
             ));
             if !run.writes.is_empty() {
                 logs.push(ConsoleEntry::runtime(
                     ConsoleLevel::Debug,
-                    Str::ScriptWroteVariables(run.writes.len()),
+                    api_explorer::Text::ScriptWroteVariables(run.writes.len()).into(),
                 ));
             }
 
@@ -279,7 +280,7 @@ fn run_post(
     if run.dropped_logs > 0 {
         logs.push(ConsoleEntry::runtime(
             ConsoleLevel::Warn,
-            Str::ConsoleRunTruncated(run.dropped_logs),
+            api_explorer::Text::ConsoleRunTruncated(run.dropped_logs).into(),
         ));
     }
 
@@ -299,14 +300,15 @@ fn run_post(
         None => {
             logs.push(ConsoleEntry::runtime(
                 ConsoleLevel::Debug,
-                Str::TestScriptFinished {
+                api_explorer::Text::TestScriptFinished {
                     millis: millis(run.duration),
-                },
+                }
+                .into(),
             ));
             if !run.writes.is_empty() {
                 logs.push(ConsoleEntry::runtime(
                     ConsoleLevel::Debug,
-                    Str::ScriptWroteVariables(run.writes.len()),
+                    api_explorer::Text::ScriptWroteVariables(run.writes.len()).into(),
                 ));
             }
         }
@@ -350,7 +352,7 @@ fn apply(draft: &mut RequestDraft, request: ScriptRequest, logs: &mut Vec<Consol
         // work is still good.
         None => logs.push(ConsoleEntry::runtime(
             ConsoleLevel::Warn,
-            Str::ScriptUnknownMethod(request.method.clone()),
+            api_explorer::Text::ScriptUnknownMethod(request.method.clone()).into(),
         )),
     }
     draft.url = request.url;

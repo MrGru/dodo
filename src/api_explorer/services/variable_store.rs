@@ -30,7 +30,7 @@ use std::sync::Mutex;
 use serde_json::Value;
 
 use crate::api_explorer::models::variables::{SCHEMA_VERSION, VariableDocument};
-use crate::i18n::Str;
+use crate::i18n::{Str, api_variables};
 use crate::paths::data_dir;
 
 /// Why environments could not be loaded or saved, in terms the UI can show.
@@ -58,13 +58,16 @@ impl VariableStoreError {
     /// The message shown when saving or loading environments fails.
     pub fn message(&self) -> Str {
         match self {
-            VariableStoreError::Io { detail } => Str::VariableStoreError(detail.clone()),
-            VariableStoreError::MissingVersion => Str::VariableStoreMissingVersion,
+            VariableStoreError::Io { detail } => {
+                api_variables::Text::StoreError(detail.clone()).into()
+            }
+            VariableStoreError::MissingVersion => api_variables::Text::StoreMissingVersion.into(),
             VariableStoreError::UnsupportedVersion { found, supported } => {
-                Str::VariableStoreUnsupportedVersion {
+                api_variables::Text::StoreUnsupportedVersion {
                     found: *found,
                     supported: *supported,
                 }
+                .into()
             }
         }
     }

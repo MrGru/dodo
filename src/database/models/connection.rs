@@ -6,12 +6,12 @@
 //! A database password is stored exactly the way the API Explorer already
 //! stores a secret variable: plain text in dodo's own data directory, flagged,
 //! masked in the UI behind a reveal toggle, and accompanied by a notice that is
-//! **never absent** ([`Str::DbPasswordStorageNotice`]). That was a deliberate
+//! **never absent** ([`db_connection::Text::PasswordStorageNotice`]). That was a deliberate
 //! decision, not an omission, and the design report's `CredentialStore` trait
 //! is deliberately **not** built: with one storage behaviour it would be
 //! machinery for a choice that no longer exists.
 //!
-//! [`Str::DbPasswordStorageNotice`]: crate::i18n::Str::DbPasswordStorageNotice
+//! [`db_connection::Text::PasswordStorageNotice`]: crate::i18n::db_connection::Text::PasswordStorageNotice
 //!
 //! # Versioning
 //!
@@ -24,6 +24,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::engine::{Address, Engine};
+use crate::i18n::db_connection;
 
 /// The schema version written into `connections.json`.
 ///
@@ -350,16 +351,15 @@ impl DetailField {
     /// The word beside the value. These are the connection form's own labels:
     /// the card and the form name the same thing the same way.
     pub fn label(self) -> crate::i18n::Str {
-        use crate::i18n::Str;
         match self {
-            DetailField::Name => Str::DbFieldName,
-            DetailField::Url => Str::DbFieldUrl,
-            DetailField::Host => Str::DbFieldHost,
-            DetailField::Port => Str::DbFieldPort,
-            DetailField::Database => Str::DbFieldDatabase,
-            DetailField::User => Str::DbFieldUser,
-            DetailField::File => Str::DbFieldFile,
-            DetailField::Type => Str::DbFieldEngine,
+            DetailField::Name => db_connection::Text::FieldName.into(),
+            DetailField::Url => db_connection::Text::FieldUrl.into(),
+            DetailField::Host => db_connection::Text::FieldHost.into(),
+            DetailField::Port => db_connection::Text::FieldPort.into(),
+            DetailField::Database => db_connection::Text::FieldDatabase.into(),
+            DetailField::User => db_connection::Text::FieldUser.into(),
+            DetailField::File => db_connection::Text::FieldFile.into(),
+            DetailField::Type => db_connection::Text::FieldEngine.into(),
         }
     }
 }
@@ -384,13 +384,14 @@ pub enum ProfileProblem {
 
 impl ProfileProblem {
     pub fn message(self) -> crate::i18n::Str {
-        use crate::i18n::Str;
         match self {
-            ProfileProblem::HostMissing => Str::DbProfileHostMissing,
-            ProfileProblem::PortMissing => Str::DbProfilePortMissing,
-            ProfileProblem::DatabaseMissing => Str::DbProfileDatabaseMissing,
-            ProfileProblem::RedisDatabaseInvalid => Str::DbProfileRedisDatabaseInvalid,
-            ProfileProblem::FileMissing => Str::DbProfileFileMissing,
+            ProfileProblem::HostMissing => db_connection::Text::ProfileHostMissing.into(),
+            ProfileProblem::PortMissing => db_connection::Text::ProfilePortMissing.into(),
+            ProfileProblem::DatabaseMissing => db_connection::Text::ProfileDatabaseMissing.into(),
+            ProfileProblem::RedisDatabaseInvalid => {
+                db_connection::Text::ProfileRedisDatabaseInvalid.into()
+            }
+            ProfileProblem::FileMissing => db_connection::Text::ProfileFileMissing.into(),
         }
     }
 }
@@ -550,9 +551,12 @@ mod tests {
         }
         assert!(!profile.url().contains("hunter2"));
         assert!(
-            !DetailField::ALL
-                .iter()
-                .any(|field| matches!(field.label(), crate::i18n::Str::DbFieldPassword)),
+            !DetailField::ALL.iter().any(|field| {
+                matches!(
+                    field.label(),
+                    crate::i18n::Str::DbConnection(crate::i18n::db_connection::Text::FieldPassword)
+                )
+            }),
             "no card row may even be labelled Password"
         );
     }

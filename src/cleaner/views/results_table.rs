@@ -43,7 +43,7 @@ use crate::cleaner::core::category::CleanerCategory;
 use crate::cleaner::core::icon::IconRaster;
 use crate::cleaner::core::item::{CleanableItem, CleanableItemId, ItemMetadata};
 use crate::cleaner::core::risk::{ItemCapability, RiskLevel};
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, cleaner, t};
 
 const CHECKBOX_COLUMN_WIDTH: gpui::Pixels = px(36.);
 const RISK_COLUMN_WIDTH: gpui::Pixels = px(112.);
@@ -109,19 +109,19 @@ pub(super) fn category_icon(category: CleanerCategory) -> AppIcon {
 fn reveal_label() -> Str {
     #[cfg(target_os = "macos")]
     {
-        Str::CleanerRevealInFinder
+        cleaner::Text::RevealInFinder.into()
     }
     #[cfg(target_os = "windows")]
     {
-        Str::CleanerRevealInExplorer
+        cleaner::Text::RevealInExplorer
     }
     #[cfg(target_os = "linux")]
     {
-        Str::CleanerRevealInFileManager
+        cleaner::Text::RevealInFileManager
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
-        Str::CleanerRevealInFinder
+        cleaner::Text::RevealInFinder
     }
 }
 
@@ -140,30 +140,30 @@ fn action_id(action: RowAction) -> &'static str {
 fn action_look(action: RowAction) -> (Str, AppIcon) {
     match action {
         RowAction::Reveal => (reveal_label(), AppIcon::FolderOpen),
-        RowAction::CopyPath => (Str::CleanerCopyPath, AppIcon::Copy),
-        RowAction::Keep => (Str::CleanerKeepItem, AppIcon::CircleCheck),
+        RowAction::CopyPath => (cleaner::Text::CopyPath.into(), AppIcon::Copy),
+        RowAction::Keep => (cleaner::Text::KeepItem.into(), AppIcon::CircleCheck),
         RowAction::Uninstall => (uninstall_label(), AppIcon::Trash),
     }
 }
 
 fn uninstall_label() -> Str {
     if cfg!(target_os = "windows") {
-        Str::CleanerOpenInstalledAppsSettings
+        cleaner::Text::OpenInstalledAppsSettings.into()
     } else if cfg!(target_os = "linux") {
-        Str::CleanerUninstallApplication
+        cleaner::Text::UninstallApplication.into()
     } else {
-        Str::CleanerBeginUninstallReview
+        cleaner::Text::BeginUninstallReview.into()
     }
 }
 
 /// The five risk levels' label and colour.
 fn risk_look(risk: RiskLevel, cx: &App) -> (Str, gpui::Hsla) {
     match risk {
-        RiskLevel::SafeRecreatable => (Str::CleanerRiskSafe, cx.theme().success),
-        RiskLevel::ReviewRecommended => (Str::CleanerRiskReview, cx.theme().warning),
-        RiskLevel::UserData => (Str::CleanerRiskUserData, cx.theme().warning),
-        RiskLevel::ApplicationMutation => (Str::CleanerRiskAppChange, cx.theme().danger),
-        RiskLevel::Protected => (Str::CleanerRiskProtected, cx.theme().danger),
+        RiskLevel::SafeRecreatable => (cleaner::Text::RiskSafe.into(), cx.theme().success),
+        RiskLevel::ReviewRecommended => (cleaner::Text::RiskReview.into(), cx.theme().warning),
+        RiskLevel::UserData => (cleaner::Text::RiskUserData.into(), cx.theme().warning),
+        RiskLevel::ApplicationMutation => (cleaner::Text::RiskAppChange.into(), cx.theme().danger),
+        RiskLevel::Protected => (cleaner::Text::RiskProtected.into(), cx.theme().danger),
     }
 }
 
@@ -275,7 +275,7 @@ impl ResultsTableDelegate {
                 .child(
                     Checkbox::new("cleaner-select-all")
                         .checked(false)
-                        .tooltip(t(Str::CleanerSelectAll, cx))
+                        .tooltip(t(cleaner::Text::SelectAll, cx))
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |view, cx| view.select_all_visible(cx));
                         }),
@@ -289,7 +289,7 @@ impl ResultsTableDelegate {
                 .child(
                     Checkbox::new("cleaner-select-all")
                         .checked(true)
-                        .tooltip(t(Str::CleanerDeselectAll, cx))
+                        .tooltip(t(cleaner::Text::DeselectAll, cx))
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |view, cx| view.deselect_all(cx));
                         }),
@@ -312,7 +312,7 @@ impl ResultsTableDelegate {
                         .justify_center()
                         .cursor_pointer()
                         .tooltip(move |window, cx| {
-                            gpui_component::tooltip::Tooltip::new(t(Str::CleanerSelectAll, cx))
+                            gpui_component::tooltip::Tooltip::new(t(cleaner::Text::SelectAll, cx))
                                 .build(window, cx)
                         })
                         .child(
@@ -345,9 +345,9 @@ impl ResultsTableDelegate {
                 Checkbox::new(("cleaner-row-select", item_id.0))
                     .checked(selected)
                     .tooltip(if selected {
-                        t(Str::CleanerDeselectItem, cx)
+                        t(cleaner::Text::DeselectItem, cx)
                     } else {
-                        t(Str::CleanerSelectItem, cx)
+                        t(cleaner::Text::SelectItem, cx)
                     })
                     .on_click(move |_, _, cx| {
                         let _ = view.update(cx, |view, cx| view.toggle_selected(item_id, cx));
@@ -361,7 +361,7 @@ impl ResultsTableDelegate {
         // sentence describing what was found and is not.
         let explanation = SharedString::from(format!(
             "{}: {}",
-            t(Str::CleanerExplanation, cx),
+            t(cleaner::Text::Explanation, cx),
             item.explanation
         ));
         div()
@@ -583,18 +583,18 @@ impl TableDelegate for ResultsTableDelegate {
                 .resizable(false)
                 .movable(false)
                 .selectable(false),
-            1 => Column::new("name", t(Str::CleanerColumnName, cx)).min_width(px(140.)),
-            2 => Column::new("risk", t(Str::CleanerColumnRisk, cx))
+            1 => Column::new("name", t(cleaner::Text::ColumnName, cx)).min_width(px(140.)),
+            2 => Column::new("risk", t(cleaner::Text::ColumnRisk, cx))
                 .width(RISK_COLUMN_WIDTH)
                 .min_width(RISK_COLUMN_WIDTH)
                 .selectable(false),
-            3 => Column::new("size", t(Str::CleanerColumnSize, cx))
+            3 => Column::new("size", t(cleaner::Text::ColumnSize, cx))
                 .width(SIZE_COLUMN_WIDTH)
                 .min_width(SIZE_COLUMN_WIDTH)
                 .text_right()
                 .selectable(false),
-            4 => Column::new("path", t(Str::CleanerPath, cx)).min_width(px(160.)),
-            5 => Column::new("actions", t(Str::CleanerColumnActions, cx))
+            4 => Column::new("path", t(cleaner::Text::Path, cx)).min_width(px(160.)),
+            5 => Column::new("actions", t(cleaner::Text::ColumnActions, cx))
                 .width(ACTIONS_COLUMN_WIDTH)
                 .min_width(ACTIONS_COLUMN_WIDTH)
                 .max_width(ACTIONS_COLUMN_WIDTH)
@@ -628,7 +628,7 @@ impl TableDelegate for ResultsTableDelegate {
             .justify_center()
             .items_center()
             .text_color(cx.theme().muted_foreground)
-            .child(t(Str::CleanerNoResultsYet, cx))
+            .child(t(cleaner::Text::NoResultsYet, cx))
     }
 
     fn render_tr(

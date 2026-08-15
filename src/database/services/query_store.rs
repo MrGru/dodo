@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use serde_json::Value;
 
 use crate::database::models::library::{QueryDataDocument, SCHEMA_VERSION};
-use crate::i18n::Str;
+use crate::i18n::{Str, db_query};
 use crate::paths::data_dir;
 
 #[derive(Debug)]
@@ -31,12 +31,15 @@ impl QueryStoreError {
 
     pub fn message(&self) -> Str {
         match self {
-            Self::Io { detail } => Str::DbQueryStoreError(detail.clone()),
-            Self::MissingVersion => Str::DbQueryStoreMissingVersion,
-            Self::UnsupportedVersion { found, supported } => Str::DbQueryStoreUnsupportedVersion {
-                found: *found,
-                supported: *supported,
-            },
+            Self::Io { detail } => db_query::Text::QueryStoreError(detail.clone()).into(),
+            Self::MissingVersion => db_query::Text::QueryStoreMissingVersion.into(),
+            Self::UnsupportedVersion { found, supported } => {
+                db_query::Text::QueryStoreUnsupportedVersion {
+                    found: *found,
+                    supported: *supported,
+                }
+                .into()
+            }
         }
     }
 }

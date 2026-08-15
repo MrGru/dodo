@@ -12,7 +12,7 @@
 //! [`HttpMethod`]: crate::api_explorer::models::method::HttpMethod
 //! [`services::codegen`]: crate::api_explorer::services::codegen
 
-use crate::i18n::Str;
+use crate::i18n::{Str, api_explorer};
 
 /// The four languages a request can be turned into.
 ///
@@ -40,10 +40,10 @@ impl CodeTarget {
     /// `i18n`'s tests.
     pub fn label(self) -> Str {
         match self {
-            CodeTarget::Curl => Str::CodeTargetCurl,
-            CodeTarget::JsFetch => Str::CodeTargetFetch,
-            CodeTarget::JsAxios => Str::CodeTargetAxios,
-            CodeTarget::JsXhr => Str::CodeTargetXhr,
+            CodeTarget::Curl => api_explorer::Text::CodeTargetCurl.into(),
+            CodeTarget::JsFetch => api_explorer::Text::CodeTargetFetch.into(),
+            CodeTarget::JsAxios => api_explorer::Text::CodeTargetAxios.into(),
+            CodeTarget::JsXhr => api_explorer::Text::CodeTargetXhr.into(),
         }
     }
 

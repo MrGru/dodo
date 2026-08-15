@@ -23,7 +23,7 @@ use std::sync::Mutex;
 use serde_json::Value;
 
 use crate::api_explorer::models::script_consent::{ConsentDocument, SCHEMA_VERSION};
-use crate::i18n::Str;
+use crate::i18n::{Str, api_scripts};
 use crate::paths::data_dir;
 
 /// Why approvals could not be loaded or saved.
@@ -43,13 +43,18 @@ impl ConsentStoreError {
 
     pub fn message(&self) -> Str {
         match self {
-            ConsentStoreError::Io { detail } => Str::ConsentStoreError(detail.clone()),
-            ConsentStoreError::MissingVersion => Str::ConsentStoreMissingVersion,
+            ConsentStoreError::Io { detail } => {
+                api_scripts::Text::ConsentStoreError(detail.clone()).into()
+            }
+            ConsentStoreError::MissingVersion => {
+                api_scripts::Text::ConsentStoreMissingVersion.into()
+            }
             ConsentStoreError::UnsupportedVersion { found, supported } => {
-                Str::ConsentStoreUnsupportedVersion {
+                api_scripts::Text::ConsentStoreUnsupportedVersion {
                     found: *found,
                     supported: *supported,
                 }
+                .into()
             }
         }
     }

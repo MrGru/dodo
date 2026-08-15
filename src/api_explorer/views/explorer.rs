@@ -43,7 +43,7 @@ use crate::api_explorer::state::ui::{
 use crate::api_explorer::views::{generate_code, script_consent};
 use crate::api_explorer::{ScriptPolicy, SendRequest};
 use crate::app_icon::AppIcon;
-use crate::i18n::{Language, Str, t};
+use crate::i18n::{Language, Str, api_collections, api_explorer, api_variables, t};
 use crate::paths::data_dir;
 
 /// The key context the send shortcut is bound in. Matching happens up the
@@ -117,11 +117,11 @@ impl ApiExplorer {
         let first = cx.new(|cx| RequestTabState::new(window, cx));
         Self::watch_tab(&first, window, cx);
 
-        let name_placeholder = t(Str::NameRequestPlaceholder, cx);
+        let name_placeholder = t(api_explorer::Text::NameRequestPlaceholder, cx);
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder(name_placeholder));
-        let search_placeholder = t(Str::SearchCollectionsPlaceholder, cx);
+        let search_placeholder = t(api_explorer::Text::SearchCollectionsPlaceholder, cx);
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder));
-        let rename_placeholder = t(Str::NamePlaceholder, cx);
+        let rename_placeholder = t(api_variables::Text::NamePlaceholder, cx);
         let rename_input = cx.new(|cx| InputState::new(window, cx).placeholder(rename_placeholder));
 
         let collection_store: Arc<dyn CollectionStore> = Arc::new(DiskCollectionStore::new());
@@ -588,7 +588,7 @@ impl ApiExplorer {
     /// Adds a new, empty collection and opens its rename popover so the user can
     /// name it immediately.
     pub(super) fn create_collection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let name = t(Str::DefaultCollectionName, cx).to_string();
+        let name = t(api_explorer::Text::DefaultCollectionName, cx).to_string();
         let id = self.collections.tree_mut().add_collection(name);
         self.collections.set_error(None);
         self.persist_collections(cx);
@@ -602,7 +602,7 @@ impl ApiExplorer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let name = t(Str::DefaultFolderName, cx).to_string();
+        let name = t(api_explorer::Text::DefaultFolderName, cx).to_string();
         if let Some(id) = self.collections.tree_mut().add_folder(parent, name) {
             self.persist_collections(cx);
             self.begin_rename(id, window, cx);
@@ -708,7 +708,7 @@ impl ApiExplorer {
             return;
         }
         let snapshot = tab.read(cx).request.snapshot(cx);
-        let default_collection = t(Str::DefaultCollectionName, cx).to_string();
+        let default_collection = t(api_explorer::Text::DefaultCollectionName, cx).to_string();
         let collection = self
             .collections
             .tree_mut()
@@ -765,9 +765,9 @@ impl ApiExplorer {
                         }
                         Err(error) => this.collections.set_error(Some(error.message())),
                     },
-                    Err(detail) => this
-                        .collections
-                        .set_error(Some(Str::CollectionImportError(detail))),
+                    Err(detail) => this.collections.set_error(Some(
+                        api_collections::Text::CollectionImportError(detail).into(),
+                    )),
                 }
                 cx.notify();
             });
@@ -798,7 +798,7 @@ impl ApiExplorer {
             return;
         };
         let name = snapshot.summary();
-        let default_collection = t(Str::DefaultCollectionName, cx).to_string();
+        let default_collection = t(api_explorer::Text::DefaultCollectionName, cx).to_string();
         let collection = self
             .collections
             .tree_mut()
@@ -1083,9 +1083,18 @@ impl ApiExplorer {
         self.language = language;
 
         for (field, str) in [
-            (&self.name_input, Str::NameRequestPlaceholder),
-            (&self.search_input, Str::SearchCollectionsPlaceholder),
-            (&self.rename_input, Str::NamePlaceholder),
+            (
+                &self.name_input,
+                Str::from(api_explorer::Text::NameRequestPlaceholder),
+            ),
+            (
+                &self.search_input,
+                Str::from(api_explorer::Text::SearchCollectionsPlaceholder),
+            ),
+            (
+                &self.rename_input,
+                Str::from(api_variables::Text::NamePlaceholder),
+            ),
         ] {
             let placeholder = t(str, cx);
             field.update(cx, |state, cx| {
@@ -1140,13 +1149,13 @@ impl ApiExplorer {
             .child(rail_button(
                 LeftPanel::Collections,
                 AppIcon::Folder,
-                Str::Collections,
+                api_collections::Text::Collections.into(),
                 "rail-collections",
             ))
             .child(rail_button(
                 LeftPanel::History,
                 AppIcon::Clock,
-                Str::History,
+                api_collections::Text::History.into(),
                 "rail-history",
             ))
             .into_any_element()

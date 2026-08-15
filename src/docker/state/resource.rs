@@ -168,6 +168,7 @@ impl<T: Searchable + Clone> ResourceState<T> {
 mod tests {
     use super::{ResourceState, Searchable};
     use crate::docker::models::volume::Volume;
+    use crate::i18n::docker;
 
     fn volume(name: &str) -> Volume {
         Volume {
@@ -229,13 +230,12 @@ mod tests {
     #[test]
     fn merge_after_error_re_renders_even_when_rows_match() {
         use crate::docker::models::usage::ContainerUsage;
-        use crate::i18n::Str;
 
         let mut state: ResourceState<Volume> = ResourceState::default();
         let rows = vec![volume("pgdata")];
         state.set_rows(rows.clone());
-        assert!(state.set_poll_error(Str::DockerConnectionError("down".into())));
-        assert!(!state.set_poll_error(Str::DockerConnectionError("still".into())));
+        assert!(state.set_poll_error(docker::Text::ConnectionError("down".into()).into()));
+        assert!(!state.set_poll_error(docker::Text::ConnectionError("still".into()).into()));
         // Recovery with the same rows is still a change: the table must return.
         assert!(state.merge(rows, ContainerUsage::default()));
     }

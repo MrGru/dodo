@@ -6,7 +6,7 @@
 //! actually kept, so a byte-budget stop cannot skip rows on the next page.
 
 use crate::database::models::catalog::{NodeId, NodeKind};
-use crate::i18n::Str;
+use crate::i18n::{Str, db_catalog, db_connection};
 
 /// Rows requested from the server for one table-data page.
 pub const DATA_PAGE_SIZE: u64 = 100;
@@ -40,11 +40,11 @@ impl DetailTab {
 
     pub fn label(self) -> Str {
         match self {
-            Self::Data => Str::DbDetailData,
-            Self::Columns => Str::DbGroupColumns,
-            Self::Indexes => Str::DbGroupIndexes,
-            Self::Constraints => Str::DbGroupConstraints,
-            Self::Ddl => Str::DbDetailDdl,
+            Self::Data => db_catalog::Text::DetailData.into(),
+            Self::Columns => db_catalog::Text::GroupColumns.into(),
+            Self::Indexes => db_catalog::Text::GroupIndexes.into(),
+            Self::Constraints => db_catalog::Text::GroupConstraints.into(),
+            Self::Ddl => db_catalog::Text::DetailDdl.into(),
         }
     }
 }
@@ -74,14 +74,14 @@ pub enum DetailField {
 impl DetailField {
     pub fn label(self) -> Str {
         match self {
-            Self::Name => Str::DbFieldName,
-            Self::Type => Str::DbFieldEngine,
-            Self::Nullable => Str::DbDetailFieldNullable,
-            Self::NotNull => Str::DbDetailFieldNotNull,
-            Self::Default => Str::DbDetailFieldDefault,
-            Self::Unique => Str::DbDetailFieldUnique,
-            Self::Primary => Str::DbDetailFieldPrimary,
-            Self::Definition => Str::DbDetailFieldDefinition,
+            Self::Name => db_connection::Text::FieldName.into(),
+            Self::Type => db_connection::Text::FieldEngine.into(),
+            Self::Nullable => db_catalog::Text::DetailFieldNullable.into(),
+            Self::NotNull => db_catalog::Text::DetailFieldNotNull.into(),
+            Self::Default => db_catalog::Text::DetailFieldDefault.into(),
+            Self::Unique => db_catalog::Text::DetailFieldUnique.into(),
+            Self::Primary => db_catalog::Text::DetailFieldPrimary.into(),
+            Self::Definition => db_catalog::Text::DetailFieldDefinition.into(),
         }
     }
 }

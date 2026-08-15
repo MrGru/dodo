@@ -33,7 +33,7 @@ use std::sync::Arc;
 use crate::docker::models::runtime::{
     self, CommandOutput, RuntimeAction, RuntimeCommand, RuntimeInfo, RuntimeKind, RuntimeStatus,
 };
-use crate::i18n::Str;
+use crate::i18n::{Str, docker};
 use crate::paths::HostOs;
 
 /// A runtime Start/Stop that did not complete, in terms the UI can act on.
@@ -54,9 +54,9 @@ pub enum RuntimeError {
 impl RuntimeError {
     pub fn message(&self) -> Str {
         match self {
-            RuntimeError::Unsupported => Str::RuntimeActionUnsupported,
-            RuntimeError::NotFound => Str::RuntimeBinaryNotFound,
-            RuntimeError::Operation(detail) => Str::DockerOperationError(detail.clone()),
+            RuntimeError::Unsupported => docker::Text::RuntimeActionUnsupported.into(),
+            RuntimeError::NotFound => docker::Text::RuntimeBinaryNotFound.into(),
+            RuntimeError::Operation(detail) => docker::Text::OperationError(detail.clone()).into(),
         }
     }
 }

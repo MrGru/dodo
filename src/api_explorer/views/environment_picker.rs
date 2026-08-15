@@ -41,7 +41,7 @@ use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::environments_editor;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{api_variables, t};
 
 /// How wide the picker trigger may grow before its label truncates. Fixed so
 /// that a long environment name cannot push the preview off the row.
@@ -78,7 +78,7 @@ impl ApiExplorer {
             .environments
             .active()
             .map(|environment| SharedString::from(environment.name.clone()))
-            .unwrap_or_else(|| t(Str::NoEnvironment, cx));
+            .unwrap_or_else(|| t(api_variables::Text::NoEnvironment, cx));
 
         let none_row = Button::new("environment-none")
             .ghost()
@@ -86,7 +86,7 @@ impl ApiExplorer {
             .w_full()
             .justify_start()
             .selected(active.is_none())
-            .label(t(Str::NoEnvironment, cx))
+            .label(t(api_variables::Text::NoEnvironment, cx))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.environments.set_active(None);
                 this.persist_environments(cx);
@@ -135,7 +135,7 @@ impl ApiExplorer {
                     .outline()
                     .xsmall()
                     .max_w(PICKER_MAX_W)
-                    .tooltip(t(Str::SelectEnvironment, cx))
+                    .tooltip(t(api_variables::Text::SelectEnvironment, cx))
                     .child(
                         h_flex()
                             .min_w_0()
@@ -172,7 +172,7 @@ impl ApiExplorer {
                                 .py_1()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(t(Str::NoEnvironmentsYetHint, cx)),
+                                .child(t(api_variables::Text::NoEnvironmentsYetHint, cx)),
                         )
                     })
                     .children(rows)
@@ -190,7 +190,7 @@ impl ApiExplorer {
                                     .w_full()
                                     .justify_start()
                                     .icon(AppIcon::Sliders)
-                                    .label(t(Str::ManageEnvironments, cx))
+                                    .label(t(api_variables::Text::ManageEnvironments, cx))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.environment_menu_open = false;
                                         cx.notify();
@@ -250,7 +250,7 @@ impl ApiExplorer {
                         .lookup(&name)
                         .map(|(scope, _)| t(scope.label(), cx).to_string())
                         .unwrap_or_default();
-                    t(Str::ResolvesFrom { name, scope }, cx)
+                    t(api_variables::Text::ResolvesFrom { name, scope }, cx)
                 })
             })
             .collect();
@@ -258,13 +258,19 @@ impl ApiExplorer {
         let (text, warn) = match missing.first() {
             // Named rather than counted: one name is enough to fix it, and it
             // is the same sentence the send-time failure uses.
-            Some(name) => (t(Str::UnresolvedVariablePreview(name.clone()), cx), true),
+            Some(name) => (
+                t(
+                    api_variables::Text::UnresolvedVariablePreview(name.clone()),
+                    cx,
+                ),
+                true,
+            ),
             None => (
                 interpolate(&url, &variables)
                     .map(SharedString::from)
                     // A recursion failure has no sensible preview text; the
                     // send-time banner explains it properly.
-                    .unwrap_or_else(|_| t(Str::NoActiveVariables, cx)),
+                    .unwrap_or_else(|_| t(api_variables::Text::NoActiveVariables, cx)),
                 false,
             ),
         };
@@ -287,7 +293,7 @@ impl ApiExplorer {
                     div()
                         .flex_shrink_0()
                         .text_color(cx.theme().muted_foreground)
-                        .child(t(Str::ResolvedUrlLabel, cx)),
+                        .child(t(api_variables::Text::ResolvedUrlLabel, cx)),
                 )
                 .child(
                     div()

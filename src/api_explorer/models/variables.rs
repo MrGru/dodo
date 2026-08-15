@@ -135,9 +135,13 @@ impl VariableScope {
     /// The word the UI uses for this scope.
     pub fn label(self) -> crate::i18n::Str {
         match self {
-            VariableScope::Collection => crate::i18n::Str::CollectionVariables,
-            VariableScope::Environment => crate::i18n::Str::EnvironmentVariables,
-            VariableScope::Script => crate::i18n::Str::ScriptVariables,
+            VariableScope::Collection => {
+                crate::i18n::api_variables::Text::CollectionVariables.into()
+            }
+            VariableScope::Environment => {
+                crate::i18n::api_variables::Text::EnvironmentVariables.into()
+            }
+            VariableScope::Script => crate::i18n::api_variables::Text::ScriptVariables.into(),
         }
     }
 }

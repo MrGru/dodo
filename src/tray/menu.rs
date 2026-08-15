@@ -5,7 +5,7 @@ use tray_icon::menu::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem,
 
 use dodo_ime_core::{ActiveLanguages, LanguageId};
 
-use crate::i18n::{Str, t};
+use crate::i18n::{shell, t, tray};
 
 /// Logs a failed append and carries on.
 ///
@@ -79,11 +79,11 @@ impl TrayMenu {
 
         let this = TrayMenu {
             menu: Menu::new(),
-            open: MenuItem::new(t(Str::TrayOpenDodo, cx), true, None),
-            keyboard_input: Submenu::new(t(Str::TrayKeyboardInput, cx), true),
+            open: MenuItem::new(t(tray::Text::OpenDodo, cx), true, None),
+            keyboard_input: Submenu::new(t(tray::Text::KeyboardInput, cx), true),
             languages,
-            settings: MenuItem::new(t(Str::Settings, cx), true, None),
-            quit: MenuItem::new(t(Str::TrayQuitDodo, cx), true, None),
+            settings: MenuItem::new(t(shell::Text::Settings, cx), true, None),
+            quit: MenuItem::new(t(tray::Text::QuitDodo, cx), true, None),
         };
         this.assemble();
         this
@@ -173,10 +173,11 @@ impl TrayMenu {
     /// Called when the interface language changes. It leaves the
     /// [`LanguageId`] rows alone because their labels are endonyms.
     pub fn relabel(&self, cx: &gpui::App) {
-        self.open.set_text(t(Str::TrayOpenDodo, cx));
-        self.keyboard_input.set_text(t(Str::TrayKeyboardInput, cx));
-        self.settings.set_text(t(Str::Settings, cx));
-        self.quit.set_text(t(Str::TrayQuitDodo, cx));
+        self.open.set_text(t(tray::Text::OpenDodo, cx));
+        self.keyboard_input
+            .set_text(t(tray::Text::KeyboardInput, cx));
+        self.settings.set_text(t(shell::Text::Settings, cx));
+        self.quit.set_text(t(tray::Text::QuitDodo, cx));
     }
 }
 

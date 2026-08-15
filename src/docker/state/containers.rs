@@ -271,7 +271,7 @@ mod tests {
     use super::{ContainersState, sort_for_display};
     use crate::docker::models::container::Container;
     use crate::docker::models::status::ContainerStatus;
-    use crate::i18n::Str;
+    use crate::i18n::docker;
 
     fn container(id: &str, name: &str, status: ContainerStatus) -> Container {
         Container {
@@ -506,8 +506,8 @@ mod tests {
         let rows = vec![full("1", "web", ContainerStatus::Running, "nginx", None)];
         state.set_rows(rows.clone());
         // A poll fails: transition into error is a change; a second failure is not.
-        assert!(state.set_poll_error(Str::DockerConnectionError("down".into())));
-        assert!(!state.set_poll_error(Str::DockerConnectionError("still down".into())));
+        assert!(state.set_poll_error(docker::Text::ConnectionError("down".into()).into()));
+        assert!(!state.set_poll_error(docker::Text::ConnectionError("still down".into()).into()));
         // Recovery re-lists the same rows — still a change, because the error is
         // clearing and the table must come back.
         assert!(state.merge_rows(rows));

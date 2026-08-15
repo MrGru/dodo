@@ -23,7 +23,7 @@
 //! stopped at the server" the thing the UI is reporting, rather than "the UI
 //! stopped waiting".
 
-use crate::i18n::Str;
+use crate::i18n::{Str, database, db_catalog};
 
 /// A database operation that failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,16 +66,19 @@ impl DbError {
     /// The message shown for this failure.
     pub fn message(&self) -> Str {
         match self {
-            DbError::Unreachable(detail) => Str::DbUnreachable(detail.clone()),
+            DbError::Unreachable(detail) => database::Text::Unreachable(detail.clone()).into(),
             DbError::Server {
                 code: Some(code),
                 detail,
-            } => Str::DbServerErrorCoded {
+            } => database::Text::ServerErrorCoded {
                 code: code.clone(),
                 detail: detail.clone(),
-            },
-            DbError::Server { code: None, detail } => Str::DbServerError(detail.clone()),
-            DbError::Cancelled => Str::DbCancelledMessage,
+            }
+            .into(),
+            DbError::Server { code: None, detail } => {
+                database::Text::ServerError(detail.clone()).into()
+            }
+            DbError::Cancelled => db_catalog::Text::CancelledMessage.into(),
         }
     }
 
@@ -101,7 +104,7 @@ impl DbError {
 #[cfg(test)]
 mod tests {
     use super::DbError;
-    use crate::i18n::{Language, Str};
+    use crate::i18n::{Language, Str, database};
 
     #[test]
     fn every_error_keeps_the_drivers_own_words() {
@@ -144,7 +147,7 @@ mod tests {
     fn a_missing_code_picks_the_uncoded_message() {
         assert!(matches!(
             DbError::server("boom").message(),
-            Str::DbServerError(_)
+            Str::Database(database::Text::ServerError(_))
         ));
     }
 

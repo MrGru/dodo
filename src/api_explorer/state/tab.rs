@@ -23,7 +23,7 @@ use crate::api_explorer::services::send::{ScriptJob, SendJob, send};
 use crate::api_explorer::state::history::HistoryRecord;
 use crate::api_explorer::state::request::{RequestState, ScriptSlot};
 use crate::api_explorer::state::response::{Outcome, ResponseState, window_lines};
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, api_explorer, t};
 
 pub struct RequestTabState {
     pub request: RequestState,
@@ -117,9 +117,12 @@ impl RequestTabState {
         cx: &mut Context<Self>,
     ) {
         let editor = self.request.script_editor(slot).clone();
-        let message = found
-            .as_ref()
-            .map(|error| t(Str::ScriptSyntaxError(error.detail.clone()), cx));
+        let message = found.as_ref().map(|error| {
+            t(
+                api_explorer::Text::ScriptSyntaxError(error.detail.clone()),
+                cx,
+            )
+        });
 
         editor.update(cx, |state, cx| {
             let text = state.text().clone();

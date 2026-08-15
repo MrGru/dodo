@@ -59,7 +59,7 @@ use crate::api_explorer::models::script_consent::ConsentPolicy;
 use crate::app_icon::AppIcon;
 use crate::assets::Assets;
 use crate::dialog_slot::{self, SingleDialog};
-use crate::i18n::{Language, Str, t};
+use crate::i18n::{Language, Str, shell, t};
 use crate::layout::{Layout, View};
 use crate::quick_nav::QuickNav;
 use crate::quick_nav::models::detect::Detector;
@@ -68,7 +68,11 @@ use crate::session::models::features::FeatureError;
 
 /// Base text size in px, largest first. `Theme::font_size` drives the window's
 /// rem size (see the library's `Root::render`), so these scale the whole UI.
-const FONT_SIZES: [(Str, f32); 3] = [(Str::Large, 18.), (Str::Medium, 16.), (Str::Small, 14.)];
+const FONT_SIZES: [(shell::Text, f32); 3] = [
+    (shell::Text::Large, 18.),
+    (shell::Text::Medium, 16.),
+    (shell::Text::Small, 14.),
+];
 const DEFAULT_FONT_SIZE: f32 = 16.;
 
 const RADII: [f32; 4] = [8., 6., 4., 0.];
@@ -188,7 +192,7 @@ pub fn open(layout: WeakEntity<Layout>, window: &mut Window, cx: &mut App) {
 
     window.open_dialog(cx, move |dialog, _, cx| {
         dialog
-            .title(t(Str::Settings, cx))
+            .title(t(shell::Text::Settings, cx))
             .w(DIALOG_WIDTH)
             .on_close(|_, _, cx| dialog_slot::release::<SettingsDialog>(cx))
             .child(view.clone())
@@ -250,16 +254,16 @@ impl Setting {
 
     fn label(self) -> Str {
         match self {
-            Setting::Language => Str::Language,
-            Setting::RunScripts => Str::RunScripts,
+            Setting::Language => shell::Text::Language.into(),
+            Setting::RunScripts => shell::Text::RunScripts.into(),
             #[cfg(any(target_os = "macos", target_os = "windows"))]
-            Setting::StartWithOs => Str::StartWithOs,
-            Setting::FontSize => Str::FontSize,
-            Setting::BorderRadius => Str::BorderRadius,
-            Setting::Theme => Str::Theme,
-            Setting::QuickNavEnabled => Str::QuickNavEnabled,
+            Setting::StartWithOs => shell::Text::StartWithOs.into(),
+            Setting::FontSize => shell::Text::FontSize.into(),
+            Setting::BorderRadius => shell::Text::BorderRadius.into(),
+            Setting::Theme => shell::Text::Theme.into(),
+            Setting::QuickNavEnabled => shell::Text::QuickNavEnabled.into(),
             Setting::QuickNavPattern(detector) => detector.label(),
-            Setting::Features => Str::Features,
+            Setting::Features => shell::Text::Features.into(),
         }
     }
 
@@ -267,12 +271,16 @@ impl Setting {
     /// the user knows where the jump will land.
     fn section(self) -> Str {
         match self {
-            Setting::Language | Setting::RunScripts => Str::General,
+            Setting::Language | Setting::RunScripts => shell::Text::General.into(),
             #[cfg(any(target_os = "macos", target_os = "windows"))]
-            Setting::StartWithOs => Str::General,
-            Setting::FontSize | Setting::BorderRadius | Setting::Theme => Str::Appearance,
-            Setting::QuickNavEnabled | Setting::QuickNavPattern(_) => Str::QuickNavigation,
-            Setting::Features => Str::Features,
+            Setting::StartWithOs => shell::Text::General.into(),
+            Setting::FontSize | Setting::BorderRadius | Setting::Theme => {
+                shell::Text::Appearance.into()
+            }
+            Setting::QuickNavEnabled | Setting::QuickNavPattern(_) => {
+                shell::Text::QuickNavigation.into()
+            }
+            Setting::Features => shell::Text::Features.into(),
         }
     }
 }
@@ -412,7 +420,7 @@ impl ListDelegate for SearchDelegate {
             .justify_center()
             .text_sm()
             .text_color(cx.theme().muted_foreground)
-            .child(t(Str::NoSettingsMatch, cx))
+            .child(t(shell::Text::NoSettingsMatch, cx))
     }
 
     /// An empty query leaves the dialog exactly as it was before this feature:
@@ -632,8 +640,10 @@ impl Render for SettingsView {
                             .rounded(cx.theme().radius)
                             .when(searching, |this| this.shadow_md())
                             .child(
-                                List::new(&self.search)
-                                    .search_placeholder(t(Str::SearchSettingsPlaceholder, cx)),
+                                List::new(&self.search).search_placeholder(t(
+                                    shell::Text::SearchSettingsPlaceholder,
+                                    cx,
+                                )),
                             ),
                     )
                     .with_priority(1),
@@ -674,26 +684,26 @@ fn pages(
     start_with_os: Rc<Cell<StartupStatus>>,
     cx: &App,
 ) -> Vec<SettingPage> {
-    let general = t(Str::General, cx);
-    let appearance = t(Str::Appearance, cx);
+    let general = t(shell::Text::General, cx);
+    let appearance = t(shell::Text::Appearance, cx);
     let lit = |setting: Setting| highlight == Some(setting);
 
     let mut general_group = SettingGroup::new()
         .title(general.clone())
         .item(
             SettingItem::new(
-                t(Str::Language, cx),
+                t(shell::Text::Language, cx),
                 highlighted(language_field(), lit(Setting::Language), cx),
             )
-            .description(t(Str::LanguageDescription, cx))
+            .description(t(shell::Text::LanguageDescription, cx))
             .keywords([general.clone()]),
         )
         .item(
             SettingItem::new(
-                t(Str::RunScripts, cx),
+                t(shell::Text::RunScripts, cx),
                 highlighted(run_scripts_field(cx), lit(Setting::RunScripts), cx),
             )
-            .description(t(Str::RunScriptsDescription, cx))
+            .description(t(shell::Text::RunScriptsDescription, cx))
             .keywords([general.clone()]),
         );
 
@@ -701,14 +711,14 @@ fn pages(
     {
         general_group = general_group.item(
             SettingItem::new(
-                t(Str::StartWithOs, cx),
+                t(shell::Text::StartWithOs, cx),
                 highlighted(
                     start_with_os_field(start_with_os),
                     lit(Setting::StartWithOs),
                     cx,
                 ),
             )
-            .description(t(Str::StartWithOsDescription, cx))
+            .description(t(shell::Text::StartWithOsDescription, cx))
             .keywords([general.clone()]),
         );
     }
@@ -722,7 +732,7 @@ fn pages(
             // The message is the *description*; the control is empty because
             // there is nothing here to change.
             SettingItem::new(
-                t(Str::SessionStorageProblem, cx),
+                t(shell::Text::SessionStorageProblem, cx),
                 SettingField::render(|_, _, _| div()),
             )
             .description(t(problem, cx))
@@ -744,26 +754,26 @@ fn pages(
                     .title(appearance.clone())
                     .item(
                         SettingItem::new(
-                            t(Str::FontSize, cx),
+                            t(shell::Text::FontSize, cx),
                             highlighted(font_size_field(cx), lit(Setting::FontSize), cx),
                         )
-                        .description(t(Str::FontSizeDescription, cx))
+                        .description(t(shell::Text::FontSizeDescription, cx))
                         .keywords([appearance.clone()]),
                     )
                     .item(
                         SettingItem::new(
-                            t(Str::BorderRadius, cx),
+                            t(shell::Text::BorderRadius, cx),
                             highlighted(radius_field(), lit(Setting::BorderRadius), cx),
                         )
-                        .description(t(Str::BorderRadiusDescription, cx))
+                        .description(t(shell::Text::BorderRadiusDescription, cx))
                         .keywords([appearance.clone()]),
                     )
                     .item(
                         SettingItem::new(
-                            t(Str::Theme, cx),
+                            t(shell::Text::Theme, cx),
                             highlighted(theme_field(), lit(Setting::Theme), cx),
                         )
-                        .description(t(Str::ThemeDescription, cx))
+                        .description(t(shell::Text::ThemeDescription, cx))
                         .keywords([appearance]),
                     ),
             ),
@@ -795,7 +805,7 @@ const FEATURE_ROW_HEIGHT: Pixels = px(34.);
 /// longer listed — belong to the pane. [`Layout::set_tool_enabled`] and
 /// [`Layout::move_tool`] are the seam.
 fn features_page(layout: &WeakEntity<Layout>, cx: &App) -> SettingPage {
-    let title = t(Str::Features, cx);
+    let title = t(shell::Text::Features, cx);
     let layout = layout.clone();
 
     SettingPage::new(title.clone())
@@ -839,7 +849,7 @@ fn feature_list(layout: &WeakEntity<Layout>, cx: &mut App) -> AnyElement {
             div()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child(t(Str::FeaturesDescription, cx)),
+                .child(t(shell::Text::FeaturesDescription, cx)),
         )
         .child(v_flex().w_full().gap_1().children(rows))
         .into_any_element()
@@ -899,7 +909,7 @@ fn feature_row(
         .child({
             // The grab half. Only the handle starts a drag, so pressing the
             // switch or a move button never does.
-            let hint = t(Str::FeatureDragToReorder, cx);
+            let hint = t(shell::Text::FeatureDragToReorder, cx);
 
             div()
                 .id(SharedString::from(format!("feature-grip-{code}")))
@@ -942,7 +952,7 @@ fn feature_row(
             code,
             "up",
             AppIcon::ArrowUp,
-            Str::FeatureMoveUp,
+            shell::Text::FeatureMoveUp.into(),
             -1,
             ix == 0,
             cx,
@@ -952,7 +962,7 @@ fn feature_row(
             code,
             "down",
             AppIcon::ArrowDown,
-            Str::FeatureMoveDown,
+            shell::Text::FeatureMoveDown.into(),
             1,
             ix + 1 >= count,
             cx,
@@ -964,7 +974,7 @@ fn feature_row(
                 .tooltip(if locked {
                     t(FeatureError::LastVisibleTool.message(), cx)
                 } else {
-                    t(Str::FeatureShowInSidebar, cx)
+                    t(shell::Text::FeatureShowInSidebar, cx)
                 })
                 .on_click({
                     let layout = layout.clone();
@@ -1060,12 +1070,12 @@ impl Render for DragTool {
 /// front of a real parser reads differently from a shape test, because it *is*
 /// different.
 fn quick_nav_page(highlight: Option<Setting>, cx: &App) -> SettingPage {
-    let title = t(Str::QuickNavigation, cx);
+    let title = t(shell::Text::QuickNavigation, cx);
     let lit = |setting: Setting| highlight == Some(setting);
 
     let mut group = SettingGroup::new().title(title.clone()).item(
         SettingItem::new(
-            t(Str::QuickNavEnabled, cx),
+            t(shell::Text::QuickNavEnabled, cx),
             highlighted(
                 SettingField::switch(
                     |cx: &App| QuickNav::enabled(cx),
@@ -1076,7 +1086,7 @@ fn quick_nav_page(highlight: Option<Setting>, cx: &App) -> SettingPage {
                 cx,
             ),
         )
-        .description(t(Str::QuickNavEnabledDescription, cx))
+        .description(t(shell::Text::QuickNavEnabledDescription, cx))
         .keywords([title.clone()]),
     );
 
@@ -1086,8 +1096,8 @@ fn quick_nav_page(highlight: Option<Setting>, cx: &App) -> SettingPage {
         // needs to know their pattern is not the thing being used.
         let description = match QuickNav::pattern_error(detector, cx) {
             Some(error) => t(error.message(), cx),
-            None if detector.has_parser() => t(Str::QuickNavGateDescription, cx),
-            None => t(Str::QuickNavShapeDescription, cx),
+            None if detector.has_parser() => t(shell::Text::QuickNavGateDescription, cx),
+            None => t(shell::Text::QuickNavShapeDescription, cx),
         };
 
         group = group.item(
@@ -1112,7 +1122,7 @@ fn quick_nav_page(highlight: Option<Setting>, cx: &App) -> SettingPage {
             // there is nothing here to change. `SettingItem` requires a field,
             // so an empty render closure is the way to say "none".
             SettingItem::new(
-                t(Str::QuickNavStorageProblem, cx),
+                t(shell::Text::QuickNavStorageProblem, cx),
                 SettingField::render(|_, _, _| div()),
             )
             .description(t(problem, cx))
@@ -1210,10 +1220,10 @@ fn language_field() -> SettingField<SharedString> {
 fn start_with_os_field(status: Rc<Cell<StartupStatus>>) -> SettingField<SharedString> {
     SettingField::render(move |_, _, cx| match status.get() {
         StartupStatus::Loading => div()
-            .child(t(Str::StartWithOsChecking, cx))
+            .child(t(shell::Text::StartWithOsChecking, cx))
             .into_any_element(),
         StartupStatus::Unknown => div()
-            .child(t(Str::StartWithOsStatusUnknown, cx))
+            .child(t(shell::Text::StartWithOsStatusUnknown, cx))
             .into_any_element(),
         StartupStatus::Known(enabled) => {
             let status = status.clone();

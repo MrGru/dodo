@@ -24,7 +24,7 @@ use crate::database::models::detail::{DdlSource, DetailNotice, DetailTab};
 use crate::database::state::detail::DetailLoad;
 use crate::database::views::database::DatabaseView;
 use crate::database::views::result_grid;
-use crate::i18n::{Str, t};
+use crate::i18n::{db_catalog, t};
 
 impl DatabaseView {
     pub(super) fn render_object_detail(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -87,7 +87,7 @@ impl DatabaseView {
                             .ghost()
                             .xsmall()
                             .icon(AppIcon::Close)
-                            .tooltip(t(Str::DbDetailClose, cx))
+                            .tooltip(t(db_catalog::Text::DetailClose, cx))
                             .on_click(cx.listener(|this, _, _, cx| this.close_detail(cx))),
                     ),
             )
@@ -150,27 +150,32 @@ impl DatabaseView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match load {
-            DetailLoad::Idle | DetailLoad::Loading => {
-                empty_state(AppIcon::Ellipsis, t(Str::DbTreeLoading, cx), None, cx)
-                    .into_any_element()
-            }
-            DetailLoad::Unavailable => empty_state(
-                AppIcon::AlertTriangle,
-                t(Str::DbDetailUnavailable, cx),
+            DetailLoad::Idle | DetailLoad::Loading => empty_state(
+                AppIcon::Ellipsis,
+                t(db_catalog::Text::TreeLoading, cx),
                 None,
                 cx,
             )
             .into_any_element(),
-            DetailLoad::Failed(error) => {
-                error_state(t(Str::DbStatusError, cx), t(error.message(), cx), cx)
-                    .into_any_element()
-            }
+            DetailLoad::Unavailable => empty_state(
+                AppIcon::AlertTriangle,
+                t(db_catalog::Text::DetailUnavailable, cx),
+                None,
+                cx,
+            )
+            .into_any_element(),
+            DetailLoad::Failed(error) => error_state(
+                t(db_catalog::Text::StatusError, cx),
+                t(error.message(), cx),
+                cx,
+            )
+            .into_any_element(),
             DetailLoad::Empty(detail_notice) => v_flex()
                 .size_full()
                 .children(detail_notice.map(|notice_kind| {
                     let text = match notice_kind {
                         DetailNotice::SqliteConstraintsExcludeChecks => {
-                            Str::DbDetailConstraintsPartial
+                            db_catalog::Text::DetailConstraintsPartial
                         }
                     };
                     div()
@@ -183,9 +188,9 @@ impl DatabaseView {
                     AppIcon::Table,
                     t(
                         if tab == DetailTab::Data {
-                            Str::DbDetailNoRows
+                            db_catalog::Text::DetailNoRows
                         } else {
-                            Str::DbDetailNoMetadata
+                            db_catalog::Text::DetailNoMetadata
                         },
                         cx,
                     ),
@@ -199,7 +204,7 @@ impl DatabaseView {
                 .children(grid.notice.map(|notice_kind| {
                     let text = match notice_kind {
                         DetailNotice::SqliteConstraintsExcludeChecks => {
-                            Str::DbDetailConstraintsPartial
+                            db_catalog::Text::DetailConstraintsPartial
                         }
                     };
                     div()
@@ -211,14 +216,17 @@ impl DatabaseView {
                 .children((grid.capped_cells > 0).then(|| {
                     div().w_full().px_2().pt_1p5().child(notice(
                         Tone::Warning,
-                        t(Str::DbFooterCapped(grid.capped_cells), cx),
+                        t(db_catalog::Text::FooterCapped(grid.capped_cells), cx),
                         cx,
                     ))
                 }))
                 .children((tab != DetailTab::Data && grid.has_more).then(|| {
                     div().w_full().px_2().pt_1p5().child(notice(
                         Tone::Warning,
-                        t(Str::DbDetailMetadataTruncated(grid.grid.rows().len()), cx),
+                        t(
+                            db_catalog::Text::DetailMetadataTruncated(grid.grid.rows().len()),
+                            cx,
+                        ),
                         cx,
                     ))
                 }))
@@ -239,7 +247,7 @@ impl DatabaseView {
                     .children((ddl_source == DdlSource::Reconstructed).then(|| {
                         div().w_full().px_2().pt_1p5().child(notice(
                             Tone::Warning,
-                            t(Str::DbDetailDdlReconstructed, cx),
+                            t(db_catalog::Text::DetailDdlReconstructed, cx),
                             cx,
                         ))
                     }))
@@ -249,7 +257,7 @@ impl DatabaseView {
                                 .ghost()
                                 .xsmall()
                                 .icon(AppIcon::Copy)
-                                .label(t(Str::DbDetailCopyDdl, cx))
+                                .label(t(db_catalog::Text::DetailCopyDdl, cx))
                                 .on_click(move |_, _, cx| {
                                     cx.write_to_clipboard(ClipboardItem::new_string(
                                         copied.clone(),
@@ -293,7 +301,7 @@ impl DatabaseView {
         let pending = matches!(load, DetailLoad::Grid(grid) if grid.grid.has_pending());
         let range = (rows > 0).then(|| {
             t(
-                Str::DbDetailRowsRange {
+                db_catalog::Text::DetailRowsRange {
                     first,
                     last: first + rows - 1,
                 },
@@ -326,21 +334,21 @@ impl DatabaseView {
                                 .ghost()
                                 .xsmall()
                                 .disabled(!detail.can_previous() || pending)
-                                .label(t(Str::DbDetailPrevious, cx))
+                                .label(t(db_catalog::Text::DetailPrevious, cx))
                                 .on_click(cx.listener(|this, _, _, cx| this.detail_previous(cx))),
                         )
                         .child(
                             div()
                                 .px_2()
                                 .text_xs()
-                                .child(t(Str::DbDetailPage(detail.page_number()), cx)),
+                                .child(t(db_catalog::Text::DetailPage(detail.page_number()), cx)),
                         )
                         .child(
                             Button::new("db-detail-next")
                                 .ghost()
                                 .xsmall()
                                 .disabled(!detail.can_next() || pending)
-                                .label(t(Str::DbDetailNext, cx))
+                                .label(t(db_catalog::Text::DetailNext, cx))
                                 .on_click(cx.listener(|this, _, _, cx| this.detail_next(cx))),
                         ),
                 )

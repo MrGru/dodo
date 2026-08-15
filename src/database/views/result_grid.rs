@@ -59,7 +59,7 @@ use gpui_component::{ActiveTheme as _, Size, StyledExt as _, h_flex, v_flex};
 
 use crate::app_icon::AppIcon;
 use crate::database::models::value::{ColumnMeta, Row, Value};
-use crate::i18n::{Str, t};
+use crate::i18n::{db_query, t};
 
 /// A column's default width. Wide enough for a timestamp, which is the widest
 /// thing most result sets have; every column is resizable from there.
@@ -249,14 +249,14 @@ impl TableDelegate for ResultDelegate {
                 let cell = copy_cell.clone();
                 let row = copy_row.clone();
                 menu.item(
-                    PopupMenuItem::new(t(Str::DbCopyCell, cx))
+                    PopupMenuItem::new(t(db_query::Text::CopyCell, cx))
                         .icon(AppIcon::Copy)
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(cell.clone()));
                         }),
                 )
                 .item(
-                    PopupMenuItem::new(t(Str::DbCopyRow, cx))
+                    PopupMenuItem::new(t(db_query::Text::CopyRow, cx))
                         .icon(AppIcon::Copy)
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(row.clone()));
@@ -268,7 +268,7 @@ impl TableDelegate for ResultDelegate {
             // value, so text that spells NULL cannot be mistaken for one.
             Some(Value::Null) | None => cell
                 .text_color(cx.theme().muted_foreground)
-                .child(t(Str::DbColumnNull, cx))
+                .child(t(db_query::Text::ColumnNull, cx))
                 .into_any_element(),
             // Truncated, never wrapped and never widening: a full-width UUID
             // scrolls with the grid rather than pushing the columns beside it

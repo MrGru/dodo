@@ -35,7 +35,7 @@
 
 use regex::{Regex, RegexBuilder};
 
-use crate::i18n::Str;
+use crate::i18n::{Str, quick_nav};
 
 /// The longest pattern accepted, in characters.
 ///
@@ -65,11 +65,12 @@ pub enum PatternError {
 impl PatternError {
     pub fn message(&self) -> Str {
         match self {
-            PatternError::TooLong { length, limit } => Str::QuickNavPatternTooLong {
+            PatternError::TooLong { length, limit } => quick_nav::Text::PatternTooLong {
                 length: *length,
                 limit: *limit,
-            },
-            PatternError::Invalid(detail) => Str::QuickNavPatternInvalid(detail.clone()),
+            }
+            .into(),
+            PatternError::Invalid(detail) => quick_nav::Text::PatternInvalid(detail.clone()).into(),
         }
     }
 }

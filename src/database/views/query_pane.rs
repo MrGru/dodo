@@ -39,7 +39,7 @@ use crate::database::services::export::ExportFormat;
 use crate::database::state::query::QueryState;
 use crate::database::views::database::{DatabaseView, EDITOR_HEIGHT, EDITOR_MIN};
 use crate::database::views::result_grid;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, db_catalog, db_query, t};
 
 impl DatabaseView {
     pub(super) fn render_workspace(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -53,8 +53,8 @@ impl DatabaseView {
         if self.connections.selected().is_none() && !self.connections.is_empty() {
             return empty_state(
                 AppIcon::Database,
-                t(Str::DbSelectConnection, cx),
-                Some(t(Str::DbSelectConnectionHint, cx)),
+                t(db_query::Text::SelectConnection, cx),
+                Some(t(db_query::Text::SelectConnectionHint, cx)),
                 cx,
             )
             .into_any_element();
@@ -97,7 +97,7 @@ impl DatabaseView {
                 let running = tab.is_running();
                 Tab::new()
                     .px_2()
-                    .label(t(Str::DbQueryTabTitle(tab.number), cx))
+                    .label(t(db_query::Text::QueryTabTitle(tab.number), cx))
                     .suffix(
                         h_flex()
                             .items_center()
@@ -117,7 +117,7 @@ impl DatabaseView {
                                         .ghost()
                                         .xsmall()
                                         .icon(AppIcon::Close)
-                                        .tooltip(t(Str::DbCloseQueryTab, cx))
+                                        .tooltip(t(db_query::Text::CloseQueryTab, cx))
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.close_tab(index, window, cx);
                                         })),
@@ -148,7 +148,7 @@ impl DatabaseView {
                                     .ghost()
                                     .xsmall()
                                     .icon(AppIcon::Plus)
-                                    .tooltip(t(Str::DbNewQueryTab, cx))
+                                    .tooltip(t(db_query::Text::NewQueryTab, cx))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_tab(window, cx);
                                     })),
@@ -210,7 +210,7 @@ impl DatabaseView {
                             .text_xs()
                             .font_medium()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t(Str::DbQuery, cx)),
+                            .child(t(db_query::Text::Query, cx)),
                     )
                     .child(
                         h_flex()
@@ -220,7 +220,7 @@ impl DatabaseView {
                                     .xsmall()
                                     .ghost()
                                     .icon(AppIcon::SquareCode)
-                                    .label(t(Str::DbSavedQueries, cx))
+                                    .label(t(db_query::Text::SavedQueries, cx))
                                     .disabled(!query_store_writable)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_saved_queries(window, cx)
@@ -231,7 +231,7 @@ impl DatabaseView {
                                     .xsmall()
                                     .ghost()
                                     .icon(AppIcon::Save)
-                                    .tooltip(t(Str::DbSaveQuery, cx))
+                                    .tooltip(t(db_query::Text::SaveQuery, cx))
                                     .disabled(!can_save_query)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.pin_current_query(window, cx)
@@ -242,7 +242,7 @@ impl DatabaseView {
                                     .xsmall()
                                     .ghost()
                                     .icon(AppIcon::Clock)
-                                    .label(t(Str::DbHistory, cx))
+                                    .label(t(db_query::Text::History, cx))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_history(window, cx)
                                     })),
@@ -252,7 +252,7 @@ impl DatabaseView {
                                     Button::new("db-format")
                                         .xsmall()
                                         .ghost()
-                                        .label(t(Str::DbFormat, cx))
+                                        .label(t(db_query::Text::Format, cx))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.format(window, cx)
                                         })),
@@ -268,7 +268,7 @@ impl DatabaseView {
                                         .xsmall()
                                         .danger()
                                         .icon(AppIcon::Stop)
-                                        .label(t(Str::DbCancelQuery, cx))
+                                        .label(t(db_query::Text::CancelQuery, cx))
                                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                                 )
                             })
@@ -280,7 +280,7 @@ impl DatabaseView {
                                     Button::new("db-explain")
                                         .xsmall()
                                         .ghost()
-                                        .label(t(Str::DbExplain, cx))
+                                        .label(t(db_query::Text::Explain, cx))
                                         .on_click(cx.listener(|this, _, _, cx| this.explain(cx))),
                                 )
                             })
@@ -294,9 +294,9 @@ impl DatabaseView {
                                     // that fails silently teaches nothing.
                                     .disabled(!connected || running)
                                     .label(if running {
-                                        t(Str::DbRunning, cx)
+                                        t(db_query::Text::Running, cx)
                                     } else {
-                                        t(Str::DbExecute, cx)
+                                        t(db_query::Text::Execute, cx)
                                     })
                                     .on_click(cx.listener(|this, _, _, cx| this.execute(cx))),
                             ),
@@ -338,14 +338,15 @@ impl DatabaseView {
         let body = match query {
             QueryState::Idle => empty_state(
                 AppIcon::Table,
-                t(Str::DbNoResultYet, cx),
-                Some(t(Str::DbNoResultYetHint, cx)),
+                t(db_query::Text::NoResultYet, cx),
+                Some(t(db_query::Text::NoResultYetHint, cx)),
                 cx,
             )
             .into_any_element(),
 
             QueryState::Running => {
-                empty_state(AppIcon::Table, t(Str::DbRunning, cx), None, cx).into_any_element()
+                empty_state(AppIcon::Table, t(db_query::Text::Running, cx), None, cx)
+                    .into_any_element()
             }
 
             QueryState::Failed(failure) => {
@@ -359,12 +360,16 @@ impl DatabaseView {
                 let body = if failure.is_cancelled() {
                     empty_state(
                         AppIcon::Stop,
-                        t(Str::DbCancelledTitle, cx),
-                        Some(t(Str::DbCancelledHint, cx)),
+                        t(db_query::Text::CancelledTitle, cx),
+                        Some(t(db_query::Text::CancelledHint, cx)),
                         cx,
                     )
                 } else {
-                    error_state(t(Str::DbStatusError, cx), t(failure.message(), cx), cx)
+                    error_state(
+                        t(db_catalog::Text::StatusError, cx),
+                        t(failure.message(), cx),
+                        cx,
+                    )
                 };
                 body.when_some(statement, |this, statement| {
                     this.child(
@@ -383,7 +388,8 @@ impl DatabaseView {
                 // A statement that changed rows rather than returning them. The
                 // footer already says how many; this says there is no grid on
                 // purpose, rather than showing an empty one.
-                empty_state(AppIcon::Table, t(Str::DbNoRows, cx), None, cx).into_any_element()
+                empty_state(AppIcon::Table, t(db_query::Text::NoRows, cx), None, cx)
+                    .into_any_element()
             }
 
             // `with_size` is what stops the header clipping its two lines, and
@@ -431,7 +437,7 @@ impl DatabaseView {
                             .text_xs()
                             .font_medium()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t(Str::DbResult, cx)),
+                            .child(t(db_query::Text::Result, cx)),
                     )
                     .children(show_edit_toolbar.then(|| self.render_edit_toolbar(cx))),
             )
@@ -489,29 +495,29 @@ impl DatabaseView {
                 0,
             ));
         let read_only = read_only.map(|reason| reason.message());
-        let busy = committing.then_some(Str::DbCommitRunning);
+        let busy = committing.then_some(Str::from(db_query::Text::CommitRunning));
         let cell_reason = busy.clone().or_else(|| read_only.clone()).or_else(|| {
             selected_cell
                 .is_none()
-                .then_some(Str::DbEditSelectRow)
+                .then_some(Str::from(db_query::Text::EditSelectRow))
                 .or_else(|| cell_error.map(Self::edit_error_text))
         });
         let row_reason = busy.clone().or_else(|| read_only.clone()).or_else(|| {
             selected_row
                 .is_none()
-                .then_some(Str::DbEditSelectRow)
+                .then_some(Str::from(db_query::Text::EditSelectRow))
                 .or_else(|| row_error.map(Self::edit_error_text))
         });
         let duplicate_reason = busy.clone().or_else(|| read_only.clone()).or_else(|| {
             selected_row
                 .is_none()
-                .then_some(Str::DbEditSelectRow)
+                .then_some(Str::from(db_query::Text::EditSelectRow))
                 .or_else(|| duplicate_error.map(Self::edit_error_text))
         });
         let add_reason = busy.clone().or_else(|| read_only.clone());
         let pending_reason = busy
             .or(read_only)
-            .or_else(|| (pending == 0).then_some(Str::DbEditNoPending));
+            .or_else(|| (pending == 0).then_some(Str::from(db_query::Text::EditNoPending)));
 
         h_flex()
             .min_w_0()
@@ -522,14 +528,14 @@ impl DatabaseView {
                     .mr_1()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::DbPendingChanges(pending), cx))
+                    .child(t(db_query::Text::PendingChanges(pending), cx))
             }))
             .child(
                 Button::new("db-edit-cell")
                     .ghost()
                     .xsmall()
                     .disabled(cell_reason.is_some())
-                    .label(t(Str::DbEditCell, cx))
+                    .label(t(db_query::Text::EditCell, cx))
                     .when_some(cell_reason, |button, reason| button.tooltip(t(reason, cx)))
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Some((row, column)) = this.selected_cell(cx) {
@@ -543,7 +549,7 @@ impl DatabaseView {
                     .xsmall()
                     .icon(AppIcon::Plus)
                     .disabled(add_reason.is_some())
-                    .label(t(Str::DbAddRow, cx))
+                    .label(t(db_query::Text::AddRow, cx))
                     .when_some(add_reason, |button, reason| button.tooltip(t(reason, cx)))
                     .on_click(cx.listener(|this, _, window, cx| this.open_add_row(window, cx))),
             )
@@ -552,7 +558,7 @@ impl DatabaseView {
                     .ghost()
                     .xsmall()
                     .disabled(duplicate_reason.is_some())
-                    .label(t(Str::DbDuplicateRow, cx))
+                    .label(t(db_query::Text::DuplicateRow, cx))
                     .when_some(duplicate_reason, |button, reason| {
                         button.tooltip(t(reason, cx))
                     })
@@ -567,7 +573,7 @@ impl DatabaseView {
                     .xsmall()
                     .icon(AppIcon::Trash)
                     .disabled(row_reason.is_some())
-                    .label(t(Str::DbDeleteRow, cx))
+                    .label(t(db_query::Text::DeleteRow, cx))
                     .when_some(row_reason, |button, reason| button.tooltip(t(reason, cx)))
                     .on_click(cx.listener(|this, _, _, cx| this.delete_selected_row(cx))),
             )
@@ -576,7 +582,7 @@ impl DatabaseView {
                     .ghost()
                     .xsmall()
                     .disabled(pending_reason.is_some())
-                    .label(t(Str::DbRollback, cx))
+                    .label(t(db_query::Text::Rollback, cx))
                     .when_some(pending_reason.clone(), |button, reason| {
                         button.tooltip(t(reason, cx))
                     })
@@ -587,7 +593,7 @@ impl DatabaseView {
                     .primary()
                     .xsmall()
                     .disabled(pending_reason.is_some())
-                    .label(t(Str::DbCommit, cx))
+                    .label(t(db_query::Text::Commit, cx))
                     .when_some(pending_reason, |button, reason| {
                         button.tooltip(t(reason, cx))
                     })
@@ -644,7 +650,10 @@ impl DatabaseView {
                             // skim past.
                             this.child(div().flex_1().min_w_0().child(notice(
                                 Tone::Warning,
-                                t(Str::DbFooterTruncated(outcome.grid.rows().len()), cx),
+                                t(
+                                    db_query::Text::FooterTruncated(outcome.grid.rows().len()),
+                                    cx,
+                                ),
                                 cx,
                             )))
                         })
@@ -659,7 +668,7 @@ impl DatabaseView {
                                             .ghost()
                                             .icon(AppIcon::Download)
                                             .disabled(!can_export)
-                                            .label(t(Str::DbExportCsv, cx))
+                                            .label(t(db_query::Text::ExportCsv, cx))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.export(ExportFormat::Csv, cx)
                                             })),
@@ -670,7 +679,7 @@ impl DatabaseView {
                                             .ghost()
                                             .icon(AppIcon::Download)
                                             .disabled(!can_export)
-                                            .label(t(Str::DbExportJson, cx))
+                                            .label(t(db_query::Text::ExportJson, cx))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.export(ExportFormat::Json, cx)
                                             })),
@@ -690,7 +699,7 @@ impl DatabaseView {
                                 .flex_shrink_0()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(t(Str::DbStatementLabel, cx)),
+                                .child(t(db_query::Text::StatementLabel, cx)),
                         )
                         .child(
                             div()

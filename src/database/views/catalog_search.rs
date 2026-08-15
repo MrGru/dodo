@@ -19,7 +19,7 @@ use crate::database::components::notice::{Tone, notice};
 use crate::database::models::catalog::{NodeKind, NodeLabel};
 use crate::database::state::catalog_search::{CatalogIndex, CatalogSource, crawl_catalogs};
 use crate::database::views::database::{DatabaseView, node_icon};
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, db_catalog, db_connection, t};
 
 const PANEL_W: Pixels = px(720.);
 const PANEL_H: Pixels = px(500.);
@@ -41,7 +41,7 @@ pub fn open(
         let body_h = PANEL_H.min(viewport.height - PANEL_MARGIN * 4.);
         dialog
             .w(card_w)
-            .title(t(Str::DbCatalogSearch, cx))
+            .title(t(db_catalog::Text::CatalogSearch, cx))
             .content(move |content, _, _| {
                 content.child(
                     div()
@@ -119,7 +119,7 @@ impl Render for CatalogSearchView {
             .gap_2()
             .child(notice(
                 Tone::Info,
-                t(Str::DbCatalogSearchConnectedOnly, cx),
+                t(db_catalog::Text::CatalogSearchConnectedOnly, cx),
                 cx,
             ))
             .when(self.loading, |this| {
@@ -127,12 +127,12 @@ impl Render for CatalogSearchView {
                     h_flex()
                         .w_full()
                         .justify_between()
-                        .child(t(Str::DbCatalogSearchLoading, cx))
+                        .child(t(db_catalog::Text::CatalogSearchLoading, cx))
                         .child(
                             Button::new("db-cancel-catalog-search")
                                 .ghost()
                                 .small()
-                                .label(t(Str::DbCancel, cx))
+                                .label(t(db_connection::Text::Cancel, cx))
                                 .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                         ),
                 )
@@ -140,24 +140,28 @@ impl Render for CatalogSearchView {
             .when(truncated, |this| {
                 this.child(notice(
                     Tone::Warning,
-                    t(Str::DbCatalogSearchTruncated(nodes), cx),
+                    t(db_catalog::Text::CatalogSearchTruncated(nodes), cx),
                     cx,
                 ))
             })
             .when(failures > 0, |this| {
                 this.child(notice(
                     Tone::Warning,
-                    t(Str::DbCatalogSearchPartial(failures), cx),
+                    t(db_catalog::Text::CatalogSearchPartial(failures), cx),
                     cx,
                 ))
             })
             .when(cancelled, |this| {
-                this.child(notice(Tone::Info, t(Str::DbCancelledMessage, cx), cx))
+                this.child(notice(
+                    Tone::Info,
+                    t(db_catalog::Text::CancelledMessage, cx),
+                    cx,
+                ))
             })
             .child(
                 div().flex_1().min_h_0().child(
                     List::new(&self.list)
-                        .search_placeholder(t(Str::DbCatalogSearchPlaceholder, cx))
+                        .search_placeholder(t(db_catalog::Text::CatalogSearchPlaceholder, cx))
                         .size_full(),
                 ),
             )
@@ -288,9 +292,9 @@ impl ListDelegate for CatalogDelegate {
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
         let text = match &self.index {
-            None => Str::DbCatalogSearchLoading,
-            Some(index) if index.entries.is_empty() => Str::DbCatalogSearchEmpty,
-            Some(_) => Str::DbCatalogSearchNoMatches,
+            None => db_catalog::Text::CatalogSearchLoading,
+            Some(index) if index.entries.is_empty() => db_catalog::Text::CatalogSearchEmpty,
+            Some(_) => db_catalog::Text::CatalogSearchNoMatches,
         };
         v_flex()
             .size_full()
@@ -331,15 +335,15 @@ impl ListDelegate for CatalogDelegate {
 
 fn kind_label(kind: NodeKind) -> Str {
     match kind {
-        NodeKind::Database => Str::DbCatalogKindDatabase,
-        NodeKind::Schema => Str::DbCatalogKindSchema,
-        NodeKind::Table => Str::DbCatalogKindTable,
-        NodeKind::View => Str::DbCatalogKindView,
-        NodeKind::Column => Str::DbCatalogKindColumn,
-        NodeKind::Index => Str::DbCatalogKindIndex,
-        NodeKind::Constraint => Str::DbCatalogKindConstraint,
-        NodeKind::Namespace => Str::DbCatalogKindNamespace,
-        NodeKind::Key => Str::DbCatalogKindKey,
-        NodeKind::Folder | NodeKind::Other => Str::DbCatalogKindObject,
+        NodeKind::Database => db_catalog::Text::CatalogKindDatabase.into(),
+        NodeKind::Schema => db_catalog::Text::CatalogKindSchema.into(),
+        NodeKind::Table => db_catalog::Text::CatalogKindTable.into(),
+        NodeKind::View => db_catalog::Text::CatalogKindView.into(),
+        NodeKind::Column => db_catalog::Text::CatalogKindColumn.into(),
+        NodeKind::Index => db_catalog::Text::CatalogKindIndex.into(),
+        NodeKind::Constraint => db_catalog::Text::CatalogKindConstraint.into(),
+        NodeKind::Namespace => db_catalog::Text::CatalogKindNamespace.into(),
+        NodeKind::Key => db_catalog::Text::CatalogKindKey.into(),
+        NodeKind::Folder | NodeKind::Other => db_catalog::Text::CatalogKindObject.into(),
     }
 }

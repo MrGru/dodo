@@ -44,7 +44,7 @@ use crate::api_explorer::services::file_picker;
 use crate::api_explorer::state::request::{KeyValueRow, MoveRow, RowTable};
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, api_explorer, api_variables, t};
 
 /// Width of the enable checkbox column, and of the header cell above it.
 const ENABLE_COLUMN: Pixels = px(24.);
@@ -80,26 +80,26 @@ fn labels(table: RowTable) -> Labels {
     match table {
         RowTable::Params => Labels {
             summary: |count| match count {
-                0 => Str::NoActiveParams,
-                n => Str::ActiveParams(n),
+                0 => api_explorer::Text::NoActiveParams.into(),
+                n => api_explorer::Text::ActiveParams(n).into(),
             },
-            add_row_label: Str::AddParameter,
+            add_row_label: api_explorer::Text::AddParameter.into(),
             id_prefix: "param",
         },
         RowTable::Headers => Labels {
             summary: |count| match count {
-                0 => Str::NoActiveHeaders,
-                n => Str::ActiveHeaders(n),
+                0 => api_explorer::Text::NoActiveHeaders.into(),
+                n => api_explorer::Text::ActiveHeaders(n).into(),
             },
-            add_row_label: Str::AddHeader,
+            add_row_label: api_explorer::Text::AddHeader.into(),
             id_prefix: "header",
         },
         RowTable::BodyFields => Labels {
             summary: |count| match count {
-                0 => Str::NoActiveFields,
-                n => Str::ActiveFields(n),
+                0 => api_explorer::Text::NoActiveFields.into(),
+                n => api_explorer::Text::ActiveFields(n).into(),
             },
-            add_row_label: Str::AddField,
+            add_row_label: api_explorer::Text::AddField.into(),
             id_prefix: "field",
         },
     }
@@ -160,7 +160,7 @@ pub fn key_value_table(
                     .text_color(cx.theme().warning)
                     .bg(cx.theme().warning.opacity(0.1))
                     .child(Icon::new(AppIcon::AlertTriangle).size(px(12.)))
-                    .child(t(Str::IncompleteFileFields(incomplete), cx)),
+                    .child(t(api_explorer::Text::IncompleteFileFields(incomplete), cx)),
             )
         })
         .child(body)
@@ -280,7 +280,7 @@ fn mode_switch(
             table,
             labels,
             "table",
-            Str::EditModeTable,
+            api_explorer::Text::EditModeTable.into(),
             !bulk,
             false,
             tab,
@@ -290,7 +290,7 @@ fn mode_switch(
             table,
             labels,
             "bulk",
-            Str::EditModeBulk,
+            api_explorer::Text::EditModeBulk.into(),
             bulk,
             true,
             tab,
@@ -336,7 +336,7 @@ fn add_top_button(
         .ghost()
         .xsmall()
         .icon(AppIcon::Plus)
-        .label(t(Str::Add, cx))
+        .label(t(api_explorer::Text::Add, cx))
         .on_click(move |_, window, cx| {
             tab.update(cx, |state, cx| {
                 state.request.add_row(table, window, cx);
@@ -389,7 +389,7 @@ fn column_header(
             div().w(ENABLE_COLUMN).flex_shrink_0().child(
                 Checkbox::new(format!("{prefix}-toggle-all"))
                     .checked(all_enabled)
-                    .tooltip(t(Str::ToggleAllRows, cx))
+                    .tooltip(t(api_explorer::Text::ToggleAllRows, cx))
                     .on_click(move |checked, _, cx| {
                         let checked = *checked;
                         tab.update(cx, |state, cx| {
@@ -400,21 +400,26 @@ fn column_header(
                     }),
             ),
         )
-        .child(div().flex_1().min_w_0().child(t(Str::ColumnKey, cx)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(t(api_variables::Text::ColumnKey, cx)),
+        )
         .when(typed, |this| {
             this.child(
                 div()
                     .w(TYPE_COLUMN)
                     .flex_shrink_0()
-                    .child(t(Str::ColumnType, cx)),
+                    .child(t(api_explorer::Text::ColumnType, cx)),
             )
         })
-        .child(value_column(typed).child(t(Str::ColumnValue, cx)))
+        .child(value_column(typed).child(t(api_variables::Text::ColumnValue, cx)))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .child(t(Str::ColumnDescription, cx)),
+                .child(t(api_explorer::Text::ColumnDescription, cx)),
         )
         .child(div().w(ACTIONS_COLUMN).flex_shrink_0())
 }
@@ -576,7 +581,7 @@ fn file_cell(
     let label = if chosen {
         SharedString::from(name)
     } else {
-        t(Str::ChooseFile, cx)
+        t(api_explorer::Text::ChooseFile, cx)
     };
 
     h_flex()
@@ -607,7 +612,9 @@ fn file_cell(
                             .child(div().flex_1().min_w_0().truncate().child(label)),
                     )
                     .when(chosen, |this| this.tooltip(SharedString::from(path)))
-                    .when(!chosen, |this| this.tooltip(t(Str::NoFileSelected, cx)))
+                    .when(!chosen, |this| {
+                        this.tooltip(t(api_explorer::Text::NoFileSelected, cx))
+                    })
                     .on_click(move |_, _, cx| {
                         file_picker::choose_file(pick_tab.clone(), cx, move |state, chosen, cx| {
                             state.request.set_row_file(
@@ -638,7 +645,7 @@ fn file_cell(
                     .xsmall()
                     .flex_shrink_0()
                     .icon(AppIcon::Close)
-                    .tooltip(t(Str::ClearFile, cx))
+                    .tooltip(t(api_explorer::Text::ClearFile, cx))
                     .on_click(move |_, _, cx| {
                         clear_tab.update(cx, |state, cx| {
                             state.request.set_row_file(table, id, String::new(), None);
@@ -693,14 +700,14 @@ fn row_actions(
         .child(move_button(
             "move-up",
             AppIcon::ArrowUp,
-            Str::MoveRowUp,
+            api_explorer::Text::MoveRowUp.into(),
             MoveRow::Up,
             is_first,
         ))
         .child(move_button(
             "move-down",
             AppIcon::ArrowDown,
-            Str::MoveRowDown,
+            api_explorer::Text::MoveRowDown.into(),
             MoveRow::Down,
             is_last,
         ))
@@ -709,7 +716,7 @@ fn row_actions(
                 .ghost()
                 .xsmall()
                 .icon(AppIcon::Copy)
-                .tooltip(t(Str::DuplicateRow, cx))
+                .tooltip(t(api_explorer::Text::DuplicateRow, cx))
                 .on_click(move |_, window, cx| {
                     duplicate_tab.update(cx, |state, cx| {
                         state.request.duplicate_row(table, id, window, cx);
@@ -723,7 +730,7 @@ fn row_actions(
                 .ghost()
                 .xsmall()
                 .icon(AppIcon::Close)
-                .tooltip(t(Str::DeleteRow, cx))
+                .tooltip(t(api_variables::Text::DeleteRow, cx))
                 .on_click(move |_, _, cx| {
                     delete_tab.update(cx, |state, cx| {
                         state.request.remove_row(table, id);

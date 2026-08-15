@@ -16,7 +16,7 @@ use crate::api_explorer::state::request::{RequestTab, RowTable};
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{api_explorer, t};
 
 impl ApiExplorer {
     pub(super) fn render_request_editor(
@@ -83,7 +83,7 @@ impl ApiExplorer {
                     .flex_shrink_0()
                     .ghost()
                     .icon(AppIcon::SquareCode)
-                    .tooltip(t(Str::GenerateCode, cx))
+                    .tooltip(t(api_explorer::Text::GenerateCode, cx))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_generate_code(window, cx);
                     })),
@@ -94,7 +94,7 @@ impl ApiExplorer {
                     .flex_shrink_0()
                     .primary()
                     .icon(AppIcon::Send)
-                    .label(t(Str::Send, cx))
+                    .label(t(api_explorer::Text::Send, cx))
                     .loading(in_flight)
                     .disabled(in_flight)
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -221,26 +221,31 @@ impl ApiExplorer {
                 Button::new("save-request-trigger")
                     .ghost()
                     .icon(AppIcon::Save)
-                    .tooltip(t(Str::NameRequest, cx)),
+                    .tooltip(t(api_explorer::Text::NameRequest, cx)),
             )
             .w(px(260.))
             .child(
                 v_flex()
                     .gap_2()
                     .p_1()
-                    .child(div().text_xs().font_bold().child(t(Str::NameRequest, cx)))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_bold()
+                            .child(t(api_explorer::Text::NameRequest, cx)),
+                    )
                     .child(Input::new(&name_input).small())
                     .child(
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t(Str::SaveToCollectionNote, cx)),
+                            .child(t(api_explorer::Text::SaveToCollectionNote, cx)),
                     )
                     .child(
                         Button::new("save-request-confirm")
                             .primary()
                             .small()
-                            .label(t(Str::SaveName, cx))
+                            .label(t(api_explorer::Text::SaveName, cx))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let name = confirm_input.read(cx).value().to_string();
                                 this.save_active_request(name, cx);

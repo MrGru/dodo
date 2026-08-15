@@ -77,7 +77,8 @@ impl ManifestSource for HttpManifestSource {
             return Err(UpdateError::Manifest(
                 crate::updater::models::manifest::ManifestError::InvalidFile {
                     platform: String::new(),
-                    detail: crate::i18n::Str::UpdateErrorManifestInsecureUrl(url.to_owned()),
+                    detail: crate::i18n::updater::Text::ErrorManifestInsecureUrl(url.to_owned())
+                        .into(),
                 },
             ));
         }

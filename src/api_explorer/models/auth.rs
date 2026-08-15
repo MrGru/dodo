@@ -4,7 +4,7 @@
 //! service layer's job (`services::http::auth`); nothing here knows what a
 //! header is.
 
-use crate::i18n::Str;
+use crate::i18n::{Str, api_explorer};
 
 /// The authorization schemes the Auth tab offers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -28,11 +28,11 @@ impl AuthType {
 
     pub fn label(self) -> Str {
         match self {
-            AuthType::None => Str::AuthTypeNone,
-            AuthType::Bearer => Str::AuthTypeBearer,
-            AuthType::Basic => Str::AuthTypeBasic,
-            AuthType::ApiKey => Str::AuthTypeApiKey,
-            AuthType::OAuth2 => Str::AuthTypeOAuth2,
+            AuthType::None => api_explorer::Text::AuthTypeNone.into(),
+            AuthType::Bearer => api_explorer::Text::AuthTypeBearer.into(),
+            AuthType::Basic => api_explorer::Text::AuthTypeBasic.into(),
+            AuthType::ApiKey => api_explorer::Text::AuthTypeApiKey.into(),
+            AuthType::OAuth2 => api_explorer::Text::AuthTypeOAuth2.into(),
         }
     }
 
@@ -59,8 +59,8 @@ impl ApiKeyLocation {
 
     pub fn label(self) -> Str {
         match self {
-            ApiKeyLocation::Header => Str::ApiKeyInHeader,
-            ApiKeyLocation::Query => Str::ApiKeyInQuery,
+            ApiKeyLocation::Header => api_explorer::Text::ApiKeyInHeader.into(),
+            ApiKeyLocation::Query => api_explorer::Text::ApiKeyInQuery.into(),
         }
     }
 }

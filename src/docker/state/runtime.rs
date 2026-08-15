@@ -90,6 +90,7 @@ impl RuntimeListState {
 mod tests {
     use super::*;
     use crate::docker::models::runtime::RuntimeStatus;
+    use crate::i18n::docker;
     use crate::paths::HostOs;
 
     fn row(kind: RuntimeKind, status: RuntimeStatus) -> RuntimeInfo {
@@ -111,7 +112,7 @@ mod tests {
     #[test]
     fn begin_action_clears_a_stale_error_and_finish_clears_pending() {
         let mut state = RuntimeListState::default();
-        state.set_action_error(Str::RuntimeBinaryNotFound);
+        state.set_action_error(docker::Text::RuntimeBinaryNotFound.into());
         assert!(state.action_error().is_some());
 
         state.begin_action(RuntimeKind::Docker);
@@ -127,7 +128,7 @@ mod tests {
     fn set_action_error_also_clears_pending() {
         let mut state = RuntimeListState::default();
         state.begin_action(RuntimeKind::Containerd);
-        state.set_action_error(Str::RuntimeBinaryNotFound);
+        state.set_action_error(docker::Text::RuntimeBinaryNotFound.into());
         assert_eq!(state.pending(), None);
         assert!(state.action_error().is_some());
     }

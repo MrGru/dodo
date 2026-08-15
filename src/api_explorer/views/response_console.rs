@@ -8,7 +8,7 @@
 //!   of why; sending the user to "no response yet" would hide the answer.
 //! - It says what it dropped. The buffer is capped (`models::console`), and the
 //!   footer states the count rather than letting the top of the log quietly
-//!   vanish — the rule `Str::BodyTruncated` already follows.
+//!   vanish — the rule `api_scripts::Text::BodyTruncated` already follows.
 //!
 //! Level chips are the same `Button::selected` idiom the body-view modes use,
 //! and they select a *minimum*: picking Warn shows warnings and errors.
@@ -26,7 +26,7 @@ use crate::api_explorer::models::console::{ConsoleEntry, ConsoleLevel, ConsoleSo
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{api_scripts, t};
 
 impl ApiExplorer {
     pub(super) fn console_pane(
@@ -52,8 +52,8 @@ impl ApiExplorer {
                     .min_h_0()
                     .child(empty_state(
                         AppIcon::SquareCode,
-                        t(Str::ConsoleEmpty, cx),
-                        Some(t(Str::ConsoleEmptyHint, cx)),
+                        t(api_scripts::Text::ConsoleEmpty, cx),
+                        Some(t(api_scripts::Text::ConsoleEmptyHint, cx)),
                         cx,
                     ))
                     .into_any_element()
@@ -82,7 +82,7 @@ impl ApiExplorer {
                         .border_color(cx.theme().border)
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(t(Str::ConsoleDropped(dropped), cx)),
+                        .child(t(api_scripts::Text::ConsoleDropped(dropped), cx)),
                 )
             })
             .into_any_element()
@@ -137,7 +137,7 @@ impl ApiExplorer {
                             .ghost()
                             .xsmall()
                             .icon(AppIcon::Copy)
-                            .tooltip(t(Str::Copy, cx))
+                            .tooltip(t(api_scripts::Text::Copy, cx))
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 let state = copy_tab.read(cx);
                                 let text = state
@@ -155,7 +155,7 @@ impl ApiExplorer {
                         Button::new("console-clear")
                             .ghost()
                             .xsmall()
-                            .label(t(Str::ConsoleClear, cx))
+                            .label(t(api_scripts::Text::ConsoleClear, cx))
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 clear_tab.update(cx, |state, cx| {
                                     state.response.console.clear();

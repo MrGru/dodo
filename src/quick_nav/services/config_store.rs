@@ -34,7 +34,7 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-use crate::i18n::Str;
+use crate::i18n::{Str, quick_nav};
 use crate::paths::data_dir;
 use crate::quick_nav::models::config::{QuickNavDocument, SCHEMA_VERSION};
 
@@ -54,13 +54,14 @@ pub enum QuickNavStoreError {
 impl QuickNavStoreError {
     pub fn message(&self) -> Str {
         match self {
-            QuickNavStoreError::Io(detail) => Str::QuickNavStoreError(detail.clone()),
-            QuickNavStoreError::MissingVersion => Str::QuickNavStoreMissingVersion,
+            QuickNavStoreError::Io(detail) => quick_nav::Text::StoreError(detail.clone()).into(),
+            QuickNavStoreError::MissingVersion => quick_nav::Text::StoreMissingVersion.into(),
             QuickNavStoreError::UnsupportedVersion { found, understood } => {
-                Str::QuickNavStoreUnsupportedVersion {
+                quick_nav::Text::StoreUnsupportedVersion {
                     found: *found,
                     understood: *understood,
                 }
+                .into()
             }
         }
     }

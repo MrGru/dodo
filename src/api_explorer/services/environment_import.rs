@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use crate::api_explorer::models::variables::{Environment, Variable};
 use crate::api_explorer::services::variable_store::{VariableStoreError, parse_document};
-use crate::i18n::Str;
+use crate::i18n::{Str, api_variables};
 
 /// Why an environment import could not be read.
 #[derive(Debug)]
@@ -46,7 +46,7 @@ impl EnvironmentImportError {
     pub fn message(&self) -> Str {
         match self {
             EnvironmentImportError::Unreadable { detail } => {
-                Str::EnvironmentImportError(detail.clone())
+                api_variables::Text::EnvironmentImportError(detail.clone()).into()
             }
             EnvironmentImportError::Store(error) => error.message(),
         }

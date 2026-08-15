@@ -90,7 +90,7 @@ use crate::docker::models::inspect::{FieldValue, InspectDetail, InspectKind};
 use crate::docker::models::logs::{LOG_TAIL_LIMIT, LogLine, LogStream};
 use crate::docker::services::DockerEngine;
 use crate::docker::state::detail::{DetailStatus, DetailTab, DetailTabs};
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, docker, t};
 
 /// The dialog card's preferred width, and the preferred height of the body under
 /// the title. The dialog sizes to its content, so the body's height is what keeps
@@ -257,7 +257,7 @@ fn render_title(view: &Entity<DetailView>, cx: &App) -> AnyElement {
                 .xsmall()
                 .ghost()
                 .icon(AppIcon::Refresh)
-                .tooltip(t(Str::DockerRefresh, cx))
+                .tooltip(t(docker::Text::Refresh, cx))
                 .on_click(move |_, window, cx| {
                     refresh.update(cx, |this, cx| this.reload(window, cx));
                 }),
@@ -459,9 +459,9 @@ impl DetailView {
         for field in &detail.fields {
             let value = match &field.value {
                 FieldValue::Text(text) => SharedString::from(text.clone()),
-                FieldValue::Flag(true) => t(Str::DockerYes, cx),
-                FieldValue::Flag(false) => t(Str::DockerNo, cx),
-                FieldValue::Missing => t(Str::DockerNotAvailable, cx),
+                FieldValue::Flag(true) => t(docker::Text::Yes, cx),
+                FieldValue::Flag(false) => t(docker::Text::No, cx),
+                FieldValue::Missing => t(docker::Text::NotAvailable, cx),
             };
             let missing = matches!(field.value, FieldValue::Missing);
             rows.push(
@@ -495,7 +495,7 @@ impl DetailView {
 
         v_flex()
             .size_full()
-            .child(section_title(t(Str::DockerDetails, cx), cx))
+            .child(section_title(t(docker::Text::Details, cx), cx))
             .child(
                 // `w_full` on every scroll box: a scroll container sizes to its
                 // content otherwise, which leaves the field rows and the section
@@ -508,7 +508,7 @@ impl DetailView {
                     .overflow_y_scroll()
                     .child(v_flex().w_full().children(rows)),
             )
-            .child(section_title(t(Str::DockerRawJson, cx), cx))
+            .child(section_title(t(docker::Text::RawJson, cx), cx))
             .child(
                 div().w_full().flex_1().min_h_0().child(
                     Input::new(&self.json)
@@ -527,8 +527,8 @@ impl DetailView {
         if lines.is_empty() {
             return empty_state(
                 AppIcon::File,
-                t(Str::DockerNoLogs, cx),
-                Some(t(Str::DockerNoLogsHint, cx)),
+                t(docker::Text::NoLogs, cx),
+                Some(t(docker::Text::NoLogsHint, cx)),
                 cx,
             )
             .into_any_element();
@@ -579,7 +579,7 @@ impl DetailView {
                     .border_color(cx.theme().border)
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::DockerLogsTail(LOG_TAIL_LIMIT), cx)),
+                    .child(t(docker::Text::LogsTail(LOG_TAIL_LIMIT), cx)),
             )
             .into_any_element()
     }
@@ -608,7 +608,7 @@ impl Render for DetailView {
 /// A failed tab: the frame plus the engine's own message, with nothing stale
 /// behind it.
 fn detail_error(error: Str, cx: &App) -> AnyElement {
-    error_state(t(Str::DockerDetailErrorTitle, cx), t(error, cx), cx).into_any_element()
+    error_state(t(docker::Text::DetailErrorTitle, cx), t(error, cx), cx).into_any_element()
 }
 
 /// A small heading over one section of the body.

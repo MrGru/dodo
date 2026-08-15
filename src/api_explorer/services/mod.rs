@@ -47,7 +47,7 @@ use std::time::Duration;
 
 use crate::api_explorer::models::exchange::Exchange;
 use crate::api_explorer::models::method::HttpMethod;
-use crate::i18n::Str;
+use crate::i18n::{Str, api_explorer};
 
 /// Which protocol a request speaks. Phase 1 ships one; the discriminant exists
 /// so that adding another is a data change rather than a structural one.
@@ -124,29 +124,43 @@ impl TransportError {
     /// The message shown in the error banner.
     pub fn message(&self) -> Str {
         match self {
-            TransportError::InvalidUrl { detail } => Str::HttpInvalidUrl(detail.clone()),
-            TransportError::UnsupportedScheme { scheme } => {
-                Str::HttpUnsupportedScheme(scheme.clone())
+            TransportError::InvalidUrl { detail } => {
+                api_explorer::Text::InvalidUrl(detail.clone()).into()
             }
-            TransportError::InvalidHeader { name } => Str::HttpInvalidHeader(name.clone()),
-            TransportError::FileUnreadable { path, detail } => Str::HttpFileUnreadable {
+            TransportError::UnsupportedScheme { scheme } => {
+                api_explorer::Text::UnsupportedScheme(scheme.clone()).into()
+            }
+            TransportError::InvalidHeader { name } => {
+                api_explorer::Text::InvalidHeader(name.clone()).into()
+            }
+            TransportError::FileUnreadable { path, detail } => api_explorer::Text::FileUnreadable {
                 path: path.clone(),
                 detail: detail.clone(),
-            },
-            TransportError::FileTooLarge { path, limit_mb } => Str::HttpFileTooLarge {
+            }
+            .into(),
+            TransportError::FileTooLarge { path, limit_mb } => api_explorer::Text::FileTooLarge {
                 path: path.clone(),
                 limit_mb: *limit_mb,
-            },
-            TransportError::UnresolvedVariable { name } => {
-                Str::HttpUnresolvedVariable(name.clone())
             }
-            TransportError::RecursiveVariable { name } => Str::HttpRecursiveVariable(name.clone()),
-            TransportError::Timeout { seconds } => Str::HttpTimeout(*seconds),
-            TransportError::Dns { host } => Str::HttpDnsFailure(host.clone()),
-            TransportError::Connect { detail } => Str::HttpConnectFailure(detail.clone()),
-            TransportError::Tls { detail } => Str::HttpTlsFailure(detail.clone()),
-            TransportError::BodyNotText { detail } => Str::HttpBodyNotText(detail.clone()),
-            TransportError::Unexpected { detail } => Str::HttpUnexpected(detail.clone()),
+            .into(),
+            TransportError::UnresolvedVariable { name } => {
+                api_explorer::Text::UnresolvedVariable(name.clone()).into()
+            }
+            TransportError::RecursiveVariable { name } => {
+                api_explorer::Text::RecursiveVariable(name.clone()).into()
+            }
+            TransportError::Timeout { seconds } => api_explorer::Text::Timeout(*seconds).into(),
+            TransportError::Dns { host } => api_explorer::Text::DnsFailure(host.clone()).into(),
+            TransportError::Connect { detail } => {
+                api_explorer::Text::ConnectFailure(detail.clone()).into()
+            }
+            TransportError::Tls { detail } => api_explorer::Text::TlsFailure(detail.clone()).into(),
+            TransportError::BodyNotText { detail } => {
+                api_explorer::Text::BodyNotText(detail.clone()).into()
+            }
+            TransportError::Unexpected { detail } => {
+                api_explorer::Text::Unexpected(detail.clone()).into()
+            }
         }
     }
 }

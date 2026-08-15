@@ -80,7 +80,7 @@ use regex::Regex;
 
 use crate::api_explorer::services::curl;
 use crate::database::models::uri;
-use crate::i18n::Str;
+use crate::i18n::{Str, quick_nav};
 
 use super::config::QuickNavDocument;
 use super::pattern::{self, PatternError};
@@ -169,11 +169,11 @@ impl Detector {
     /// The Settings dialog's label for this detector's pattern field.
     pub fn label(self) -> Str {
         match self {
-            Detector::Curl => Str::QuickNavCurlPattern,
-            Detector::DatabaseUri => Str::QuickNavDatabasePattern,
-            Detector::Jwt => Str::QuickNavJwtPattern,
-            Detector::Json => Str::QuickNavJsonPattern,
-            Detector::Base64 => Str::QuickNavBase64Pattern,
+            Detector::Curl => quick_nav::Text::CurlPattern.into(),
+            Detector::DatabaseUri => quick_nav::Text::DatabasePattern.into(),
+            Detector::Jwt => quick_nav::Text::JwtPattern.into(),
+            Detector::Json => quick_nav::Text::JsonPattern.into(),
+            Detector::Base64 => quick_nav::Text::Base64Pattern.into(),
         }
     }
 

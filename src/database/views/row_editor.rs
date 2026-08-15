@@ -19,7 +19,7 @@ use gpui_component::{
 use crate::database::components::notice::{Tone, notice};
 use crate::database::models::value::{ColumnMeta, Row, Value};
 use crate::database::views::database::DatabaseView;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, db_connection, db_query, t};
 
 const WIDTH: gpui::Pixels = px(640.);
 const PADDING: gpui::Pixels = px(32.);
@@ -148,7 +148,7 @@ impl RowEditor {
             .map(|(_, name)| name.clone())
             .collect::<Vec<_>>();
         if !missing.is_empty() {
-            self.error = Some(Str::DbIdentityRequired(missing.join(", ")));
+            self.error = Some(db_query::Text::IdentityRequired(missing.join(", ")).into());
             cx.notify();
             return;
         }
@@ -177,7 +177,7 @@ impl Render for RowEditor {
                 notice(
                     Tone::Info,
                     t(
-                        Str::DbIdentityRequired(
+                        db_query::Text::IdentityRequired(
                             self.required_identity
                                 .iter()
                                 .map(|(_, name)| name.as_str())
@@ -233,7 +233,7 @@ impl Render for RowEditor {
                                             .small()
                                             .selected(field.is_null)
                                             .disabled(field.fixed)
-                                            .label(t(Str::DbSetNull, cx))
+                                            .label(t(db_query::Text::SetNull, cx))
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.toggle_null(index, cx)
                                             })),
@@ -255,14 +255,14 @@ impl Render for RowEditor {
                         Button::new("db-row-cancel")
                             .ghost()
                             .small()
-                            .label(t(Str::DbCancel, cx))
+                            .label(t(db_connection::Text::Cancel, cx))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("db-row-save")
                             .primary()
                             .small()
-                            .label(t(Str::DbSave, cx))
+                            .label(t(db_connection::Text::Save, cx))
                             .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
                     ),
             )

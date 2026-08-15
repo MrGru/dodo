@@ -413,6 +413,26 @@ mod tests {
         );
     }
 
+    /// Keeps the *set* honest. The array's declared length already pins the
+    /// count at compile time; this says the number out loud so shrinking the
+    /// scan is a deliberate two-line change, and catches a path pasted twice —
+    /// which would keep the length while dropping a file from the scan.
+    #[test]
+    fn the_scan_still_covers_every_source_it_did() {
+        assert_eq!(
+            super::SOURCES.len(),
+            34,
+            "the view scan covers fewer files than it did; add the file back, or \
+             lower this count deliberately and say why"
+        );
+
+        let mut paths: Vec<&str> = super::SOURCES.iter().map(|(path, _)| *path).collect();
+        paths.sort_unstable();
+        let unique = paths.len();
+        paths.dedup();
+        assert_eq!(unique, paths.len(), "a source path is listed twice");
+    }
+
     /// Keeps `SOURCES` honest: `include_str!` would happily embed a file that
     /// no longer builds any UI.
     ///

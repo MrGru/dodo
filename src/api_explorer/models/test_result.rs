@@ -30,11 +30,11 @@
 
 use std::time::Duration;
 
-use crate::i18n::Str;
+use crate::i18n::{Str, api_scripts};
 
 /// Test results kept from a single run. A script can define them in a loop;
 /// beyond this the rest are dropped and counted, never silently discarded —
-/// the rule `Str::BodyTruncated` already follows.
+/// the rule `api_scripts::Text::BodyTruncated` already follows.
 pub const MAX_RESULTS: usize = 500;
 
 /// Which hook a result came from.
@@ -59,8 +59,8 @@ impl ScriptPhase {
     /// The heading the Tests tab groups by.
     pub fn label(self) -> Str {
         match self {
-            ScriptPhase::PreRequest => Str::PreRequestScriptLabel,
-            ScriptPhase::PostResponse => Str::PostResponseScriptLabel,
+            ScriptPhase::PreRequest => api_scripts::Text::PreRequestScriptLabel.into(),
+            ScriptPhase::PostResponse => api_scripts::Text::PostResponseScriptLabel.into(),
         }
     }
 }
@@ -200,7 +200,7 @@ impl TestReport {
 #[cfg(test)]
 mod tests {
     use super::{ScriptPhase, TestOutcome, TestReport, TestResult, TestSummary};
-    use crate::i18n::Str;
+    use crate::i18n::api_scripts;
     use std::time::Duration;
 
     fn result(name: &str, outcome: TestOutcome, phase: ScriptPhase) -> TestResult {
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn an_error_alone_makes_a_report_worth_showing() {
         let report = TestReport {
-            error: Some(Str::ScriptOutOfMemory),
+            error: Some(api_scripts::Text::OutOfMemory.into()),
             ran: true,
             ..TestReport::default()
         };

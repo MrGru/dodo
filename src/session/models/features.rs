@@ -39,7 +39,7 @@
 //!    `quick_nav::models::detect`; dragging Base64 above JWT in the sidebar must
 //!    not change what a pasted token does.
 
-use crate::i18n::Str;
+use crate::i18n::{Str, session};
 
 use super::document::ToolRecord;
 
@@ -64,7 +64,7 @@ impl FeatureError {
     /// already on screen re-translates when the language changes.
     pub fn message(self) -> Str {
         match self {
-            FeatureError::LastVisibleTool => Str::FeatureLastVisibleTool,
+            FeatureError::LastVisibleTool => session::Text::FeatureLastVisibleTool.into(),
         }
     }
 }

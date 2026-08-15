@@ -8,7 +8,7 @@
 use gpui::{App, Hsla};
 use gpui_component::ActiveTheme as _;
 
-use crate::i18n::Str;
+use crate::i18n::{Str, docker};
 
 /// The Docker container lifecycle states, as the Engine API reports them.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
@@ -49,15 +49,15 @@ impl ContainerStatus {
     /// The badge caption, localized.
     pub fn label(self) -> Str {
         match self {
-            ContainerStatus::Created => Str::DockerStatusCreated,
-            ContainerStatus::Running => Str::DockerStatusRunning,
-            ContainerStatus::Paused => Str::DockerStatusPaused,
-            ContainerStatus::Restarting => Str::DockerStatusRestarting,
-            ContainerStatus::Exited => Str::DockerStatusExited,
-            ContainerStatus::Removing => Str::DockerStatusRemoving,
-            ContainerStatus::Dead => Str::DockerStatusDead,
-            ContainerStatus::Stopping => Str::DockerStatusStopping,
-            ContainerStatus::Unknown => Str::DockerStatusUnknown,
+            ContainerStatus::Created => docker::Text::StatusCreated.into(),
+            ContainerStatus::Running => docker::Text::StatusRunning.into(),
+            ContainerStatus::Paused => docker::Text::StatusPaused.into(),
+            ContainerStatus::Restarting => docker::Text::StatusRestarting.into(),
+            ContainerStatus::Exited => docker::Text::StatusExited.into(),
+            ContainerStatus::Removing => docker::Text::StatusRemoving.into(),
+            ContainerStatus::Dead => docker::Text::StatusDead.into(),
+            ContainerStatus::Stopping => docker::Text::StatusStopping.into(),
+            ContainerStatus::Unknown => docker::Text::StatusUnknown.into(),
         }
     }
 

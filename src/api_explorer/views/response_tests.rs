@@ -40,7 +40,7 @@ use crate::api_explorer::state::request::{RequestTab, ScriptSlot};
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, api_scripts, t};
 
 impl ApiExplorer {
     pub(super) fn tests_pane(
@@ -79,13 +79,13 @@ impl ApiExplorer {
                     AppIcon::SquareCode,
                     t(
                         if ran {
-                            Str::TestsScriptDefinedNone
+                            api_scripts::Text::TestsScriptDefinedNone
                         } else {
-                            Str::TestsNotRun
+                            api_scripts::Text::TestsNotRun
                         },
                         cx,
                     ),
-                    Some(t(Str::TestsScriptDefinedNoneHint, cx)),
+                    Some(t(api_scripts::Text::TestsScriptDefinedNoneHint, cx)),
                     cx,
                 )
                 .into_any_element()
@@ -148,7 +148,7 @@ impl ApiExplorer {
                         .border_color(cx.theme().border)
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(t(Str::TestsDropped(dropped), cx)),
+                        .child(t(api_scripts::Text::TestsDropped(dropped), cx)),
                 )
             })
             .into_any_element()
@@ -174,20 +174,20 @@ impl ApiExplorer {
                     .gap_2()
                     .text_color(cx.theme().muted_foreground)
                     .child(Icon::new(AppIcon::SquareCode).size(px(28.)))
-                    .child(div().text_sm().child(t(Str::TestsNone, cx)))
+                    .child(div().text_sm().child(t(api_scripts::Text::TestsNone, cx)))
                     .child(
                         div()
                             .text_xs()
                             .text_center()
                             .max_w(px(260.))
-                            .child(t(Str::TestsNoneHint, cx)),
+                            .child(t(api_scripts::Text::TestsNoneHint, cx)),
                     ),
             )
             .child(
                 Button::new("tests-add")
                     .small()
                     .icon(AppIcon::SquareCode)
-                    .label(t(Str::TestsAddOne, cx))
+                    .label(t(api_scripts::Text::TestsAddOne, cx))
                     .on_click(cx.listener(move |_, _, window, cx| {
                         // Open the editor the test would go in *and* seed it, so
                         // the button lands the user somewhere they can type
@@ -250,20 +250,20 @@ impl ApiExplorer {
                 div()
                     .font_bold()
                     .text_color(colour)
-                    .child(t(Str::TestsPassedCount(summary.passed), cx)),
+                    .child(t(api_scripts::Text::TestsPassedCount(summary.passed), cx)),
             )
             .when(summary.failed > 0, |this| {
                 this.child(
                     div()
                         .text_color(cx.theme().danger)
-                        .child(t(Str::TestsFailedCount(summary.failed), cx)),
+                        .child(t(api_scripts::Text::TestsFailedCount(summary.failed), cx)),
                 )
             })
             .when(summary.errored > 0, |this| {
                 this.child(
                     div()
                         .text_color(cx.theme().warning)
-                        .child(t(Str::TestsErroredCount(summary.errored), cx)),
+                        .child(t(api_scripts::Text::TestsErroredCount(summary.errored), cx)),
                 )
             })
             .child(div().flex_1().min_w_0())

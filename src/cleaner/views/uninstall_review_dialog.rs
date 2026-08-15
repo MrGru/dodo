@@ -37,7 +37,7 @@ use crate::cleaner::macos::applications::confidence::MatchConfidence;
 use crate::cleaner::macos::applications::identity::AppIdentity;
 use crate::cleaner::macos::applications::locations::LocationScope;
 use crate::cleaner::macos::applications::review::{self, UninstallReview, UninstallReviewError};
-use crate::i18n::{Str, t};
+use crate::i18n::{cleaner, t};
 
 use super::CleanerView;
 
@@ -70,7 +70,7 @@ pub fn open(
     window.open_dialog(cx, move |dialog_builder, _, cx| {
         dialog_builder
             .title(t(
-                Str::CleanerUninstallReviewTitle { name: name.clone() },
+                cleaner::Text::UninstallReviewTitle { name: name.clone() },
                 cx,
             ))
             .w(WIDTH)
@@ -166,11 +166,11 @@ fn default_selection(review: &UninstallReview) -> HashSet<CleanableItemId> {
 
 fn confidence_label(confidence: MatchConfidence, cx: &App) -> gpui::SharedString {
     let str = match confidence {
-        MatchConfidence::Confirmed => Str::CleanerConfidenceConfirmed,
-        MatchConfidence::High => Str::CleanerConfidenceHigh,
-        MatchConfidence::Medium => Str::CleanerConfidenceMedium,
-        MatchConfidence::Low => Str::CleanerConfidenceLow,
-        MatchConfidence::SharedOrUnsafe => Str::CleanerConfidenceSharedOrUnsafe,
+        MatchConfidence::Confirmed => cleaner::Text::ConfidenceConfirmed,
+        MatchConfidence::High => cleaner::Text::ConfidenceHigh,
+        MatchConfidence::Medium => cleaner::Text::ConfidenceMedium,
+        MatchConfidence::Low => cleaner::Text::ConfidenceLow,
+        MatchConfidence::SharedOrUnsafe => cleaner::Text::ConfidenceSharedOrUnsafe,
     };
     t(str, cx)
 }
@@ -181,16 +181,16 @@ impl Render for UninstallReviewDialog {
             ReviewState::Loading => v_flex()
                 .gap_2()
                 .p_2()
-                .child(t(Str::CleanerUninstallLoading, cx)),
+                .child(t(cleaner::Text::UninstallLoading, cx)),
             ReviewState::Refused(UninstallReviewError::ProtectedApplication) => v_flex()
                 .gap_2()
                 .p_2()
-                .child(t(Str::CleanerUninstallRefusedProtected, cx))
+                .child(t(cleaner::Text::UninstallRefusedProtected, cx))
                 .child(close_button(cx)),
             ReviewState::Refused(UninstallReviewError::NotAnApplication) => v_flex()
                 .gap_2()
                 .p_2()
-                .child(t(Str::CleanerUninstallRefusedNotApplication, cx))
+                .child(t(cleaner::Text::UninstallRefusedNotApplication, cx))
                 .child(close_button(cx)),
             ReviewState::Ready(review) => {
                 let app = review.app.clone();
@@ -224,14 +224,14 @@ impl Render for UninstallReviewDialog {
                         div()
                             .font_bold()
                             .text_sm()
-                            .child(t(Str::CleanerUninstallRelatedFilesHeader, cx)),
+                            .child(t(cleaner::Text::UninstallRelatedFilesHeader, cx)),
                     )
                     .when(candidates.is_empty(), |list| {
                         list.child(
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(t(Str::CleanerUninstallNoRelatedFiles, cx)),
+                                .child(t(cleaner::Text::UninstallNoRelatedFiles, cx)),
                         )
                     })
                     .child({
@@ -256,7 +256,7 @@ impl Render for UninstallReviewDialog {
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t(Str::CleanerUninstallDestinationNote, cx)),
+                            .child(t(cleaner::Text::UninstallDestinationNote, cx)),
                     )
                     .child(
                         h_flex()
@@ -275,14 +275,14 @@ impl Render for UninstallReviewDialog {
                                         Button::new("cleaner-uninstall-cancel")
                                             .ghost()
                                             .small()
-                                            .label(t(Str::CleanerCancelScan, cx))
+                                            .label(t(cleaner::Text::CancelScan, cx))
                                             .on_click(|_, window, cx| window.close_dialog(cx)),
                                     )
                                     .child(
                                         Button::new("cleaner-uninstall-confirm")
                                             .danger()
                                             .small()
-                                            .label(t(Str::CleanerUninstallMoveToTrash, cx))
+                                            .label(t(cleaner::Text::UninstallMoveToTrash, cx))
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.confirm(window, cx)
                                             })),
@@ -298,7 +298,7 @@ fn close_button(cx: &App) -> impl IntoElement {
     Button::new("cleaner-uninstall-close")
         .ghost()
         .small()
-        .label(t(Str::CleanerUninstallClose, cx))
+        .label(t(cleaner::Text::UninstallClose, cx))
         .on_click(|_, window, cx| window.close_dialog(cx))
 }
 
@@ -349,7 +349,7 @@ fn candidate_row(
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(t(Str::CleanerUninstallScanOnlyBadge, cx)),
+                                    .child(t(cleaner::Text::UninstallScanOnlyBadge, cx)),
                             )
                         })
                         .child(

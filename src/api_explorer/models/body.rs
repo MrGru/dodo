@@ -5,7 +5,7 @@
 //! in `services::http::request_body`. This module only says what a body is.
 
 use crate::api_explorer::models::key_value::KeyValue;
-use crate::i18n::Str;
+use crate::i18n::{Str, api_explorer};
 
 /// The kinds of body the Body tab can build.
 ///
@@ -41,14 +41,14 @@ impl BodyType {
 
     pub fn label(self) -> Str {
         match self {
-            BodyType::None => Str::BodyTypeNone,
-            BodyType::Json => Str::BodyTypeJson,
-            BodyType::Text => Str::BodyTypeText,
-            BodyType::Xml => Str::BodyTypeXml,
-            BodyType::Html => Str::BodyTypeHtml,
-            BodyType::FormData => Str::BodyTypeFormData,
-            BodyType::UrlEncoded => Str::BodyTypeUrlEncoded,
-            BodyType::Binary => Str::BodyTypeBinary,
+            BodyType::None => api_explorer::Text::BodyTypeNone.into(),
+            BodyType::Json => api_explorer::Text::BodyTypeJson.into(),
+            BodyType::Text => api_explorer::Text::BodyTypeText.into(),
+            BodyType::Xml => api_explorer::Text::BodyTypeXml.into(),
+            BodyType::Html => api_explorer::Text::BodyTypeHtml.into(),
+            BodyType::FormData => api_explorer::Text::BodyTypeFormData.into(),
+            BodyType::UrlEncoded => api_explorer::Text::BodyTypeUrlEncoded.into(),
+            BodyType::Binary => api_explorer::Text::BodyTypeBinary.into(),
         }
     }
 

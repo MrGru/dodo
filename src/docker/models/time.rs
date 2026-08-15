@@ -5,7 +5,7 @@
 //! [`RelativeTime::since`] turns the gap between then and now into the coarsest
 //! sensible unit. Both halves are pure so they are unit tested directly.
 
-use crate::i18n::Str;
+use crate::i18n::{Str, docker};
 
 /// A "time ago" bucket, chosen so the label reads the way a person would say it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,15 +66,15 @@ impl RelativeTime {
     /// The localized label, carrying the count where there is one.
     pub fn label(self) -> Str {
         match self {
-            RelativeTime::Never => Str::DockerRelNever,
-            RelativeTime::JustNow => Str::DockerRelJustNow,
-            RelativeTime::Seconds(n) => Str::DockerRelSecondsAgo(n),
-            RelativeTime::Minutes(n) => Str::DockerRelMinutesAgo(n),
-            RelativeTime::Hours(n) => Str::DockerRelHoursAgo(n),
-            RelativeTime::Days(n) => Str::DockerRelDaysAgo(n),
-            RelativeTime::Weeks(n) => Str::DockerRelWeeksAgo(n),
-            RelativeTime::Months(n) => Str::DockerRelMonthsAgo(n),
-            RelativeTime::Years(n) => Str::DockerRelYearsAgo(n),
+            RelativeTime::Never => docker::Text::RelNever.into(),
+            RelativeTime::JustNow => docker::Text::RelJustNow.into(),
+            RelativeTime::Seconds(n) => docker::Text::RelSecondsAgo(n).into(),
+            RelativeTime::Minutes(n) => docker::Text::RelMinutesAgo(n).into(),
+            RelativeTime::Hours(n) => docker::Text::RelHoursAgo(n).into(),
+            RelativeTime::Days(n) => docker::Text::RelDaysAgo(n).into(),
+            RelativeTime::Weeks(n) => docker::Text::RelWeeksAgo(n).into(),
+            RelativeTime::Months(n) => docker::Text::RelMonthsAgo(n).into(),
+            RelativeTime::Years(n) => docker::Text::RelYearsAgo(n).into(),
         }
     }
 }

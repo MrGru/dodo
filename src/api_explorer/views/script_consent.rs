@@ -42,7 +42,7 @@ use crate::api_explorer::models::script::is_runnable;
 use crate::api_explorer::models::script_consent::ConsentKey;
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, api_scripts, t};
 
 /// The card's preferred width, and the height of the script view inside it.
 /// Both shrink to fit a small window before the dialog is built — `Dialog`
@@ -88,7 +88,7 @@ pub fn open(
         let width = card_width(window);
         dialog
             .w(width)
-            .title(t(Str::ScriptConsentTitle, cx))
+            .title(t(api_scripts::Text::ConsentTitle, cx))
             // `content`, not `child`: a plain child is wrapped in an
             // `overflow_y_scrollbar` box that content-sizes everything inside.
             .content(move |content, _, _| {
@@ -129,8 +129,8 @@ impl ScriptConsentDialog {
     ) -> Self {
         let mut editors = Vec::new();
         for (label, source) in [
-            (Str::PreRequestScriptLabel, scripts.pre),
-            (Str::PostResponseScriptLabel, scripts.post),
+            (api_scripts::Text::PreRequestScriptLabel, scripts.pre),
+            (api_scripts::Text::PostResponseScriptLabel, scripts.post),
         ] {
             // A hook with no script is not shown at all: an empty editor under
             // a heading reads as "and this one runs too".
@@ -138,7 +138,7 @@ impl ScriptConsentDialog {
                 continue;
             }
             editors.push((
-                label,
+                label.into(),
                 cx.new(|cx| {
                     InputState::new(window, cx)
                         .code_editor("javascript")
@@ -183,9 +183,9 @@ impl Render for ScriptConsentDialog {
         // The honest sentence for this situation. "Has not run before" is false
         // once an earlier version has.
         let explanation = if self.re_armed {
-            Str::ScriptConsentExplainChanged
+            api_scripts::Text::ConsentExplainChanged
         } else {
-            Str::ScriptConsentExplain
+            api_scripts::Text::ConsentExplain
         };
         // Only worth naming the hooks when there is more than one to tell apart.
         let labelled = self.scripts.len() > 1;
@@ -204,7 +204,10 @@ impl Render for ScriptConsentDialog {
                     .text_xs()
                     .font_bold()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::ScriptConsentRequest(self.request_name.clone()), cx)),
+                    .child(t(
+                        api_scripts::Text::ConsentRequest(self.request_name.clone()),
+                        cx,
+                    )),
             )
             .children(self.scripts.iter().map(|(label, editor)| {
                 v_flex()
@@ -241,7 +244,7 @@ impl Render for ScriptConsentDialog {
                     .gap_2()
                     .child(
                         Button::new("script-consent-skip")
-                            .label(t(Str::ScriptConsentSkip, cx))
+                            .label(t(api_scripts::Text::ConsentSkip, cx))
                             .on_click(cx.listener(move |_, _, window, cx| {
                                 let (page, tab) = decline.clone();
                                 window.close_dialog(cx);
@@ -253,7 +256,7 @@ impl Render for ScriptConsentDialog {
                     .child(
                         Button::new("script-consent-run")
                             .primary()
-                            .label(t(Str::ScriptConsentRun, cx))
+                            .label(t(api_scripts::Text::ConsentRun, cx))
                             .on_click(cx.listener(move |_, _, window, cx| {
                                 let (page, tab, key) = approve.clone();
                                 window.close_dialog(cx);

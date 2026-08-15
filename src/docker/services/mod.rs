@@ -69,7 +69,7 @@ use crate::docker::models::logs::LogLine;
 use crate::docker::models::network::Network;
 use crate::docker::models::usage::ContainerUsage;
 use crate::docker::models::volume::Volume;
-use crate::i18n::Str;
+use crate::i18n::{Str, docker};
 
 /// A Docker operation that did not complete, in terms the UI can act on.
 ///
@@ -90,8 +90,10 @@ impl DockerError {
     /// The message shown for this failure.
     pub fn message(&self) -> Str {
         match self {
-            DockerError::Unreachable(detail) => Str::DockerConnectionError(detail.clone()),
-            DockerError::Operation(detail) => Str::DockerOperationError(detail.clone()),
+            DockerError::Unreachable(detail) => {
+                docker::Text::ConnectionError(detail.clone()).into()
+            }
+            DockerError::Operation(detail) => docker::Text::OperationError(detail.clone()).into(),
         }
     }
 }

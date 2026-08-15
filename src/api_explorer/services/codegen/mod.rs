@@ -63,7 +63,7 @@ pub use normalize::{NormalizedBody, NormalizedPart, NormalizedRequest, normalize
 use crate::api_explorer::models::codegen::CodeTarget;
 use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::api_explorer::models::variables::VariableSet;
-use crate::i18n::Str;
+use crate::i18n::{Str, api_explorer};
 
 /// Why a request could not be turned into code.
 ///
@@ -85,8 +85,12 @@ impl CodegenError {
     /// phrasing of it.
     pub fn message(self) -> Str {
         match self {
-            CodegenError::UnresolvedVariable { name } => Str::HttpUnresolvedVariable(name),
-            CodegenError::RecursiveVariable { name } => Str::HttpRecursiveVariable(name),
+            CodegenError::UnresolvedVariable { name } => {
+                api_explorer::Text::UnresolvedVariable(name).into()
+            }
+            CodegenError::RecursiveVariable { name } => {
+                api_explorer::Text::RecursiveVariable(name).into()
+            }
         }
     }
 }

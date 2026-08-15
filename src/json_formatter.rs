@@ -8,7 +8,7 @@ use gpui_component::{ActiveTheme, IndexPath, Sizable, h_flex, v_flex};
 
 use serde::Serialize as _;
 
-use crate::i18n::{Language, Str, t};
+use crate::i18n::{Language, Str, json_formatter, shared, t};
 
 /// The indentation width options offered in the dropdown, in spaces.
 const INDENT_OPTIONS: [usize; 3] = [2, 3, 4];
@@ -33,7 +33,7 @@ pub struct JsonFormatter {
 impl JsonFormatter {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let language = Language::current(cx);
-        let placeholder = t(Str::JsonPlaceholder, cx);
+        let placeholder = t(json_formatter::Text::JsonPlaceholder, cx);
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor("json")
@@ -62,7 +62,7 @@ impl JsonFormatter {
         }
         self.language = language;
 
-        let placeholder = t(Str::JsonPlaceholder, cx);
+        let placeholder = t(json_formatter::Text::JsonPlaceholder, cx);
         self.input.update(cx, |state, cx| {
             state.set_placeholder(placeholder, window, cx);
         });
@@ -137,13 +137,13 @@ impl JsonFormatter {
                 let column = (err.column().max(1) - 1) as u32;
                 // `err`'s own wording is serde_json's, in English; the frame
                 // around it is ours and is translated.
-                let error = Str::InvalidJson {
+                let error = json_formatter::Text::InvalidJson {
                     line: err.line(),
                     column: err.column(),
                     detail: err.to_string(),
                 };
                 let message = t(error.clone(), cx);
-                self.error = Some(error);
+                self.error = Some(error.into());
 
                 self.input.update(cx, |state, cx| {
                     let text = state.text().clone();
@@ -179,12 +179,16 @@ impl Render for JsonFormatter {
                     .child(
                         Button::new("format-json")
                             .primary()
-                            .label(t(Str::FormatButton, cx))
+                            .label(t(shared::Text::FormatButton, cx))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.format(window, cx);
                             })),
                     )
-                    .child(div().text_sm().child(t(Str::IndentLabel, cx)))
+                    .child(
+                        div()
+                            .text_sm()
+                            .child(t(json_formatter::Text::IndentLabel, cx)),
+                    )
                     .child(Select::new(&self.indent).small().w(px(120.))),
             )
             .when_some(
@@ -226,6 +230,6 @@ impl Render for JsonFormatter {
 fn indent_options(cx: &App) -> Vec<SharedString> {
     INDENT_OPTIONS
         .iter()
-        .map(|n| t(Str::IndentSpaces(*n), cx))
+        .map(|n| t(json_formatter::Text::IndentSpaces(*n), cx))
         .collect()
 }

@@ -35,7 +35,7 @@
 //!   runtime's own VM (Docker Desktop's, Lima's, …) with no independent
 //!   lifecycle a user command could address.
 
-use crate::i18n::Str;
+use crate::i18n::{Str, docker};
 use crate::paths::HostOs;
 
 /// Which container runtime/daemon a row is about.
@@ -61,10 +61,10 @@ impl RuntimeKind {
     /// for "Containers"/"Images"/"Volumes"/"Networks".
     pub fn title(self) -> Str {
         match self {
-            RuntimeKind::Docker => Str::Docker,
-            RuntimeKind::PodmanMachine => Str::RuntimePodmanMachine,
-            RuntimeKind::Kubernetes => Str::RuntimeKubernetes,
-            RuntimeKind::Containerd => Str::RuntimeContainerd,
+            RuntimeKind::Docker => docker::Text::Docker.into(),
+            RuntimeKind::PodmanMachine => docker::Text::RuntimePodmanMachine.into(),
+            RuntimeKind::Kubernetes => docker::Text::RuntimeKubernetes.into(),
+            RuntimeKind::Containerd => docker::Text::RuntimeContainerd.into(),
         }
     }
 }
@@ -89,11 +89,11 @@ impl RuntimeStatus {
     /// The badge caption, localized.
     pub fn label(&self) -> Str {
         match self {
-            RuntimeStatus::Running => Str::RuntimeStatusRunning,
-            RuntimeStatus::Stopped => Str::RuntimeStatusStopped,
-            RuntimeStatus::NotInstalled => Str::RuntimeStatusNotInstalled,
-            RuntimeStatus::Unsupported => Str::RuntimeStatusUnsupported,
-            RuntimeStatus::Unknown => Str::RuntimeStatusUnknown,
+            RuntimeStatus::Running => docker::Text::RuntimeStatusRunning.into(),
+            RuntimeStatus::Stopped => docker::Text::RuntimeStatusStopped.into(),
+            RuntimeStatus::NotInstalled => docker::Text::RuntimeStatusNotInstalled.into(),
+            RuntimeStatus::Unsupported => docker::Text::RuntimeStatusUnsupported.into(),
+            RuntimeStatus::Unknown => docker::Text::RuntimeStatusUnknown.into(),
         }
     }
 

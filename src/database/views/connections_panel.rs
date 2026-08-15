@@ -47,7 +47,7 @@ use crate::database::state::tree::RowRef;
 use crate::database::views::database::{
     ConnectionLook, DatabaseView, RowLook, TREE_INDENT, TREE_PADDING, row_looks,
 };
-use crate::i18n::{Str, t};
+use crate::i18n::{database, db_catalog, db_connection, t};
 
 /// The width of the disclosure column. Wide enough for the chevron, and every
 /// row reserves it so a leaf's label lines up with a folder's.
@@ -108,7 +108,7 @@ impl DatabaseView {
                     .text_xs()
                     .font_medium()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::DbConnections, cx)),
+                    .child(t(database::Text::Connections, cx)),
             )
             .child(
                 h_flex()
@@ -118,7 +118,7 @@ impl DatabaseView {
                             .ghost()
                             .xsmall()
                             .icon(AppIcon::Search)
-                            .tooltip(t(Str::DbCatalogSearch, cx))
+                            .tooltip(t(db_catalog::Text::CatalogSearch, cx))
                             .disabled(!self.can_search_catalogs())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.open_catalog_search(window, cx)
@@ -129,7 +129,7 @@ impl DatabaseView {
                             .ghost()
                             .xsmall()
                             .icon(AppIcon::Refresh)
-                            .tooltip(t(Str::DbRefreshTree, cx))
+                            .tooltip(t(database::Text::RefreshTree, cx))
                             // Refresh re-reads the *selected* connection, which
                             // is the only one the word can mean once the tree
                             // holds several.
@@ -141,7 +141,7 @@ impl DatabaseView {
                             .ghost()
                             .xsmall()
                             .icon(AppIcon::Plus)
-                            .tooltip(t(Str::DbNewConnection, cx))
+                            .tooltip(t(db_connection::Text::NewConnection, cx))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let draft = this.connections.draft(Engine::PostgreSql);
                                 this.open_form(draft, false, window, cx);
@@ -160,15 +160,15 @@ impl DatabaseView {
 
         empty_state(
             AppIcon::Database,
-            t(Str::DbNoConnections, cx),
-            Some(t(Str::DbNoConnectionsHint, cx)),
+            t(database::Text::NoConnections, cx),
+            Some(t(database::Text::NoConnectionsHint, cx)),
             cx,
         )
         .child(
             Button::new("db-new-connection-empty")
                 .small()
                 .primary()
-                .label(t(Str::DbNewConnection, cx))
+                .label(t(db_connection::Text::NewConnection, cx))
                 .on_click(cx.listener(|this, _, window, cx| {
                     let draft = this.connections.draft(Engine::PostgreSql);
                     this.open_form(draft, false, window, cx);
@@ -435,11 +435,11 @@ fn connection_menu(
 ) -> PopupMenu {
     let id = look.id;
     let connect_label = if look.connected {
-        Str::DbDisconnect
+        database::Text::Disconnect
     } else if look.failed {
-        Str::DbReconnect
+        database::Text::Reconnect
     } else {
-        Str::DbConnect
+        database::Text::Connect
     };
 
     menu.item(
@@ -461,7 +461,7 @@ fn connection_menu(
     )
     .item(PopupMenuItem::separator())
     .item(
-        PopupMenuItem::new(t(Str::DbEditConnection, cx))
+        PopupMenuItem::new(t(database::Text::EditConnection, cx))
             .icon(AppIcon::Settings)
             .on_click({
                 let view = view.clone();
@@ -475,7 +475,7 @@ fn connection_menu(
             }),
     )
     .item(
-        PopupMenuItem::new(t(Str::DbDuplicateConnection, cx))
+        PopupMenuItem::new(t(database::Text::DuplicateConnection, cx))
             .icon(AppIcon::Copy)
             .on_click({
                 let view = view.clone();
@@ -485,7 +485,7 @@ fn connection_menu(
             }),
     )
     .item(
-        PopupMenuItem::new(t(Str::DbDeleteConnection, cx))
+        PopupMenuItem::new(t(database::Text::DeleteConnection, cx))
             .icon(AppIcon::Trash)
             .on_click({
                 let view = view.clone();

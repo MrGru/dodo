@@ -35,7 +35,7 @@ use crate::api_explorer::state::request::ScriptSlot;
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{api_scripts, shared, t};
 
 impl ApiExplorer {
     pub(super) fn request_scripts_pane(
@@ -101,7 +101,7 @@ impl ApiExplorer {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(t(Str::ScriptsSandboxNotice, cx)),
+                    .child(t(api_scripts::Text::ScriptsSandboxNotice, cx)),
             )
     }
 
@@ -197,7 +197,7 @@ impl ApiExplorer {
                     .child(Icon::new(AppIcon::AlertTriangle).size(px(12.))),
             )
             .child(div().flex_1().min_w_0().child(t(
-                Str::ScriptSyntaxErrorAt {
+                api_scripts::Text::SyntaxErrorAt {
                     line: line + 1,
                     detail,
                 },
@@ -217,7 +217,7 @@ impl ApiExplorer {
         Button::new((slot.id_prefix(), 0u64))
             .ghost()
             .xsmall()
-            .label(t(Str::FormatButton, cx))
+            .label(t(shared::Text::FormatButton, cx))
             .on_click(cx.listener(move |_, _, window, cx| {
                 let editor = tab.read(cx).request.script_editor(slot).clone();
                 tab.update(cx, |state, cx| {
@@ -268,7 +268,7 @@ impl ApiExplorer {
                     .ghost()
                     .xsmall()
                     .icon(AppIcon::SquareCode)
-                    .label(t(Str::InsertTemplate, cx)),
+                    .label(t(api_scripts::Text::InsertTemplate, cx)),
             )
             .w(px(240.))
             .child(
@@ -280,7 +280,7 @@ impl ApiExplorer {
                             .text_xs()
                             .font_bold()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t(Str::InsertTemplate, cx)),
+                            .child(t(api_scripts::Text::InsertTemplate, cx)),
                     )
                     .children(items),
             )

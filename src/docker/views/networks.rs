@@ -44,7 +44,7 @@ use crate::docker::{
     DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp, DockerOpenDetail,
     DockerRefreshList, KEY_CONTEXT, POLL_INTERVAL,
 };
-use crate::i18n::{Language, Str, t};
+use crate::i18n::{Language, docker, shared, t};
 
 /// Fixed column widths. Name takes the remaining width as the one flex column.
 const DRIVER_W: Pixels = px(120.);
@@ -79,7 +79,7 @@ pub struct NetworksView {
 
 impl NetworksView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let placeholder = t(Str::DockerSearchNetworks, cx);
+        let placeholder = t(docker::Text::SearchNetworks, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
 
         cx.subscribe(&search, |this, state, event: &InputEvent, cx| {
@@ -329,13 +329,13 @@ impl NetworksView {
             let entity = entity.clone();
             let id = id.clone();
             alert
-                .title(t(Str::DockerDeleteTitle, cx))
-                .description(t(Str::DockerDeleteMessage(name.clone()), cx))
+                .title(t(docker::Text::DeleteTitle, cx))
+                .description(t(docker::Text::DeleteMessage(name.clone()), cx))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t(Str::Delete, cx))
+                        .ok_text(t(shared::Text::Delete, cx))
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text(t(Str::DockerCancel, cx))
+                        .cancel_text(t(docker::Text::Cancel, cx))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _window, cx| {
@@ -351,7 +351,7 @@ impl NetworksView {
             return;
         }
         self.language = language;
-        let placeholder = t(Str::DockerSearchNetworks, cx);
+        let placeholder = t(docker::Text::SearchNetworks, cx);
         self.search.update(cx, |state, cx| {
             state.set_placeholder(placeholder, window, cx);
         });
@@ -367,7 +367,7 @@ impl NetworksView {
                 Button::new("docker-networks-refresh")
                     .small()
                     .icon(AppIcon::Refresh)
-                    .label(t(Str::DockerRefresh, cx))
+                    .label(t(docker::Text::Refresh, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
     }
@@ -399,8 +399,8 @@ impl NetworksView {
         if self.state.is_empty() {
             return empty_state(
                 AppIcon::Network,
-                t(Str::NoNetworks, cx),
-                Some(t(Str::NoNetworksHint, cx)),
+                t(docker::Text::NoNetworks, cx),
+                Some(t(docker::Text::NoNetworksHint, cx)),
                 cx,
             )
             .into_any_element();
@@ -409,12 +409,12 @@ impl NetworksView {
     }
 
     fn render_error(&self, message: SharedString, cx: &mut Context<Self>) -> gpui::AnyElement {
-        error_state(t(Str::DockerUnreachableTitle, cx), message, cx)
+        error_state(t(docker::Text::UnreachableTitle, cx), message, cx)
             .child(
                 Button::new("docker-networks-retry")
                     .small()
                     .icon(AppIcon::Refresh)
-                    .label(t(Str::DockerRetry, cx))
+                    .label(t(docker::Text::Retry, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
             .into_any_element()
@@ -423,7 +423,7 @@ impl NetworksView {
     fn render_table(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let rows = self.state.visible();
         if rows.is_empty() {
-            return empty_state(AppIcon::Network, t(Str::NoNetworks, cx), None, cx)
+            return empty_state(AppIcon::Network, t(docker::Text::NoNetworks, cx), None, cx)
                 .into_any_element();
         }
         let now = now_unix();
@@ -464,29 +464,33 @@ impl NetworksView {
             .text_xs()
             .font_medium()
             .text_color(cx.theme().muted_foreground)
-            .child(header_cell(t(Str::DockerColumnName, cx)).flex_1().min_w_0())
             .child(
-                header_cell(t(Str::DockerColumnDriver, cx))
+                header_cell(t(docker::Text::ColumnName, cx))
+                    .flex_1()
+                    .min_w_0(),
+            )
+            .child(
+                header_cell(t(docker::Text::ColumnDriver, cx))
                     .w(DRIVER_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnScope, cx))
+                header_cell(t(docker::Text::ColumnScope, cx))
                     .w(SCOPE_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::Containers, cx))
+                header_cell(t(docker::Text::Containers, cx))
                     .w(CONTAINERS_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnCreated, cx))
+                header_cell(t(docker::Text::ColumnCreated, cx))
                     .w(CREATED_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnActions, cx))
+                header_cell(t(docker::Text::ColumnActions, cx))
                     .w(ACTIONS_W)
                     .flex_shrink_0(),
             )
@@ -530,7 +534,7 @@ impl NetworksView {
                 name_cell(
                     SharedString::from(format!("nname-{}", row.id)),
                     SharedString::from(row.name.clone()),
-                    t(Str::DockerOpenDetails, cx),
+                    t(docker::Text::OpenDetails, cx),
                     cx.listener({
                         let id = row.id.clone();
                         move |this, _, window, cx| this.open_detail(id.clone(), window, cx)
@@ -574,9 +578,9 @@ impl NetworksView {
         // A predefined network's Delete is disabled and says why; a removable one
         // reads the plain Delete tooltip.
         let delete_tooltip = if predefined {
-            t(Str::DockerNetworkPredefined, cx)
+            t(docker::Text::NetworkPredefined, cx)
         } else {
-            t(Str::Delete, cx)
+            t(shared::Text::Delete, cx)
         };
         // Delete only. Inspect was removed from here in round 6 — the Name cell
         // and the right-click menu open the detail dialog.

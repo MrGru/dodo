@@ -39,7 +39,7 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-use crate::i18n::Str;
+use crate::i18n::{Str, session};
 use crate::paths::data_dir;
 use crate::session::models::document::{SCHEMA_VERSION, SessionDocument};
 
@@ -59,13 +59,14 @@ pub enum SessionStoreError {
 impl SessionStoreError {
     pub fn message(&self) -> Str {
         match self {
-            SessionStoreError::Io(detail) => Str::SessionStoreError(detail.clone()),
-            SessionStoreError::MissingVersion => Str::SessionStoreMissingVersion,
+            SessionStoreError::Io(detail) => session::Text::StoreError(detail.clone()).into(),
+            SessionStoreError::MissingVersion => session::Text::StoreMissingVersion.into(),
             SessionStoreError::UnsupportedVersion { found, understood } => {
-                Str::SessionStoreUnsupportedVersion {
+                session::Text::StoreUnsupportedVersion {
                     found: *found,
                     understood: *understood,
                 }
+                .into()
             }
         }
     }

@@ -27,7 +27,7 @@
 
 use std::collections::VecDeque;
 
-use crate::i18n::Str;
+use crate::i18n::{Str, api_scripts};
 
 /// Entries kept per tab.
 pub const MAX_ENTRIES: usize = 500;
@@ -53,10 +53,10 @@ impl ConsoleLevel {
 
     pub fn label(self) -> Str {
         match self {
-            ConsoleLevel::Debug => Str::ConsoleLevelDebug,
-            ConsoleLevel::Log => Str::ConsoleLevelLog,
-            ConsoleLevel::Warn => Str::ConsoleLevelWarn,
-            ConsoleLevel::Error => Str::ConsoleLevelError,
+            ConsoleLevel::Debug => api_scripts::Text::ConsoleLevelDebug.into(),
+            ConsoleLevel::Log => api_scripts::Text::ConsoleLevelLog.into(),
+            ConsoleLevel::Warn => api_scripts::Text::ConsoleLevelWarn.into(),
+            ConsoleLevel::Error => api_scripts::Text::ConsoleLevelError.into(),
         }
     }
 }
@@ -165,10 +165,9 @@ impl ConsoleLog {
     pub fn begin_run(&mut self, summary: String) {
         self.runs += 1;
         let run = self.runs;
-        self.push(ConsoleEntry::separator(Str::ConsoleRunSeparator {
-            run,
-            summary,
-        }));
+        self.push(ConsoleEntry::separator(
+            api_scripts::Text::ConsoleRunSeparator { run, summary }.into(),
+        ));
     }
 
     /// Drops oldest-first until both caps hold. One entry always survives, so a
@@ -237,7 +236,7 @@ impl ConsoleLog {
 #[cfg(test)]
 mod tests {
     use super::{ConsoleEntry, ConsoleLevel, ConsoleLog, ConsoleSource, MAX_BYTES, MAX_ENTRIES};
-    use crate::i18n::{Language, Str};
+    use crate::i18n::{Language, Str, api_scripts};
 
     fn log_line(n: usize) -> ConsoleEntry {
         ConsoleEntry::script(ConsoleLevel::Log, format!("line {n}"))
@@ -315,7 +314,9 @@ mod tests {
         let numbers: Vec<usize> = all(&log)
             .into_iter()
             .filter_map(|entry| match &entry.localized {
-                Some(Str::ConsoleRunSeparator { run, .. }) => Some(*run),
+                Some(Str::ApiScripts(api_scripts::Text::ConsoleRunSeparator { run, .. })) => {
+                    Some(*run)
+                }
                 _ => None,
             })
             .collect();
@@ -354,13 +355,15 @@ mod tests {
         log.push(ConsoleEntry::script(ConsoleLevel::Debug, "quiet"));
         log.push(ConsoleEntry::runtime(
             ConsoleLevel::Error,
-            Str::ScriptOutOfMemory,
+            api_scripts::Text::OutOfMemory.into(),
         ));
 
         let loud = log.copy_text(ConsoleLevel::Error, render);
         assert_eq!(
             loud,
-            Str::ScriptOutOfMemory.text(Language::English).into_owned()
+            Str::from(api_scripts::Text::OutOfMemory)
+                .text(Language::English)
+                .into_owned()
         );
         assert!(
             log.copy_text(ConsoleLevel::Debug, render)
@@ -383,7 +386,9 @@ mod tests {
         let run = all(&log)
             .into_iter()
             .find_map(|entry| match &entry.localized {
-                Some(Str::ConsoleRunSeparator { run, .. }) => Some(*run),
+                Some(Str::ApiScripts(api_scripts::Text::ConsoleRunSeparator { run, .. })) => {
+                    Some(*run)
+                }
                 _ => None,
             });
         assert_eq!(
@@ -395,7 +400,10 @@ mod tests {
 
     #[test]
     fn a_runtime_entry_is_told_apart_from_a_script_one() {
-        let entry = ConsoleEntry::runtime(ConsoleLevel::Warn, Str::ScriptSkippedByPolicy);
+        let entry = ConsoleEntry::runtime(
+            ConsoleLevel::Warn,
+            api_scripts::Text::SkippedByPolicy.into(),
+        );
         assert_eq!(entry.source, ConsoleSource::Runtime);
         assert!(entry.message.is_empty());
     }

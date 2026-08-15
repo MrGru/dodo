@@ -11,7 +11,7 @@ use gpui_component::{ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, v_f
 use crate::database::components::notice::{Tone, notice};
 use crate::database::models::library::SavedQuery;
 use crate::database::views::database::DatabaseView;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, db_connection, db_query, t};
 
 const WIDTH: gpui::Pixels = px(680.);
 const HEIGHT: gpui::Pixels = px(440.);
@@ -25,9 +25,9 @@ pub fn open(
     cx: &mut App,
 ) {
     let title = if editing {
-        Str::DbSavedQueryEditTitle
+        db_query::Text::SavedQueryEditTitle
     } else {
-        Str::DbSavedQueryCreateTitle
+        db_query::Text::SavedQueryCreateTitle
     };
     let editor = cx.new(|cx| SavedQueryForm::new(page, draft, window, cx));
     let body = editor.clone();
@@ -58,7 +58,7 @@ impl SavedQueryForm {
     ) -> Self {
         let name = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(t(Str::DbSavedQueryNamePlaceholder, cx))
+                .placeholder(t(db_query::Text::SavedQueryNamePlaceholder, cx))
                 .default_value(draft.name.clone())
         });
         let statement = cx.new(|cx| {
@@ -83,12 +83,12 @@ impl SavedQueryForm {
         let name = self.name.read(cx).value().to_string();
         let statement = self.statement.read(cx).value().to_string();
         if name.trim().is_empty() {
-            self.error = Some(Str::DbSavedQueryNameRequired);
+            self.error = Some(db_query::Text::SavedQueryNameRequired.into());
             cx.notify();
             return;
         }
         if statement.trim().is_empty() {
-            self.error = Some(Str::DbSavedQueryStatementRequired);
+            self.error = Some(db_query::Text::SavedQueryStatementRequired.into());
             cx.notify();
             return;
         }
@@ -112,24 +112,27 @@ impl Render for SavedQueryForm {
             .gap_3()
             .child(notice(
                 Tone::Warning,
-                t(Str::DbSavedQueryPlaintextNotice, cx),
+                t(db_query::Text::SavedQueryPlaintextNotice, cx),
                 cx,
             ))
             .child(
-                v_flex().gap_1().child(t(Str::DbSavedQueryScope, cx)).child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!(
-                            "{} · {}",
-                            self.draft.scope.connection_name, self.draft.scope.target
-                        )),
-                ),
+                v_flex()
+                    .gap_1()
+                    .child(t(db_query::Text::SavedQueryScope, cx))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!(
+                                "{} · {}",
+                                self.draft.scope.connection_name, self.draft.scope.target
+                            )),
+                    ),
             )
             .child(
                 v_flex()
                     .gap_1()
-                    .child(t(Str::DbSavedQueryName, cx))
+                    .child(t(db_query::Text::SavedQueryName, cx))
                     .child(Input::new(&self.name).small()),
             )
             .child(
@@ -137,7 +140,7 @@ impl Render for SavedQueryForm {
                     .flex_1()
                     .min_h_0()
                     .gap_1()
-                    .child(t(Str::DbSavedQueryStatement, cx))
+                    .child(t(db_query::Text::SavedQueryStatement, cx))
                     .child(
                         div()
                             .flex_1()
@@ -167,14 +170,14 @@ impl Render for SavedQueryForm {
                         Button::new("db-saved-query-cancel")
                             .ghost()
                             .small()
-                            .label(t(Str::DbCancel, cx))
+                            .label(t(db_connection::Text::Cancel, cx))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("db-saved-query-save")
                             .primary()
                             .small()
-                            .label(t(Str::DbSave, cx))
+                            .label(t(db_connection::Text::Save, cx))
                             .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
                     ),
             )

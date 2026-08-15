@@ -99,7 +99,7 @@ use crate::database::views::row_editor::{
 };
 use crate::database::views::{saved_queries, saved_query_form};
 use crate::database::{DatabaseCopyCell, DatabaseCopyRow, KEY_CONTEXT};
-use crate::i18n::{Language, Str, t};
+use crate::i18n::{Language, Str, database, db_catalog, db_connection, db_query, t};
 use crate::paths::data_dir;
 
 /// The left panel's default width, and the range the divider allows.
@@ -241,7 +241,7 @@ impl DatabaseView {
     /// Builds one editor. Every tab gets its own, so a switch keeps each tab's
     /// cursor, scroll position and undo history.
     fn new_editor(&self, window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
-        let placeholder = t(Str::DbQueryPlaceholder, cx);
+        let placeholder = t(database::Text::QueryPlaceholder, cx);
         cx.new(|cx| {
             InputState::new(window, cx)
                 // `code_editor` first: it *replaces* the mode, so anything set
@@ -348,13 +348,13 @@ impl DatabaseView {
         window.open_alert_dialog(cx, move |alert, _, cx| {
             let view = view.clone();
             alert
-                .title(t(Str::DbSavedQueryDeleteTitle, cx))
-                .description(t(Str::DbSavedQueryDeleteMessage(name.clone()), cx))
+                .title(t(database::Text::SavedQueryDeleteTitle, cx))
+                .description(t(database::Text::SavedQueryDeleteMessage(name.clone()), cx))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t(Str::DbSavedQueryDelete, cx))
+                        .ok_text(t(db_query::Text::SavedQueryDelete, cx))
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text(t(Str::DbCancel, cx))
+                        .cancel_text(t(db_connection::Text::Cancel, cx))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _, cx| {
@@ -376,13 +376,13 @@ impl DatabaseView {
         window.open_alert_dialog(cx, move |alert, _, cx| {
             let view = view.clone();
             alert
-                .title(t(Str::DbHistoryClearTitle, cx))
-                .description(t(Str::DbHistoryClearMessage, cx))
+                .title(t(database::Text::HistoryClearTitle, cx))
+                .description(t(database::Text::HistoryClearMessage, cx))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t(Str::DbHistoryClear, cx))
+                        .ok_text(t(db_query::Text::HistoryClear, cx))
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text(t(Str::DbCancel, cx))
+                        .cancel_text(t(db_connection::Text::Cancel, cx))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _, cx| {
@@ -412,7 +412,8 @@ impl DatabaseView {
         }
         self.open_tab_with_statement(statement, window, cx);
         if !matches && let Some(tab) = self.tabs.active_mut() {
-            tab.notice = Some(Str::DbSavedQueryScopeMismatch(scope.connection_name));
+            tab.notice =
+                Some(database::Text::SavedQueryScopeMismatch(scope.connection_name).into());
             tab.notice_success = false;
         }
         cx.notify();
@@ -444,7 +445,7 @@ impl DatabaseView {
         if self.tabs.tabs().get(index).is_some_and(
             |tab| matches!(&tab.query, QueryState::Done(outcome) if outcome.grid.has_pending()),
         ) {
-            self.edit_notice = Some((Str::DbResolvePending, false));
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
             cx.notify();
             return;
         }
@@ -674,7 +675,8 @@ impl DatabaseView {
             && self.drivers.contains_key(&entry.scope.connection_id);
         if !valid {
             self.edit_notice = Some((
-                Str::DbCatalogSearchConnectionUnavailable(entry.scope.connection_name),
+                database::Text::CatalogSearchConnectionUnavailable(entry.scope.connection_name)
+                    .into(),
                 false,
             ));
             cx.notify();
@@ -725,7 +727,7 @@ impl DatabaseView {
 
     pub(super) fn connect(&mut self, id: u64, cx: &mut Context<Self>) {
         if self.connection_has_pending(id) {
-            self.edit_notice = Some((Str::DbResolvePending, false));
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
             cx.notify();
             return;
         }
@@ -771,7 +773,7 @@ impl DatabaseView {
 
     pub(super) fn disconnect(&mut self, id: u64, cx: &mut Context<Self>) {
         if self.connection_has_pending(id) {
-            self.edit_notice = Some((Str::DbResolvePending, false));
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
             cx.notify();
             return;
         }
@@ -794,7 +796,7 @@ impl DatabaseView {
         cx: &mut Context<Self>,
     ) {
         if editing && self.connection_has_pending(profile.id) {
-            self.edit_notice = Some((Str::DbResolvePending, false));
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
             cx.notify();
             return;
         }
@@ -821,7 +823,9 @@ impl DatabaseView {
     }
 
     pub(super) fn duplicate(&mut self, id: u64, cx: &mut Context<Self>) {
-        let suffix = Str::DbCopySuffix.text(Language::current(cx)).into_owned();
+        let suffix = Str::from(database::Text::CopySuffix)
+            .text(Language::current(cx))
+            .into_owned();
         if self.connections.duplicate(id, &suffix).is_some() {
             self.sync_tree_items(cx);
             self.persist(cx);
@@ -831,7 +835,7 @@ impl DatabaseView {
 
     pub(super) fn delete(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if self.connection_has_pending(id) {
-            self.edit_notice = Some((Str::DbResolvePending, false));
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
             cx.notify();
             return;
         }
@@ -850,13 +854,13 @@ impl DatabaseView {
         window.open_alert_dialog(cx, move |alert, _, cx| {
             let view = view.clone();
             alert
-                .title(t(Str::DbDeleteConnectionTitle, cx))
-                .description(t(Str::DbDeleteConnectionMessage(name.clone()), cx))
+                .title(t(database::Text::DeleteConnectionTitle, cx))
+                .description(t(database::Text::DeleteConnectionMessage(name.clone()), cx))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t(Str::DbDeleteConnection, cx))
+                        .ok_text(t(database::Text::DeleteConnection, cx))
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text(t(Str::DbCancel, cx))
+                        .cancel_text(t(db_connection::Text::Cancel, cx))
                         .show_cancel(true),
                 )
                 // Returning `true` is what closes it: the library calls
@@ -976,9 +980,9 @@ impl DatabaseView {
                 (
                     saved.id,
                     if overwritten {
-                        Str::QuickNavKeptStoredPassword(name)
+                        database::Text::QuickNavKeptStoredPassword(name)
                     } else {
-                        Str::QuickNavOpenedConnection(name)
+                        database::Text::QuickNavOpenedConnection(name)
                     },
                 )
             }
@@ -988,7 +992,8 @@ impl DatabaseView {
                 // moment discards. Milliseconds at startup, but silent data loss
                 // is not worth the shortcut.
                 if !self.connections.loaded() {
-                    self.edit_notice = Some((Str::QuickNavConnectionsLoading, false));
+                    self.edit_notice =
+                        Some((database::Text::QuickNavConnectionsLoading.into(), false));
                     cx.notify();
                     return;
                 }
@@ -1000,11 +1005,11 @@ impl DatabaseView {
 
                 self.connections.save(profile);
                 self.persist(cx);
-                (id, Str::QuickNavCreatedConnection(name))
+                (id, database::Text::QuickNavCreatedConnection(name))
             }
         };
 
-        self.edit_notice = Some((notice, true));
+        self.edit_notice = Some((notice.into(), true));
         self.on_connection_expanded(connection, cx);
     }
 
@@ -1123,7 +1128,7 @@ impl DatabaseView {
         cx: &mut Context<Self>,
     ) {
         if self.detail_has_pending() {
-            self.edit_notice = Some((Str::DbResolvePending, false));
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
             cx.notify();
             return;
         }
@@ -1171,7 +1176,7 @@ impl DatabaseView {
 
     pub(super) fn select_detail_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.detail_has_pending() {
-            self.edit_notice = Some((Str::DbResolvePending, false));
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
             cx.notify();
             return;
         }
@@ -1202,7 +1207,7 @@ impl DatabaseView {
 
     pub(super) fn detail_previous(&mut self, cx: &mut Context<Self>) {
         if self.detail_has_pending() {
-            self.edit_notice = Some((Str::DbResolvePending, false));
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
             cx.notify();
             return;
         }
@@ -1214,7 +1219,7 @@ impl DatabaseView {
 
     pub(super) fn detail_next(&mut self, cx: &mut Context<Self>) {
         if self.detail_has_pending() {
-            self.edit_notice = Some((Str::DbResolvePending, false));
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
             cx.notify();
             return;
         }
@@ -1238,7 +1243,7 @@ impl DatabaseView {
 
     pub(super) fn close_detail(&mut self, cx: &mut Context<Self>) {
         if self.detail_has_pending() {
-            self.edit_notice = Some((Str::DbResolvePending, false));
+            self.edit_notice = Some((database::Text::ResolvePending.into(), false));
             cx.notify();
             return;
         }
@@ -1363,13 +1368,13 @@ impl DatabaseView {
     pub(super) fn edit_error_text(error: EditError) -> Str {
         match error {
             EditError::ReadOnly(reason) => reason.message(),
-            EditError::IdentityColumn => Str::DbEditIdentityColumn,
-            EditError::IdentityUnavailable => Str::DbEditIdentityUnavailable,
+            EditError::IdentityColumn => database::Text::EditIdentityColumn.into(),
+            EditError::IdentityUnavailable => database::Text::EditIdentityUnavailable.into(),
             EditError::UnsupportedCell | EditError::MissingColumn | EditError::MissingRow => {
-                Str::DbEditUnsupportedCell
+                database::Text::EditUnsupportedCell.into()
             }
             EditError::MissingRequiredIdentity(columns) => {
-                Str::DbIdentityRequired(columns.join(", "))
+                db_query::Text::IdentityRequired(columns.join(", ")).into()
             }
         }
     }
@@ -1413,7 +1418,7 @@ impl DatabaseView {
                 return;
             }
         };
-        let title = Str::DbEditCellTitle(
+        let title = database::Text::EditCellTitle(
             columns
                 .get(column)
                 .map(|column| column.name.clone())
@@ -1422,7 +1427,7 @@ impl DatabaseView {
         row_editor::open(
             cx.entity(),
             RowEditorDraft {
-                title,
+                title: title.into(),
                 columns,
                 values,
                 included: vec![column],
@@ -1460,7 +1465,7 @@ impl DatabaseView {
         row_editor::open(
             cx.entity(),
             RowEditorDraft {
-                title: Str::DbAddRowTitle,
+                title: database::Text::AddRowTitle.into(),
                 columns,
                 values,
                 included,
@@ -1474,7 +1479,7 @@ impl DatabaseView {
 
     pub(super) fn open_duplicate_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(row) = self.selected_row(cx) else {
-            self.edit_notice = Some((Str::DbEditSelectRow, false));
+            self.edit_notice = Some((db_query::Text::EditSelectRow.into(), false));
             cx.notify();
             return;
         };
@@ -1503,7 +1508,7 @@ impl DatabaseView {
         row_editor::open(
             cx.entity(),
             RowEditorDraft {
-                title: Str::DbDuplicateRowTitle,
+                title: database::Text::DuplicateRowTitle.into(),
                 columns,
                 values,
                 included,
@@ -1549,7 +1554,7 @@ impl DatabaseView {
 
     pub(super) fn delete_selected_row(&mut self, cx: &mut Context<Self>) {
         let Some(row) = self.selected_row(cx) else {
-            self.edit_notice = Some((Str::DbEditSelectRow, false));
+            self.edit_notice = Some((db_query::Text::EditSelectRow.into(), false));
             cx.notify();
             return;
         };
@@ -1571,7 +1576,7 @@ impl DatabaseView {
             return;
         };
         let Some(dialect) = driver.capabilities().mutation else {
-            self.edit_notice = Some((Str::DbEditUnsupported, false));
+            self.edit_notice = Some((database::Text::EditUnsupported.into(), false));
             cx.notify();
             return;
         };
@@ -1586,9 +1591,9 @@ impl DatabaseView {
         let Some(Ok(batch)) = batch else {
             self.edit_notice = Some((
                 if batch.is_none() {
-                    Str::DbEditNoPending
+                    db_query::Text::EditNoPending.into()
                 } else {
-                    Str::DbCommitBuildFailed
+                    database::Text::CommitBuildFailed.into()
                 },
                 false,
             ));
@@ -1609,7 +1614,7 @@ impl DatabaseView {
             return;
         }
         let expected = batch.expected_rows();
-        self.edit_notice = Some((Str::DbCommitRunning, true));
+        self.edit_notice = Some((db_query::Text::CommitRunning.into(), true));
         cx.notify();
         self.mutation_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
@@ -1626,7 +1631,8 @@ impl DatabaseView {
                                 Ok(()) => {
                                     tab.query = QueryState::Idle;
                                     tab.result_connection = None;
-                                    tab.notice = Some(Str::DbCommitSucceeded(expected));
+                                    tab.notice =
+                                        Some(database::Text::CommitSucceeded(expected).into());
                                     tab.notice_success = true;
                                 }
                                 Err(error) => {
@@ -1647,7 +1653,8 @@ impl DatabaseView {
                             .is_some_and(|detail| detail.request() == *request);
                         match result {
                             Ok(()) => {
-                                this.edit_notice = Some((Str::DbCommitSucceeded(expected), true));
+                                this.edit_notice =
+                                    Some((database::Text::CommitSucceeded(expected).into(), true));
                                 if current {
                                     this.reload_detail(cx);
                                 }
@@ -1685,7 +1692,7 @@ impl DatabaseView {
         };
         if matches!(&tab.query, QueryState::Done(outcome) if outcome.grid.has_pending()) {
             if let Some(tab) = self.tabs.active_mut() {
-                tab.notice = Some(Str::DbResolvePending);
+                tab.notice = Some(database::Text::ResolvePending.into());
                 tab.notice_success = false;
             }
             cx.notify();
@@ -1822,7 +1829,8 @@ impl DatabaseView {
                     if let Some(tab) = this.tabs.find_mut(id) {
                         // Held as a `Str` rather than rendered text, so a
                         // banner already on screen re-translates.
-                        tab.notice = Some(Str::DbCancelFailed(error.detail().to_string()));
+                        tab.notice =
+                            Some(database::Text::CancelFailed(error.detail().to_string()).into());
                         tab.notice_success = false;
                     }
                     cx.notify();
@@ -1916,18 +1924,21 @@ impl DatabaseView {
                 tab.cancel = None;
                 match result {
                     Ok(rows) => {
-                        tab.notice = Some(Str::DbExportSucceeded {
-                            rows,
-                            path: shown_path,
-                        });
+                        tab.notice = Some(
+                            database::Text::ExportSucceeded {
+                                rows,
+                                path: shown_path,
+                            }
+                            .into(),
+                        );
                         tab.notice_success = true;
                     }
                     Err(error) if error.is_cancelled() => {
-                        tab.notice = Some(Str::DbExportCancelled);
+                        tab.notice = Some(database::Text::ExportCancelled.into());
                         tab.notice_success = false;
                     }
                     Err(error) => {
-                        tab.notice = Some(Str::DbExportFailed(error.detail()));
+                        tab.notice = Some(database::Text::ExportFailed(error.detail()).into());
                         tab.notice_success = false;
                     }
                 }
@@ -2012,9 +2023,9 @@ impl DatabaseView {
         self.language = current;
         let placeholder = t(
             if language == "sql" {
-                Str::DbQueryPlaceholder
+                database::Text::QueryPlaceholder
             } else {
-                Str::DbCommandPlaceholder
+                database::Text::CommandPlaceholder
             },
             cx,
         );
@@ -2095,10 +2106,10 @@ fn build_item(outline: &Outline, connections: &ConnectionsState, cx: &App) -> Tr
 
 fn notice_label(notice: &Notice, cx: &App) -> SharedString {
     match notice {
-        Notice::Loading => t(Str::DbTreeLoading, cx),
-        Notice::Empty => t(Str::DbTreeEmpty, cx),
+        Notice::Loading => t(db_catalog::Text::TreeLoading, cx),
+        Notice::Empty => t(database::Text::TreeEmpty, cx),
         Notice::Failed(error) => t(error.message(), cx),
-        Notice::NotConnected => t(Str::DbTreeNotConnected, cx),
+        Notice::NotConnected => t(database::Text::TreeNotConnected, cx),
     }
 }
 

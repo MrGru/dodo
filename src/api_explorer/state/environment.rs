@@ -262,6 +262,7 @@ impl EnvironmentState {
 mod tests {
     use super::EnvironmentState;
     use crate::api_explorer::models::script::{VariableWrite, WriteScope};
+
     use crate::api_explorer::models::variables::{
         Environment, Variable, VariableDocument, VariableScope,
     };
@@ -295,7 +296,7 @@ mod tests {
         // Otherwise a read failure would leave the editor unable to save for
         // the rest of the session.
         let mut state = EnvironmentState::default();
-        state.mark_load_failed(crate::i18n::Str::VariableStoreMissingVersion);
+        state.mark_load_failed(crate::i18n::api_variables::Text::StoreMissingVersion.into());
         assert!(state.is_loaded());
         assert!(state.error().is_some());
     }

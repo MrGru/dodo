@@ -49,7 +49,7 @@ use gpui_component::{
 use dodo_ime_core::LanguageId;
 use dodo_ime_ipc::settings::{Backend, Scheme, Shortcut, ShortcutKey, ShortcutModifiers, Tone};
 
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, input_method, t, tray};
 use crate::input_method::InputMethod;
 #[cfg(target_os = "macos")]
 use crate::input_method::Install;
@@ -150,9 +150,9 @@ impl InputMethodView {
     fn install_button(cx: &App) -> Button {
         let running = InputMethod::install_state(cx) == Install::Running;
         let label = if InputMethod::is_installed(cx) {
-            Str::InputMethodReinstall
+            input_method::Text::Reinstall
         } else {
-            Str::InputMethodInstall
+            input_method::Text::Install
         };
 
         Button::new("install-input-method")
@@ -185,7 +185,7 @@ impl InputMethodView {
                     .flex_1()
                     .min_w_0()
                     .gap_1()
-                    .child(div().font_bold().child(t(Str::InputMethodStatus, cx)))
+                    .child(div().font_bold().child(t(input_method::Text::Status, cx)))
                     .child(
                         div()
                             .text_sm()
@@ -213,7 +213,7 @@ impl InputMethodView {
             .child(
                 div()
                     .font_bold()
-                    .child(t(Str::InputMethodStorageProblem, cx)),
+                    .child(t(input_method::Text::StorageProblem, cx)),
             )
             .child(div().text_sm().child(t(problem, cx)))
     }
@@ -244,12 +244,12 @@ impl InputMethodView {
 
     #[cfg(target_os = "macos")]
     fn description() -> Str {
-        Str::InputMethodDescription
+        input_method::Text::Description.into()
     }
 
     #[cfg(target_os = "windows")]
     fn description() -> Str {
-        Str::InputMethodWindowsDescription
+        input_method::Text::WindowsDescription
     }
 
     fn backend_label(backend: Backend) -> Str {
@@ -257,15 +257,15 @@ impl InputMethodView {
             Backend::Native => {
                 #[cfg(target_os = "macos")]
                 {
-                    Str::InputMethodNative
+                    input_method::Text::Native.into()
                 }
                 #[cfg(target_os = "windows")]
                 {
-                    Str::InputMethodNativeTsf
+                    input_method::Text::NativeTsf
                 }
             }
-            Backend::EventTap => Str::InputMethodEventTap,
-            Backend::KeyboardHook => Str::InputMethodKeyboardHook,
+            Backend::EventTap => input_method::Text::EventTap.into(),
+            Backend::KeyboardHook => input_method::Text::KeyboardHook.into(),
         }
     }
 
@@ -289,11 +289,13 @@ impl InputMethodView {
     #[cfg(target_os = "macos")]
     fn event_tap_status_line(cx: &App) -> Str {
         match InputMethod::event_tap_status(cx) {
-            EventTapStatus::Inactive => Str::InputMethodEventTapInactive,
-            EventTapStatus::WaitingForNative => Str::InputMethodEventTapWaitingForNative,
-            EventTapStatus::NeedsAccessibility => Str::InputMethodEventTapNeedsAccessibility,
-            EventTapStatus::Running => Str::InputMethodEventTapRunning,
-            EventTapStatus::Failed => Str::InputMethodEventTapFailed,
+            EventTapStatus::Inactive => input_method::Text::EventTapInactive.into(),
+            EventTapStatus::WaitingForNative => input_method::Text::EventTapWaitingForNative.into(),
+            EventTapStatus::NeedsAccessibility => {
+                input_method::Text::EventTapNeedsAccessibility.into()
+            }
+            EventTapStatus::Running => input_method::Text::EventTapRunning.into(),
+            EventTapStatus::Failed => input_method::Text::EventTapFailed.into(),
         }
     }
 
@@ -316,7 +318,7 @@ impl InputMethodView {
                     .child(
                         div()
                             .font_bold()
-                            .child(t(Str::InputMethodEventTapStatus, cx)),
+                            .child(t(input_method::Text::EventTapStatus, cx)),
                     )
                     .child(
                         div()
@@ -330,30 +332,30 @@ impl InputMethodView {
     #[cfg(target_os = "windows")]
     fn windows_tsf_status_line(cx: &App) -> Str {
         match InputMethod::windows_install_state(cx) {
-            WindowsInstall::Installing => Str::InputMethodInstalling,
-            WindowsInstall::Uninstalling => Str::InputMethodUninstalling,
+            WindowsInstall::Installing => input_method::Text::Installing,
+            WindowsInstall::Uninstalling => input_method::Text::Uninstalling,
             WindowsInstall::Done(WindowsInstallOutcome::Ready) => {
-                Str::InputMethodWindowsTsfInstalled
+                input_method::Text::WindowsTsfInstalled
             }
             WindowsInstall::Done(WindowsInstallOutcome::Removed) => {
-                Str::InputMethodWindowsTsfRemoved
+                input_method::Text::WindowsTsfRemoved
             }
             WindowsInstall::Done(WindowsInstallOutcome::Failed(
                 WindowsInstallFailure::NoSourceDll,
-            )) => Str::InputMethodWindowsTsfNoDll,
+            )) => input_method::Text::WindowsTsfNoDll,
             WindowsInstall::Done(WindowsInstallOutcome::Failed(WindowsInstallFailure::Copy {
                 detail,
-            })) => Str::InputMethodCopyFailed(detail),
+            })) => input_method::Text::CopyFailed(detail),
             WindowsInstall::Done(WindowsInstallOutcome::Failed(
                 WindowsInstallFailure::Register { detail },
-            )) => Str::InputMethodWindowsTsfRegisterFailed(detail),
+            )) => input_method::Text::WindowsTsfRegisterFailed(detail),
             WindowsInstall::Done(WindowsInstallOutcome::Failed(
                 WindowsInstallFailure::Unregister { detail },
-            )) => Str::InputMethodWindowsTsfUnregisterFailed(detail),
+            )) => input_method::Text::WindowsTsfUnregisterFailed(detail),
             WindowsInstall::Idle if InputMethod::is_installed(cx) => {
-                Str::InputMethodWindowsTsfInstalled
+                input_method::Text::WindowsTsfInstalled
             }
-            WindowsInstall::Idle => Str::InputMethodWindowsTsfNotInstalled,
+            WindowsInstall::Idle => input_method::Text::WindowsTsfNotInstalled,
         }
     }
 
@@ -364,9 +366,9 @@ impl InputMethodView {
             WindowsInstall::Installing | WindowsInstall::Uninstalling
         );
         let install_label = if InputMethod::is_installed(cx) {
-            Str::InputMethodReinstall
+            input_method::Text::Reinstall
         } else {
-            Str::InputMethodInstall
+            input_method::Text::Install
         };
         h_flex()
             .items_center()
@@ -383,7 +385,7 @@ impl InputMethodView {
                     .child(
                         div()
                             .font_bold()
-                            .child(t(Str::InputMethodWindowsTsfStatus, cx)),
+                            .child(t(input_method::Text::WindowsTsfStatus, cx)),
                     )
                     .child(
                         div()
@@ -406,7 +408,7 @@ impl InputMethodView {
                     .child(
                         Button::new("uninstall-windows-tsf")
                             .ghost()
-                            .label(t(Str::InputMethodUninstall, cx))
+                            .label(t(input_method::Text::Uninstall, cx))
                             .disabled(running || !InputMethod::is_installed(cx))
                             .on_click(|_, _, cx| InputMethod::uninstall(cx)),
                     ),
@@ -463,12 +465,12 @@ impl InputMethodView {
                     .flex_1()
                     .min_w(px(180.))
                     .gap_1()
-                    .child(div().child(t(Str::InputMethodLanguageSwitch, cx)))
+                    .child(div().child(t(input_method::Text::LanguageSwitch, cx)))
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t(Str::InputMethodLanguageSwitchDescription, cx)),
+                            .child(t(input_method::Text::LanguageSwitchDescription, cx)),
                     ),
             )
             .child(
@@ -484,7 +486,7 @@ impl InputMethodView {
     fn language_switch_choice(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let switch = InputMethod::language_switch(cx);
         let label: SharedString = if self.recording {
-            t(Str::InputMethodShortcutRecording, cx)
+            t(input_method::Text::ShortcutRecording, cx)
         } else {
             shortcut_display(switch.shortcut, cx).into()
         };
@@ -529,7 +531,11 @@ impl InputMethodView {
                                         InputMethod::set_language_switch(switch, cx);
                                     }),
                             )
-                            .child(div().text_sm().child(t(Str::InputMethodShortcutBeep, cx))),
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(t(input_method::Text::ShortcutBeep, cx)),
+                            ),
                     ),
             )
             .when_some(self.recorder_hint(cx), |this, hint| {
@@ -551,13 +557,13 @@ impl InputMethodView {
     /// nothing, which is the exact failure this round exists to end.
     fn recorder_hint(&self, cx: &App) -> Option<Str> {
         if self.unsupported_key {
-            return Some(Str::InputMethodShortcutUnsupportedKey);
+            return Some(input_method::Text::ShortcutUnsupportedKey.into());
         }
         #[cfg(target_os = "macos")]
         if InputMethod::backend(cx) == Backend::Native
             && InputMethod::language_switch(cx).shortcut.key == ShortcutKey::Modifiers
         {
-            return Some(Str::InputMethodShortcutNeedsEventTap);
+            return Some(input_method::Text::ShortcutNeedsEventTap.into());
         }
         #[cfg(not(target_os = "macos"))]
         let _ = cx;
@@ -663,9 +669,9 @@ impl InputMethodView {
     #[cfg(target_os = "windows")]
     fn keyboard_hook_status_line(cx: &App) -> Str {
         match InputMethod::keyboard_hook_status(cx) {
-            KeyboardHookStatus::Inactive => Str::InputMethodKeyboardHookInactive,
-            KeyboardHookStatus::Running => Str::InputMethodKeyboardHookRunning,
-            KeyboardHookStatus::Failed => Str::InputMethodKeyboardHookFailed,
+            KeyboardHookStatus::Inactive => input_method::Text::KeyboardHookInactive,
+            KeyboardHookStatus::Running => input_method::Text::KeyboardHookRunning,
+            KeyboardHookStatus::Failed => input_method::Text::KeyboardHookFailed,
         }
     }
 
@@ -686,7 +692,7 @@ impl InputMethodView {
                     .child(
                         div()
                             .font_bold()
-                            .child(t(Str::InputMethodKeyboardHookStatus, cx)),
+                            .child(t(input_method::Text::KeyboardHookStatus, cx)),
                     )
                     .child(
                         div()
@@ -698,7 +704,7 @@ impl InputMethodView {
     }
 
     /// Telex or VNI. The labels are proper nouns and identical in every
-    /// language, so `Str::InputMethodTelex` and `…Vni` both answer `_`.
+    /// language, so `input_method::Text::Telex` and `…Vni` both answer `_`.
     fn scheme_choice(cx: &App) -> impl IntoElement {
         let selected = Scheme::ALL
             .iter()
@@ -708,8 +714,8 @@ impl InputMethodView {
             .children(Scheme::ALL.map(|scheme| {
                 t(
                     match scheme {
-                        Scheme::Telex => Str::InputMethodTelex,
-                        Scheme::Vni => Str::InputMethodVni,
+                        Scheme::Telex => input_method::Text::Telex,
+                        Scheme::Vni => input_method::Text::Vni,
                     },
                     cx,
                 )
@@ -736,8 +742,8 @@ impl InputMethodView {
             .children(Tone::ALL.map(|tone| {
                 t(
                     match tone {
-                        Tone::Modern => Str::InputMethodToneModern,
-                        Tone::Traditional => Str::InputMethodToneTraditional,
+                        Tone::Modern => input_method::Text::ToneModern,
+                        Tone::Traditional => input_method::Text::ToneTraditional,
                     },
                     cx,
                 )
@@ -879,20 +885,20 @@ const MODIFIER_META: &str = "Win";
 fn shortcut_key_label(key: ShortcutKey) -> Option<Str> {
     Some(match key {
         ShortcutKey::Modifiers => return None,
-        ShortcutKey::Space => Str::InputMethodShortcutSpace,
-        ShortcutKey::Enter => Str::InputMethodShortcutEnter,
-        ShortcutKey::Tab => Str::InputMethodShortcutTab,
-        ShortcutKey::Escape => Str::InputMethodShortcutEscape,
-        ShortcutKey::Backspace => Str::InputMethodShortcutBackspace,
-        ShortcutKey::Delete => Str::InputMethodShortcutDelete,
-        ShortcutKey::Home => Str::InputMethodShortcutHome,
-        ShortcutKey::End => Str::InputMethodShortcutEnd,
-        ShortcutKey::PageUp => Str::InputMethodShortcutPageUp,
-        ShortcutKey::PageDown => Str::InputMethodShortcutPageDown,
-        ShortcutKey::ArrowLeft => Str::InputMethodShortcutArrowLeft,
-        ShortcutKey::ArrowRight => Str::InputMethodShortcutArrowRight,
-        ShortcutKey::ArrowUp => Str::InputMethodShortcutArrowUp,
-        ShortcutKey::ArrowDown => Str::InputMethodShortcutArrowDown,
+        ShortcutKey::Space => input_method::Text::ShortcutSpace.into(),
+        ShortcutKey::Enter => input_method::Text::ShortcutEnter.into(),
+        ShortcutKey::Tab => input_method::Text::ShortcutTab.into(),
+        ShortcutKey::Escape => input_method::Text::ShortcutEscape.into(),
+        ShortcutKey::Backspace => input_method::Text::ShortcutBackspace.into(),
+        ShortcutKey::Delete => input_method::Text::ShortcutDelete.into(),
+        ShortcutKey::Home => input_method::Text::ShortcutHome.into(),
+        ShortcutKey::End => input_method::Text::ShortcutEnd.into(),
+        ShortcutKey::PageUp => input_method::Text::ShortcutPageUp.into(),
+        ShortcutKey::PageDown => input_method::Text::ShortcutPageDown.into(),
+        ShortcutKey::ArrowLeft => input_method::Text::ShortcutArrowLeft.into(),
+        ShortcutKey::ArrowRight => input_method::Text::ShortcutArrowRight.into(),
+        ShortcutKey::ArrowUp => input_method::Text::ShortcutArrowUp.into(),
+        ShortcutKey::ArrowDown => input_method::Text::ShortcutArrowDown.into(),
     })
 }
 
@@ -921,8 +927,8 @@ impl Render for InputMethodView {
                     .child(t(Self::description(), cx)),
             )
             .child(Self::row(
-                Str::InputMethodBackend,
-                Str::InputMethodBackendDescription,
+                input_method::Text::Backend.into(),
+                input_method::Text::BackendDescription.into(),
                 Self::backend_choice(cx),
                 cx,
             ));
@@ -933,22 +939,22 @@ impl Render for InputMethodView {
             })
             .when(InputMethod::backend(cx) == Backend::EventTap, |this| {
                 this.child(Self::event_tap_status_card(cx)).child(Self::row(
-                    Str::InputMethodBrowserFix,
-                    Str::InputMethodBrowserFixDescription,
+                    input_method::Text::BrowserFix.into(),
+                    input_method::Text::BrowserFixDescription.into(),
                     Self::browser_fix_switch(cx),
                     cx,
                 ))
             });
         let root = root
             .child(Self::row(
-                Str::InputMethodActiveLanguages,
-                Str::InputMethodActiveLanguagesDescription,
+                input_method::Text::ActiveLanguages.into(),
+                input_method::Text::ActiveLanguagesDescription.into(),
                 Self::active_languages_choice(cx),
                 cx,
             ))
             .child(Self::row(
-                Str::TrayKeyboardInput,
-                Str::InputMethodLanguageDescription,
+                tray::Text::KeyboardInput.into(),
+                input_method::Text::LanguageDescription.into(),
                 Self::language_choice(cx),
                 cx,
             ))
@@ -968,26 +974,26 @@ impl Render for InputMethodView {
             v_flex()
                 .gap_1()
                 .child(Self::row(
-                    Str::InputMethodScheme,
-                    Str::InputMethodSchemeDescription,
+                    input_method::Text::Scheme.into(),
+                    input_method::Text::SchemeDescription.into(),
                     Self::scheme_choice(cx),
                     cx,
                 ))
                 .child(Self::row(
-                    Str::InputMethodTonePlacement,
-                    Str::InputMethodTonePlacementDescription,
+                    input_method::Text::TonePlacement.into(),
+                    input_method::Text::TonePlacementDescription.into(),
                     Self::tone_choice(cx),
                     cx,
                 ))
                 .child(Self::row(
-                    Str::InputMethodSpellCheck,
-                    Str::InputMethodSpellCheckDescription,
+                    input_method::Text::SpellCheck.into(),
+                    input_method::Text::SpellCheckDescription.into(),
                     Self::spell_check_switch(cx),
                     cx,
                 ))
                 .child(Self::row(
-                    Str::InputMethodBracketShortcuts,
-                    Str::InputMethodBracketShortcutsDescription,
+                    input_method::Text::BracketShortcuts.into(),
+                    input_method::Text::BracketShortcutsDescription.into(),
                     Self::bracket_shortcuts_switch(cx),
                     cx,
                 )),

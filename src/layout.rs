@@ -13,7 +13,7 @@ use crate::cleaner::CleanerView;
 use crate::database::DatabaseView;
 use crate::docker::{DockerPage, DockerView};
 use crate::encoder_decoder::{EncoderDecoder, Format};
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, docker, shell, t};
 #[cfg(target_os = "macos")]
 use crate::input_method::InputMethod;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -133,14 +133,14 @@ impl View {
     /// the rail's selected page.
     pub fn title(self) -> Str {
         match self {
-            View::JsonFormatter => Str::JsonFormatterTitle,
-            View::EncoderDecoder => Str::EncoderDecoderTitle,
-            View::ApiExplorer => Str::ApiExplorerTitle,
-            View::Cleaner => Str::CleanerTitle,
-            View::Docker => Str::Docker,
-            View::Database => Str::DatabaseTitle,
+            View::JsonFormatter => shell::Text::JsonFormatterTitle.into(),
+            View::EncoderDecoder => shell::Text::EncoderDecoderTitle.into(),
+            View::ApiExplorer => shell::Text::ApiExplorerTitle.into(),
+            View::Cleaner => shell::Text::CleanerTitle.into(),
+            View::Docker => docker::Text::Docker.into(),
+            View::Database => shell::Text::DatabaseTitle.into(),
             #[cfg(any(target_os = "macos", target_os = "windows"))]
-            View::InputMethod => Str::InputMethod,
+            View::InputMethod => shell::Text::InputMethod.into(),
         }
     }
 
@@ -958,7 +958,7 @@ impl Render for Layout {
                                 .when(!icon_collapsed, |this| this.child("Dodo")),
                         ),
                     )
-                    .child(SidebarGroup::new(t(Str::Tools, cx)).children(self.menu(cx)))
+                    .child(SidebarGroup::new(t(shell::Text::Tools, cx)).children(self.menu(cx)))
                     .footer(
                         // A plain stack, not a `SidebarFooter` — see
                         // [`footer_button`] for why, and for where its two
@@ -976,7 +976,7 @@ impl Render for Layout {
                                 footer_button(
                                     "check-for-updates",
                                     AppIcon::Download,
-                                    Str::CheckForUpdates,
+                                    shell::Text::CheckForUpdates.into(),
                                     icon_collapsed,
                                     cx,
                                 )
@@ -986,7 +986,7 @@ impl Render for Layout {
                                 footer_button(
                                     "open-settings",
                                     AppIcon::Settings,
-                                    Str::Settings,
+                                    shell::Text::Settings.into(),
                                     icon_collapsed,
                                     cx,
                                 )
@@ -1054,7 +1054,6 @@ impl Render for Layout {
 
 #[cfg(test)]
 mod tests {
-    use std::mem::{Discriminant, discriminant};
 
     use gpui::{Display, FlexDirection, Length, Overflow, SharedString, Styled as _, px, relative};
     use gpui_component::sidebar::SidebarMenuItem;
@@ -1066,7 +1065,7 @@ mod tests {
         main_pane, pane_title, tool_box, window_min_size,
     };
     use crate::docker::DockerPage;
-    use crate::i18n::Str;
+    use crate::i18n::{Str, docker};
     use crate::quick_nav::models::detect::{Detector, Patterns, detect_among};
     use crate::session::models::features::Features;
 
@@ -1081,8 +1080,8 @@ mod tests {
         Features::resolve(None, &View::codes())
     }
 
-    fn title_of(view: View, page: DockerPage) -> Discriminant<Str> {
-        discriminant(&pane_title(view, page))
+    fn title_of(view: View, page: DockerPage) -> Str {
+        pane_title(view, page)
     }
 
     /// The source of one item, from its signature down to the next line that
@@ -1646,20 +1645,17 @@ mod tests {
 
     #[test]
     fn the_docker_row_reads_docker_while_the_pane_reads_the_page() {
-        assert_eq!(
-            discriminant(&View::Docker.title()),
-            discriminant(&Str::Docker)
-        );
+        assert_eq!(View::Docker.title(), Str::from(docker::Text::Docker));
 
         for (page, expected) in [
-            (DockerPage::Containers, Str::Containers),
-            (DockerPage::Images, Str::Images),
-            (DockerPage::Volumes, Str::Volumes),
-            (DockerPage::Networks, Str::Networks),
+            (DockerPage::Containers, Str::from(docker::Text::Containers)),
+            (DockerPage::Images, Str::from(docker::Text::Images)),
+            (DockerPage::Volumes, Str::from(docker::Text::Volumes)),
+            (DockerPage::Networks, Str::from(docker::Text::Networks)),
         ] {
             assert_eq!(
                 title_of(View::Docker, page),
-                discriminant(&expected),
+                expected,
                 "the pane heading must follow the rail's selected page",
             );
         }
@@ -1675,7 +1671,7 @@ mod tests {
             View::Database,
         ] {
             for page in DockerPage::ALL {
-                assert_eq!(title_of(view, page), discriminant(&view.title()));
+                assert_eq!(title_of(view, page), view.title());
             }
         }
     }

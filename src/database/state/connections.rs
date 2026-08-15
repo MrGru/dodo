@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use crate::database::models::connection::{ConnectionDocument, ConnectionProfile, SCHEMA_VERSION};
 use crate::database::models::engine::Engine;
 use crate::database::models::error::DbError;
-use crate::i18n::Str;
+use crate::i18n::{Str, database, db_catalog};
 
 /// Where one connection is between disconnected and usable.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -31,10 +31,10 @@ impl Status {
     /// The word beside the connection's name.
     pub fn label(&self) -> Str {
         match self {
-            Status::Disconnected => Str::DbStatusDisconnected,
-            Status::Connecting => Str::DbStatusConnecting,
-            Status::Connected => Str::DbStatusConnected,
-            Status::Error(_) => Str::DbStatusError,
+            Status::Disconnected => database::Text::StatusDisconnected.into(),
+            Status::Connecting => database::Text::StatusConnecting.into(),
+            Status::Connected => database::Text::StatusConnected.into(),
+            Status::Error(_) => db_catalog::Text::StatusError.into(),
         }
     }
 

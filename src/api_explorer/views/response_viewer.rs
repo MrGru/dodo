@@ -24,7 +24,7 @@ use crate::api_explorer::state::response::{BodyView, Outcome, ResponseTab};
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, api_response, api_scripts, t};
 
 impl ApiExplorer {
     pub(super) fn render_response_viewer(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -64,12 +64,12 @@ impl ApiExplorer {
             Outcome::Idle => h_flex()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(t(Str::NoResponseYet, cx))
+                .child(t(api_response::Text::NoResponseYet, cx))
                 .into_any_element(),
             Outcome::InFlight => h_flex()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(t(Str::Sending, cx))
+                .child(t(api_response::Text::Sending, cx))
                 .into_any_element(),
             Outcome::Failed(_) => h_flex()
                 .items_center()
@@ -82,7 +82,11 @@ impl ApiExplorer {
                     )
                     .small()
                     .rounded(cx.theme().radius)
-                    .child(div().font_bold().child(t(Str::RequestFailed, cx))),
+                    .child(
+                        div()
+                            .font_bold()
+                            .child(t(api_response::Text::RequestFailed, cx)),
+                    ),
                 )
                 .into_any_element(),
             // Copied out by value: `exchange` borrows from `state`, which
@@ -113,9 +117,9 @@ impl ApiExplorer {
                     .icon(AppIcon::PanelBottom)
                     .tooltip(t(
                         if collapsed {
-                            Str::ExpandResponse
+                            api_response::Text::ExpandResponse
                         } else {
-                            Str::CollapseResponse
+                            api_response::Text::CollapseResponse
                         },
                         cx,
                     ))
@@ -286,7 +290,7 @@ impl ApiExplorer {
                 tab,
                 body_view,
                 BodyView::Pretty,
-                Str::BodyPretty,
+                api_response::Text::BodyPretty.into(),
                 "body-pretty",
                 cx,
             ))
@@ -294,7 +298,7 @@ impl ApiExplorer {
                 tab,
                 body_view,
                 BodyView::Raw,
-                Str::BodyRaw,
+                api_response::Text::BodyRaw.into(),
                 "body-raw",
                 cx,
             ))
@@ -303,7 +307,7 @@ impl ApiExplorer {
                     tab,
                     body_view,
                     BodyView::Preview,
-                    Str::BodyPreview,
+                    api_response::Text::BodyPreview.into(),
                     "body-preview",
                     cx,
                 ))
@@ -313,7 +317,7 @@ impl ApiExplorer {
                     tab,
                     body_view,
                     BodyView::Tree,
-                    Str::BodyTree,
+                    api_response::Text::BodyTree.into(),
                     "body-tree",
                     cx,
                 ))
@@ -323,7 +327,7 @@ impl ApiExplorer {
                     .ghost()
                     .xsmall()
                     .icon(AppIcon::Copy)
-                    .tooltip(t(Str::Copy, cx))
+                    .tooltip(t(api_scripts::Text::Copy, cx))
                     .on_click(cx.listener(move |_, _, _, cx| {
                         // Copies the whole body, not just the windowed part —
                         // the window is a rendering limit, not a data limit.
@@ -342,7 +346,7 @@ impl ApiExplorer {
                     .ghost()
                     .xsmall()
                     .icon(AppIcon::Save)
-                    .tooltip(t(Str::SaveToFile, cx))
+                    .tooltip(t(api_response::Text::SaveToFile, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.save_body_to_file(cx))),
             )
     }
@@ -396,8 +400,8 @@ impl ApiExplorer {
         if state.response.exchange().is_none() && !pane.shows_without_a_response() {
             return empty_state(
                 AppIcon::Send,
-                t(Str::NoResponseYet, cx),
-                Some(t(Str::NoResponseHint, cx)),
+                t(api_response::Text::NoResponseYet, cx),
+                Some(t(api_response::Text::NoResponseHint, cx)),
                 cx,
             )
             .into_any_element();
@@ -471,7 +475,7 @@ impl ApiExplorer {
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .bg(cx.theme().muted.opacity(0.4))
-                        .child(t(Str::HtmlPreviewNote, cx)),
+                        .child(t(api_response::Text::HtmlPreviewNote, cx)),
                 )
             })
             .child(
@@ -495,20 +499,20 @@ impl ApiExplorer {
                     .border_color(cx.theme().border)
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(div().child(t(Str::LineRange { shown, total }, cx)))
+                    .child(div().child(t(api_response::Text::LineRange { shown, total }, cx)))
                     .child(
                         h_flex()
                             .items_center()
                             .gap_2()
                             .when(truncated, |this| {
-                                this.child(div().child(t(Str::BodyTruncated, cx)))
+                                this.child(div().child(t(api_scripts::Text::BodyTruncated, cx)))
                             })
                             .when(has_more, |this| {
                                 this.child(
                                     Button::new("load-more-lines")
                                         .ghost()
                                         .xsmall()
-                                        .label(t(Str::LoadMoreLines, cx))
+                                        .label(t(api_response::Text::LoadMoreLines, cx))
                                         .on_click(cx.listener(move |_, _, window, cx| {
                                             more_tab.update(cx, |state, cx| {
                                                 state.response.show_more_lines();
@@ -590,7 +594,7 @@ impl ApiExplorer {
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(t(
-                            Str::JsonTreeTruncated(
+                            api_response::Text::JsonTreeTruncated(
                                 crate::api_explorer::models::json_tree::ROW_BUDGET,
                             ),
                             cx,
@@ -709,8 +713,8 @@ impl ApiExplorer {
         if cookies.is_empty() {
             return empty_state(
                 AppIcon::File,
-                t(Str::NoCookies, cx),
-                Some(t(Str::NoCookiesHint, cx)),
+                t(api_response::Text::NoCookies, cx),
+                Some(t(api_response::Text::NoCookiesHint, cx)),
                 cx,
             )
             .into_any_element();

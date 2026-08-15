@@ -21,7 +21,7 @@ use crate::api_explorer::components::empty_state::empty_state;
 use crate::api_explorer::models::collection::{Node, NodeId, NodeKind};
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, api_collections, shared, t};
 
 impl ApiExplorer {
     pub(super) fn render_collections_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -56,8 +56,8 @@ impl ApiExplorer {
                     .child(if self.collections.is_empty() {
                         empty_state(
                             AppIcon::Folder,
-                            t(Str::NoCollections, cx),
-                            Some(t(Str::NoCollectionsHint, cx)),
+                            t(api_collections::Text::NoCollections, cx),
+                            Some(t(api_collections::Text::NoCollectionsHint, cx)),
                             cx,
                         )
                         .into_any_element()
@@ -82,7 +82,7 @@ impl ApiExplorer {
                     .text_xs()
                     .font_bold()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::Collections, cx)),
+                    .child(t(api_collections::Text::Collections, cx)),
             )
             .child(
                 h_flex()
@@ -92,7 +92,7 @@ impl ApiExplorer {
                             .ghost()
                             .xsmall()
                             .icon(AppIcon::Import)
-                            .tooltip(t(Str::ImportCollection, cx))
+                            .tooltip(t(api_collections::Text::ImportCollection, cx))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.import_collections(cx);
                             })),
@@ -102,7 +102,7 @@ impl ApiExplorer {
                             .ghost()
                             .xsmall()
                             .icon(AppIcon::Plus)
-                            .tooltip(t(Str::NewCollection, cx))
+                            .tooltip(t(api_collections::Text::NewCollection, cx))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.create_collection(window, cx);
                             })),
@@ -144,7 +144,7 @@ impl ApiExplorer {
                     .primary()
                     .xsmall()
                     .icon(AppIcon::Save)
-                    .tooltip(t(Str::Rename, cx))
+                    .tooltip(t(api_collections::Text::Rename, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.confirm_rename(cx))),
             )
             .child(
@@ -334,7 +334,7 @@ impl ApiExplorer {
         let mut menu = v_flex().gap_0p5().p_1();
         if is_container {
             menu = menu.child(action(
-                Str::NewFolder,
+                api_collections::Text::NewFolder.into(),
                 AppIcon::Folder,
                 "node-new-folder",
                 cx,
@@ -342,7 +342,7 @@ impl ApiExplorer {
             ));
         } else {
             menu = menu.child(action(
-                Str::Open,
+                api_collections::Text::Open.into(),
                 AppIcon::Send,
                 "node-open",
                 cx,
@@ -351,21 +351,21 @@ impl ApiExplorer {
         }
         menu = menu
             .child(action(
-                Str::Rename,
+                api_collections::Text::Rename.into(),
                 AppIcon::SquareCode,
                 "node-rename",
                 cx,
                 |this, id, window, cx| this.begin_rename(id, window, cx),
             ))
             .child(action(
-                Str::Duplicate,
+                api_collections::Text::Duplicate.into(),
                 AppIcon::Copy,
                 "node-duplicate",
                 cx,
                 |this, id, _window, cx| this.duplicate_node(id, cx),
             ))
             .child(action(
-                Str::Delete,
+                shared::Text::Delete.into(),
                 AppIcon::Trash,
                 "node-delete",
                 cx,
@@ -383,7 +383,7 @@ impl ApiExplorer {
                     .ghost()
                     .xsmall()
                     .icon(AppIcon::Ellipsis)
-                    .tooltip(t(Str::MoreActions, cx)),
+                    .tooltip(t(api_collections::Text::MoreActions, cx)),
             )
             .w(px(180.))
             .child(menu)

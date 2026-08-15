@@ -22,7 +22,7 @@
 //!
 //! # The password notice is never absent
 //!
-//! [`Str::DbPasswordStorageNotice`] is rendered whenever a password field is on
+//! [`db_connection::Text::PasswordStorageNotice`] is rendered whenever a password field is on
 //! screen, not behind a disclosure and not only on first use. dodo stores the
 //! password in plain text in its own data directory, and the one thing that
 //! makes that acceptable is that the user is told every time.
@@ -64,16 +64,16 @@ use crate::database::models::engine::{Address, Engine};
 use crate::database::models::error::DbError;
 use crate::database::models::uri::{self, ParsedUri, UriError};
 use crate::database::services;
-use crate::i18n::{Language, Str, t};
+use crate::i18n::{Language, Str, db_connection, t};
 
 /// The word for one TLS mode. Beside `SslMode::ALL` rather than on the enum
 /// itself: `models/` has no opinion about how a mode is worded, only about what
 /// it means.
 fn ssl_label(mode: SslMode) -> Str {
     match mode {
-        SslMode::Disable => Str::DbSslDisable,
-        SslMode::Prefer => Str::DbSslPrefer,
-        SslMode::Require => Str::DbSslRequire,
+        SslMode::Disable => db_connection::Text::SslDisable.into(),
+        SslMode::Prefer => db_connection::Text::SslPrefer.into(),
+        SslMode::Require => db_connection::Text::SslRequire.into(),
     }
 }
 
@@ -164,9 +164,9 @@ pub fn open(
 
     let body = form.clone();
     let title = if editing {
-        t(Str::DbEditConnectionTitle, cx)
+        t(db_connection::Text::EditConnectionTitle, cx)
     } else {
-        t(Str::DbNewConnection, cx)
+        t(db_connection::Text::NewConnection, cx)
     };
 
     window.open_dialog(cx, move |dialog, _, _| {
@@ -189,9 +189,9 @@ pub fn open(
 
 impl ConnectionForm {
     fn new(profile: ConnectionProfile, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let name_placeholder = t(Str::DbFieldNamePlaceholder, cx);
-        let file_placeholder = t(Str::DbFieldFilePlaceholder, cx);
-        let uri_placeholder = t(Str::DbFieldUriPlaceholder, cx);
+        let name_placeholder = t(db_connection::Text::FieldNamePlaceholder, cx);
+        let file_placeholder = t(db_connection::Text::FieldFilePlaceholder, cx);
+        let uri_placeholder = t(db_connection::Text::FieldUriPlaceholder, cx);
 
         let text = |value: &str, window: &mut Window, cx: &mut Context<Self>| {
             let value = value.to_string();
@@ -402,11 +402,11 @@ impl ConnectionForm {
         }
         self.language = language;
 
-        let name = t(Str::DbFieldNamePlaceholder, cx);
+        let name = t(db_connection::Text::FieldNamePlaceholder, cx);
         self.name.update(cx, |state, cx| {
             state.set_placeholder(name, window, cx);
         });
-        let file = t(Str::DbFieldFilePlaceholder, cx);
+        let file = t(db_connection::Text::FieldFilePlaceholder, cx);
         self.file.update(cx, |state, cx| {
             state.set_placeholder(file, window, cx);
         });
@@ -474,15 +474,31 @@ impl ConnectionForm {
 
     fn network_fields(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut fields = vec![
-            self.text_field(Str::DbFieldHost, &self.host.clone(), cx),
-            self.text_field(Str::DbFieldPort, &self.port.clone(), cx),
-            self.text_field(Str::DbFieldDatabase, &self.database.clone(), cx),
-            self.text_field(Str::DbFieldUser, &self.user.clone(), cx),
+            self.text_field(
+                db_connection::Text::FieldHost.into(),
+                &self.host.clone(),
+                cx,
+            ),
+            self.text_field(
+                db_connection::Text::FieldPort.into(),
+                &self.port.clone(),
+                cx,
+            ),
+            self.text_field(
+                db_connection::Text::FieldDatabase.into(),
+                &self.database.clone(),
+                cx,
+            ),
+            self.text_field(
+                db_connection::Text::FieldUser.into(),
+                &self.user.clone(),
+                cx,
+            ),
             self.password_field(cx),
         ];
         if self.profile.engine.supports_tls() {
             fields.push(self.field(
-                Str::DbFieldSsl,
+                db_connection::Text::FieldSsl.into(),
                 self.segmented(
                     "db-ssl",
                     &SslMode::ALL.map(|mode| (mode, ssl_label(mode))),
@@ -499,7 +515,7 @@ impl ConnectionForm {
     fn password_field(&self, cx: &mut Context<Self>) -> AnyElement {
         let revealed = self.password_revealed;
         self.field(
-            Str::DbFieldPassword,
+            db_connection::Text::FieldPassword.into(),
             h_flex()
                 .w_full()
                 .gap_1()
@@ -519,9 +535,9 @@ impl ConnectionForm {
                             AppIcon::Eye
                         })
                         .tooltip(if revealed {
-                            t(Str::DbHidePassword, cx)
+                            t(db_connection::Text::HidePassword, cx)
                         } else {
-                            t(Str::DbRevealPassword, cx)
+                            t(db_connection::Text::RevealPassword, cx)
                         })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.toggle_password(window, cx);
@@ -539,7 +555,7 @@ impl ConnectionForm {
             .gap_2()
             .child(
                 self.field(
-                    Str::DbFieldUri,
+                    db_connection::Text::FieldUri.into(),
                     h_flex()
                         .w_full()
                         .gap_1()
@@ -553,7 +569,7 @@ impl ConnectionForm {
                             Button::new("db-fill-from-uri")
                                 .small()
                                 .outline()
-                                .label(t(Str::DbFillFromUri, cx))
+                                .label(t(db_connection::Text::FillFromUri, cx))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.fill_from_uri(window, cx);
                                 })),
@@ -571,33 +587,45 @@ impl ConnectionForm {
                     ignored,
                     tls_unsupported,
                 } => this
-                    .child(notice(Tone::Success, t(Str::DbUriFilled, cx), cx))
+                    .child(notice(
+                        Tone::Success,
+                        t(db_connection::Text::UriFilled, cx),
+                        cx,
+                    ))
                     .when(!ignored.is_empty(), |this| {
                         // Named, not dropped: the user gets to see that dodo
                         // read the parameter and chose not to act on it.
                         this.child(notice(
                             Tone::Warning,
-                            t(Str::DbUriIgnored(ignored.join(", ")), cx),
+                            t(db_connection::Text::UriIgnored(ignored.join(", ")), cx),
                             cx,
                         ))
                     })
                     .when(*tls_unsupported, |this| {
-                        this.child(notice(Tone::Warning, t(Str::DbUriTlsNotApplied, cx), cx))
+                        this.child(notice(
+                            Tone::Warning,
+                            t(db_connection::Text::UriTlsNotApplied, cx),
+                            cx,
+                        ))
                     }),
             })
             .into_any_element()
     }
 
     fn file_fields(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        vec![self.text_field(Str::DbFieldFile, &self.file.clone(), cx)]
+        vec![self.text_field(
+            db_connection::Text::FieldFile.into(),
+            &self.file.clone(),
+            cx,
+        )]
     }
 
     fn test_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let running = matches!(self.test, TestState::Running);
         let label: SharedString = if running {
-            t(Str::DbTesting, cx)
+            t(db_connection::Text::Testing, cx)
         } else {
-            t(Str::DbTestConnection, cx)
+            t(db_connection::Text::TestConnection, cx)
         };
 
         v_flex()
@@ -614,9 +642,11 @@ impl ConnectionForm {
                 ),
             )
             .map(|this| match &self.test {
-                TestState::Passed => {
-                    this.child(notice(Tone::Success, t(Str::DbTestSucceeded, cx), cx))
-                }
+                TestState::Passed => this.child(notice(
+                    Tone::Success,
+                    t(db_connection::Text::TestSucceeded, cx),
+                    cx,
+                )),
                 TestState::Failed(error) => {
                     this.child(notice(Tone::Danger, t(error.message(), cx), cx))
                 }
@@ -642,13 +672,21 @@ impl Render for ConnectionForm {
             .w_full()
             .gap_3()
             .child(self.uri_row(cx))
-            .child(self.text_field(Str::DbFieldName, &self.name.clone(), cx))
+            .child(self.text_field(
+                db_connection::Text::FieldName.into(),
+                &self.name.clone(),
+                cx,
+            ))
             .child(self.render_engine_picker(engine, cx))
             .children(fields)
             .when(address == Address::Network, |this| {
                 // Never hidden, never behind a disclosure: the password is
                 // stored unencrypted and the user is told every time.
-                this.child(notice(Tone::Info, t(Str::DbPasswordStorageNotice, cx), cx))
+                this.child(notice(
+                    Tone::Info,
+                    t(db_connection::Text::PasswordStorageNotice, cx),
+                    cx,
+                ))
             })
             .child(self.test_row(cx))
             .when_some(problem, |this, problem| {
@@ -663,14 +701,14 @@ impl Render for ConnectionForm {
                         Button::new("db-form-cancel")
                             .small()
                             .ghost()
-                            .label(t(Str::DbCancel, cx))
+                            .label(t(db_connection::Text::Cancel, cx))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("db-form-save")
                             .small()
                             .primary()
-                            .label(t(Str::DbSave, cx))
+                            .label(t(db_connection::Text::Save, cx))
                             .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
                     ),
             )
@@ -692,7 +730,7 @@ impl ConnectionForm {
                     .flex_shrink_0()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::DbFieldEngine, cx)),
+                    .child(t(db_connection::Text::FieldEngine, cx)),
             )
             .child(h_flex().flex_1().min_w_0().gap_1().children(
                 Engine::ALL.into_iter().enumerate().map(|(index, engine)| {

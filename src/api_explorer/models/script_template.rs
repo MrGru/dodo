@@ -11,7 +11,7 @@
 //! already in the shape Format would put it in — a template that needed
 //! reformatting the moment it was inserted would mean one of the two is wrong.
 
-use crate::i18n::Str;
+use crate::i18n::{Str, api_scripts};
 
 /// A snippet the Scripts tab can drop into the pre-request or post-response
 /// editor.
@@ -45,12 +45,12 @@ impl ScriptTemplate {
     /// The menu label naming the template.
     pub fn label(self) -> Str {
         match self {
-            ScriptTemplate::SetHeader => Str::TemplateSetHeader,
-            ScriptTemplate::SetBearerToken => Str::TemplateSetBearerToken,
-            ScriptTemplate::SetTimestamp => Str::TemplateSetTimestamp,
-            ScriptTemplate::AssertStatus => Str::TemplateAssertStatus,
-            ScriptTemplate::LogResponse => Str::TemplateLogResponse,
-            ScriptTemplate::ExtractField => Str::TemplateExtractField,
+            ScriptTemplate::SetHeader => api_scripts::Text::TemplateSetHeader.into(),
+            ScriptTemplate::SetBearerToken => api_scripts::Text::TemplateSetBearerToken.into(),
+            ScriptTemplate::SetTimestamp => api_scripts::Text::TemplateSetTimestamp.into(),
+            ScriptTemplate::AssertStatus => api_scripts::Text::TemplateAssertStatus.into(),
+            ScriptTemplate::LogResponse => api_scripts::Text::TemplateLogResponse.into(),
+            ScriptTemplate::ExtractField => api_scripts::Text::TemplateExtractField.into(),
         }
     }
 

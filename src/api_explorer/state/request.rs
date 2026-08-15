@@ -17,7 +17,7 @@ use crate::api_explorer::models::request::RequestDraft;
 use crate::api_explorer::models::script::{ScriptOrigin, ScriptSyntaxError};
 use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::api_explorer::models::tab_title;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, api_explorer, api_scripts, t};
 
 /// Which of the request tabs is showing.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -41,11 +41,11 @@ impl RequestTab {
 
     pub fn label(self) -> Str {
         match self {
-            RequestTab::Params => Str::RequestTabParams,
-            RequestTab::Headers => Str::RequestTabHeaders,
-            RequestTab::Body => Str::RequestTabBody,
-            RequestTab::Auth => Str::RequestTabAuth,
-            RequestTab::Scripts => Str::RequestTabScripts,
+            RequestTab::Params => api_explorer::Text::RequestTabParams.into(),
+            RequestTab::Headers => api_explorer::Text::RequestTabHeaders.into(),
+            RequestTab::Body => api_explorer::Text::RequestTabBody.into(),
+            RequestTab::Auth => api_explorer::Text::RequestTabAuth.into(),
+            RequestTab::Scripts => api_explorer::Text::RequestTabScripts.into(),
         }
     }
 }
@@ -82,8 +82,8 @@ impl ScriptSlot {
 
     pub fn label(self) -> Str {
         match self {
-            ScriptSlot::Pre => Str::PreRequestScriptLabel,
-            ScriptSlot::Post => Str::PostResponseScriptLabel,
+            ScriptSlot::Pre => api_scripts::Text::PreRequestScriptLabel.into(),
+            ScriptSlot::Post => api_scripts::Text::PostResponseScriptLabel.into(),
         }
     }
 }
@@ -116,19 +116,19 @@ impl RowTable {
     fn placeholders(self) -> (Str, Str, Str) {
         match self {
             RowTable::Params => (
-                Str::ParamKeyPlaceholder,
-                Str::ParamValuePlaceholder,
-                Str::DescriptionPlaceholder,
+                api_explorer::Text::ParamKeyPlaceholder.into(),
+                api_explorer::Text::ParamValuePlaceholder.into(),
+                api_explorer::Text::DescriptionPlaceholder.into(),
             ),
             RowTable::Headers => (
-                Str::HeaderKeyPlaceholder,
-                Str::HeaderValuePlaceholder,
-                Str::DescriptionPlaceholder,
+                api_explorer::Text::HeaderKeyPlaceholder.into(),
+                api_explorer::Text::HeaderValuePlaceholder.into(),
+                api_explorer::Text::DescriptionPlaceholder.into(),
             ),
             RowTable::BodyFields => (
-                Str::FieldKeyPlaceholder,
-                Str::FieldValuePlaceholder,
-                Str::DescriptionPlaceholder,
+                api_explorer::Text::FieldKeyPlaceholder.into(),
+                api_explorer::Text::FieldValuePlaceholder.into(),
+                api_explorer::Text::DescriptionPlaceholder.into(),
             ),
         }
     }
@@ -396,16 +396,16 @@ impl RequestState {
     pub fn new(window: &mut Window, cx: &mut Context<super::tab::RequestTabState>) -> Self {
         // Read before the struct literal: `t` borrows `cx`, which the entity
         // constructors below need mutably.
-        let url_placeholder = t(Str::UrlPlaceholder, cx);
-        let body_placeholder = t(Str::BodyPlaceholder, cx);
-        let pre_placeholder = t(Str::PreRequestScriptPlaceholder, cx);
-        let post_placeholder = t(Str::PostResponseScriptPlaceholder, cx);
-        let token_placeholder = t(Str::AuthTokenPlaceholder, cx);
-        let username_placeholder = t(Str::AuthUsernamePlaceholder, cx);
-        let password_placeholder = t(Str::AuthPasswordPlaceholder, cx);
-        let key_name_placeholder = t(Str::ApiKeyNamePlaceholder, cx);
-        let key_value_placeholder = t(Str::ApiKeyValuePlaceholder, cx);
-        let bulk_placeholder = t(Str::BulkEditPlaceholder, cx);
+        let url_placeholder = t(api_explorer::Text::UrlPlaceholder, cx);
+        let body_placeholder = t(api_explorer::Text::BodyPlaceholder, cx);
+        let pre_placeholder = t(api_explorer::Text::PreRequestScriptPlaceholder, cx);
+        let post_placeholder = t(api_explorer::Text::PostResponseScriptPlaceholder, cx);
+        let token_placeholder = t(api_explorer::Text::AuthTokenPlaceholder, cx);
+        let username_placeholder = t(api_explorer::Text::AuthUsernamePlaceholder, cx);
+        let password_placeholder = t(api_explorer::Text::AuthPasswordPlaceholder, cx);
+        let key_name_placeholder = t(api_explorer::Text::ApiKeyNamePlaceholder, cx);
+        let key_value_placeholder = t(api_explorer::Text::ApiKeyValuePlaceholder, cx);
+        let bulk_placeholder = t(api_explorer::Text::BulkEditPlaceholder, cx);
 
         let mut state = Self {
             method: HttpMethod::default(),
@@ -767,17 +767,32 @@ impl RequestState {
     /// re-translate on their own; this is the sweep that makes them.
     pub fn sync_placeholders(&self, window: &mut Window, cx: &mut gpui::App) {
         for (field, str) in [
-            (&self.url, Str::UrlPlaceholder),
-            (&self.body_editor, Str::BodyPlaceholder),
-            (&self.auth_token, Str::AuthTokenPlaceholder),
-            (&self.auth_username, Str::AuthUsernamePlaceholder),
-            (&self.auth_password, Str::AuthPasswordPlaceholder),
-            (&self.auth_key_name, Str::ApiKeyNamePlaceholder),
-            (&self.auth_key_value, Str::ApiKeyValuePlaceholder),
-            (&self.pre_request_script, Str::PreRequestScriptPlaceholder),
+            (&self.url, api_explorer::Text::UrlPlaceholder),
+            (&self.body_editor, api_explorer::Text::BodyPlaceholder),
+            (&self.auth_token, api_explorer::Text::AuthTokenPlaceholder),
+            (
+                &self.auth_username,
+                api_explorer::Text::AuthUsernamePlaceholder,
+            ),
+            (
+                &self.auth_password,
+                api_explorer::Text::AuthPasswordPlaceholder,
+            ),
+            (
+                &self.auth_key_name,
+                api_explorer::Text::ApiKeyNamePlaceholder,
+            ),
+            (
+                &self.auth_key_value,
+                api_explorer::Text::ApiKeyValuePlaceholder,
+            ),
+            (
+                &self.pre_request_script,
+                api_explorer::Text::PreRequestScriptPlaceholder,
+            ),
             (
                 &self.post_response_script,
-                Str::PostResponseScriptPlaceholder,
+                api_explorer::Text::PostResponseScriptPlaceholder,
             ),
         ] {
             let text = t(str, cx);
@@ -786,7 +801,7 @@ impl RequestState {
             });
         }
 
-        let bulk_placeholder = t(Str::BulkEditPlaceholder, cx);
+        let bulk_placeholder = t(api_explorer::Text::BulkEditPlaceholder, cx);
         for editor in &self.bulk_editors {
             editor.update(cx, |state, cx| {
                 state.set_placeholder(bulk_placeholder.clone(), window, cx);
@@ -965,7 +980,7 @@ impl RequestState {
 
         match tab_title::derive(&self.url.read(cx).value()) {
             Some(title) => SharedString::from(title),
-            None => t(Str::UntitledRequest, cx),
+            None => t(api_explorer::Text::UntitledRequest, cx),
         }
     }
 }

@@ -90,7 +90,7 @@ use crate::database::models::page::RowSink;
 use crate::database::models::query::{Execution, QueryRequest};
 use crate::database::models::statement::{Dialect, GeneratedBatch};
 use crate::database::models::value::ColumnMeta;
-use crate::i18n::Str;
+use crate::i18n::{Str, database};
 
 /// What a driver can do, as far as the UI needs to know.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,15 +156,19 @@ pub enum MutationFailure {
 impl MutationFailure {
     pub fn message(&self) -> Str {
         match self {
-            Self::Transaction(error) => Str::DbCommitTransactionFailed(error.detail().into()),
-            Self::Statement { index, error, .. } => Str::DbCommitFailed {
+            Self::Transaction(error) => {
+                database::Text::CommitTransactionFailed(error.detail().into()).into()
+            }
+            Self::Statement { index, error, .. } => database::Text::CommitFailed {
                 statement: index + 1,
                 detail: error.detail().into(),
-            },
-            Self::Affected { index, actual, .. } => Str::DbCommitAffectedMismatch {
+            }
+            .into(),
+            Self::Affected { index, actual, .. } => database::Text::CommitAffectedMismatch {
                 statement: index + 1,
                 actual: *actual,
-            },
+            }
+            .into(),
         }
     }
 }

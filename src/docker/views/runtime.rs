@@ -31,7 +31,7 @@ use crate::docker::components::toolbar::toolbar;
 use crate::docker::models::runtime::{RuntimeInfo, RuntimeKind, RuntimeStatus};
 use crate::docker::services::runtime::{RuntimeError, RuntimeService, default_runtime_service};
 use crate::docker::state::runtime::RuntimeListState;
-use crate::i18n::{Str, t};
+use crate::i18n::{docker, t};
 
 /// The row icon for `kind`. Chosen from icons already on the Docker rail
 /// rather than new artwork — the same reuse the module leans on everywhere
@@ -190,19 +190,24 @@ impl RuntimesView {
                     .gap_0()
                     .flex_1()
                     .min_w_0()
-                    .child(div().text_sm().font_medium().child(t(Str::Runtimes, cx)))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_medium()
+                            .child(t(docker::Text::Runtimes, cx)),
+                    )
                     .child(
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t(Str::RuntimesDescription, cx)),
+                            .child(t(docker::Text::RuntimesDescription, cx)),
                     ),
             )
             .child(
                 Button::new("docker-runtimes-refresh")
                     .small()
                     .icon(AppIcon::Refresh)
-                    .label(t(Str::DockerRefresh, cx))
+                    .label(t(docker::Text::Refresh, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
     }
@@ -288,9 +293,9 @@ impl RuntimesView {
 
         if matches!(row.status, RuntimeStatus::Running) {
             let label = if pending {
-                t(Str::RuntimeStopping, cx)
+                t(docker::Text::RuntimeStopping, cx)
             } else {
-                t(Str::DockerStop, cx)
+                t(docker::Text::Stop, cx)
             };
             return Button::new(SharedString::from(format!("runtime-stop-{kind:?}")))
                 .small()
@@ -303,9 +308,9 @@ impl RuntimesView {
         }
 
         let label = if pending {
-            t(Str::RuntimeStarting, cx)
+            t(docker::Text::RuntimeStarting, cx)
         } else {
-            t(Str::DockerStart, cx)
+            t(docker::Text::Start, cx)
         };
         let mut button = Button::new(SharedString::from(format!("runtime-start-{kind:?}")))
             .small()
@@ -314,10 +319,12 @@ impl RuntimesView {
             .disabled(pending || !row.can_start);
         if !row.can_start && !pending {
             let tooltip = match row.status {
-                RuntimeStatus::Unsupported => t(Str::RuntimeStatusUnsupported, cx),
-                RuntimeStatus::NotInstalled => t(Str::RuntimeStatusNotInstalled, cx),
-                _ if kind == RuntimeKind::Kubernetes => t(Str::RuntimeManagedExternally, cx),
-                _ => t(Str::RuntimeStatusUnknown, cx),
+                RuntimeStatus::Unsupported => t(docker::Text::RuntimeStatusUnsupported, cx),
+                RuntimeStatus::NotInstalled => t(docker::Text::RuntimeStatusNotInstalled, cx),
+                _ if kind == RuntimeKind::Kubernetes => {
+                    t(docker::Text::RuntimeManagedExternally, cx)
+                }
+                _ => t(docker::Text::RuntimeStatusUnknown, cx),
             };
             button = button.tooltip(tooltip);
         }

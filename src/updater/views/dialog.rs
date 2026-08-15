@@ -58,7 +58,7 @@ use gpui_component::{ActiveTheme as _, Icon, StyledExt as _, WindowExt as _, h_f
 use crate::app_icon::AppIcon;
 use crate::build_info::VERSION_INFO;
 use crate::dialog_slot::{self, SingleDialog};
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, t, updater};
 use crate::updater::models::state::{InstallOutcome, UpdateEvent, UpdateInfo, UpdaterState};
 use crate::updater::services::{Cancellation, log, pipeline};
 use crate::updater::state::machine::{RetryFrom, UpdaterMachine};
@@ -146,7 +146,7 @@ fn present(view: Entity<UpdateDialog>, window: &mut Window, cx: &mut App) {
         dialog
             .w(card_w)
             .overlay_closable(!busy)
-            .title(t(Str::SoftwareUpdate, cx))
+            .title(t(updater::Text::SoftwareUpdate, cx))
             // Closing the dialog abandons whatever it started. The background
             // job is not stopped by dropping the view's task — that only stops
             // the UI listening — so the flag has to be set explicitly.
@@ -431,17 +431,21 @@ impl Render for UpdateDialog {
 impl UpdateDialog {
     fn render_body(&self, cx: &Context<Self>) -> AnyElement {
         match self.machine.state() {
-            UpdaterState::Idle | UpdaterState::Checking => {
-                status(Str::UpdateChecking, self.current_version_line(cx), cx)
-            }
-            UpdaterState::Completed => {
-                status(Str::UpdateUpToDate, self.current_version_line(cx), cx)
-            }
+            UpdaterState::Idle | UpdaterState::Checking => status(
+                updater::Text::Checking.into(),
+                self.current_version_line(cx),
+                cx,
+            ),
+            UpdaterState::Completed => status(
+                updater::Text::UpToDate.into(),
+                self.current_version_line(cx),
+                cx,
+            ),
             UpdaterState::UpdateAvailable(info) => self.render_available(info, cx),
             UpdaterState::Downloading { progress, .. } => v_flex()
                 .gap_3()
                 .child(div().text_sm().child(t(
-                    Str::UpdateDownloadProgress {
+                    updater::Text::DownloadProgress {
                         done: format_size(progress.downloaded),
                         total: format_size(progress.total),
                         percent: progress.percent,
@@ -454,9 +458,9 @@ impl UpdateDialog {
             // task hop; showing "verifying" for both is honest and avoids a
             // flicker through a third caption.
             UpdaterState::Downloaded { .. } | UpdaterState::Verifying { .. } => {
-                status(Str::UpdateVerifying, None, cx)
+                status(updater::Text::Verifying.into(), None, cx)
             }
-            UpdaterState::Installing { .. } => status(Str::UpdateInstalling, None, cx),
+            UpdaterState::Installing { .. } => status(updater::Text::Installing.into(), None, cx),
             UpdaterState::ReadyToRestart { info, outcome } => {
                 self.render_installed(info, outcome, cx)
             }
@@ -476,7 +480,7 @@ impl UpdateDialog {
                                 .font_bold()
                                 .flex_shrink_0()
                                 .whitespace_nowrap()
-                                .child(t(Str::UpdateFailedHeadline, cx)),
+                                .child(t(updater::Text::FailedHeadline, cx)),
                         ),
                 )
                 .children(self.machine.error().map(|error| {
@@ -501,7 +505,7 @@ impl UpdateDialog {
             .h_full()
             .min_h_0()
             .child(div().font_bold().child(t(
-                Str::UpdateAvailableHeadline(info.parsed.to_display()),
+                updater::Text::AvailableHeadline(info.parsed.to_display()),
                 cx,
             )))
             .child(
@@ -515,20 +519,18 @@ impl UpdateDialog {
                         div()
                             .flex_shrink_0()
                             .whitespace_nowrap()
-                            .child(t(Str::UpdatePublished(info.published_at.clone()), cx)),
+                            .child(t(updater::Text::Published(info.published_at.clone()), cx)),
                     )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .whitespace_nowrap()
-                            .child(t(Str::UpdateDownloadSize(format_size(info.file.size)), cx)),
-                    ),
+                    .child(div().flex_shrink_0().whitespace_nowrap().child(t(
+                        updater::Text::DownloadSize(format_size(info.file.size)),
+                        cx,
+                    ))),
             )
             .child(
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::UpdateReleaseNotes, cx)),
+                    .child(t(updater::Text::ReleaseNotes, cx)),
             )
             .child(
                 div()
@@ -558,7 +560,7 @@ impl UpdateDialog {
         cx: &Context<Self>,
     ) -> AnyElement {
         let headline = div().font_bold().child(t(
-            Str::UpdateInstalledHeadline(info.parsed.to_display()),
+            updater::Text::InstalledHeadline(info.parsed.to_display()),
             cx,
         ));
 
@@ -579,7 +581,7 @@ impl UpdateDialog {
                 .gap_2()
                 .min_w_0()
                 .child(div().font_bold().child(t(
-                    Str::UpdateManualInstall(archive.display().to_string()),
+                    updater::Text::ManualInstall(archive.display().to_string()),
                     cx,
                 )))
                 .child(
@@ -593,7 +595,7 @@ impl UpdateDialog {
     }
 
     fn current_version_str(&self) -> Str {
-        Str::UpdateCurrentVersion(VERSION_INFO.version.to_owned())
+        updater::Text::CurrentVersion(VERSION_INFO.version.to_owned()).into()
     }
 
     fn current_version_line(&self, _cx: &Context<Self>) -> Option<Str> {
@@ -622,7 +624,7 @@ impl UpdateDialog {
             .child(
                 div().flex_1().min_w_0().child(
                     Checkbox::new("updater-auto-check")
-                        .label(t(Str::UpdateCheckAutomatically, cx))
+                        .label(t(updater::Text::CheckAutomatically, cx))
                         .checked(self.config.auto_update)
                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
                             this.set_auto_check(*checked, cx)
@@ -644,19 +646,19 @@ impl UpdateDialog {
         match self.machine.state() {
             UpdaterState::Idle | UpdaterState::Checking => vec![
                 Button::new("updater-cancel")
-                    .label(t(Str::UpdateCancel, cx))
+                    .label(t(updater::Text::Cancel, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.cancel(cx)))
                     .into_any_element(),
             ],
             UpdaterState::UpdateAvailable(_) => vec![
                 Button::new("updater-skip")
                     .ghost()
-                    .label(t(Str::UpdateSkipVersion, cx))
+                    .label(t(updater::Text::SkipVersion, cx))
                     .on_click(cx.listener(|this, _, window, cx| this.skip(window, cx)))
                     .into_any_element(),
                 Button::new("updater-download")
                     .primary()
-                    .label(t(Str::UpdateDownloadAction, cx))
+                    .label(t(updater::Text::DownloadAction, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.start_download(cx)))
                     .into_any_element(),
             ],
@@ -664,7 +666,7 @@ impl UpdateDialog {
             | UpdaterState::Downloaded { .. }
             | UpdaterState::Verifying { .. } => vec![
                 Button::new("updater-cancel")
-                    .label(t(Str::UpdateCancel, cx))
+                    .label(t(updater::Text::Cancel, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.cancel(cx)))
                     .into_any_element(),
             ],
@@ -674,7 +676,7 @@ impl UpdateDialog {
                 let mut actions = vec![
                     Button::new("updater-later")
                         .ghost()
-                        .label(t(Str::UpdateLater, cx))
+                        .label(t(updater::Text::Later, cx))
                         .on_click(|_, window, cx| close(window, cx))
                         .into_any_element(),
                 ];
@@ -684,7 +686,7 @@ impl UpdateDialog {
                     actions.push(
                         Button::new("updater-restart")
                             .primary()
-                            .label(t(Str::UpdateRestartNow, cx))
+                            .label(t(updater::Text::RestartNow, cx))
                             .on_click(cx.listener(|this, _, _, cx| this.restart(cx)))
                             .into_any_element(),
                     );
@@ -693,19 +695,19 @@ impl UpdateDialog {
             }
             UpdaterState::Completed => vec![
                 Button::new("updater-close")
-                    .label(t(Str::UpdateLater, cx))
+                    .label(t(updater::Text::Later, cx))
                     .on_click(|_, window, cx| close(window, cx))
                     .into_any_element(),
             ],
             UpdaterState::Failed { .. } => vec![
                 Button::new("updater-close")
                     .ghost()
-                    .label(t(Str::UpdateLater, cx))
+                    .label(t(updater::Text::Later, cx))
                     .on_click(|_, window, cx| close(window, cx))
                     .into_any_element(),
                 Button::new("updater-retry")
                     .primary()
-                    .label(t(Str::UpdateRetry, cx))
+                    .label(t(updater::Text::Retry, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.retry(cx)))
                     .into_any_element(),
             ],

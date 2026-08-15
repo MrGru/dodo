@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api_explorer::models::collection::NodeId;
 use crate::api_explorer::models::script::{ScriptOrigin, is_runnable, script_hash};
-use crate::i18n::Str;
+use crate::i18n::{Str, api_scripts};
 
 /// The schema version written into every consent file.
 ///
@@ -91,9 +91,9 @@ impl ConsentPolicy {
 
     pub fn label(self) -> Str {
         match self {
-            ConsentPolicy::Never => Str::RunScriptsNever,
-            ConsentPolicy::AskImported => Str::RunScriptsAskImported,
-            ConsentPolicy::Always => Str::RunScriptsAlways,
+            ConsentPolicy::Never => api_scripts::Text::RunScriptsNever.into(),
+            ConsentPolicy::AskImported => api_scripts::Text::RunScriptsAskImported.into(),
+            ConsentPolicy::Always => api_scripts::Text::RunScriptsAlways.into(),
         }
     }
 }

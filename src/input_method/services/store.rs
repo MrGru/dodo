@@ -23,7 +23,7 @@ use dodo_ime_ipc::document::IpcError;
 use dodo_ime_ipc::settings::{SETTINGS_FILE, SettingsDocument};
 use dodo_ime_ipc::status::{STATUS_FILE, StatusDocument};
 
-use crate::i18n::Str;
+use crate::i18n::{Str, input_method};
 use crate::paths::data_dir;
 
 /// Turns an IPC failure into something the Input method tool can show.
@@ -35,13 +35,14 @@ use crate::paths::data_dir;
 /// where "update dodo" would not be.
 pub fn message_for(error: &IpcError) -> Str {
     match error {
-        IpcError::Io { detail } => Str::InputMethodStoreError(detail.clone()),
-        IpcError::MissingVersion => Str::InputMethodStoreMissingVersion,
+        IpcError::Io { detail } => input_method::Text::StoreError(detail.clone()).into(),
+        IpcError::MissingVersion => input_method::Text::StoreMissingVersion.into(),
         IpcError::UnsupportedVersion { found, supported } => {
-            Str::InputMethodStoreUnsupportedVersion {
+            input_method::Text::StoreUnsupportedVersion {
                 found: *found,
                 supported: *supported,
             }
+            .into()
         }
     }
 }
@@ -144,7 +145,7 @@ impl InputMethodStore for InMemoryInputMethodStore {
 #[cfg(test)]
 mod tests {
     use super::{DiskInputMethodStore, InMemoryInputMethodStore, InputMethodStore, message_for};
-    use crate::i18n::Str;
+    use crate::i18n::{Str, input_method};
     use dodo_ime_ipc::document::IpcError;
     use dodo_ime_ipc::settings::{
         SETTINGS_FILE, Scheme, SettingsDocument, Tone, VietnameseSettings,
@@ -250,7 +251,7 @@ mod tests {
         );
         assert!(matches!(
             message_for(&error),
-            Str::InputMethodStoreUnsupportedVersion { found, .. } if found == newer
+            Str::InputMethod(input_method::Text::StoreUnsupportedVersion { found, .. }) if found == newer
         ));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -271,7 +272,10 @@ mod tests {
 
         let error = store.load_settings().unwrap_err();
         assert!(matches!(error, IpcError::Io { .. }), "{error:?}");
-        assert!(matches!(message_for(&error), Str::InputMethodStoreError(_)));
+        assert!(matches!(
+            message_for(&error),
+            Str::InputMethod(input_method::Text::StoreError(_))
+        ));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -285,7 +289,7 @@ mod tests {
         assert_eq!(store.load_settings().unwrap_err(), IpcError::MissingVersion);
         assert_eq!(
             message_for(&IpcError::MissingVersion),
-            Str::InputMethodStoreMissingVersion
+            input_method::Text::StoreMissingVersion.into()
         );
 
         let _ = std::fs::remove_dir_all(&dir);

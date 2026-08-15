@@ -65,7 +65,7 @@
 
 use percent_encoding::percent_decode_str;
 
-use crate::i18n::Str;
+use crate::i18n::{Str, db_connection};
 
 use super::connection::{ConnectionProfile, SslMode};
 use super::engine::{Address, Engine};
@@ -134,12 +134,14 @@ pub enum UriError {
 impl UriError {
     pub fn message(&self) -> Str {
         match self {
-            UriError::Empty => Str::DbUriEmpty,
-            UriError::NoScheme => Str::DbUriNoScheme,
-            UriError::UnknownScheme(scheme) => Str::DbUriUnknownScheme(scheme.clone()),
-            UriError::InvalidPort(port) => Str::DbUriInvalidPort(port.clone()),
-            UriError::MissingFile => Str::DbUriMissingFile,
-            UriError::InvalidEscape => Str::DbUriInvalidEscape,
+            UriError::Empty => db_connection::Text::UriEmpty.into(),
+            UriError::NoScheme => db_connection::Text::UriNoScheme.into(),
+            UriError::UnknownScheme(scheme) => {
+                db_connection::Text::UriUnknownScheme(scheme.clone()).into()
+            }
+            UriError::InvalidPort(port) => db_connection::Text::UriInvalidPort(port.clone()).into(),
+            UriError::MissingFile => db_connection::Text::UriMissingFile.into(),
+            UriError::InvalidEscape => db_connection::Text::UriInvalidEscape.into(),
         }
     }
 }

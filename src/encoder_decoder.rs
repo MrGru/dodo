@@ -9,7 +9,8 @@ use base64::alphabet;
 use base64::engine::{DecodePaddingMode, Engine as _, GeneralPurpose, GeneralPurposeConfig};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
-use crate::i18n::{JwtPart, Language, Str, t};
+use crate::i18n::encoder_decoder::JwtPart;
+use crate::i18n::{Language, Str, encoder_decoder, t};
 
 /// Encoders are strict about padding; decoders accept padded or unpadded input
 /// so pasted values from either convention round-trip.
@@ -45,12 +46,15 @@ pub enum Format {
     Jwt,
 }
 
-const FORMATS: [(Format, Str); 5] = [
-    (Format::Base64, Str::FormatBase64),
-    (Format::Base64UrlSafe, Str::FormatBase64UrlSafe),
-    (Format::Url, Str::FormatUrl),
-    (Format::Hex, Str::FormatHex),
-    (Format::Jwt, Str::FormatJwt),
+const FORMATS: [(Format, encoder_decoder::Text); 5] = [
+    (Format::Base64, encoder_decoder::Text::FormatBase64),
+    (
+        Format::Base64UrlSafe,
+        encoder_decoder::Text::FormatBase64UrlSafe,
+    ),
+    (Format::Url, encoder_decoder::Text::FormatUrl),
+    (Format::Hex, encoder_decoder::Text::FormatHex),
+    (Format::Jwt, encoder_decoder::Text::FormatJwt),
 ];
 
 /// The pane layout flips only when two editors would become cramped.
@@ -109,14 +113,14 @@ pub struct EncoderDecoder {
 impl EncoderDecoder {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let language = Language::current(cx);
-        let input_placeholder = t(Str::EncoderInputPlaceholder, cx);
+        let input_placeholder = t(encoder_decoder::Text::EncoderInputPlaceholder, cx);
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .multi_line(true)
                 .soft_wrap(true)
                 .placeholder(input_placeholder)
         });
-        let output_placeholder = t(Str::EncoderOutputPlaceholder, cx);
+        let output_placeholder = t(encoder_decoder::Text::EncoderOutputPlaceholder, cx);
         let output = cx.new(|cx| {
             InputState::new(window, cx)
                 .multi_line(true)
@@ -158,8 +162,14 @@ impl EncoderDecoder {
         self.language = language;
 
         for (state, placeholder) in [
-            (self.input.clone(), Str::EncoderInputPlaceholder),
-            (self.output.clone(), Str::EncoderOutputPlaceholder),
+            (
+                self.input.clone(),
+                encoder_decoder::Text::EncoderInputPlaceholder,
+            ),
+            (
+                self.output.clone(),
+                encoder_decoder::Text::EncoderOutputPlaceholder,
+            ),
         ] {
             let placeholder = t(placeholder, cx);
             state.update(cx, |state, cx| {
@@ -210,7 +220,7 @@ impl EncoderDecoder {
             Format::Url => Ok(utf8_percent_encode(&source, URI_COMPONENT).to_string()),
             Format::Hex => Ok(encode_hex(source.as_bytes())),
             // JWT has no encode direction (signing needs a key).
-            Format::Jwt => Err(Str::JwtEncodeUnsupported),
+            Format::Jwt => Err(encoder_decoder::Text::JwtEncodeUnsupported.into()),
         };
         self.apply(result, window, cx);
     }
@@ -315,7 +325,7 @@ impl EncoderDecoder {
         cx: &App,
     ) -> AnyElement {
         if !is_jwt {
-            return Self::pane(Str::OutputLabel, output, cx);
+            return Self::pane(encoder_decoder::Text::OutputLabel.into(), output, cx);
         }
         let (jwt_header, jwt_payload, jwt_signature) = jwt;
 
@@ -324,9 +334,20 @@ impl EncoderDecoder {
             .min_w_0()
             .min_h_0()
             .gap_2()
-            .child(Self::pane(Str::JwtHeaderLabel, jwt_header, cx))
-            .child(Self::pane(Str::JwtPayloadLabel, jwt_payload, cx))
-            .child(Self::label(Str::JwtSignatureLabel, cx))
+            .child(Self::pane(
+                encoder_decoder::Text::JwtHeaderLabel.into(),
+                jwt_header,
+                cx,
+            ))
+            .child(Self::pane(
+                encoder_decoder::Text::JwtPayloadLabel.into(),
+                jwt_payload,
+                cx,
+            ))
+            .child(Self::label(
+                encoder_decoder::Text::JwtSignatureLabel.into(),
+                cx,
+            ))
             .child(
                 div()
                     .min_h(px(36.))
@@ -351,7 +372,7 @@ impl EncoderDecoder {
         jwt: (Entity<InputState>, Entity<InputState>, SharedString),
         cx: &App,
     ) -> AnyElement {
-        let input = Self::pane(Str::InputLabel, input, cx);
+        let input = Self::pane(encoder_decoder::Text::InputLabel.into(), input, cx);
         let output = Self::output_pane(is_jwt, output, jwt, cx);
 
         match layout {
@@ -402,7 +423,7 @@ impl Render for EncoderDecoder {
                         div()
                             .id("encoder-format-tabs")
                             .role(Role::Group)
-                            .aria_label(t(Str::FormatLabel, cx))
+                            .aria_label(t(encoder_decoder::Text::FormatLabel, cx))
                             .flex_1()
                             .min_w_0()
                             .overflow_hidden()
@@ -427,7 +448,7 @@ impl Render for EncoderDecoder {
                             Button::new("encode")
                                 .primary()
                                 .small()
-                                .label(t(Str::EncodeButton, cx))
+                                .label(t(encoder_decoder::Text::EncodeButton, cx))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.encode(window, cx);
                                 })),
@@ -435,7 +456,7 @@ impl Render for EncoderDecoder {
                         .child(
                             Button::new("decode")
                                 .small()
-                                .label(t(Str::DecodeButton, cx))
+                                .label(t(encoder_decoder::Text::DecodeButton, cx))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.decode(window, cx);
                                 })),
@@ -446,7 +467,7 @@ impl Render for EncoderDecoder {
                             Button::new("decode-jwt")
                                 .primary()
                                 .small()
-                                .label(t(Str::DecodeJwtButton, cx))
+                                .label(t(encoder_decoder::Text::DecodeJwtButton, cx))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.decode(window, cx);
                                 })),
@@ -476,7 +497,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 fn decode_hex(source: &str) -> Result<String, Str> {
     let digits: Vec<char> = source.chars().filter(|c| !c.is_whitespace()).collect();
     if !digits.len().is_multiple_of(2) {
-        return Err(Str::InvalidHexOddLength(digits.len()));
+        return Err(encoder_decoder::Text::InvalidHexOddLength(digits.len()).into());
     }
 
     let mut bytes = Vec::with_capacity(digits.len() / 2);
@@ -491,7 +512,7 @@ fn decode_hex(source: &str) -> Result<String, Str> {
 fn hex_value(c: char, position: usize) -> Result<u8, Str> {
     c.to_digit(16)
         .map(|d| d as u8)
-        .ok_or(Str::InvalidHexDigit { digit: c, position })
+        .ok_or(encoder_decoder::Text::InvalidHexDigit { digit: c, position }.into())
 }
 
 fn decode_base64(engine: &GeneralPurpose, source: &str) -> Result<String, Str> {
@@ -501,7 +522,7 @@ fn decode_base64(engine: &GeneralPurpose, source: &str) -> Result<String, Str> {
         .decode(cleaned.as_bytes())
         // `err` is the base64 crate's own English wording; only the frame
         // around it is ours to translate.
-        .map_err(|err| Str::InvalidBase64(err.to_string()))?;
+        .map_err(|err| encoder_decoder::Text::InvalidBase64(err.to_string()))?;
     bytes_to_string(bytes)
 }
 
@@ -517,18 +538,18 @@ fn decode_url(source: &str) -> Result<String, Str> {
             .get(index + 1..index + 3)
             .is_some_and(|pair| pair.iter().all(u8::is_ascii_hexdigit));
         if !valid {
-            return Err(Str::InvalidPercentAt(index));
+            return Err(encoder_decoder::Text::InvalidPercentAt(index).into());
         }
     }
 
     percent_decode_str(source)
         .decode_utf8()
         .map(|decoded| decoded.into_owned())
-        .map_err(|err| Str::InvalidPercentEncoding(err.to_string()))
+        .map_err(|err| encoder_decoder::Text::InvalidPercentEncoding(err.to_string()).into())
 }
 
 fn bytes_to_string(bytes: Vec<u8>) -> Result<String, Str> {
-    String::from_utf8(bytes).map_err(|err| Str::NotUtf8(err.to_string()))
+    String::from_utf8(bytes).map_err(|err| encoder_decoder::Text::NotUtf8(err.to_string()).into())
 }
 
 /// Splits a JWT into its three parts, returning the pretty-printed header and
@@ -536,12 +557,12 @@ fn bytes_to_string(bytes: Vec<u8>) -> Result<String, Str> {
 /// this is an inspection tool and no key is available.
 fn split_jwt(token: &str) -> Result<(String, String, String), Str> {
     if token.is_empty() {
-        return Err(Str::JwtEmpty);
+        return Err(encoder_decoder::Text::JwtEmpty.into());
     }
 
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
-        return Err(Str::JwtPartCount(parts.len()));
+        return Err(encoder_decoder::Text::JwtPartCount(parts.len()).into());
     }
 
     let header = decode_jwt_json(parts[0], JwtPart::Header)?;
@@ -552,20 +573,23 @@ fn split_jwt(token: &str) -> Result<(String, String, String), Str> {
 /// The `err` values below are the base64 and serde_json crates' own English
 /// wording; only the sentence around them is ours to translate.
 fn decode_jwt_json(part: &str, name: JwtPart) -> Result<String, Str> {
-    let bytes = B64_URL_SAFE
-        .decode(part.as_bytes())
-        .map_err(|err| Str::JwtPartNotBase64 {
+    let bytes = B64_URL_SAFE.decode(part.as_bytes()).map_err(|err| {
+        encoder_decoder::Text::JwtPartNotBase64 {
             part: name,
             detail: err.to_string(),
-        })?;
+        }
+    })?;
     let value: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|err| Str::JwtPartNotJson {
+        serde_json::from_slice(&bytes).map_err(|err| encoder_decoder::Text::JwtPartNotJson {
             part: name,
             detail: err.to_string(),
         })?;
-    serde_json::to_string_pretty(&value).map_err(|err| Str::JwtPartNotRenderable {
-        part: name,
-        detail: err.to_string(),
+    serde_json::to_string_pretty(&value).map_err(|err| {
+        encoder_decoder::Text::JwtPartNotRenderable {
+            part: name,
+            detail: err.to_string(),
+        }
+        .into()
     })
 }
 

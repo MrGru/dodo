@@ -20,7 +20,7 @@ use crate::database::components::notice::{Tone, notice};
 use crate::database::models::statement::{GeneratedBatch, display_parameter, placeholder};
 use crate::database::services::Driver;
 use crate::database::views::database::{DatabaseView, MutationTarget};
-use crate::i18n::{Str, t};
+use crate::i18n::{db_connection, db_query, t};
 
 const WIDTH: gpui::Pixels = px(760.);
 const PADDING: gpui::Pixels = px(32.);
@@ -41,10 +41,13 @@ pub(super) fn open(
     });
     let body = view.clone();
     window.open_dialog(cx, move |dialog, _, cx| {
-        dialog.title(t(Str::DbCommitTitle, cx)).w(WIDTH).content({
-            let body = body.clone();
-            move |content, _, _| content.child(div().w(WIDTH - PADDING).child(body.clone()))
-        })
+        dialog
+            .title(t(db_query::Text::CommitTitle, cx))
+            .w(WIDTH)
+            .content({
+                let body = body.clone();
+                move |content, _, _| content.child(div().w(WIDTH - PADDING).child(body.clone()))
+            })
     });
 }
 
@@ -68,16 +71,20 @@ impl Render for CommitDialog {
             .gap_3()
             .child(notice(
                 Tone::Warning,
-                t(Str::DbCommitLostUpdateNotice, cx),
+                t(db_query::Text::CommitLostUpdateNotice, cx),
                 cx,
             ))
-            .child(div().text_sm().child(t(Str::DbCommitSummary(expected), cx)))
+            .child(
+                div()
+                    .text_sm()
+                    .child(t(db_query::Text::CommitSummary(expected), cx)),
+            )
             .child(
                 div()
                     .text_xs()
                     .font_bold()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::DbCommitExactStatements, cx)),
+                    .child(t(db_query::Text::CommitExactStatements, cx)),
             )
             .child(
                 v_flex()
@@ -100,17 +107,15 @@ impl Render for CommitDialog {
                                     h_flex()
                                         .w_full()
                                         .justify_between()
-                                        .child(
-                                            div().font_semibold().child(t(
-                                                Str::DbCommitStatementLabel(index + 1),
-                                                cx,
-                                            )),
-                                        )
+                                        .child(div().font_semibold().child(t(
+                                            db_query::Text::CommitStatementLabel(index + 1),
+                                            cx,
+                                        )))
                                         .child(
                                             div()
                                                 .text_xs()
                                                 .text_color(cx.theme().muted_foreground)
-                                                .child(t(Str::DbExpectedOneRow, cx)),
+                                                .child(t(db_query::Text::ExpectedOneRow, cx)),
                                         ),
                                 )
                                 .child(
@@ -129,7 +134,7 @@ impl Render for CommitDialog {
                                             div()
                                                 .text_xs()
                                                 .text_color(cx.theme().muted_foreground)
-                                                .child(t(Str::DbCommitParameters, cx)),
+                                                .child(t(db_query::Text::CommitParameters, cx)),
                                         )
                                         .children(statement.params.iter().enumerate().map(
                                             |(parameter, value)| {
@@ -161,14 +166,14 @@ impl Render for CommitDialog {
                         Button::new("db-commit-cancel")
                             .ghost()
                             .small()
-                            .label(t(Str::DbCancel, cx))
+                            .label(t(db_connection::Text::Cancel, cx))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("db-commit-confirm")
                             .danger()
                             .small()
-                            .label(t(Str::DbCommit, cx))
+                            .label(t(db_query::Text::Commit, cx))
                             .on_click(move |_, window, cx| {
                                 window.close_dialog(cx);
                                 page.update(cx, |page, cx| {

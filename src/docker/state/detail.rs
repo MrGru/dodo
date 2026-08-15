@@ -20,7 +20,7 @@
 //! [`views::detail`](crate::docker::views::detail).
 
 use crate::docker::models::inspect::InspectKind;
-use crate::i18n::Str;
+use crate::i18n::{Str, docker};
 
 /// Where a detail surface's one fetch has got to.
 pub enum DetailStatus<T> {
@@ -63,8 +63,8 @@ impl DetailTab {
     /// separately-opened overlays' titles — so nothing new is translated here.
     pub fn label(self) -> Str {
         match self {
-            DetailTab::Inspect => Str::DockerInspect,
-            DetailTab::Logs => Str::DockerViewLogs,
+            DetailTab::Inspect => docker::Text::Inspect.into(),
+            DetailTab::Logs => docker::Text::ViewLogs.into(),
         }
     }
 }
@@ -146,7 +146,7 @@ impl<I, L> DetailTabs<I, L> {
 mod tests {
     use super::{DetailStatus, DetailTab, DetailTabs};
     use crate::docker::models::inspect::InspectKind;
-    use crate::i18n::Str;
+    use crate::i18n::docker;
 
     /// The concrete instantiation the tab tests use: the payload types do not
     /// matter to the switching rules, only whether a slot is filled.
@@ -229,9 +229,9 @@ mod tests {
     fn a_failed_tab_is_retried_by_refresh_not_by_switching() {
         let mut tabs = tabs();
         tabs.begin_load(DetailTab::Inspect);
-        tabs.set_inspect(DetailStatus::Failed(Str::DockerOperationError(
-            "nope".into(),
-        )));
+        tabs.set_inspect(DetailStatus::Failed(
+            docker::Text::OperationError("nope".into()).into(),
+        ));
 
         // Switching away and back does not silently retry.
         assert!(tabs.activate(DetailTab::Logs));
@@ -275,14 +275,7 @@ mod tests {
 
     #[test]
     fn each_tab_labels_itself_with_an_existing_string() {
-        use std::mem::discriminant;
-        assert_eq!(
-            discriminant(&DetailTab::Inspect.label()),
-            discriminant(&Str::DockerInspect)
-        );
-        assert_eq!(
-            discriminant(&DetailTab::Logs.label()),
-            discriminant(&Str::DockerViewLogs)
-        );
+        assert_eq!(DetailTab::Inspect.label(), docker::Text::Inspect.into());
+        assert_eq!(DetailTab::Logs.label(), docker::Text::ViewLogs.into());
     }
 }

@@ -20,7 +20,7 @@ use crate::app_icon::AppIcon;
 use crate::database::models::library::{HistoryEntry, HistoryOutcome};
 use crate::database::state::query::format_elapsed;
 use crate::database::views::database::DatabaseView;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, db_catalog, db_query, t};
 
 const PANEL_W: Pixels = px(680.);
 const PANEL_H: Pixels = px(440.);
@@ -42,7 +42,7 @@ pub fn open(
         let body_h = PANEL_H.min(viewport.height - PANEL_MARGIN * 4.);
         dialog
             .w(card_w)
-            .title(t(Str::DbHistory, cx))
+            .title(t(db_query::Text::History, cx))
             .content(move |content, _, _| {
                 content.child(
                     div()
@@ -94,7 +94,7 @@ impl Render for HistoryView {
                         .ghost()
                         .small()
                         .icon(AppIcon::Trash)
-                        .label(t(Str::DbHistoryClear, cx))
+                        .label(t(db_query::Text::HistoryClear, cx))
                         .disabled(!self.can_clear)
                         .on_click(move |_, window, cx| {
                             window.close_dialog(cx);
@@ -107,7 +107,7 @@ impl Render for HistoryView {
             .child(
                 div().flex_1().min_h_0().child(
                     List::new(&self.list)
-                        .search_placeholder(t(Str::DbHistorySearch, cx))
+                        .search_placeholder(t(db_query::Text::HistorySearch, cx))
                         .size_full(),
                 ),
             )
@@ -166,9 +166,9 @@ impl ListDelegate for HistoryDelegate {
     ) -> Option<Self::Item> {
         let entry = self.entries.get(*self.filtered.get(ix.row)?)?;
         let outcome = match entry.outcome {
-            HistoryOutcome::Succeeded => Str::DbHistorySucceeded,
-            HistoryOutcome::Failed => Str::DbHistoryFailed,
-            HistoryOutcome::Cancelled => Str::DbCancelledMessage,
+            HistoryOutcome::Succeeded => Str::from(db_query::Text::HistorySucceeded),
+            HistoryOutcome::Failed => Str::from(db_query::Text::HistoryFailed),
+            HistoryOutcome::Cancelled => Str::from(db_catalog::Text::CancelledMessage),
         };
         let separator = || {
             div()
@@ -197,9 +197,9 @@ impl ListDelegate for HistoryDelegate {
                             .child(t(outcome, cx))
                             .children(entry.duration_ms.map(|millis| {
                                 h_flex().gap_1().child(separator()).child(t(
-                                    Str::DbFooterElapsed(format_elapsed(Duration::from_millis(
-                                        millis,
-                                    ))),
+                                    db_query::Text::FooterElapsed(format_elapsed(
+                                        Duration::from_millis(millis),
+                                    )),
                                     cx,
                                 ))
                             }))
@@ -216,9 +216,9 @@ impl ListDelegate for HistoryDelegate {
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
         let text = if self.entries.is_empty() {
-            Str::DbHistoryEmpty
+            db_query::Text::HistoryEmpty
         } else {
-            Str::DbHistoryNoMatches
+            db_query::Text::HistoryNoMatches
         };
         v_flex()
             .size_full()
@@ -261,10 +261,10 @@ fn statement_summary(statement: &str) -> String {
 fn relative_age(recorded_at: u64, current: u64) -> Str {
     let seconds = current.saturating_sub(recorded_at);
     match seconds {
-        0..=59 => Str::DbHistoryJustNow,
-        60..=3_599 => Str::DbHistoryMinutesAgo(seconds / 60),
-        3_600..=86_399 => Str::DbHistoryHoursAgo(seconds / 3_600),
-        _ => Str::DbHistoryDaysAgo(seconds / 86_400),
+        0..=59 => db_query::Text::HistoryJustNow.into(),
+        60..=3_599 => db_query::Text::HistoryMinutesAgo(seconds / 60).into(),
+        3_600..=86_399 => db_query::Text::HistoryHoursAgo(seconds / 3_600).into(),
+        _ => db_query::Text::HistoryDaysAgo(seconds / 86_400).into(),
     }
 }
 
@@ -278,7 +278,7 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{relative_age, statement_summary};
-    use crate::i18n::Str;
+    use crate::i18n::{Str, db_query};
 
     #[test]
     fn a_multiline_statement_is_one_search_result_row() {
@@ -290,18 +290,21 @@ mod tests {
 
     #[test]
     fn persisted_timestamps_render_as_bounded_relative_units() {
-        assert!(matches!(relative_age(100, 120), Str::DbHistoryJustNow));
+        assert!(matches!(
+            relative_age(100, 120),
+            Str::DbQuery(db_query::Text::HistoryJustNow)
+        ));
         assert!(matches!(
             relative_age(100, 220),
-            Str::DbHistoryMinutesAgo(2)
+            Str::DbQuery(db_query::Text::HistoryMinutesAgo(2))
         ));
         assert!(matches!(
             relative_age(100, 7_300),
-            Str::DbHistoryHoursAgo(2)
+            Str::DbQuery(db_query::Text::HistoryHoursAgo(2))
         ));
         assert!(matches!(
             relative_age(100, 172_900),
-            Str::DbHistoryDaysAgo(2)
+            Str::DbQuery(db_query::Text::HistoryDaysAgo(2))
         ));
     }
 }

@@ -26,7 +26,7 @@
 //! the i18n guard has something to enforce and a driver never has to know what
 //! language the app is in.
 
-use crate::i18n::Str;
+use crate::i18n::{Str, db_catalog};
 
 /// A driver's own way of naming an object. Opaque above `services/`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -93,12 +93,12 @@ pub enum GroupLabel {
 impl GroupLabel {
     pub fn text(self) -> Str {
         match self {
-            GroupLabel::Tables => Str::DbGroupTables,
-            GroupLabel::Views => Str::DbGroupViews,
-            GroupLabel::Columns => Str::DbGroupColumns,
-            GroupLabel::Indexes => Str::DbGroupIndexes,
-            GroupLabel::Constraints => Str::DbGroupConstraints,
-            GroupLabel::More => Str::DbGroupMore,
+            GroupLabel::Tables => db_catalog::Text::GroupTables.into(),
+            GroupLabel::Views => db_catalog::Text::GroupViews.into(),
+            GroupLabel::Columns => db_catalog::Text::GroupColumns.into(),
+            GroupLabel::Indexes => db_catalog::Text::GroupIndexes.into(),
+            GroupLabel::Constraints => db_catalog::Text::GroupConstraints.into(),
+            GroupLabel::More => db_catalog::Text::GroupMore.into(),
         }
     }
 }

@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::api_explorer::models::collection::Node;
-use crate::i18n::Str;
+use crate::i18n::{Str, api_collections};
 use crate::paths::data_dir;
 
 /// A persistence failure, in terms the UI can show.
@@ -38,7 +38,7 @@ impl StoreError {
 
     /// The message shown when saving or loading collections fails.
     pub fn message(&self) -> Str {
-        Str::CollectionStoreError(self.detail.clone())
+        api_collections::Text::CollectionStoreError(self.detail.clone()).into()
     }
 }
 

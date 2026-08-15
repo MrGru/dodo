@@ -46,7 +46,7 @@ use crate::api_explorer::models::script::ScriptOrigin;
 use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::api_explorer::models::variables::Variable;
 use crate::api_explorer::services::environment_import::postman_variable;
-use crate::i18n::Str;
+use crate::i18n::{Str, api_collections};
 
 /// Why an import could not be read.
 #[derive(Debug)]
@@ -62,7 +62,7 @@ impl ImportError {
     }
 
     pub fn message(&self) -> Str {
-        Str::CollectionImportError(self.detail.clone())
+        api_collections::Text::CollectionImportError(self.detail.clone()).into()
     }
 }
 

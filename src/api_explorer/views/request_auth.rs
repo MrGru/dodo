@@ -24,7 +24,7 @@ use crate::api_explorer::models::auth::{ApiKeyLocation, AuthType};
 use crate::api_explorer::state::tab::RequestTabState;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{api_explorer, t};
 
 /// Width of the label column beside each field, so the inputs line up.
 const LABEL_COLUMN: Pixels = px(96.);
@@ -75,7 +75,7 @@ impl ApiExplorer {
                 // than hidden, the same convention the rest of the tool uses.
                 .disabled(!candidate.is_available())
                 .when(!candidate.is_available(), |this| {
-                    this.tooltip(t(Str::OAuth2Later, cx))
+                    this.tooltip(t(api_explorer::Text::OAuth2Later, cx))
                 })
                 .label(t(candidate.label(), cx))
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -99,7 +99,7 @@ impl ApiExplorer {
                 Button::new("auth-type-trigger")
                     .outline()
                     .xsmall()
-                    .tooltip(t(Str::AuthTypeLabel, cx))
+                    .tooltip(t(api_explorer::Text::AuthTypeLabel, cx))
                     .child(
                         h_flex()
                             .items_center()
@@ -137,24 +137,44 @@ impl ApiExplorer {
         match auth_type {
             AuthType::None => empty_state(
                 AppIcon::Globe,
-                t(Str::NoAuthTitle, cx),
-                Some(t(Str::NoAuthHint, cx)),
+                t(api_explorer::Text::NoAuthTitle, cx),
+                Some(t(api_explorer::Text::NoAuthHint, cx)),
                 cx,
             )
             .into_any_element(),
 
             AuthType::Bearer => field_column()
-                .child(field_row(t(Str::AuthTokenLabel, cx), &token, cx))
+                .child(field_row(
+                    t(api_explorer::Text::AuthTokenLabel, cx),
+                    &token,
+                    cx,
+                ))
                 .into_any_element(),
 
             AuthType::Basic => field_column()
-                .child(field_row(t(Str::AuthUsernameLabel, cx), &username, cx))
-                .child(field_row(t(Str::AuthPasswordLabel, cx), &password, cx))
+                .child(field_row(
+                    t(api_explorer::Text::AuthUsernameLabel, cx),
+                    &username,
+                    cx,
+                ))
+                .child(field_row(
+                    t(api_explorer::Text::AuthPasswordLabel, cx),
+                    &password,
+                    cx,
+                ))
                 .into_any_element(),
 
             AuthType::ApiKey => field_column()
-                .child(field_row(t(Str::ApiKeyNameLabel, cx), &key_name, cx))
-                .child(field_row(t(Str::ApiKeyValueLabel, cx), &key_value, cx))
+                .child(field_row(
+                    t(api_explorer::Text::ApiKeyNameLabel, cx),
+                    &key_name,
+                    cx,
+                ))
+                .child(field_row(
+                    t(api_explorer::Text::ApiKeyValueLabel, cx),
+                    &key_value,
+                    cx,
+                ))
                 .child(self.api_key_location_row(tab, location, cx))
                 .into_any_element(),
 
@@ -162,8 +182,8 @@ impl ApiExplorer {
             // here as well so the pane can never render blank.
             AuthType::OAuth2 => later_step(
                 AppIcon::Globe,
-                t(Str::AuthTypeOAuth2, cx),
-                t(Str::OAuth2Later, cx),
+                t(api_explorer::Text::AuthTypeOAuth2, cx),
+                t(api_explorer::Text::OAuth2Later, cx),
                 cx,
             )
             .into_any_element(),
@@ -205,7 +225,7 @@ impl ApiExplorer {
                     .flex_shrink_0()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::ApiKeySendAs, cx)),
+                    .child(t(api_explorer::Text::ApiKeySendAs, cx)),
             )
             .child(h_flex().items_center().gap_1().children(options))
     }

@@ -52,7 +52,7 @@ use crate::docker::{
     DockerMoveDown, DockerMoveUp, DockerOpenDetail, DockerRefreshList, DockerToggleSelect,
     KEY_CONTEXT, POLL_INTERVAL,
 };
-use crate::i18n::{Language, Str, t};
+use crate::i18n::{Language, docker, shared, t};
 
 /// Fixed column widths shared by the header and every row so they line up. Name,
 /// Image and Ports take the remaining width as flex columns and truncate.
@@ -111,7 +111,7 @@ pub struct ContainersView {
 
 impl ContainersView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let placeholder = t(Str::DockerSearchPlaceholder, cx);
+        let placeholder = t(docker::Text::SearchPlaceholder, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
 
         // Instant, case-insensitive filtering: every keystroke updates the query.
@@ -492,13 +492,13 @@ impl ContainersView {
             let entity = entity.clone();
             let id = id.clone();
             alert
-                .title(t(Str::DockerDeleteTitle, cx))
-                .description(t(Str::DockerDeleteMessage(name.clone()), cx))
+                .title(t(docker::Text::DeleteTitle, cx))
+                .description(t(docker::Text::DeleteMessage(name.clone()), cx))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t(Str::Delete, cx))
+                        .ok_text(t(shared::Text::Delete, cx))
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text(t(Str::DockerCancel, cx))
+                        .cancel_text(t(docker::Text::Cancel, cx))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _window, cx| {
@@ -554,7 +554,7 @@ impl ContainersView {
                 this.refresh(cx);
                 if failures > 0 {
                     this.state
-                        .set_action_error(Str::DockerBulkFailures(failures));
+                        .set_action_error(docker::Text::BulkFailures(failures).into());
                 }
                 cx.notify();
             });
@@ -575,13 +575,13 @@ impl ContainersView {
             let entity = entity.clone();
             let ids = ids.clone();
             alert
-                .title(t(Str::DockerBulkDeleteTitle, cx))
-                .description(t(Str::DockerBulkDeleteMessage(count), cx))
+                .title(t(docker::Text::BulkDeleteTitle, cx))
+                .description(t(docker::Text::BulkDeleteMessage(count), cx))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t(Str::Delete, cx))
+                        .ok_text(t(shared::Text::Delete, cx))
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text(t(Str::DockerCancel, cx))
+                        .cancel_text(t(docker::Text::Cancel, cx))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _window, cx| {
@@ -601,7 +601,7 @@ impl ContainersView {
             return;
         }
         self.language = language;
-        let placeholder = t(Str::DockerSearchPlaceholder, cx);
+        let placeholder = t(docker::Text::SearchPlaceholder, cx);
         self.search.update(cx, |state, cx| {
             state.set_placeholder(placeholder, window, cx);
         });
@@ -617,7 +617,7 @@ impl ContainersView {
                 Button::new("docker-refresh")
                     .small()
                     .icon(AppIcon::Refresh)
-                    .label(t(Str::DockerRefresh, cx))
+                    .label(t(docker::Text::Refresh, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
             .child(self.render_filter(cx))
@@ -626,7 +626,7 @@ impl ContainersView {
             .child(coming_soon_button(
                 "docker-create".into(),
                 AppIcon::Plus,
-                t(Str::DockerCreate, cx),
+                t(docker::Text::Create, cx),
                 cx,
             ))
     }
@@ -637,9 +637,9 @@ impl ContainersView {
     fn render_filter(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.state.filters().active_count();
         let label = if active > 0 {
-            t(Str::DockerFilterWithCount(active), cx)
+            t(docker::Text::FilterWithCount(active), cx)
         } else {
-            t(Str::DockerFilter, cx)
+            t(docker::Text::Filter, cx)
         };
         let trigger = Button::new("docker-filter")
             .small()
@@ -674,14 +674,14 @@ impl ContainersView {
                         div()
                             .text_sm()
                             .font_medium()
-                            .child(t(Str::DockerFilterTitle, cx)),
+                            .child(t(docker::Text::FilterTitle, cx)),
                     )
                     .when(filters.is_active(), |row| {
                         row.child(
                             Button::new("docker-filter-clear")
                                 .xsmall()
                                 .ghost()
-                                .label(t(Str::DockerFilterClear, cx))
+                                .label(t(docker::Text::FilterClear, cx))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.state.filters_mut().clear();
                                     cx.notify();
@@ -690,7 +690,7 @@ impl ContainersView {
                     }),
             )
             // Status — always present; the five filterable lifecycle states.
-            .child(filter_section_title(t(Str::DockerColumnStatus, cx), cx))
+            .child(filter_section_title(t(docker::Text::ColumnStatus, cx), cx))
             .children(FILTERABLE_STATUSES.map(|status| {
                 Checkbox::new(SharedString::from(format!("filter-status-{status:?}")))
                     .label(t(status.label(), cx))
@@ -703,7 +703,7 @@ impl ContainersView {
             // Compose project — only when at least one project exists.
             .when(!projects.is_empty(), |panel| {
                 panel
-                    .child(filter_section_title(t(Str::DockerFilterProject, cx), cx))
+                    .child(filter_section_title(t(docker::Text::FilterProject, cx), cx))
                     .children(projects.into_iter().map(|project| {
                         let checked = filters.is_project_selected(&project);
                         Checkbox::new(SharedString::from(format!("filter-project-{project}")))
@@ -720,7 +720,7 @@ impl ContainersView {
             // Image — only when there is something to pick.
             .when(!images.is_empty(), |panel| {
                 panel
-                    .child(filter_section_title(t(Str::DockerColumnImage, cx), cx))
+                    .child(filter_section_title(t(docker::Text::ColumnImage, cx), cx))
                     .children(images.into_iter().map(|image| {
                         let checked = filters.is_image_selected(&image);
                         Checkbox::new(SharedString::from(format!("filter-image-{image}")))
@@ -735,10 +735,10 @@ impl ContainersView {
                     }))
             })
             // Has published ports (boolean) and the Favorites placeholder.
-            .child(filter_section_title(t(Str::DockerColumnPorts, cx), cx))
+            .child(filter_section_title(t(docker::Text::ColumnPorts, cx), cx))
             .child(
                 Checkbox::new("filter-published-ports")
-                    .label(t(Str::DockerFilterPublishedPorts, cx))
+                    .label(t(docker::Text::FilterPublishedPorts, cx))
                     .checked(filters.published_ports_only())
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.state.filters_mut().set_published_ports_only(*checked);
@@ -748,7 +748,7 @@ impl ContainersView {
             // Favorites is a future feature: a clearly-labelled, disabled stub.
             .child(
                 Checkbox::new("filter-favorites")
-                    .label(t(Str::DockerFilterFavorites, cx))
+                    .label(t(docker::Text::FilterFavorites, cx))
                     .checked(false)
                     .disabled(true),
             )
@@ -796,7 +796,7 @@ impl ContainersView {
             .child(
                 div()
                     .font_medium()
-                    .child(t(Str::DockerBulkSelected(count), cx)),
+                    .child(t(docker::Text::BulkSelected(count), cx)),
             )
             .child(div().flex_1())
             .child(
@@ -804,7 +804,7 @@ impl ContainersView {
                     .xsmall()
                     .ghost()
                     .icon(AppIcon::Play)
-                    .label(t(Str::DockerBulkStart, cx))
+                    .label(t(docker::Text::BulkStart, cx))
                     .disabled(startable.is_empty())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let ids = this.state.bulk_startable_ids();
@@ -816,7 +816,7 @@ impl ContainersView {
                     .xsmall()
                     .ghost()
                     .icon(AppIcon::Stop)
-                    .label(t(Str::DockerBulkStop, cx))
+                    .label(t(docker::Text::BulkStop, cx))
                     .disabled(stoppable.is_empty())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let ids = this.state.bulk_stoppable_ids();
@@ -828,7 +828,7 @@ impl ContainersView {
                     .xsmall()
                     .danger()
                     .icon(AppIcon::Trash)
-                    .label(t(Str::DockerBulkDelete, cx))
+                    .label(t(docker::Text::BulkDelete, cx))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.confirm_bulk_delete(window, cx)),
                     ),
@@ -837,7 +837,7 @@ impl ContainersView {
                 Button::new("bulk-clear")
                     .xsmall()
                     .ghost()
-                    .label(t(Str::DockerBulkClear, cx))
+                    .label(t(docker::Text::BulkClear, cx))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.state.selection.clear();
                         cx.notify();
@@ -862,12 +862,12 @@ impl ContainersView {
     }
 
     fn render_error(&self, message: SharedString, cx: &mut Context<Self>) -> gpui::AnyElement {
-        error_state(t(Str::DockerUnreachableTitle, cx), message, cx)
+        error_state(t(docker::Text::UnreachableTitle, cx), message, cx)
             .child(
                 Button::new("docker-retry")
                     .small()
                     .icon(AppIcon::Refresh)
-                    .label(t(Str::DockerRetry, cx))
+                    .label(t(docker::Text::Retry, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
             .into_any_element()
@@ -876,8 +876,8 @@ impl ContainersView {
     fn render_empty(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         empty_state(
             AppIcon::Inbox,
-            t(Str::NoContainers, cx),
-            Some(t(Str::NoContainersHint, cx)),
+            t(docker::Text::NoContainers, cx),
+            Some(t(docker::Text::NoContainersHint, cx)),
             cx,
         )
         .child(
@@ -885,7 +885,7 @@ impl ContainersView {
             coming_soon_button(
                 "docker-empty-create".into(),
                 AppIcon::Plus,
-                t(Str::DockerCreate, cx),
+                t(docker::Text::Create, cx),
                 cx,
             ),
         )
@@ -897,7 +897,7 @@ impl ContainersView {
 
         // Rows exist but the search/filters hide them all: a centred empty note.
         if groups.is_empty() {
-            return empty_state(AppIcon::Inbox, t(Str::NoContainers, cx), None, cx)
+            return empty_state(AppIcon::Inbox, t(docker::Text::NoContainers, cx), None, cx)
                 .into_any_element();
         }
 
@@ -958,7 +958,7 @@ impl ContainersView {
         let key = group.key.clone();
         let title = match &group.key {
             GroupKey::Project(name) => SharedString::from(name.clone()),
-            GroupKey::Ungrouped => t(Str::DockerUngrouped, cx),
+            GroupKey::Ungrouped => t(docker::Text::Ungrouped, cx),
         };
         let chevron = if collapsed {
             AppIcon::ChevronRight
@@ -993,12 +993,12 @@ impl ContainersView {
             )
             .child(div().font_medium().child(title))
             .child(status_badge(
-                t(Str::DockerGroupContainers(group.total()), cx),
+                t(docker::Text::GroupContainers(group.total()), cx),
                 cx.theme().muted_foreground,
                 cx,
             ))
             .child(status_badge(
-                t(Str::DockerGroupRunning(group.running_count()), cx),
+                t(docker::Text::GroupRunning(group.running_count()), cx),
                 summary_color,
                 cx,
             ))
@@ -1023,7 +1023,7 @@ impl ContainersView {
                 div().w(SELECT_W).flex_shrink_0().child(
                     Checkbox::new("docker-select-all")
                         .checked(all_selected)
-                        .tooltip(t(Str::DockerSelectAll, cx))
+                        .tooltip(t(docker::Text::SelectAll, cx))
                         .on_click(
                             cx.listener(|this, checked: &bool, _, cx| {
                                 this.select_all(*checked, cx)
@@ -1031,34 +1031,38 @@ impl ContainersView {
                         ),
                 ),
             )
-            .child(header_cell(t(Str::DockerColumnName, cx)).flex_1().min_w_0())
             .child(
-                header_cell(t(Str::DockerColumnImage, cx))
+                header_cell(t(docker::Text::ColumnName, cx))
                     .flex_1()
                     .min_w_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnStatus, cx))
+                header_cell(t(docker::Text::ColumnImage, cx))
+                    .flex_1()
+                    .min_w_0(),
+            )
+            .child(
+                header_cell(t(docker::Text::ColumnStatus, cx))
                     .w(STATUS_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnCpu, cx))
+                header_cell(t(docker::Text::ColumnCpu, cx))
                     .w(CPU_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnPorts, cx))
+                header_cell(t(docker::Text::ColumnPorts, cx))
                     .flex_1()
                     .min_w_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnLastStarted, cx))
+                header_cell(t(docker::Text::ColumnLastStarted, cx))
                     .w(STARTED_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnActions, cx))
+                header_cell(t(docker::Text::ColumnActions, cx))
                     .w(ACTIONS_W)
                     .flex_shrink_0(),
             )
@@ -1107,7 +1111,7 @@ impl ContainersView {
                 div().w(SELECT_W).flex_shrink_0().child(
                     Checkbox::new(SharedString::from(format!("sel-{}", row.id)))
                         .checked(selected)
-                        .tooltip(t(Str::DockerSelectRow, cx))
+                        .tooltip(t(docker::Text::SelectRow, cx))
                         .on_click(cx.listener({
                             let id = row.id.clone();
                             move |this, checked: &bool, _, cx| {
@@ -1123,7 +1127,7 @@ impl ContainersView {
                 name_cell(
                     SharedString::from(format!("cname-{}", row.id)),
                     SharedString::from(row.name.clone()),
-                    t(Str::DockerOpenDetails, cx),
+                    t(docker::Text::OpenDetails, cx),
                     cx.listener({
                         let id = row.id.clone();
                         move |this, _, window, cx| {
@@ -1200,7 +1204,7 @@ impl ContainersView {
             .child(action_button(
                 SharedString::from(format!("start-{}", row.id)),
                 AppIcon::Play,
-                t(Str::DockerStart, cx),
+                t(docker::Text::Start, cx),
                 status.can_start(),
                 ButtonVariant::Ghost,
                 cx.listener({
@@ -1211,7 +1215,7 @@ impl ContainersView {
             .child(action_button(
                 SharedString::from(format!("stop-{}", row.id)),
                 AppIcon::Stop,
-                t(Str::DockerStop, cx),
+                t(docker::Text::Stop, cx),
                 status.can_stop(),
                 ButtonVariant::Ghost,
                 cx.listener({
@@ -1222,7 +1226,7 @@ impl ContainersView {
             .child(action_button(
                 SharedString::from(format!("restart-{}", row.id)),
                 AppIcon::Restart,
-                t(Str::DockerRestart, cx),
+                t(docker::Text::Restart, cx),
                 status.can_restart(),
                 ButtonVariant::Ghost,
                 cx.listener({
@@ -1233,7 +1237,7 @@ impl ContainersView {
             .child(action_button(
                 SharedString::from(format!("delete-{}", row.id)),
                 AppIcon::Trash,
-                t(Str::Delete, cx),
+                t(shared::Text::Delete, cx),
                 true,
                 ButtonVariant::Danger,
                 cx.listener({
@@ -1360,50 +1364,50 @@ fn container_context_menu(
 ) -> PopupMenu {
     menu.action_context(focus)
         .menu_with_icon(
-            t(Str::DockerInspect, cx),
+            t(docker::Text::Inspect, cx),
             AppIcon::Eye,
             Box::new(DockerContextInspect),
         )
         .menu_with_icon(
-            t(Str::DockerViewLogs, cx),
+            t(docker::Text::ViewLogs, cx),
             AppIcon::File,
             Box::new(DockerContextLogs),
         )
         .separator()
         .menu_with_icon_and_disabled(
-            t(Str::DockerStart, cx),
+            t(docker::Text::Start, cx),
             AppIcon::Play,
             Box::new(DockerContextStart),
             !status.can_start(),
         )
         .menu_with_icon_and_disabled(
-            t(Str::DockerStop, cx),
+            t(docker::Text::Stop, cx),
             AppIcon::Stop,
             Box::new(DockerContextStop),
             !status.can_stop(),
         )
         .menu_with_icon_and_disabled(
-            t(Str::DockerRestart, cx),
+            t(docker::Text::Restart, cx),
             AppIcon::Restart,
             Box::new(DockerContextRestart),
             !status.can_restart(),
         )
         .separator()
         .menu_with_icon(
-            t(Str::Delete, cx),
+            t(shared::Text::Delete, cx),
             AppIcon::Trash,
             Box::new(DockerContextDelete),
         )
         .separator()
-        .label(t(Str::DockerComingSoonLabel, cx))
+        .label(t(docker::Text::ComingSoonLabel, cx))
         .menu_with_icon_and_disabled(
-            t(Str::DockerOpenTerminal, cx),
+            t(docker::Text::OpenTerminal, cx),
             AppIcon::SquareCode,
             Box::new(DockerContextTerminal),
             true,
         )
         .menu_with_icon_and_disabled(
-            t(Str::DockerStats, cx),
+            t(docker::Text::Stats, cx),
             AppIcon::Sliders,
             Box::new(DockerContextStats),
             true,

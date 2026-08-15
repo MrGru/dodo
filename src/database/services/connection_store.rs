@@ -23,7 +23,7 @@ use std::sync::Mutex;
 use serde_json::Value;
 
 use crate::database::models::connection::{ConnectionDocument, SCHEMA_VERSION};
-use crate::i18n::Str;
+use crate::i18n::{Str, db_connection};
 use crate::paths::data_dir;
 
 /// Why connections could not be loaded or saved, in terms the UI can show.
@@ -49,13 +49,18 @@ impl ConnectionStoreError {
 
     pub fn message(&self) -> Str {
         match self {
-            ConnectionStoreError::Io { detail } => Str::DbConnectionStoreError(detail.clone()),
-            ConnectionStoreError::MissingVersion => Str::DbConnectionStoreMissingVersion,
+            ConnectionStoreError::Io { detail } => {
+                db_connection::Text::ConnectionStoreError(detail.clone()).into()
+            }
+            ConnectionStoreError::MissingVersion => {
+                db_connection::Text::ConnectionStoreMissingVersion.into()
+            }
             ConnectionStoreError::UnsupportedVersion { found, supported } => {
-                Str::DbConnectionStoreUnsupportedVersion {
+                db_connection::Text::ConnectionStoreUnsupportedVersion {
                     found: *found,
                     supported: *supported,
                 }
+                .into()
             }
         }
     }

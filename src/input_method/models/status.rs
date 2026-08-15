@@ -21,7 +21,7 @@
 //!
 //! [`StatusDocument`]: dodo_ime_ipc::status::StatusDocument
 
-use crate::i18n::Str;
+use crate::i18n::{Str, input_method};
 use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallStep};
 
 /// Whether an install is running, and what the last one did.
@@ -57,36 +57,38 @@ pub fn status_message(
     running: Option<&str>,
 ) -> Str {
     match install {
-        Install::Running => Str::InputMethodInstalling,
-        Install::Done(InstallOutcome::Ready) => Str::InputMethodInstalled,
+        Install::Running => input_method::Text::Installing.into(),
+        Install::Done(InstallOutcome::Ready) => input_method::Text::Installed.into(),
         Install::Done(InstallOutcome::Installed { refused, status }) => {
             // The step is not named in the message on purpose: "enable" and
             // "select" are Text Input Sources' words, and what the user has to do
             // about either is the same sentence.
             debug_assert!(matches!(refused, InstallStep::Enable | InstallStep::Select));
-            Str::InputMethodInstalledNotActive(*status)
+            input_method::Text::InstalledNotActive(*status).into()
         }
         Install::Done(InstallOutcome::Failed(InstallFailure::NoSourceBundle)) => {
-            Str::InputMethodNoBundle
+            input_method::Text::NoBundle.into()
         }
         Install::Done(InstallOutcome::Failed(InstallFailure::Copy { detail })) => {
-            Str::InputMethodCopyFailed(detail.clone())
+            input_method::Text::CopyFailed(detail.clone()).into()
         }
         Install::Done(InstallOutcome::Failed(InstallFailure::InvalidSignature { detail })) => {
-            Str::InputMethodInvalidSignature(detail.clone())
+            input_method::Text::InvalidSignature(detail.clone()).into()
         }
         Install::Done(InstallOutcome::Failed(InstallFailure::NeverAppeared { attempts })) => {
-            Str::InputMethodNeverAppeared(*attempts)
+            input_method::Text::NeverAppeared(*attempts).into()
         }
         // Nothing has been pressed this run, so the state is whatever is on disk.
-        Install::Idle if !installed => Str::InputMethodNotInstalled,
-        Install::Idle if settings_applied == Some(false) => Str::InputMethodSettingsPending,
+        Install::Idle if !installed => input_method::Text::NotInstalled.into(),
+        Install::Idle if settings_applied == Some(false) => {
+            input_method::Text::SettingsPending.into()
+        }
         Install::Idle => match running {
-            Some(version) => Str::InputMethodRunning(version.to_string()),
+            Some(version) => input_method::Text::Running(version.to_string()).into(),
             // Installed, and either it has never run or the process that wrote
             // the status file has since exited. macOS stops the agent when
             // nothing is typing at it.
-            None => Str::InputMethodInstalledIdle,
+            None => input_method::Text::InstalledIdle.into(),
         },
     }
 }
@@ -96,7 +98,7 @@ mod tests {
     use std::mem::{Discriminant, discriminant};
 
     use super::{Install, status_message};
-    use crate::i18n::Str;
+    use crate::i18n::{Str, input_method};
     use crate::input_method::models::install::{InstallFailure, InstallOutcome, InstallStep};
 
     fn said(
@@ -104,11 +106,17 @@ mod tests {
         installed: bool,
         applied: Option<bool>,
         running: Option<&str>,
-    ) -> Discriminant<Str> {
-        discriminant(&status_message(install, installed, applied, running))
+    ) -> Discriminant<input_method::Text> {
+        match status_message(install, installed, applied, running) {
+            Str::InputMethod(text) => discriminant(&text),
+            other => panic!("the status line is not an Input method string: {other:?}"),
+        }
     }
 
-    fn is(expected: Str) -> Discriminant<Str> {
+    /// Compared on the *area's* discriminant, not `Str`'s: every Input method
+    /// string shares `Str::InputMethod`, and some of these carry a runtime
+    /// value, so neither `Str`'s discriminant nor `==` would answer this.
+    fn is(expected: input_method::Text) -> Discriminant<input_method::Text> {
         discriminant(&expected)
     }
 
@@ -127,11 +135,11 @@ mod tests {
         // instead of the outcome.
         assert_eq!(
             said(&refused, true, Some(true), Some("0.1.0")),
-            is(Str::InputMethodInstalledNotActive(-50)),
+            is(input_method::Text::InstalledNotActive(-50)),
         );
         assert_eq!(
             said(&Install::Running, true, Some(true), Some("0.1.0")),
-            is(Str::InputMethodInstalling),
+            is(input_method::Text::Installing),
         );
         assert_eq!(
             said(
@@ -140,7 +148,7 @@ mod tests {
                 Some(false),
                 None
             ),
-            is(Str::InputMethodInstalled),
+            is(input_method::Text::Installed),
         );
     }
 
@@ -151,22 +159,22 @@ mod tests {
     #[test]
     fn each_failure_has_its_own_sentence() {
         for (failure, expected) in [
-            (InstallFailure::NoSourceBundle, Str::InputMethodNoBundle),
+            (InstallFailure::NoSourceBundle, input_method::Text::NoBundle),
             (
                 InstallFailure::Copy {
                     detail: "ditto: permission denied".into(),
                 },
-                Str::InputMethodCopyFailed(String::new()),
+                input_method::Text::CopyFailed(String::new()),
             ),
             (
                 InstallFailure::InvalidSignature {
                     detail: "code object is not signed at all".into(),
                 },
-                Str::InputMethodInvalidSignature(String::new()),
+                input_method::Text::InvalidSignature(String::new()),
             ),
             (
                 InstallFailure::NeverAppeared { attempts: 5 },
-                Str::InputMethodNeverAppeared(0),
+                input_method::Text::NeverAppeared(0),
             ),
         ] {
             let install = Install::Done(InstallOutcome::Failed(failure));
@@ -183,7 +191,7 @@ mod tests {
         }));
         assert_eq!(
             status_message(&install, false, None, None),
-            Str::InputMethodCopyFailed("ditto: /Users/x: Permission denied".into()),
+            input_method::Text::CopyFailed("ditto: /Users/x: Permission denied".into()).into(),
         );
     }
 
@@ -196,22 +204,22 @@ mod tests {
         // has since deleted by hand.
         assert_eq!(
             said(&Install::Idle, false, Some(true), Some("0.1.0")),
-            is(Str::InputMethodNotInstalled),
+            is(input_method::Text::NotInstalled),
         );
         // Written but not echoed back: the ordinary state for a moment after a
         // change, and a lasting one when the input method is not running.
         assert_eq!(
             said(&Install::Idle, true, Some(false), Some("0.1.0")),
-            is(Str::InputMethodSettingsPending),
+            is(input_method::Text::SettingsPending),
         );
         assert_eq!(
             said(&Install::Idle, true, Some(true), Some("0.1.0")),
-            is(Str::InputMethodRunning(String::new())),
+            is(input_method::Text::Running(String::new())),
         );
         // Installed and nothing has ever run: not a fault.
         assert_eq!(
             said(&Install::Idle, true, None, None),
-            is(Str::InputMethodInstalledIdle),
+            is(input_method::Text::InstalledIdle),
         );
     }
 
@@ -238,7 +246,7 @@ mod tests {
     fn the_running_message_reports_the_bundle_version() {
         assert_eq!(
             status_message(&Install::Idle, true, Some(true), Some("0.0.9")),
-            Str::InputMethodRunning("0.0.9".into()),
+            input_method::Text::Running("0.0.9".into()).into(),
         );
     }
 

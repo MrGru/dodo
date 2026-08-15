@@ -22,7 +22,7 @@ use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _, StyledExt
 
 use crate::app_icon::AppIcon;
 use crate::docker::{DockerContextDelete, DockerContextInspect};
-use crate::i18n::{Str, t};
+use crate::i18n::{docker, shared, t};
 
 /// A header cell: a `div` carrying the caption, truncating if the column is
 /// squeezed. The caller sets the width.
@@ -108,7 +108,7 @@ pub fn coming_soon_button(
         .small()
         .icon(icon)
         .label(label)
-        .tooltip(t(Str::DockerComingSoonLabel, cx))
+        .tooltip(t(docker::Text::ComingSoonLabel, cx))
         .disabled(true)
 }
 
@@ -132,13 +132,13 @@ pub fn resource_context_menu(
 ) -> PopupMenu {
     menu.action_context(focus)
         .menu_with_icon(
-            t(Str::DockerInspect, cx),
+            t(docker::Text::Inspect, cx),
             AppIcon::Eye,
             Box::new(DockerContextInspect),
         )
         .separator()
         .menu_with_icon_and_disabled(
-            t(Str::Delete, cx),
+            t(shared::Text::Delete, cx),
             AppIcon::Trash,
             Box::new(DockerContextDelete),
             !delete_enabled,

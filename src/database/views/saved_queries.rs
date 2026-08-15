@@ -14,7 +14,7 @@ use gpui_component::{
 use crate::app_icon::AppIcon;
 use crate::database::models::library::SavedQuery;
 use crate::database::views::database::DatabaseView;
-use crate::i18n::{Str, t};
+use crate::i18n::{db_query, t};
 
 const PANEL_W: Pixels = px(680.);
 const PANEL_H: Pixels = px(440.);
@@ -35,7 +35,7 @@ pub fn open(
         let body_h = PANEL_H.min(viewport.height - PANEL_MARGIN * 4.);
         dialog
             .w(card_w)
-            .title(t(Str::DbSavedQueries, cx))
+            .title(t(db_query::Text::SavedQueries, cx))
             .content(move |content, _, _| {
                 content.child(
                     div()
@@ -70,7 +70,7 @@ impl SavedQueriesView {
 impl Render for SavedQueriesView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         List::new(&self.list)
-            .search_placeholder(t(Str::DbSavedQuerySearch, cx))
+            .search_placeholder(t(db_query::Text::SavedQuerySearch, cx))
             .size_full()
     }
 }
@@ -168,7 +168,7 @@ impl ListDelegate for SavedQueriesDelegate {
                                 .ghost()
                                 .xsmall()
                                 .icon(AppIcon::Settings)
-                                .tooltip(t(Str::DbSavedQueryEdit, cx))
+                                .tooltip(t(db_query::Text::SavedQueryEdit, cx))
                                 .on_click({
                                     let page = edit_page.clone();
                                     let query = edit_query.clone();
@@ -185,7 +185,7 @@ impl ListDelegate for SavedQueriesDelegate {
                                 .ghost()
                                 .xsmall()
                                 .icon(AppIcon::Trash)
-                                .tooltip(t(Str::DbSavedQueryDelete, cx))
+                                .tooltip(t(db_query::Text::SavedQueryDelete, cx))
                                 .on_click({
                                     let page = delete_page.clone();
                                     let query = delete_query.clone();
@@ -207,9 +207,9 @@ impl ListDelegate for SavedQueriesDelegate {
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
         let text = if self.entries.is_empty() {
-            Str::DbSavedQueryEmpty
+            db_query::Text::SavedQueryEmpty
         } else {
-            Str::DbSavedQueryNoMatches
+            db_query::Text::SavedQueryNoMatches
         };
         v_flex()
             .size_full()

@@ -57,7 +57,7 @@ use crate::api_explorer::models::snapshot::RequestSnapshot;
 use crate::api_explorer::models::variables::VariableSet;
 use crate::api_explorer::services::codegen;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{Str, api_explorer, api_scripts, t};
 
 /// The card's preferred width, and the height of the code view inside it. Both
 /// shrink to fit a small window *before* the dialog is built — `Dialog` computes
@@ -83,7 +83,7 @@ pub fn open(snapshot: RequestSnapshot, variables: VariableSet, window: &mut Wind
         let width = card_width(window);
         dialog
             .w(width)
-            .title(t(Str::GenerateCode, cx))
+            .title(t(api_explorer::Text::GenerateCode, cx))
             // `content`, not `child`: a plain child is wrapped in an
             // `overflow_y_scrollbar` box that content-sizes everything inside.
             .content(move |content, _, _| {
@@ -253,7 +253,7 @@ impl Render for GenerateCodeDialog {
                     Button::new("generate-code-copy")
                         .primary()
                         .icon(AppIcon::Copy)
-                        .label(t(Str::Copy, cx))
+                        .label(t(api_scripts::Text::Copy, cx))
                         .on_click(cx.listener(|this, _, _, cx| this.copy(cx))),
                 ),
             )
@@ -290,12 +290,18 @@ impl GenerateCodeDialog {
             // Deliberately uncounted: how many secrets a request *uses* is not
             // what `withheld` holds once they are resolved, and a wrong number
             // in this particular sentence would be worse than no number.
-            (Str::GenerateCodeSecretsRevealed, cx.theme().danger)
+            (
+                api_explorer::Text::GenerateCodeSecretsRevealed,
+                cx.theme().danger,
+            )
         } else if self.withheld.is_empty() {
-            (Str::GenerateCodeCarriesValues, cx.theme().muted_foreground)
+            (
+                api_explorer::Text::GenerateCodeCarriesValues,
+                cx.theme().muted_foreground,
+            )
         } else {
             (
-                Str::GenerateCodeSecretsWithheld(self.withheld.join(", ")),
+                api_explorer::Text::GenerateCodeSecretsWithheld(self.withheld.join(", ")),
                 cx.theme().warning,
             )
         };
@@ -319,7 +325,7 @@ impl GenerateCodeDialog {
     fn reveal_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         Checkbox::new("generate-code-reveal")
             .checked(self.reveal_secrets)
-            .label(t(Str::GenerateCodeRevealSecrets, cx))
+            .label(t(api_explorer::Text::GenerateCodeRevealSecrets, cx))
             .on_click(cx.listener(|this, checked: &bool, window, cx| {
                 this.set_reveal_secrets(*checked, window, cx);
             }))

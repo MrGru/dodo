@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use crate::database::models::value::ColumnMeta;
-use crate::i18n::Str;
+use crate::i18n::{Str, database};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TableRef {
@@ -71,18 +71,25 @@ pub enum ReadOnlyReason {
 impl ReadOnlyReason {
     pub fn message(&self) -> Str {
         match self {
-            Self::Unsupported => Str::DbEditUnsupported,
-            Self::NoColumns => Str::DbEditNoColumns,
-            Self::MissingOrigin(column) => Str::DbEditMissingOrigin(column.clone()),
-            Self::MultipleTables => Str::DbEditMultipleTables,
-            Self::DuplicateBaseColumn(column) => Str::DbEditDuplicateColumn(column.clone()),
-            Self::DuplicateRows => Str::DbEditDuplicateRows,
-            Self::NoUniqueIdentity(table) => Str::DbEditNoUniqueIdentity(table.clone()),
-            Self::MissingIdentityColumns { table, columns } => Str::DbEditMissingIdentityColumns {
-                table: table.clone(),
-                columns: columns.join(", "),
-            },
-            Self::Metadata(detail) => Str::DbEditMetadataFailed(detail.clone()),
+            Self::Unsupported => database::Text::EditUnsupported.into(),
+            Self::NoColumns => database::Text::EditNoColumns.into(),
+            Self::MissingOrigin(column) => database::Text::EditMissingOrigin(column.clone()).into(),
+            Self::MultipleTables => database::Text::EditMultipleTables.into(),
+            Self::DuplicateBaseColumn(column) => {
+                database::Text::EditDuplicateColumn(column.clone()).into()
+            }
+            Self::DuplicateRows => database::Text::EditDuplicateRows.into(),
+            Self::NoUniqueIdentity(table) => {
+                database::Text::EditNoUniqueIdentity(table.clone()).into()
+            }
+            Self::MissingIdentityColumns { table, columns } => {
+                database::Text::EditMissingIdentityColumns {
+                    table: table.clone(),
+                    columns: columns.join(", "),
+                }
+                .into()
+            }
+            Self::Metadata(detail) => database::Text::EditMetadataFailed(detail.clone()).into(),
         }
     }
 }

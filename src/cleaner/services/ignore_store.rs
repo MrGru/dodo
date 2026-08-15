@@ -36,7 +36,7 @@ use std::sync::Mutex;
 use serde_json::Value;
 
 use crate::cleaner::core::ignore::IgnoredItemsDocument;
-use crate::i18n::Str;
+use crate::i18n::{Str, cleaner};
 use crate::paths::data_dir;
 
 /// Why the keep list could not be read or written.
@@ -55,13 +55,18 @@ pub enum OrphanIgnoreStoreError {
 impl OrphanIgnoreStoreError {
     pub fn message(&self) -> Str {
         match self {
-            OrphanIgnoreStoreError::Io(detail) => Str::CleanerIgnoreStoreError(detail.clone()),
-            OrphanIgnoreStoreError::MissingVersion => Str::CleanerIgnoreStoreMissingVersion,
+            OrphanIgnoreStoreError::Io(detail) => {
+                cleaner::Text::IgnoreStoreError(detail.clone()).into()
+            }
+            OrphanIgnoreStoreError::MissingVersion => {
+                cleaner::Text::IgnoreStoreMissingVersion.into()
+            }
             OrphanIgnoreStoreError::UnsupportedVersion { found, understood } => {
-                Str::CleanerIgnoreStoreUnsupportedVersion {
+                cleaner::Text::IgnoreStoreUnsupportedVersion {
                     found: *found,
                     understood: *understood,
                 }
+                .into()
             }
         }
     }

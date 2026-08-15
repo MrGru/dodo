@@ -45,7 +45,7 @@ use crate::docker::{
     DockerContextDelete, DockerContextInspect, DockerMoveDown, DockerMoveUp, DockerOpenDetail,
     DockerRefreshList, KEY_CONTEXT, POLL_INTERVAL,
 };
-use crate::i18n::{Language, Str, t};
+use crate::i18n::{Language, docker, shared, t};
 
 /// Fixed column widths. Name and Mount point take the remaining width as the two
 /// flex columns and truncate.
@@ -80,7 +80,7 @@ pub struct VolumesView {
 
 impl VolumesView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let placeholder = t(Str::DockerSearchVolumes, cx);
+        let placeholder = t(docker::Text::SearchVolumes, cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
 
         cx.subscribe(&search, |this, state, event: &InputEvent, cx| {
@@ -307,13 +307,13 @@ impl VolumesView {
             let entity = entity.clone();
             let name = name.clone();
             alert
-                .title(t(Str::DockerDeleteTitle, cx))
-                .description(t(Str::DockerDeleteMessage(name.clone()), cx))
+                .title(t(docker::Text::DeleteTitle, cx))
+                .description(t(docker::Text::DeleteMessage(name.clone()), cx))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(t(Str::Delete, cx))
+                        .ok_text(t(shared::Text::Delete, cx))
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text(t(Str::DockerCancel, cx))
+                        .cancel_text(t(docker::Text::Cancel, cx))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _window, cx| {
@@ -329,7 +329,7 @@ impl VolumesView {
             return;
         }
         self.language = language;
-        let placeholder = t(Str::DockerSearchVolumes, cx);
+        let placeholder = t(docker::Text::SearchVolumes, cx);
         self.search.update(cx, |state, cx| {
             state.set_placeholder(placeholder, window, cx);
         });
@@ -345,7 +345,7 @@ impl VolumesView {
                 Button::new("docker-volumes-refresh")
                     .small()
                     .icon(AppIcon::Refresh)
-                    .label(t(Str::DockerRefresh, cx))
+                    .label(t(docker::Text::Refresh, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
     }
@@ -377,8 +377,8 @@ impl VolumesView {
         if self.state.is_empty() {
             return empty_state(
                 AppIcon::HardDrive,
-                t(Str::NoVolumes, cx),
-                Some(t(Str::NoVolumesHint, cx)),
+                t(docker::Text::NoVolumes, cx),
+                Some(t(docker::Text::NoVolumesHint, cx)),
                 cx,
             )
             .into_any_element();
@@ -387,12 +387,12 @@ impl VolumesView {
     }
 
     fn render_error(&self, message: SharedString, cx: &mut Context<Self>) -> gpui::AnyElement {
-        error_state(t(Str::DockerUnreachableTitle, cx), message, cx)
+        error_state(t(docker::Text::UnreachableTitle, cx), message, cx)
             .child(
                 Button::new("docker-volumes-retry")
                     .small()
                     .icon(AppIcon::Refresh)
-                    .label(t(Str::DockerRetry, cx))
+                    .label(t(docker::Text::Retry, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
             .into_any_element()
@@ -401,7 +401,7 @@ impl VolumesView {
     fn render_table(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let rows = self.state.visible();
         if rows.is_empty() {
-            return empty_state(AppIcon::HardDrive, t(Str::NoVolumes, cx), None, cx)
+            return empty_state(AppIcon::HardDrive, t(docker::Text::NoVolumes, cx), None, cx)
                 .into_any_element();
         }
 
@@ -441,29 +441,33 @@ impl VolumesView {
             .text_xs()
             .font_medium()
             .text_color(cx.theme().muted_foreground)
-            .child(header_cell(t(Str::DockerColumnName, cx)).flex_1().min_w_0())
             .child(
-                header_cell(t(Str::DockerColumnDriver, cx))
-                    .w(DRIVER_W)
-                    .flex_shrink_0(),
-            )
-            .child(
-                header_cell(t(Str::DockerColumnMountPoint, cx))
+                header_cell(t(docker::Text::ColumnName, cx))
                     .flex_1()
                     .min_w_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnSize, cx))
+                header_cell(t(docker::Text::ColumnDriver, cx))
+                    .w(DRIVER_W)
+                    .flex_shrink_0(),
+            )
+            .child(
+                header_cell(t(docker::Text::ColumnMountPoint, cx))
+                    .flex_1()
+                    .min_w_0(),
+            )
+            .child(
+                header_cell(t(docker::Text::ColumnSize, cx))
                     .w(SIZE_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnContainersUsing, cx))
+                header_cell(t(docker::Text::ColumnContainersUsing, cx))
                     .w(USING_W)
                     .flex_shrink_0(),
             )
             .child(
-                header_cell(t(Str::DockerColumnActions, cx))
+                header_cell(t(docker::Text::ColumnActions, cx))
                     .w(ACTIONS_W)
                     .flex_shrink_0(),
             )
@@ -472,7 +476,7 @@ impl VolumesView {
     fn render_row(&self, row: Volume, cx: &mut Context<Self>) -> impl IntoElement {
         let size = match row.size {
             Some(bytes) => SharedString::from(format_size(bytes)),
-            None => t(Str::DockerNotAvailable, cx),
+            None => t(docker::Text::NotAvailable, cx),
         };
         let using = self.state.usage().volumes_using(&row.name);
         let focused = self.focused.as_deref() == Some(row.name.as_str());
@@ -507,7 +511,7 @@ impl VolumesView {
                 name_cell(
                     SharedString::from(format!("vname-{}", row.name)),
                     SharedString::from(row.name.clone()),
-                    t(Str::DockerOpenDetails, cx),
+                    t(docker::Text::OpenDetails, cx),
                     cx.listener({
                         let name = row.name.clone();
                         move |this, _, window, cx| this.open_detail(name.clone(), window, cx)
@@ -549,7 +553,7 @@ impl VolumesView {
         h_flex().gap_1().child(action_button(
             SharedString::from(format!("delete-{}", row.name)),
             AppIcon::Trash,
-            t(Str::Delete, cx),
+            t(shared::Text::Delete, cx),
             true,
             ButtonVariant::Danger,
             cx.listener({

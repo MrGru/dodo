@@ -30,7 +30,7 @@ use crate::database::models::query::QueryRequest;
 use crate::database::models::value::ColumnMeta;
 use crate::database::services::Driver;
 use crate::database::state::edit::PendingGrid;
-use crate::i18n::Str;
+use crate::i18n::{Str, db_catalog, db_query};
 
 /// Where the query pane is.
 #[derive(Default)]
@@ -81,9 +81,9 @@ pub enum Failure {
 impl Failure {
     pub fn message(&self) -> Str {
         match self {
-            Failure::Nothing => Str::DbNoStatement,
+            Failure::Nothing => db_query::Text::NoStatement.into(),
             Failure::Rejected { error, .. } => error.message(),
-            Failure::Cancelled { .. } => Str::DbCancelledMessage,
+            Failure::Cancelled { .. } => db_catalog::Text::CancelledMessage.into(),
         }
     }
 
@@ -206,18 +206,18 @@ impl Outcome {
         let mut parts = Vec::new();
 
         match self.rows_affected {
-            Some(count) => parts.push(Str::DbFooterRowsAffected(count)),
-            None => parts.push(Str::DbFooterRows(self.grid.rows().len())),
+            Some(count) => parts.push(db_query::Text::FooterRowsAffected(count).into()),
+            None => parts.push(db_query::Text::FooterRows(self.grid.rows().len()).into()),
         }
 
         if self.truncated {
-            parts.push(Str::DbFooterTruncated(self.grid.rows().len()));
+            parts.push(db_query::Text::FooterTruncated(self.grid.rows().len()).into());
         }
         if self.capped_cells > 0 {
-            parts.push(Str::DbFooterCapped(self.capped_cells));
+            parts.push(db_catalog::Text::FooterCapped(self.capped_cells).into());
         }
 
-        parts.push(Str::DbFooterElapsed(format_elapsed(self.elapsed)));
+        parts.push(db_query::Text::FooterElapsed(format_elapsed(self.elapsed)).into());
         parts
     }
 
@@ -253,7 +253,7 @@ mod tests {
     use crate::database::services::Driver as _;
     use crate::database::services::fake::FakeDriver;
     use crate::database::state::edit::PendingGrid;
-    use crate::i18n::{Language, Str};
+    use crate::i18n::{Language, Str, db_catalog, db_query};
     use std::time::Duration;
 
     fn budget() -> PageBudget {
@@ -378,7 +378,10 @@ mod tests {
             Err(failure @ Failure::Cancelled { .. }) => {
                 assert!(failure.is_cancelled());
                 assert_eq!(failure.statement(), Some("SELECT 1"));
-                assert!(matches!(failure.message(), Str::DbCancelledMessage));
+                assert!(matches!(
+                    failure.message(),
+                    Str::DbCatalog(db_catalog::Text::CancelledMessage)
+                ));
             }
             other => panic!("expected a cancellation, got {other:?}"),
         }
@@ -419,7 +422,10 @@ mod tests {
         }
 
         assert_eq!(Failure::Nothing.statement(), None);
-        assert!(matches!(Failure::Nothing.message(), Str::DbNoStatement));
+        assert!(matches!(
+            Failure::Nothing.message(),
+            Str::DbQuery(db_query::Text::NoStatement)
+        ));
     }
 
     // ---- the footer ------------------------------------------------------
@@ -430,8 +436,14 @@ mod tests {
         let outcome = run(&driver, "SELECT 1", budget()).expect("runs");
 
         let footer = outcome.footer();
-        assert!(matches!(footer[0], Str::DbFooterRows(3)));
-        assert!(matches!(footer.last(), Some(Str::DbFooterElapsed(_))));
+        assert!(matches!(
+            footer[0],
+            Str::DbQuery(db_query::Text::FooterRows(3))
+        ));
+        assert!(matches!(
+            footer.last(),
+            Some(Str::DbQuery(db_query::Text::FooterElapsed(_)))
+        ));
     }
 
     /// The whole point of the bound being honest: when it trips, the footer
@@ -454,12 +466,14 @@ mod tests {
         assert!(
             footer
                 .iter()
-                .any(|part| matches!(part, Str::DbFooterTruncated(10))),
+                .any(|part| matches!(part, Str::DbQuery(db_query::Text::FooterTruncated(10)))),
             "no truncation notice in {footer:?}"
         );
 
         for language in Language::ALL {
-            let text = Str::DbFooterTruncated(10).text(language).into_owned();
+            let text = Str::from(db_query::Text::FooterTruncated(10))
+                .text(language)
+                .into_owned();
             assert!(
                 text.contains("10"),
                 "{} dropped the count: {text}",
@@ -476,7 +490,7 @@ mod tests {
             !outcome
                 .footer()
                 .iter()
-                .any(|part| matches!(part, Str::DbFooterTruncated(_))),
+                .any(|part| matches!(part, Str::DbQuery(db_query::Text::FooterTruncated(_)))),
             "a complete result must not claim there was more"
         );
     }
@@ -499,7 +513,7 @@ mod tests {
             outcome
                 .footer()
                 .iter()
-                .any(|part| matches!(part, Str::DbFooterCapped(_)))
+                .any(|part| matches!(part, Str::DbCatalog(db_catalog::Text::FooterCapped(_))))
         );
         assert!(matches!(outcome.grid.rows()[0][1], Value::Truncated { .. }));
     }
@@ -523,7 +537,10 @@ mod tests {
         };
 
         assert!(!outcome.has_grid());
-        assert!(matches!(outcome.footer()[0], Str::DbFooterRowsAffected(7)));
+        assert!(matches!(
+            outcome.footer()[0],
+            Str::DbQuery(db_query::Text::FooterRowsAffected(7))
+        ));
     }
 
     // ---- elapsed formatting ---------------------------------------------

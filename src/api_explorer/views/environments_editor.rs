@@ -29,7 +29,7 @@
 //!
 //! `decision-secret-variable-storage` requires the editor to say, where the
 //! user can see it, that secret values are stored unencrypted on this machine.
-//! That is [`Str::SecretStorageWarning`], drawn in the warning colour above the
+//! That is [`api_variables::Text::SecretStorageWarning`], drawn in the warning colour above the
 //! table rather than tucked into a tooltip. Masking is display only — the value
 //! goes to disk in plain text like every other one.
 
@@ -50,7 +50,7 @@ use gpui_component::{
 use crate::api_explorer::models::variables::Variable;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Language, Str, t};
+use crate::i18n::{Language, api_variables, t};
 
 /// The card's preferred width and the body's preferred height, shrunk to fit a
 /// small window by [`card_size`] before the dialog is built — `Dialog` computes
@@ -144,7 +144,7 @@ pub fn open(
         let (card_w, body_h) = card_size(window);
         dialog
             .w(card_w)
-            .title(t(Str::Environments, cx))
+            .title(t(api_variables::Text::Environments, cx))
             // `content`, not `child`: a plain child is wrapped in an
             // `overflow_y_scrollbar` box, which takes its width from its
             // content and collapses everything `w_full` inside.
@@ -175,7 +175,7 @@ impl EnvironmentsEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let name_placeholder = t(Str::NamePlaceholder, cx);
+        let name_placeholder = t(api_variables::Text::NamePlaceholder, cx);
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder(name_placeholder));
 
         // Renaming is live in the page as it is typed, so the picker's label
@@ -263,8 +263,8 @@ impl EnvironmentsEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> VariableRow {
-        let key_placeholder = t(Str::VariableKeyPlaceholder, cx);
-        let value_placeholder = t(Str::VariableValuePlaceholder, cx);
+        let key_placeholder = t(api_variables::Text::KeyPlaceholder, cx);
+        let value_placeholder = t(api_variables::Text::ValuePlaceholder, cx);
 
         let key = cx.new(|cx| {
             InputState::new(window, cx)
@@ -376,7 +376,7 @@ impl EnvironmentsEditor {
     // ---- Environment-level actions ------------------------------------------
 
     fn create_environment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let name = t(Str::DefaultEnvironmentName, cx).to_string();
+        let name = t(api_variables::Text::DefaultEnvironmentName, cx).to_string();
         let id = self.page.update(cx, |page, cx| {
             let id = page.environments.create(name);
             page.persist_environments(cx);
@@ -394,7 +394,7 @@ impl EnvironmentsEditor {
         let Some(id) = self.scope else {
             return;
         };
-        let suffix = t(Str::EnvironmentCopySuffix, cx).to_string();
+        let suffix = t(api_variables::Text::EnvironmentCopySuffix, cx).to_string();
         let copy = self.page.update(cx, |page, cx| {
             let copy = page.environments.duplicate(id, &suffix);
             page.persist_environments(cx);
@@ -460,12 +460,12 @@ impl EnvironmentsEditor {
         }
         self.language = language;
 
-        let name = t(Str::NamePlaceholder, cx);
+        let name = t(api_variables::Text::NamePlaceholder, cx);
         self.name_input
             .update(cx, |state, cx| state.set_placeholder(name, window, cx));
 
-        let key = t(Str::VariableKeyPlaceholder, cx);
-        let value = t(Str::VariableValuePlaceholder, cx);
+        let key = t(api_variables::Text::KeyPlaceholder, cx);
+        let value = t(api_variables::Text::ValuePlaceholder, cx);
         for row in &self.rows {
             let (key, value) = (key.clone(), value.clone());
             row.key
@@ -571,7 +571,7 @@ impl EnvironmentsEditor {
                     .w_full()
                     .justify_start()
                     .selected(selected.is_none())
-                    .label(t(Str::CollectionVariables, cx))
+                    .label(t(api_variables::Text::CollectionVariables, cx))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.select(None, window, cx);
                     })),
@@ -582,7 +582,7 @@ impl EnvironmentsEditor {
                     .px_2()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::Environments, cx)),
+                    .child(t(api_variables::Text::Environments, cx)),
             )
             .child(
                 div()
@@ -597,7 +597,7 @@ impl EnvironmentsEditor {
                                 .py_1()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(t(Str::NoEnvironmentsYet, cx)),
+                                .child(t(api_variables::Text::NoEnvironmentsYet, cx)),
                         )
                     })
                     .children(rows),
@@ -611,7 +611,7 @@ impl EnvironmentsEditor {
                             .ghost()
                             .xsmall()
                             .icon(AppIcon::Plus)
-                            .label(t(Str::NewEnvironment, cx))
+                            .label(t(api_variables::Text::NewEnvironment, cx))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.create_environment(window, cx);
                             })),
@@ -621,7 +621,7 @@ impl EnvironmentsEditor {
                             .ghost()
                             .xsmall()
                             .icon(AppIcon::Import)
-                            .tooltip(t(Str::ImportEnvironment, cx))
+                            .tooltip(t(api_variables::Text::ImportEnvironment, cx))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.import(window, cx);
                             })),
@@ -656,7 +656,7 @@ impl EnvironmentsEditor {
                                 .ghost()
                                 .xsmall()
                                 .icon(AppIcon::Copy)
-                                .tooltip(t(Str::DuplicateEnvironment, cx))
+                                .tooltip(t(api_variables::Text::DuplicateEnvironment, cx))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.duplicate_environment(window, cx);
                                 })),
@@ -666,7 +666,7 @@ impl EnvironmentsEditor {
                                 .ghost()
                                 .xsmall()
                                 .icon(AppIcon::Trash)
-                                .tooltip(t(Str::DeleteEnvironment, cx))
+                                .tooltip(t(api_variables::Text::DeleteEnvironment, cx))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.delete_environment(window, cx);
                                 })),
@@ -679,7 +679,7 @@ impl EnvironmentsEditor {
                                 .min_w_0()
                                 .text_sm()
                                 .font_bold()
-                                .child(t(Str::CollectionVariables, cx)),
+                                .child(t(api_variables::Text::CollectionVariables, cx)),
                         )
                     }),
             )
@@ -688,7 +688,7 @@ impl EnvironmentsEditor {
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(t(Str::CollectionVariablesNote, cx)),
+                        .child(t(api_variables::Text::CollectionVariablesNote, cx)),
                 )
             })
     }
@@ -742,7 +742,7 @@ impl EnvironmentsEditor {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(t(Str::SecretStorageWarning, cx)),
+                    .child(t(api_variables::Text::SecretStorageWarning, cx)),
             )
     }
 
@@ -754,9 +754,9 @@ impl EnvironmentsEditor {
             .filter(|row| row.enabled && !row.key.read(cx).value().trim().is_empty())
             .count();
         let summary = if active == 0 {
-            Str::NoActiveVariables
+            api_variables::Text::NoActiveVariables
         } else {
-            Str::ActiveVariables(active)
+            api_variables::Text::ActiveVariables(active)
         };
 
         v_flex()
@@ -780,7 +780,7 @@ impl EnvironmentsEditor {
                             .ghost()
                             .xsmall()
                             .icon(AppIcon::Plus)
-                            .label(t(Str::AddVariable, cx))
+                            .label(t(api_variables::Text::AddVariable, cx))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.add_row(window, cx);
                             })),
@@ -812,13 +812,23 @@ impl EnvironmentsEditor {
             .text_xs()
             .text_color(cx.theme().muted_foreground)
             .child(div().w(ENABLE_COLUMN).flex_shrink_0())
-            .child(div().flex_1().min_w_0().child(t(Str::ColumnKey, cx)))
-            .child(div().flex_1().min_w_0().child(t(Str::ColumnValue, cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(t(api_variables::Text::ColumnKey, cx)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(t(api_variables::Text::ColumnValue, cx)),
+            )
             .child(
                 div()
                     .w(SECRET_COLUMN)
                     .flex_shrink_0()
-                    .child(t(Str::ColumnSecret, cx)),
+                    .child(t(api_variables::Text::ColumnSecret, cx)),
             )
             .child(div().w(ACTIONS_COLUMN).flex_shrink_0())
     }
@@ -871,7 +881,7 @@ impl EnvironmentsEditor {
                     .child(
                         Checkbox::new(("variable-secret", id))
                             .checked(secret)
-                            .tooltip(t(Str::MarkSecret, cx))
+                            .tooltip(t(api_variables::Text::MarkSecret, cx))
                             .on_click(cx.listener(move |this, checked: &bool, window, cx| {
                                 this.set_secret(id, *checked, window, cx);
                             })),
@@ -887,9 +897,9 @@ impl EnvironmentsEditor {
                                 .selected(revealed)
                                 .tooltip(t(
                                     if revealed {
-                                        Str::HideSecret
+                                        api_variables::Text::HideSecret
                                     } else {
-                                        Str::RevealSecret
+                                        api_variables::Text::RevealSecret
                                     },
                                     cx,
                                 ))
@@ -905,7 +915,7 @@ impl EnvironmentsEditor {
                         .ghost()
                         .xsmall()
                         .icon(AppIcon::Close)
-                        .tooltip(t(Str::DeleteRow, cx))
+                        .tooltip(t(api_variables::Text::DeleteRow, cx))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.remove_row(id, cx);
                         })),

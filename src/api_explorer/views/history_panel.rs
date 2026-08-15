@@ -21,7 +21,7 @@ use crate::api_explorer::models::exchange::format_duration;
 use crate::api_explorer::state::history::HistoryEntry;
 use crate::api_explorer::views::explorer::ApiExplorer;
 use crate::app_icon::AppIcon;
-use crate::i18n::{Str, t};
+use crate::i18n::{api_collections, api_response, shared, t};
 
 impl ApiExplorer {
     pub(super) fn render_history_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -37,8 +37,8 @@ impl ApiExplorer {
                     .child(if self.history.is_empty() {
                         empty_state(
                             AppIcon::Clock,
-                            t(Str::NoHistory, cx),
-                            Some(t(Str::NoHistoryHint, cx)),
+                            t(api_collections::Text::NoHistory, cx),
+                            Some(t(api_collections::Text::NoHistoryHint, cx)),
                             cx,
                         )
                         .into_any_element()
@@ -67,14 +67,14 @@ impl ApiExplorer {
                     .text_xs()
                     .font_bold()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(Str::History, cx)),
+                    .child(t(api_collections::Text::History, cx)),
             )
             .when(has_entries, |this| {
                 this.child(
                     Button::new("history-clear-all")
                         .ghost()
                         .xsmall()
-                        .label(t(Str::HistoryClearAll, cx))
+                        .label(t(api_collections::Text::HistoryClearAll, cx))
                         .on_click(cx.listener(|this, _, _, cx| this.clear_history(cx))),
                 )
             })
@@ -99,7 +99,11 @@ impl ApiExplorer {
             )
             .small()
             .rounded(cx.theme().radius)
-            .child(div().font_bold().child(t(Str::RequestFailed, cx)))
+            .child(
+                div()
+                    .font_bold()
+                    .child(t(api_response::Text::RequestFailed, cx)),
+            )
             .into_any_element(),
         };
 
@@ -203,7 +207,7 @@ impl ApiExplorer {
                     .ghost()
                     .xsmall()
                     .icon(AppIcon::SquareCode)
-                    .tooltip(t(Str::HistoryReopen, cx))
+                    .tooltip(t(api_collections::Text::HistoryReopen, cx))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.reopen_history(id, window, cx);
                     })),
@@ -213,7 +217,7 @@ impl ApiExplorer {
                     .ghost()
                     .xsmall()
                     .icon(AppIcon::Send)
-                    .tooltip(t(Str::HistoryResend, cx))
+                    .tooltip(t(api_collections::Text::HistoryResend, cx))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.resend_history(id, window, cx);
                     })),
@@ -223,7 +227,7 @@ impl ApiExplorer {
                     .ghost()
                     .xsmall()
                     .icon(AppIcon::Copy)
-                    .tooltip(t(Str::Duplicate, cx))
+                    .tooltip(t(api_collections::Text::Duplicate, cx))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.duplicate_history(id, cx);
                     })),
@@ -233,7 +237,7 @@ impl ApiExplorer {
                     .ghost()
                     .xsmall()
                     .icon(AppIcon::Trash)
-                    .tooltip(t(Str::Delete, cx))
+                    .tooltip(t(shared::Text::Delete, cx))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.delete_history(id, cx);
                     })),
@@ -249,13 +253,13 @@ fn age_label(at: SystemTime, cx: &mut Context<ApiExplorer>) -> SharedString {
         .unwrap_or(0);
 
     let str = if seconds < 60 {
-        Str::HistoryJustNow
+        api_collections::Text::HistoryJustNow
     } else if seconds < 3600 {
-        Str::HistoryMinutesAgo(seconds / 60)
+        api_collections::Text::HistoryMinutesAgo(seconds / 60)
     } else if seconds < 86400 {
-        Str::HistoryHoursAgo(seconds / 3600)
+        api_collections::Text::HistoryHoursAgo(seconds / 3600)
     } else {
-        Str::HistoryDaysAgo(seconds / 86400)
+        api_collections::Text::HistoryDaysAgo(seconds / 86400)
     };
     t(str, cx)
 }

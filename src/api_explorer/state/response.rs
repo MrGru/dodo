@@ -7,7 +7,7 @@ use crate::api_explorer::models::console::{ConsoleLevel, ConsoleLog};
 use crate::api_explorer::models::exchange::Exchange;
 use crate::api_explorer::models::json_tree::JsonTree;
 use crate::api_explorer::models::test_result::{TestReport, TestSummary};
-use crate::i18n::Str;
+use crate::i18n::{Str, api_response};
 
 /// How many lines of a body are put into the editor at once.
 ///
@@ -38,11 +38,11 @@ impl ResponseTab {
 
     pub fn label(self) -> Str {
         match self {
-            ResponseTab::Body => Str::ResponseTabBody,
-            ResponseTab::Headers => Str::ResponseTabHeaders,
-            ResponseTab::Cookies => Str::ResponseTabCookies,
-            ResponseTab::Tests => Str::ResponseTabTests,
-            ResponseTab::Console => Str::ResponseTabConsole,
+            ResponseTab::Body => api_response::Text::ResponseTabBody.into(),
+            ResponseTab::Headers => api_response::Text::ResponseTabHeaders.into(),
+            ResponseTab::Cookies => api_response::Text::ResponseTabCookies.into(),
+            ResponseTab::Tests => api_response::Text::ResponseTabTests.into(),
+            ResponseTab::Console => api_response::Text::ResponseTabConsole.into(),
         }
     }
 
