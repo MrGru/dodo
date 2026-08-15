@@ -107,22 +107,14 @@ pub(super) fn category_icon(category: CleanerCategory) -> AppIcon {
 /// "Reveal in file manager", but the word for the thing being revealed into
 /// is not the same word on every desktop.
 fn reveal_label() -> Str {
-    #[cfg(target_os = "macos")]
-    {
-        cleaner::Text::RevealInFinder.into()
-    }
-    #[cfg(target_os = "windows")]
-    {
+    let label = if cfg!(target_os = "windows") {
         cleaner::Text::RevealInExplorer
-    }
-    #[cfg(target_os = "linux")]
-    {
+    } else if cfg!(target_os = "linux") {
         cleaner::Text::RevealInFileManager
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    {
+    } else {
         cleaner::Text::RevealInFinder
-    }
+    };
+    label.into()
 }
 
 /// The stable element-id prefix for one action's button. Distinct per action
