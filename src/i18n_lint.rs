@@ -632,7 +632,7 @@ mod tests {
     #[test]
     fn no_platform_gate_hides_a_str_returning_function() {
         fn visit(directory: &std::path::Path, root: &std::path::Path, found: &mut Vec<String>) {
-            const SKIP: [&str; 4] = [".git", "target", "_bmad", "_bmad-output"];
+            const SKIP: [&str; 2] = [".git", "target"];
 
             for entry in std::fs::read_dir(directory).expect("the repository is readable") {
                 let path = entry.expect("a readable directory entry").path();

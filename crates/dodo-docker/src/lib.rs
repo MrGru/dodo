@@ -154,7 +154,7 @@ pub use views::{DockerPage, DockerView};
 /// brisk enough that a container starting or stopping shows up on its own within
 /// a beat, slow enough that dozens of rows (each Containers tick also re-measures
 /// live CPU) never saturate the background executor. It is a constant rather than
-/// a setting on purpose — see `AGENTS.md` — polling pauses whenever the Docker
+/// a setting on purpose — see `dodo-docker-internals` — polling pauses whenever the Docker
 /// section is not the visible view, so an idle cadence never runs.
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_secs(5);
 

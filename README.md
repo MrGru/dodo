@@ -237,7 +237,7 @@ already know about. CI still runs the same checks.
 ├── .githooks/          # Tracked git hooks; see "Pre-push checks" above
 ├── Cargo.toml          # Package metadata and dependencies
 ├── build.rs            # Embeds build metadata (and the Windows .ico)
-├── docs/               # Build optimization and release engineering
+├── docs/               # Architecture, build optimization, release and platform notes
 ├── scripts/            # Packaging and icon generation
 ├── tools/              # Release-only crates, excluded from the package
 ├── crates/             # Workspace crates, sharing the one Cargo.lock

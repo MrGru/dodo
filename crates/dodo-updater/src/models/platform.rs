@@ -5,7 +5,8 @@
 //! `scripts/package.sh` / `scripts/package.ps1` and mirrored by
 //! `tools/update-manifest`'s own `Platform` table. This is the *reading* half of
 //! the same table, and it is deliberately a separate copy: the generator is a
-//! standalone crate that is not part of dodo (`AGENTS.md`), so there is nothing
+//! standalone crate that is not part of dodo
+//! (`docs/architecture/workspace-layout.md`), so there is nothing
 //! to share, and a client that silently agreed with a generator it cannot see
 //! would be worse than one whose table is tested against the four triples.
 //!

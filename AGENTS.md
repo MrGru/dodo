@@ -1,856 +1,124 @@
 # Project agent memory
 
-`dodo` is a Rust desktop app: a single window with a collapsible sidebar, where each sidebar
-entry swaps the main pane to a self-contained developer tool (JSON formatter, Encoder/Decoder,
-API Explorer, Docker, Database Explorer, Cleaner) plus, in the sidebar footer, a Settings dialog and a
-**Check for updates** dialog. It is built on GPUI (Zed's UI framework) and the `gpui-component`
-widget library, both pulled from git and pinned only by `Cargo.lock`. See `README.md` for the
-user-facing description and `Cargo.toml` for exact dependency sources.
+`dodo` is a Rust desktop app: a single window with a collapsible sidebar, where each sidebar entry
+swaps the main pane to a self-contained developer tool (JSON formatter, Encoder/Decoder, API
+Explorer, Docker, Database Explorer, Cleaner, and on macOS and Windows an Input method) plus, in
+the sidebar footer, a Settings dialog and a **Check for updates** dialog. It is built on GPUI
+(Zed's UI framework) and the `gpui-component` widget library, both pulled from git and pinned only
+by `Cargo.lock`. `README.md` is the user-facing description and `Cargo.toml` names the exact
+dependency sources.
 
-Read `src/main.rs` for the startup sequence and `src/layout.rs` for the view model; the doc
-comments there are the authority on structure. This file is only a map — for anything below the
-map's resolution, load the matching skill from the table below rather than reading a whole module
-cold.
+**The source is the authority here, and it is written to be.** `src/main.rs` owns the startup
+sequence and carries, beside every crate alias, the reason that crate exists; `src/layout.rs` owns
+the view model; `src/tools.rs` is the tool table and adding a tool is one row in it; each crate's
+`lib.rs` doc comment is the authority on that crate. Nearly every module in dodo carries a `//!`
+block stating the decisions behind it. Read those rather than a summary of them — this file is a
+map, and the map is deliberately smaller than the territory.
 
-**`src/tools.rs` is the tool table, and adding a tool is one row in it.** Its `tools!` macro
-generates the `View` enum, `View::ALL`, `title`/`icon`/`code`/`codes`/`lookup`/`for_detector` and
-the `Panes` struct holding one entity per tool — the five scattered edits `layout.rs` used to
-demand, from a single declaration carrying a tool's code, title, icon, platforms, view type and
-accepted pastes. `layout.rs` is the shell *around* whatever the table declares. It is a table and
-deliberately **not a registry**: `View` stays an ordinary persisted enum, matched on exhaustively,
-with no trait objects, no distributed slices and no build script — the win is co-location. Two
-things there are decisions rather than details. **A `code:` is a compatibility surface** —
-`session.json` stores it as the open tool *and* as the user's identity for their sidebar order and
-on/off list, so changing one drops that tool out of everyone's stored order; the literal lives in
-the row and a test pins the exact set. And **`hosts:` is how a tool says it is
-platform-conditional**, answered by a `const fn` over `cfg!` rather than a `#[cfg]` on the row, so
-the Input method's title, icon, code and detectors are compiled and asserted on every target while
-`View::ALL` is const-filtered — which matters because two of the four release targets cannot be
-built from a Mac. `tools::tests::platform_probe` compiles both halves of that machinery from any
-machine. Load `dodo-tool-view` before adding, renaming, reordering or removing one. (Unrelated to
-the repo-root `tools/` directory, which holds the standalone `update-manifest` crate.)
+## Loading discipline
 
-**`_bmad/`, `_bmad-output/` and `bmad.config.yaml` are tracked, and are not the authority for
-anything.** They are bmad scaffolding kept for contributors who work that way; the repo owner does
-not, and decided on 2026-08-05 that they stay — so their presence is settled, not an oversight.
-Authority is this file, the skills it indexes, each module's `mod.rs` doc comments and `docs/`.
-`_bmad-output/` reads authoritative and is not: its PRD, epics, per-story files and
-`sprint-status.yaml` are not kept in step with what actually lands. A session that is not
-deliberately running a bmad workflow should not read, follow or update any of it — in particular
-it must not mark a story or `sprint-status.yaml` to reflect work it just did.
+This file is loaded at the start of every session, so it holds only what is true for every session
+regardless of what is being touched. Everything else sits behind a trigger, and the triggers are
+the router below.
 
-`src/main.rs` also owns **app lifecycle**, and both halves are counter-intuitive enough to name
-here: a release Windows build is a **GUI-subsystem** binary (no console window behind the app),
-which costs it valid standard handles, so `attach_parent_console` buys them back on the
-`--version` / `--build-info` path alone — and **no shell waits for a GUI-subsystem process at
-all**, so every Windows smoke test must run it through `Start-Process -Wait`, never PowerShell's
-`&`. Capturing into a variable does *not* make the shell wait; believing it did is what cost
-v0.1.5 its Windows archive, and the same wrong claim sat in three comments and one doc before
-being corrected. "What 'verified' means" in `docs/release.md` has the panic, the run IDs and the
-fix. Closing the single window quits the
-app through **`QuitMode::LastWindowClosed`** (GPUI's own check, run after the window is removed,
-not a callback that force-quits) plus a macOS-only `cmd-w` binding, needed because dodo installs
-no menu bar for that shortcut to hang off. The doc comments there carry the reasoning. The Windows `--build-info` path has
-run on a release runner; interactive window lifecycle still needs captain testing.
+- **Do not read the docs, the crate `AGENTS.md` files or the skills up front**, and do not
+  recursively scan `docs/` or `crates/*/AGENTS.md` to "get oriented". A session that only touches
+  the JSON formatter must not pay for the Cleaner's internals or the input-method stack.
+- **Load exactly what the router points at for the task in hand**, at the moment the task reaches
+  it. That is normally one row and one file.
+- **Load an architecture doc only when the change is genuinely cross-cutting** — it crosses a
+  crate boundary, changes a public API, touches shared persisted state, or touches a platform
+  abstraction. An edit that stays inside one crate does not qualify.
+- If the router has no row for what you are doing, read the module's own `//!` docs. That is the
+  intended fallback and it is usually the whole answer.
 
-Every tool now lives in a feature crate under `crates/`: the single-file
-`dodo-json-formatter` and `dodo-encoder-decoder`, plus `dodo-cleaner`, `dodo-api-explorer`,
-`dodo-database`, `dodo-docker` and `dodo-input-method`; the updater is a feature crate too. The
-larger crates use `models/` (plain data, no GPUI, unit tested), `services/` (the only layer naming
-outside-world crates), `state/`, `components/` and `views/`; each crate's `lib.rs` docs and matching
-skill below are the authority. `main.rs` aliases every crate back to its former module name so the
-binary consumers keep their old paths. `src/` is now the application shell and cross-feature
-services only. See the feature-crate entry below before extracting another whole feature.
+## Invariants
 
-**`crates/dodo-cleaner/` is the same shape but started unfinished, rounds have been landing
-since, and on 2026-08-15 it moved out of the binary entirely** — it was `src/cleaner/`, and any
-path below that still says so is stale. Its `lib.rs` doc comment is the authority on what has
-shipped and on the two seams the move added; do not assume it is still round 1 without checking. `core/` still carries `#[allow(dead_code)]` on items ahead of what constructs
-them — **those are pending work, not dead code to delete** — but the allow comes off as each
-producer lands: `core::safety` now has the real deletion boundary used by all three cleanup paths:
-host-aware lexical normalization plus canonical allowed-root containment rejects traversal,
-symlink/junction escapes, filesystem roots, declared roots and the user's home; its deny-by-default
-`DeletionPolicy` authorizes nothing until a scanner root is named. `core::permissions` is still the
-one whole-module allow marking an area that does not exist at all yet. Three things named in
-`crates/dodo-cleaner/src/lib.rs` are worth knowing before touching it: an item's
-application icon is a **bounded, `Arc`-shared** `core::icon::IconRaster` and never a raw `Vec<u8>`
-(what it replaced measured 70.5 MiB *per app* and could not be decoded at all — `core::icon` has
-the numbers); `core::category::CleanerCategory::hidden_for(HostOs)` is the whole switch deciding
-which categories the window lists, and because a scan starts only from a category's own pane a
-hidden one is never scanned; and what a scan *looks* like is the tested pure
-`core::scan_state::ScanState::indicator`, not a `match` inside a `render`.
-**`hidden_for` is per platform and pure**: macOS lists all fourteen; Windows and Linux list the
-four filesystem categories plus shared AI Apps, Docker Cache and Node Tooling Cache, and both list
-Installed Apps. Windows never reads registry uninstall strings and hands actions to Installed Apps
-settings. Linux treats desktop entries as user-facing evidence over dpkg (Debian/Ubuntu), RPM
-(Fedora), pacman (Arch), separately-scoped Flatpak, Snap and bounded AppImages; native packages,
-system Flatpaks and Snap are scan-only, and only user Flatpaks and bounded AppImages have actions.
-Neither platform deletes package-managed install locations. Taking a `HostOs` rather than splitting
-on `cfg` is what lets every platform answer be asserted from this Mac. AI Apps keeps each host's
-Ollama/LM Studio paths in
-`crates/dodo-cleaner/src/ai_apps/definitions/<host>.rs`; every Windows/Linux location is explicitly inferred
-until captain validation, and models, chats and settings remain scan-only user data.
-Language Files stays macOS-only
-unless a safe equivalent appears; Orphaned Files stays unavailable on Windows and may return on
-Linux only with conservative package-manager-aware ownership. Scanner registries still own what
-can scan, and paired tests forbid disagreement in either direction: no hidden scanner and no
-listed row without one.
+These hold everywhere in dodo, whatever you are touching.
 
-**"`render` only runs when something changed" is false in gpui, and it cost the Cleaner its frame
-rate.** A dirty view marks its whole *ancestor* path dirty, and an ancestor re-rendering sets
-`Window::refreshing`, which bypasses the element cache for every *descendant* — so a child view
-scrolling, a 120 ms progress tick, or a redraw anywhere above re-runs a view's `render` with
-nothing of its own changed. Any `render` that copies a whole collection is therefore paying that
-copy per frame, however well the rows themselves are virtualized: `crates/dodo-cleaner/src/views/results_sync.rs`
-is the fix, the measurements and the decision table, and is the pattern to copy — stamp a revision
-where the data is mutated, compare it before re-copying. Cheap `render` bodies are not an
-optimisation in dodo; they are the contract.
+- **`Cargo.lock` is the only pin on the four git dependencies**, and `cargo update` silently jumps
+  them to upstream HEAD. Never run it as a side effect of another task; only ever as its own
+  reviewed commit. An explicit `rev = "…"` pin was tried and **cannot** replace it — upstream
+  depends on itself through unpinned default-branch refs, and the three resulting cargo errors are
+  recorded in `docs/build-optimization.md`. Hence `--locked` on every cargo invocation.
 
-**Never use a prepaint callback to mutate and `notify` a view for the next frame.** GPUI's
-`WindowInvalidator::invalidate_view` schedules a redraw only in `DrawPhase::None`; a notify during
-layout/prepaint records state but does not dirty the window, so it waits for an unrelated event.
-That made the Cleaner's result rows appear only after some resize sequences. Its table now keeps
-the pre-`2dd735c` fixed-column path and accepts horizontal scrolling; `cleaner_view.rs` carries
-the headless layout-state regression test. A headless `simulate_next_frame` is not evidence that the platform scheduled
-one — it runs an already-queued callback by hand, which is why the failed redraw workaround's test
-passed while the captain's idle window remained blank.
+- **Every string a user reads goes through `dodo-i18n`**, never a bare literal in view code. Load
+  `dodo-i18n-text` before writing or changing one; two `cargo test` guards enforce it, and a
+  failing guard means the code is wrong rather than the test.
 
-**dodo persists ten things across restarts, and reads an eleventh another process writes**, all
-under `data_dir()` (`src/paths.rs`, plus each feature crate's own `paths` seam) and each
-behind a trait so the state layer never learns where they live: `collections.json`
-(`api_explorer::services::collection_store`), `environments.json` (`services::variable_store`),
-`script-consent.json` (`services::consent_store`, the imported scripts the user has approved),
-`updater.json` (`updater::services::config_store`), `connections.json`
-(`database::services::connection_store`, which also holds database passwords in plain text — see
-`dodo-database-internals`), `query-data.json` (`database::services::query_store`, saved queries
-plus bounded query history, with query text intentionally stored as plain text), `quick-nav.json`
-(`quick_nav::services::config_store`), `cleaner-ignored-items.json`
-(`cleaner::services::ignore_store`, the orphan-detection candidates the user has marked "Keep",
-keyed by absolute path string rather than a `CleanableItemId` since that id is a session-local
-hash with no promise of surviving a restart), `session.json`
-(`session::services::session_store`) — and `input-method.json`
-(`input_method::services::store`, the macOS input method's engine settings and selected
-keyboard language).
-The eleventh is `input-method-status.json`, which **dodo only reads**: the input-method process
-writes it, and `dodo-ime-ipc`'s single-writer rule is why dodo has no method that could. Persistence
-and initial load run on the background executor, never the UI thread.
+- **Cheap `render` bodies are a contract, not an optimisation.** "`render` only runs when something
+  changed" is false in gpui: a dirty view marks its whole *ancestor* path dirty, and an ancestor
+  re-rendering sets `Window::refreshing`, which bypasses the element cache for every *descendant* —
+  so a child view scrolling, a progress tick, or a redraw anywhere above re-runs your `render` with
+  nothing of its own changed. A `render` that copies a whole collection pays that copy per frame,
+  however well its rows are virtualized. Stamp a revision where the data is mutated and compare it
+  before re-copying; `crates/dodo-cleaner/AGENTS.md` has the worked pattern and the measurements.
+  Relatedly: **never use a prepaint callback to mutate and `notify` a view for the next frame** —
+  `WindowInvalidator::invalidate_view` schedules a redraw only in `DrawPhase::None`, so a notify
+  during layout/prepaint records state without dirtying the window and waits for an unrelated
+  event.
 
-**`session.json` is what makes "nothing is persisted across restarts" obsolete**, and any doc still
-saying it — including the `dodo-theming-settings` skill — is stale rather than describing a
-decision. The captain asked for session restoration on 2026-08-06, and `src/session/mod.rs` is the
-authority: theme, font size, border radius, language, the window's rectangle **and mode**, the open
-tool, the sidebar's collapsed state, and **which tools the sidebar lists at all and in what order**.
-The other nine files persist something `session.json` does not attempt: *what the user typed or
-decided about one specific thing* — an approved script, a saved query, a cleaner path marked
-"Keep", a skipped update version, an edited quick-nav pattern — which cannot expire each launch
-without becoming a lie. **The one exception is `Run scripts`**, a `ScriptPolicy`
-global that still starts each launch at the cautious `Ask for imported` — it is the gate in front of
-running code that arrived inside someone else's collection file, not a preference, and its approvals
-are persisted per script in `script-consent.json` instead. Do not quietly start persisting it; that
-is the captain's call.
+- **A platform-conditional answer is a value chosen by `HostOs` or `cfg!`, not an item behind
+  `#[cfg]`, wherever that is possible.** Two of dodo's four release targets cannot be built from a
+  Mac at all, so an answer expressed as a `#[cfg]` item is an answer nobody here can compile or
+  test; expressed as a `const fn` over `cfg!` or as a pure function taking a `HostOs`, every
+  platform's answer is asserted from any machine. A gate in front of a genuinely platform-only API
+  still has to be an attribute — that is the line.
 
-Two things about that file that are decisions rather than details. **Every field is an `Option` and
-absent means *never chosen*** — writing `"Default Light"` into a fresh file merely because that was
-on screen would freeze system-appearance following for everyone who never opened the dialog. And
-**restoring window geometry opts out of gpui's own placement care**: `Window::new` only cascades and
-clamps in `default_bounds`, the branch it takes when `window_bounds` is `None`, so a supplied
-rectangle goes to the platform unexamined. `session::models::geometry` is the replacement — clamp to
-a display that still exists, honour `layout::window_min_size`, centre on the preferred display when
-the saved one is gone — and it is a pure function so all of it is tested without a frame. It is
-paired with a saved display **UUID**, because on macOS the rectangle alone cannot say which monitor
-it meant: every coordinate the pinned gpui reports there is display-*local* (`MacDisplay::bounds`
-returns `(0, 0)` for every display). `models::document::WindowRecord` names the four functions that
-prove it. Do not "simplify" that pairing away.
+- **`cargo fmt --all` and `cargo clippy --all-targets --locked -- -D warnings` are blocking CI jobs.**
+  Run both before committing. `cargo build` alone does not prove the tree is green, and there is no
+  crate-level `allow` in dodo; `dodo-build-release-internals` owns the suppression rules.
 
-**The Features settings page is why `View::ALL` is no longer the sidebar's order.** The captain
-asked on 2026-08-06 for per-tool on/off plus drag reordering, persisted; `session::models::features`
-is the authority and is pure, so every rule is a unit test rather than something found by looking at
-the app. Four of them matter outside that file: a stored entry naming a tool this build lacks is
-**dropped** and a tool the file never names comes back **beside its default neighbour**, enabled;
-**at least one tool always stays visible**, enforced in the model and drawn as a disabled switch with
-the reason beside it; the tool on screen is always a listed one, which is the single function
-`Features::active` answering both "the remembered tool was switched off" and "the open tool was just
-switched off"; and **a switched-off tool is not a quick-navigation route** — `layout` drops its
-detectors before `detect_among` runs, so a pasted `curl` with the API Explorer off falls through
-rather than reopening it. The last one is the trap: `detect_among`'s allowed list is a **membership
-test and never an order**, because `Detector::ORDER` is a correctness property (most specific first)
-and the sidebar's order is a preference. `Layout::features` is the live list, `View::for_detector` is
-the single mapping both `apply_route` and `allowed_detectors` read — generated from the `pastes:`
-field of each row in `src/tools.rs`, and exhaustive over `Detector` by the compiler — and
-`settings::features_page` builds the rows by hand because a `SettingItem` cannot carry a position. Adding the field is also
-what took `session.json` to **schema version 2**; an older build would have read it, dropped the key
-and written it back pruned. The historical tray language field took it to **3** for the same
-reason — and forced the fix that makes the claim true: `parse_document` now stamps
-`SCHEMA_VERSION` onto what it read, because until it did, a document loaded from a version-1
-file was written straight back *as* version 1, so a newly-added key landed in a file older
-builds still believed they understood.
-
-**`src/quick_nav/` is the one feature that is not a tool**: a vim-shaped normal mode where
-`Cmd+V` / `Ctrl+V` / `p` sends the clipboard to whichever tool can read it, and `Esc` leaves a
-focused input. Its module docs are the authority and are worth reading before touching key
-handling anywhere — three things there are counter-intuitive. **Normal mode is a key-binding
-context, not a flag**: the bindings carry `Dodo && !Input`, gpui evaluates `!` against the whole
-dispatch path, and that is the only definition — so `p` still types a `p` inside every text field
-and ordinary paste is untouched. **The pane holds a focus handle for this**, because with nothing
-focused gpui's dispatch path is the window root alone and carries none of the pane's context.
-And **`Esc` is bound at the pane, deliberately shallower than every library `Escape`**: gpui tries
-matched bindings deepest-first until one stops propagating, so a dialog, a popover, a select and
-an input's own completion popup all still win, and this fires only once they have declined.
-`models/detect.rs` carries the detection order (most-specific first: cURL → database URI → JWT →
-JSON → Base64) and the rule that resolves the captain's editable-regex request against dodo's
-existing parsers — *a pattern selects candidates, the parser confirms*. `layout.rs`'s
-`apply_route` is the single place a detected route meets a `View`.
-
-**`src/tray/` is the second feature that is not a tool**, and it is **macOS *and* Windows** —
-one `tray-icon` for both, a menu bar `NSStatusItem` or a notification-area icon showing a dodo
-with one keyboard-input-language glyph, plus a four-row native menu. Its module docs are the
-authority. **Two of `tray-icon`'s calls are macOS-only bodies that compile to nothing elsewhere,
-and both bit**: `set_icon_with_as_template` returns `Ok(())` without touching the icon off macOS,
-so the Windows mark never changed language until `src/tray/mod.rs` split the call; and a template
-image's all-zero colour channels, which AppKit repaints from alpha, are a **solid black** icon on
-Windows, where `CreateIcon` uses the colour bits. `icon::paint` is that decision, is pure, takes
-the host as a parameter so both answers are asserted from a Mac, and picks the ink from
-`SystemUsesLightTheme` — never `AppsUseLightTheme`, which is a different question. Four more
-things there are decisions rather than details.
-**The menu bar and native input method share `dodo_ime_core::LanguageId`** — the selected
-language is written to `input-method.json`, which the bundle reads; `i18n::Language` remains
-dodo's interface-language preference. A historical `session.json` tray value is migrated once
-and no longer written. **Events arrive without a second event loop**: the
-`tray-icon`/`muda` handlers run on the main thread but are `Fn + Send + Sync`, so they only
-`unbounded_send` on a `futures-channel` mpsc that one foreground `Task` awaits — and both
-handler slots are `OnceCell`s, so they must be installed *before* the menu and status item
-exist or they are locked out for the process's life. **`QuitMode::Explicit` is set from the
-tray, after the status item exists**, never statically in `main.rs`: dodo installs no menu bar,
-so the tray's Quit is the only way out, and a failed tray with the mode already switched would
-be unquittable. **`muda` has no radio group** and toggles a check item *before* emitting its
-event, so the whole group is re-asserted on every selection. Adding a language is one variant
-plus one `assets/icons/tray/dodo-<code>.svg`; the marks are rasterised through gpui's own
-`SvgRenderer`, so they cost `src/assets.rs` no new filter and add no PNG.
-
-**`crates/dodo-ime-core/` is dodo's own input method, and it is a crate, not a module.** dodo
-depends on it and names only its configuration types — a normalized `KeyEvent`/`EngineAction`
-vocabulary (`core/`) plus a Vietnamese engine speaking Telex and VNI (`languages/vietnamese/`);
-no keystroke is ever processed in the dodo process **except the explicitly selected Windows
-Keyboard Hook fallback**. Windows TSF now lives in `crates/dodo-ime-windows/`; later rounds add
-per-application language memory, abbreviations and Linux IBus. Its crate docs are the authority;
-four things there are decisions rather than details. **It is a crate because the OS hosts are
-separate processes**: the macOS host has to be its own `.app` bundle that the system launches — it
-cannot be the dodo process — and Windows and Linux load theirs into other people's applications;
-all three link this engine and none may link gpui. A module of a binary crate
-cannot be linked at all, so `src/input_method/` became `crates/dodo-ime-core/` and
-**`purity_lint.rs` now guards a real boundary rather than an aspirational one**. Its remaining job
-is what `Cargo.toml` cannot do: a dependency is one line and nothing warns, so the lint's
-allow-list turns adding one — including a sibling workspace crate — into a failing test, and
-`the_scan_covers_every_file` proves the check reads every file. Never widen the allow-list; pass
-the value in at the boundary instead. The module-wide `#![allow(dead_code)]` is **gone**, not
-because it was wired up but because everything is `pub` in a library and therefore reachable.
-**`LanguageId` is the shared keyboard-language identity**: it is persisted through
-`input-method.json`; English and Japanese pass keys through until their native engines exist.
-`ActiveLanguages` defaults to English/Vietnamese and is the one menu/cycle set;
-`LanguageSwitch` persists its key, modifiers and optional beep beside it. dodo remains the only
-settings writer: native hosts report an explicit switch through the host-owned status file, waking
-dodo via macOS's separate distributed notification or Windows' named event, so the UI and tray
-adopt then persist it without polling. The purity lint keeps UI and IPC dependencies outside the
-state machine. And **the Vietnamese
-engine is semantic, not string
-rewriting**: a letter is `(base, mark, case)`, the tone belongs to the syllable and its position is
-recomputed at render time, so `toas` + `n` becomes `toán` without anything relocating a mark.
-`InputScheme` is an enum for the same reason — Telex and VNI produce identical `Transform`s and
-share every rule about Vietnamese. **A doubled letter key states the case of the letter it marks**
-(the captain's call, 2026-08-14): `dD` is `Đ` and `Dd` is `đ`, and `aA`/`Aa` read the same way,
-because the second press *is* that letter again and is the user's latest word on it.
-`Syllable::retypes_last_letter` is the whole rule and both its conditions are load-bearing — the
-key has to spell the letter (so `w`, the tone letters and every VNI digit leave case alone, and
-`Dd` is `đ` while `D9` is `Đ`), and nothing may have been typed since (so a stroke reaching back
-over a word keeps the case the user typed: `Did` is `Đi`). Undoing the mark restores the case
-with it, which is why `Ddd` is `Dd`. It lives in `syllable.rs` and not in `telex.rs`, which
-decides *which key* and nothing else. **Every modifier reaches back over the current syllable**, the
-stroke included since 2026-08-08 (`did` is `đi`, `add` is still `add` because the rule is about the
-*initial* letter); a scheme file that decides position itself rather than asking
-`Syllable::mark_target` is how that one was wrong for a round. **Undoing a modifier reaches back
-too, and adjacency decides its shape** — the rule that makes `window` type `window`: a repeat
-cancels the letter *its own key* made (`Letter::source`, never the rendered text), collapsing to one
-literal when nothing was typed since (`ww` → `w`) and otherwise putting the earlier key back **where
-it stands** while the new one still types itself (`ưindo` + `w` → `window`, not `indow`). A direct
-marked letter's cancel therefore asks the **last** letter, not `mark_target`: `windoư`'s nucleus is
-a bare `i` that can carry no horn, so there was no target to ask and a second `w` grew `windoưư`.
-The price is stated in
-`vietnamese::tests`: a Latin word whose keys spell a **valid** Vietnamese syllable is composed and
-stays composed, because `rules`' word-boundary restore only rescues invalid ones — so `dodo` types
-`đô`, which is what Unikey does too and is not a bug to fix. Tests: `corpus.rs` holds ~460 real words as *answers* and
-derives both key sequences from them, so tone placement is never fed to the thing being tested.
-**To actually type at it before any OS host exists**, run
-`cargo run -p dodo-ime-core --example telex` (interactive) or
-`… --example telex -- --keys tieengs` (one-shot, `--verbose` for the per-key `EngineAction`s).
-It is an `examples/` target, never a `[[bin]]`, so it ships in nothing; its own header comment is
-the authority on why it is line-based (raw per-keystroke input costs a dependency) and why its
-strings are bare literals rather than `i18n::Str`.
-
-**`crates/dodo-ime-macos/` is the macOS host**: an InputMethodKit `.app` that
-macOS launches, links the engine, and types with **no dependency on `Dodo.app` running** — dodo
-does not link it and cannot start it. `docs/macos-input-method.md` is the authority on building,
-installing and enabling it by hand, on what dodo's own install action does (§7), on the two files
-the two processes exchange (§8), on what was and was not verified (§5), and on what the next round
-owes (§9: modifier-only native shortcuts, a menu-bar icon, signing). Four things there
-are decisions rather than details. **`CFBundleIdentifier` must contain `.inputmethod.` as an
-infix**, not merely end in it: `io.github.mrgru.dodo.inputmethod` never appears in the
-input-source list and `…inputmethod.Dodo` does, with `TISRegisterInputSource` returning `0` and
-logging nothing either way — `src/bundle.rs` holds every identifier plus the eight-bundle table
-that measured it, and the investigation report had this as an unverified READ note. **The bundle
-nests at `dodo.app/Contents/Helpers/`**, never `Contents/Library/InputMethods/`, because only the
-former is a directory `codesign` discovers as nested code (`docs/macos-signing.md` §7.2) — macOS
-itself never looks inside `dodo.app`, so that copy exists purely for the install action to copy
-out.
-**Everything that could get Vietnamese wrong is pure and tested without a frame** — `keymap`,
-`text`, `ops`, `session` — while `client.rs` and `controller.rs` decide nothing; that split is
-what lets `tests/controller.rs` (`harness = false`, because the class is `MainThreadOnly` and
-libtest spawns threads) drive the real class against a mock client and catch the one failure no
-unit test can, a mistyped selector, which compiles and silently registers a method nobody calls.
-And **`IMKTextInput` is hand-written `msg_send!` by necessity**: it is declared in Carbon's
-HIToolbox, not in InputMethodKit, so `objc2-input-method-kit` does not and will not bind it —
-`NSNotFound` there is `NSIntegerMax`, not `NSUIntegerMax`, and `NSRange`s are UTF-16 while the
-engine counts graphemes, which `text.rs` converts through the engine's own walk so the two
-definitions cannot drift.
-
-**`crates/dodo-ime-windows/` is the Windows TSF COM DLL**, a `cdylib` Windows loads
-independently of dodo. It links only the pure engine and IPC contract; `DllRegisterServer` writes
-per-user COM registration and the Vietnamese profile, while its TSF edit session performs marked
-composition rather than injecting keys. It re-reads settings before each key so a selected Keyboard
-Hook makes TSF pass through. The fallback itself lives in dodo's
-`crates/dodo-input-method/src/services/keyboard_hook.rs`, is only active while dodo runs, tags
-injected output,
-and passes uncertainty, repeats, key-up, shortcuts and secure-desktop uncertainty through. The
-release ZIP carries `input-method/dodo_ime_windows.dll`; the updater replaces that packaged
-sidecar with `dodo.exe` but deliberately does not register or replace the separate `%APPDATA%`
-copy — Install/Reinstall still owns that action. See `docs/windows-input-method.md` for
-install/recovery and what captain testing still owes.
-
-**`crates/dodo-ime-ipc/` is a crate because neither process can reach the other's code**. dodo and
-both native hosts link it; it holds the identifiers each platform looks up, the two single-writer
-JSON files, and the distributed-notification name. The alternative was two copies of one schema kept in step by
-nothing, and a drifted field name there does not fail to compile: it reads as absent, so the user's
-setting silently has no effect. `dodo-ime-core` cannot hold it — its `purity_lint` forbids `serde::`
-by test — and dodo must not link `dodo-ime-macos`, which would drag InputMethodKit into a UI
-application for four string constants. Three things there are decisions. **One writer per file, and
-no locking**: dodo owns `input-method.json`, the native host owns `input-method-status.json`, every write
-is temp-file-then-`rename`, and neither side has a method that could write the other's. **The
-version rule matters more here than anywhere else in dodo** — a months-old bundle reading a new
-dodo's settings file is ordinary, not exotic, so both parsers refuse a `"version"` above their own
-and the bundle then types with `DEFAULT_CONFIG` and reports revision `0`, which is exactly how dodo
-knows to say "not picked up yet". And **the status file is the one file the native host writes**, which
-contradicts the older "writes no file" claim in `dodo-ime-macos`'s own docs and is corrected there:
-nothing the user typed may ever appear in it; it is written on start, settings changes and explicit
-language-switch commands, never ordinary typing, and a test pins its key set so adding a field is
-deliberate.
-
-**`crates/dodo-input-method/` is dodo's end of it, and `services/tis.rs` carries a crash worth
-knowing about.** It left `src/` on 2026-08-15 — any path below that still says `src/input_method/`
-is stale — and `main.rs` aliases it back to `crate::input_method`, so every call site reads as it
-did; see the feature-crate entry below for the two edges the move had to invert. It is a **tool, not a Settings page** — the captain asked on 2026-08-09 — and the move took
-the whole surface: backend choice, status, install button and the four engine settings are on the
-pane and nowhere else, so no control is reachable twice. That makes `View::InputMethod` the **first
-and still only platform-conditional tool**, which its row in `src/tools.rs` says with one
-`hosts: any(target_os = "macos", target_os = "windows")` field — no `#[cfg]` on the row, and no
-per-platform `View::ALL`; the row draws `AppIcon::Keyboard`, deliberately not the globe, which is
-the API Explorer's. The pane holds **no setting at all** — `Layout::new` builds it before
-`input_method::load` has read the file, so every control reads the global in `render` and the two
-either/or settings are radio groups rather than dropdowns, whose `SelectState` would be a second
-copy of the setting; the shortcut recorder's three fields are the exception that proves it, holding
-only what the user is *doing*. Native remains the persisted default. Event Tap is the macOS-only
-alternative in `services/event_tap.rs`; Windows instead offers `Keyboard Hook`, a clearly-labelled
-no-install fallback that runs only while dodo does. Both direct-output fallbacks use the existing
-engine and never share transformation with Native TSF/InputMethodKit.
-**On Windows, `GetKeyboardState` is the wrong question and asking it cost this round four
-symptoms.** It answers *per thread* and only advances as that thread reads key messages from its
-own queue, so in a `WH_KEYBOARD_LL` callback — which runs on dodo's thread while the key is on its
-way to somebody else's application — it is frozen at whatever dodo last saw. Shift read as up, so
-`ToUnicodeEx` returned the unshifted character (no capital could reach the engine, and every
-rewritten syllable came back lowercase) *and* `Modifiers` was always empty, so no valid shortcut
-could ever match and the language switch was dead. `models::keyboard_hook::layout_state` now
-**builds** the array from `GetAsyncKeyState` rather than fetching it — a stale array is worse than
-an empty one, because a leftover Control byte turns a letter into a control character — with the
-arriving key folded in (`with_key_down`, which is what a modifier-only shortcut fires on) and caps
-lock tracked (`CapsLock`) rather than asked. The TSF DLL runs in the application's own thread where
-the snapshot should be right, so it *merges* rather than rebuilds (`keymap::merge_physical`), and
-it passes the real scan code from `lParam`. All of it is pure and tested from this Mac; none of it
-has run on Windows. **The other half of the switch was two gates**: the hook required a focused
-edit control and TSF required a writable context before either looked at the shortcut, so a window
-with nowhere to type could not switch language. Both now match the shortcut first.
-**Whichever backend is selected owns the language switch**, because the others are passing every key
-through — so both fallbacks stay attached in *every* language (a listener that stopped in English
-could never switch back), answer the shortcut before the engine sees anything, and are
-**reconfigured, never joined by a second**, which is what makes a recorded shortcut live on the next
-keystroke and the replaced one inert. `models/live_switch.rs` is that rule, pure and tested
-everywhere; a cycle performed inside an OS callback returns to the state layer over an mpsc channel
-because a callback has no `App`. The switch is `Shortcut { modifiers, key }` at
-`SettingsDocument::language_switch`, **schema 8** (`backend` was 4), where `key` is the engine's
-non-printing key set plus `Modifiers`; validity is one rule — a command modifier must be held — and
-never a count or a fixed shape. **A printing key is not in the vocabulary and never will be**: a host
-is handed what a key *types*, so `⌥Z` arrives as `Ω` and could not be matched again. **The macOS
-Native host cannot see a modifier-only shortcut at all** — `recognizedEvents:` is
-`NSEventMaskKeyDown` and `FlagsChanged` reaches only `handleEvent:client:` — so the pane says to use
-Event Tap; `docs/macos-input-method.md` §8a is the authority and §9 owns the fix.
-Event Tap retains its macOS-only
-accessibility/secure-input/feedback protections; the TSF installer has separate tested path data in
-`models/windows.rs` and is intentionally per-user.
-**A Backspace rewrite is wrong in a browser address bar**, and only a fallback can be wrong that
-way — a native host composes through a marked-text client. Inline autocomplete keeps a selection
-alive between keystrokes, so the first Backspace eats it instead of the character the engine meant.
-`models/browser_rewrite.rs` is that rule, pure and tested: one `BROWSERS` table routing bundle IDs
-to *two* strategies (Blink takes `Shift`+`Left` then `1 -> 0` on the count; WebKit and Gecko take an
-invisible character then one extra Backspace — the Chromium trick is unreliable in Safari), three
-guards that answer "post it verbatim", and an unlisted application deliberately left alone rather
-than treated as WebKit. **Start-of-field is not detectable** and `delete_before > 0` is the proxy;
-**focus is not detectable either**, so Safari and Firefox pay one extra insert plus Backspace in
-ordinary page inputs too — accepted, and emitted from one function so it can be narrowed later.
-`browser_address_bar_fix` is the switch, default on, added to `input-method.json` **without** a
-schema bump because a defaulted `bool` no native host reads is not a misread. `docs/macos-input-method.md`
-§3b is the authority, including what no unit test can prove: no real browser has run this. The
-Windows hook API has no normal password-field bit, so it passes secure-desktop and all other
-uncertain input through; `docs/windows-input-method.md` is explicit that this needs captain runtime
-testing. `dodo_ime_ipc::paths` now duplicates both the macOS and Windows data-directory rules and
-is tested against `src/paths.rs`. The module remains un-gated so Linux checks its pure parts, but
-only macOS and Windows expose the pane.
-
-**`crates/dodo-dialog-slot/` is why Settings and the updater cannot stack two copies of
-themselves, and it is a *crate* because a gpui `Global` is identified by its type.** A dialog
-layer is a stack and `open_dialog` pushes unconditionally, so a dialog with two ways in — Settings
-(sidebar footer, menu bar item) and the updater (sidebar footer, background check) — put two
-identical cards on screen. Both now `claim` a slot keyed by a marker type and `release` it from
-`on_close`; the crate doc is the authority, and `gpui-component-recipes` records the two rules that
-bite (never pair `release` with a second `close_dialog`, and the window rather than the flag
-decides). It was `src/dialog_slot.rs` until 2026-08-15 and had to stop being one the moment the
-updater left the binary: a copy on each side of a crate boundary is **two** slots, so the updater
-would claim one `settings.rs` never reads and the defect would come straight back. That is the same
-argument that put `t()` and the language global inside `dodo-i18n`; `main.rs` aliases it back to
-`crate::dialog_slot`. No other dodo dialog needs it: the rest are opened from a control the modal
-overlay covers.
-
-**`crates/dodo-i18n/` is one directory per *area of the app*, not one file per language of the
-whole app**, and that shape is the answer to a defect rather than a preference. It used to be a
-single 7,595-line `src/i18n.rs` whose `Str::text` matched on the *pair* `(Str, Language)`, so a
-third language meant editing all 937 strings instead of adding files. Now `<area>/mod.rs` owns that
-area's `Text` enum, `<area>/en.rs` and `<area>/vi.rs` are each an exhaustive `match` over it, and
-`Str` — still holdable, comparable and re-translating, which is what `ConsoleEntry` relies on — is
-a thin sum over the twenty area enums with a `From` for each, so `t()` takes `impl Into<Str>` and a
-call site reads `t(cleaner::Text::Scan, cx)`. Four things there are decisions rather than details.
-**Adding a language touches no existing string**: one `Language` variant, one arm in the `areas!`
-dispatch in `crates/dodo-i18n/src/lib.rs`, and one new file per area — and the compiler names every area that
-has not been given one. **The area boundaries follow `src/`, and the four biggest modules are split
-further** along their own view boundaries (`api_explorer` / `api_scripts` / `api_variables` /
-`api_response` / `api_collections`, `database` / `db_query` / `db_catalog` / `db_connection`), which
-is what keeps every file under 250 lines; a string more than one *area* draws lives in `shared`
-rather than being duplicated. **`std::mem::discriminant` on a `Str` no longer identifies a
-string** — every string in an area shares one `Str` variant — so a test that means "same variant,
-ignoring runtime values" has to reach into the area's own enum; `docker::models::inspect` and
-`input_method::models::status` are the two that do. And **the sample table is generated together
-with its own exhaustiveness check** by the `samples!` macro, which replaced a 940-line
-hand-numbered `position()`: one entry per variant produces both the list the tests walk and an
-exhaustive `match` over `Text`, so a variant with no sample is a compile error and no index number
-survives. `src/i18n_lint.rs` stays put at the top of `src/` because its 34 `include_str!` paths are
-relative to that directory, and every file it reads is a *view*, so the catalogue moving out did not
-touch it. **The catalogue depends on nothing and the UI half is one opt-in feature away**:
-`dodo-i18n`'s default build has no dependencies at all, because a `Str` is held unrendered by pure
-models that are tested with no `App` and no frame, and the catalogue itself will never name `gpui`.
-Its `gpui` feature switches on `src/ui.rs` alone — the active-language global, `Language::current` /
-`set`, and `t()`. Those three were `src/i18n.rs` until `dodo-cleaner` left the binary: a gpui
-`Global` is identified by its *type*, so a feature crate defining its own copy would read a
-different global and never see a language change, which means there can be exactly one and it has
-to sit where the binary and every feature crate can both name it. `main.rs` aliases the crate to
-`crate::i18n`, so a call site still reads `use crate::i18n::{cleaner, t}` and `src/i18n.rs` no
-longer exists. Two things could not move as they were, both forced by the orphan rule: the gpui
-global is an `ActiveLanguage` newtype rather than `Language` itself, and `Language::current` / `set`
-are `LanguageExt`'s associated functions — the call sites are unchanged, but a file that calls one
-has to import the trait. **Leave the feature off** in anything that only *holds* a `Str`. See the
-`dodo-i18n-text` skill before writing any user-facing string.
-
-`data_dir()` is `crate::paths::data_dir()` and knows all three platforms:
-`~/Library/Application Support/dodo`, `%APPDATA%\dodo`, `$XDG_CONFIG_HOME` or `~/.config`. The macOS
-path is frozen — changing it orphans every existing installation's saved collections. Every *rule*
-lives in `crates/dodo-paths/`, which has no dependencies and deliberately no build script; it
-classifies the platform from a target triple rather than `#[cfg]`, which is what lets all three
-branches be unit tested from a Mac that cannot compile two of them — copy that trick rather than a
-`cfg` split for anything else platform-shaped and pure. **The seam is `main.rs`'s own `paths`
-module**, which is where the one impure input enters: `build_info::VERSION_INFO.target` is a fact
-about *this binary*, so it is read there and handed to the crate. That is also why
-`HostOs::current()` is `paths::current()` now — an inherent method cannot follow its type across a
-crate boundary while its body stays behind.
-
-The files version differently, and the difference is deliberate. A `RequestSnapshot` inside
-`collections.json` is versioned only by `#[serde(default)]`, which copes with *added* fields and
-nothing else. `environments.json`, `script-consent.json`, `updater.json`, `connections.json`,
-`query-data.json`, `quick-nav.json` and `cleaner-ignored-items.json` carry an explicit
-`"version"` from their very first write, and their `parse_document` **refuses** a file whose
-version is higher rather than half-reading it. Copy that pattern for any new file; do not copy
-`collections.json`'s.
-
-**Build and release engineering lives in `docs/`**, and those four files are the authority for it:
-`docs/build-optimization.md` (release profile, the measured before/after size table, linker
-findings, the dependency report, startup review), `docs/release.md` (CI, the release workflow,
-packaging, verification, the application icon, the in-app updater), `docs/macos-signing.md` and
-`docs/macos-input-method.md` (building the input-method bundle, installing it by hand or from
-dodo's own Settings page, and the two files the two processes exchange).
-The rest is `Cargo.toml`'s `[profile.*]` comments, `build.rs`, `scripts/` and `.github/`.
-
-**dodo is unsigned on every platform, and `docs/macos-signing.md` is the authority on changing
-that** — written on 2026-08-08 as a *procurement* document, because the captain decided signing
-waits but must stay reachable. It is the answer to "what must the repo owner personally buy or
-create" (Apple Developer Program, US$99/yr; a Developer ID Application certificate, max five per
-account, Account Holder role only; one notarisation credential), the secrets by exact name, the
-entitlements — **dodo needs none, and neither will the input-method bundle** — and the ordering.
-Three things there are corrections to plans that were recorded wrongly and would have cost a
-release each. Signing happens **inside** `scripts/package.sh` / `macos-app-bundle.sh`, before the
-tar, because the published SHA-256 and `update.json` entry are computed from that archive. A
-workflow `if:` **cannot read `secrets`** — it reads an `env:` set from one at job level. And
-`codesign --deep` is deprecated for *signing* (still correct for verifying): nested bundles are
-signed inside-out, one call each. Signing is a user-experience purchase, not an enablement one —
-an unsigned dodo and an unsigned input method both run today.
-
-**The application icon is a committed pipeline, not a file someone dropped in.** `assets/branding/`
-holds the original artwork and the 1024 RGBA master; `python3 scripts/generate-icons.py` derives
-the macOS `.icns`, the Windows `.ico`, the Linux hicolor PNGs and one 256px PNG from it, and all of
-those are committed because packaging must not depend on the host (`iconutil` is macOS-only). Read
-"Application icon" in `docs/release.md` before touching any of it — it is the authority on all five
-launch paths, on which of them anyone has actually looked at (one: the macOS bundle), and on the
-fact that a `.icns` `iconutil` accepted can still render blank. **The icon is answered in three
-unrelated places**, which is the part that catches people: `build.rs` compiles the `.ico` into
-`dodo.exe`, `scripts/macos-app-bundle.sh` puts the `.icns` in the bundle, and `src/window_icon.rs`
-covers at runtime what no file can — a bare macOS binary's Dock tile, and the Linux `app_id` that
-`dodo.desktop` is matched against.
-
-**Do not confuse `assets/{branding,macos,windows,linux}` with `assets/icons`**: only
-`icons/**/*.svg` and `themes/**/*.json` are embedded in the binary through `rust-embed` (the
-`#[include]` filters in `src/assets.rs`), which is why the packaged icon artwork costs zero bytes.
-The one exception is `assets/branding/dodo-256.png`, which `src/window_icon.rs` pulls in with
-`include_bytes!` — a different mechanism the filters do not govern. Anything new under `assets/`
-that must stay out of the binary has to stay outside those two filters *and* out of an
-`include_bytes!`.
-
-**Every release publishes an `update.json` manifest**, generated by
-`tools/update-manifest` — a **standalone crate that is not part of dodo**. `exclude = ["tools/*"]`
-in `[package]` keeps it out of `cargo package`, `workspace.exclude` keeps it out of the workspace,
-it carries its own `Cargo.lock` and four dependencies, and it is built only by the release workflow
-through `--manifest-path`. It costs the binary zero bytes. Do not add it to the workspace, and do
-not give dodo a `[[bin]]`. "Automatic updates" in `docs/release.md` is the
-authority: the manifest shape and why `manifest_version` / `signature` / `channel` exist, the
-hand-verification recipe, and the channel design. Three things that are
-decisions rather than details: the manifest points at macOS's **`-app.tar.gz` bundle** selected by
-exact filename (an installer swaps the `.app`); **any missing platform fails the release**,
-experimental ones included, because a silently absent platform means those users are never offered
-an update; and the publish step is **create-or-update**, because `gh release create` cannot repair
-a tag that already exists and tags here are immutable. `crates/dodo-updater/` is what reads it —
-it left `src/` on 2026-08-15, taking `reqwest` out of the root manifest with it.
-
-Ten things about build and release that catch people:
-
-- **The repo is a cargo workspace, and `crates/` vs `tools/` is the rule for which shape a new
-  crate takes.** It gained `[workspace]` on 2026-08-08 when the input-method engine moved to
-  `crates/dodo-ime-core/`, which contradicts the older "do not add it to a workspace" line above —
-  that line was and remains right *about `tools/update-manifest`*, and the difference is whether
-  dodo **links** the crate. A linked crate is a workspace member so there is one `Cargo.lock` and
-  one `--locked`; a second lockfile for a linked crate would be a second, silently divergent
-  resolution of shared dependencies. A crate the release workflow merely *runs* stays standalone
-  and excluded. **`crates/dodo-ime-macos/` is the case the rule did not anticipate** and settles it
-  the same way: dodo does not link the macOS input-method host at all, but the host links
-  *`dodo-ime-core`*, which dodo does — so a second lockfile would resolve the engine independently
-  and "the engine the tests prove" and "the engine the shipped bundle types with" would be two
-  resolutions nothing compares. `default-members = [".", "crates/dodo-ime-core",
-  "crates/dodo-ime-macos"]` is load-bearing: without it a bare `cargo test` / `cargo clippy
-  --all-targets` would silently stop covering a member. Naming the macOS host there is safe on
-  every platform only because its Objective-C dependencies sit under a
-  `[target.'cfg(target_os = "macos")'.dependencies]` table — a plain `[dependencies]` entry would
-  make the Linux and Windows `cargo check` rows build AppKit bindings. And `workspace.exclude`
-  matches **paths, not globs** — `tools/*` there excludes nothing, which is why it is spelled out.
-  `cargo metadata --no-deps` at the root lists seventeen packages, not one.
-
-- **`crates/` also holds dodo's *kernel* crates, and the rule for what earns one is use plus
-  independence.** `dodo-i18n` (every user-visible string), `dodo-app-icon` (the icon set) and
-  `dodo-paths` (where dodo's files live) came out of `src/` on 2026-08-15 because dozens of modules
-  use each and none of them needs the rest of dodo. Four rules govern them, and the root
-  `Cargo.toml`'s header comments are the authority. **A crate goes in `members` and
-  `default-members` in the same commit** — a member missing from `default-members` silently stops
-  being tested. **The graph stays wide and shallow**: the three do not depend on each other, because
-  a chain of small crates compiles more slowly than one big one and would defeat the point.
-  **Purity is the deliverable, not the file count** — `dodo-i18n` exists so a pure model can hold a
-  translated message without a windowing library, which is why its `Cargo.toml` has an empty
-  `[dependencies]` and a comment saying so. And **what cannot be pure stays in the binary**: the
-  one read of `build_info::VERSION_INFO.target` lives in `main.rs`'s `paths` module, so no kernel
-  crate needs a build script. The gpui `Global` behind `Language` was the other half of that rule
-  and **is no longer**: `dodo-cleaner` has to render a `Str` from outside the binary, so it moved
-  into `dodo-i18n` behind an opt-in `gpui` feature (see the i18n entry above). The default build of
-  every kernel crate is still dependency-free. `src/dialog_slot.rs` was the fourth to move, on
-  2026-08-15, and it is the one where the rule about *use* did not decide it: three users is still
-  not many, but the slot is a gpui `Global` and there can only be one of it. `src/assets.rs` and
-  `src/build_info.rs` were measured and deliberately **not** extracted: `assets.rs` embeds
-  `./assets` by a path relative to its crate root, and `build_info.rs` reads the `env!` variables
-  `build.rs` sets — which is also why the updater's `init` **takes** the two fields it needs rather
-  than any crate growing a build script to re-derive them.
-
-- **`crates/` also holds *feature* crates, and `crates/dodo-cleaner` is the worked example.**
-  A kernel crate is code many tools share; a feature crate is one whole tool of the app, lifted out
-  in one piece. `dodo-cleaner` left `src/` on 2026-08-15 — 93 files, 25,646 lines, the largest
-  feature dodo has — and the shape it landed in is the shape to copy. **The seam is what qualifies
-  a feature, not its size**: before extraction, measure outbound `crate::…` edges and binary
-  consumers; extract only when every outbound edge is already a crate and the inbound surface is
-  small. The Cleaner's outbound edges were exactly `app_icon`, `i18n` and `paths`; the JSON
-  formatter and Encoder/Decoder each had only `i18n`. A `use crate::…` inside a doc comment is not
-  an edge. The conventions are:
-  - **Both sides keep their spelling.** `main.rs` does `use dodo_cleaner as cleaner;` — the same
-    aliasing `dodo_app_icon` already got — so `layout.rs` still reads
-    `use crate::cleaner::CleanerView`, and inside the crate `use dodo_app_icon as app_icon;` /
-    `use dodo_i18n as i18n;` keep every `crate::app_icon::AppIcon` and `crate::i18n::t` unchanged.
-    Rewriting `crate::cleaner::` to `crate::` was the entire source change; 91 of the 93 files are
-    byte-identical to their `src/` versions once rustfmt has re-wrapped the shortened `use` lines.
-  - **`pub mod` becomes `pub(crate) mod`, and that is not a narrowing.** Inside a binary `pub`
-    already meant "dodo and nowhere else". Leave the modules `pub` and the crate suddenly exports
-    its internals — which is also what makes `clippy::new_without_default` start firing on twelve
-    scanner constructors that were never public before. The crate's whole surface is `CleanerView`
-    and `paths`.
-  - **What was impure in the binary needs a seam in the crate.** `paths::current()` reads
-    `build_info::VERSION_INFO.target`, which a library is not handed, so
-    `dodo-cleaner/src/paths.rs` names the platform with `cfg!` instead — and `main.rs`'s `paths`
-    module carries the test asserting the two spellings are one answer, the same guard `dodo-paths`
-    already keeps against `dodo-ime-ipc`.
-  - **The pure/UI split is a contract, not an accident.** 90 of the 93 files name no UI framework;
-    only the three under `views/` may `use gpui`. Its `Cargo.toml` says why each dependency is
-    there, and nothing was added or dropped by the move.
-  - **`src/i18n_lint.rs` reaches across with `include_str!("../crates/dodo-cleaner/src/views/…")`**,
-    so the three Cleaner views are still scanned for untranslated literals from the binary's tests.
-  - **A feature crate earns a launcher, and the launcher is an `examples/` target.**
-    `cargo run -p dodo-cleaner --example cleaner --locked` opens one window containing nothing but
-    the Cleaner — the concrete payoff of the seam, and the reason to keep the inbound surface at one
-    view. `examples/` rather than `[[bin]]` so nothing a shipped build compiles can reach it, and
-    everything it needs (`gpui_platform`, `gpui-component-assets`) is a `[dev-dependency]`, so
-    `cargo tree -p dodo --edges normal,build` is byte-identical before and after. The launcher
-    invents nothing: no arguments, no fixtures, no second copy of a setting — it constructs the view
-    the way `layout.rs` does and reads the real `data_dir()`. Two pieces of `src/app.rs` are
-    genuinely required and are the whole file: `Root` plus `Root::render_dialog_layer` under it, or
-    the crate's dialogs open in state and never paint, and an asset source, or every
-    `icons/<name>.svg` resolves to nothing. Copy that shape for the next feature crate; do not let
-    it grow past a screenful.
-
-  **`crates/dodo-docker` is the second**, extracted on 2026-08-15 by repeating those five rules
-  verbatim: 43 files, `layout.rs` and `main.rs`'s `docker::init` the whole inbound surface,
-  `DockerPage` / `DockerView` / `init` / `paths` the whole outbound one. Two things it adds to the
-  worked example. **A feature crate takes its outside-world dependencies with it**: `bollard`,
-  `tokio` and `futures-util` were declared by the binary for `docker::services` alone, so the first
-  two left the root `Cargo.toml` entirely and the third stayed only because `tray` and
-  `input_method` also await a stream — dodo the binary now names no async runtime at all. And
-  **the seam only needs what the crate actually asks**: nothing under `crates/dodo-docker` writes a
-  file, so its `paths` module exposes `current()` and no `data_dir()`, and `main.rs`'s
-  host-consistency test compares the one spelling there is.
-
-  **`crates/dodo-database` is the third**, extracted the same day and the same way: 52 files, the
-  four driver crates plus `sqlformat` and the two rustls lines moving out of the root
-  `Cargo.toml` with it. It is the one that shows what to do when the inbound surface is *not* one
-  file. `quick_nav` reads `models::uri` to route a pasted connection string, so `models` stays
-  `pub` while `components`, `services`, `state` and `views` become `pub(crate)` — **the rule is
-  what the binary names, not a uniform `pub(crate)` sweep**. Its `paths` seam is also the one where
-  the two spellings agreeing matters most: a `data_dir()` that disagreed with the binary's would
-  leave `connections.json` and `query-data.json` behind, so every saved connection and query would
-  silently vanish on the next launch. `src/i18n_lint.rs` reaches across to its twelve view and
-  component files the same way it already did for the Cleaner's three.
-
-  **`crates/dodo-api-explorer` is the fourth**, extracted the same day: 77 files,
-  the largest feature dodo has, and the one whose inbound surface is widest — `layout.rs`
-  (`ApiExplorer`), `main.rs` (`init`), `settings.rs` (`ScriptPolicy` and
-  `models::script_consent::ConsentPolicy`) and `quick_nav` (`models::snapshot::RequestSnapshot`,
-  `services::curl`). Applying the Database rule to that surface leaves **both** `models` and
-  `services` `pub`, with `components`, `state` and `views` `pub(crate)`. Only `rquickjs` left the
-  root `Cargo.toml` entirely. Its `paths` seam guards three files. With this one the binary's own
-  test count falls from 976 to 477.
-
-  **`crates/dodo-updater` is the fifth**, and it is the one that shows what to do when a feature
-  needs something *only a binary is given*. `build_info` reads the `env!("DODO_*")` variables
-  `build.rs` sets, a library crate is handed none of them, and no crate here may grow a build
-  script — so `init` **takes** the two fields the updater uses (`VERSION_INFO.version` and
-  `.target`) and its `build_info` module holds them, exactly the trade `main.rs`'s `paths` module
-  already makes for `dodo-paths`. Under `cargo test`, where nothing calls `init`, that module falls
-  back to its own `CARGO_PKG_VERSION` and to naming the platform with `cfg!`, and the three
-  assertions that were really *about the binary* moved to `main.rs` beside a new guard that the two
-  spellings classify to one `PlatformKey`. It is also the crate whose move finally took **`reqwest`
-  out of the root manifest**: dodo the binary now names no HTTP client at all, the same shape
-  `bollard` and `tokio` took when Docker left.
-
-  **`crates/dodo-input-method` is the sixth**, and the only one whose edges were not
-  all outbound. `src/tray` reads it (five call sites) *and* it told the tray — a cycle no crate
-  boundary can hold — so the **notification** inverted: `observe_languages` takes a plain `fn`
-  pointer, `main.rs` hands over `tray::set_active_languages`, and a platform with no tray registers
-  nothing and is called back never. Its pane's test also names `quick_nav::{KEY_CONTEXT,
-  NORMAL_MODE}`, which a crate cannot read, so the crate mirrors both as `pub const`s and
-  `src/quick_nav`'s tests assert the two spellings stay one answer — a drift there would not fail
-  to compile. **Copy that pair of moves before reaching for anything cleverer**: an inbound edge
-  becomes a handed-in `fn`, and an unreachable constant becomes a mirrored one with a test.
-
-  **`crates/dodo-json-formatter` and `crates/dodo-encoder-decoder` are the seventh and eighth**,
-  proving that a clean seam rather than size earns a feature crate: each is its former single source
-  file plus the `dodo-i18n` alias, with no restructuring. Encoder/Decoder took
-  `percent-encoding` out of the root manifest; `base64` remains there solely for quick navigation's
-  detector. `src/i18n_lint.rs` still scans both moved files by their crate paths.
-
-  **All eight feature crates keep their platform gates, and moving one is the moment to check them.**
-  115 platform attributes came across with the input method; 11 of them only *selected a value* and
-  are now 5 `cfg!` sites, so both arms type-check from a Mac — the four `MODIFIER_*` glyph/word
-  constants, the backend radio group's two rows, and the tray call above. The other 104 declare or
-  use a platform-only type, call a platform-only function, or gate a struct field or a `mod` line,
-  none of which `cfg!` can express, so they stay. That is the rule: **a gate that picks a value
-  becomes `cfg!`; a gate in front of a platform API stays an attribute.**
-
-  **Six of the eight feature crates have an `examples/` launcher.** The four stateful tools mount
-  the real view and read the same real machine and persisted state; the JSON formatter and
-  Encoder/Decoder are stateless. All keep launcher-only dependencies under `[dev-dependencies]`.
-  Their exact commands live in README's "Running one feature on its own". The updater and input
-  method have none — one is a dialog over the app and the other reads a file a separate OS process
-  owns.
-
-  **A feature crate does not make the build faster, and this one was measured to find out.**
-  "Splitting the binary into crates" in `docs/build-optimization.md` is the authority — the method,
-  the per-unit breakdown, and why a non-interleaved A/B of build times lies. The summary, from three
-  interleaved rounds alternating `main` and the branch with a warm target directory each:
-
-  | | before | after | |
-  |---|---|---|---|
-  | clean build | 120.34s | 118.86s | −1.2% |
-  | touch a leaf file *inside* the Cleaner | 3.66s | 3.95s | **+7.9%** |
-  | touch `src/layout.rs` | 3.40s | 3.22s | −5.3% |
-
-  Every delta is a couple of tenths of a second, they point in opposite directions, and the third
-  round's after-block ran under machine load and moved both incrementals +32% on its own — which is
-  the size of the noise this is being measured against. Phase 2 got a flat rebuild and so does
-  Phase 3; **the "the binary still contains every feature" theory was wrong.** `cargo build
-  --timings` says why, and the number is unambiguous: touching that leaf file rebuilds the `dodo`
-  unit in **3.21s before and 3.20s after** — removing 25,646 lines from the binary did not move its
-  rebuild at all — and the extracted crate's own 0.72s is then *added* on top. dodo's incremental
-  rebuild is dependency fingerprinting, final codegen and linking ~800 rlibs, none of which a crate
-  boundary removes, while rustc's in-crate incremental compilation was already recompiling only the
-  codegen units a one-line edit touched. A crate boundary can only add a metadata-and-rlib step to
-  that. **So extract a feature for boundaries, testability and a public surface you can see — never
-  for build speed**, and do not re-measure this hoping for a different answer without changing what
-  dominates (the link).
-
-- **Two of the four `cargo check` targets cannot be run from this Mac at all.**
-  Linux and Windows both die in `aws-lc-sys`'s C build script (no cross C toolchain, no
-  `windows.h`) — not a portability problem in dodo, and not fixable by a cargo flag. The two Apple
-  targets do cross-check locally. "The `check` row runs natively" in `docs/release.md` has the
-  detail, including the two traps that cost time: Homebrew's `rustc` shadows rustup's and ships
-  only the host std (`rustup run` does **not** fix it — use the toolchain's absolute path), and a
-  cross-check needs its own `CARGO_TARGET_DIR` or it invalidates the warm cache a size
-  measurement depends on. Two sharper corollaries, each of which has cost a session: the
-  toolchain's absolute **`cargo`** is not enough on its own, because cargo resolves `rustc` from
-  `PATH` — set `RUSTC=<toolchain>/bin/rustc` too, or the cross build fails with "can't find crate
-  for `core`" — and never let two toolchains share `target/`, which poisons it with `E0514`
-  ("compiled by an incompatible version of rustc") until the affected packages are
-  `cargo clean -p`'d. **The `crates/dodo-ime-*` crates *do* cross-check for Windows from here**
-  (`cargo check --locked --target x86_64-pc-windows-msvc -p dodo-ime-core -p dodo-ime-ipc -p
-  dodo-ime-windows --all-targets`) because they link no TLS; only the `dodo` crate itself is
-  unreachable. So a Windows-only mistake in **`src/`** — the classic being a
-  `#[cfg(target_os = "macos")]` item called from an `any(macos, windows)` block, which is exactly
-  how `InputMethod::refresh_status` broke the Windows build — cannot be caught locally at all, and
-  a change to a `cfg`-shaped part of `crates/dodo-input-method/`, `src/tray/` or `src/layout.rs`
-  is worth
-  auditing by hand before it reaches the captain's Windows machine.
-  **CI does compile all four targets and the non-Mac rows are `experimental: true`, so their
-  failures are `continue-on-error` and do not block a merge** — which is how three platform
-  breakages reached `main` on 2026-08-15 alone: a platform arm returning the wrong type
-  (`reveal_label`), the same in a module the first sweep missed (`input_method_view`), and an
-  **ungated `use` of a `#[cfg]`-gated item** (`settings::general::start_with_os_field`, imported
-  by `settings/pages.rs` without the gate its declaration and its use site both carry — a split
-  artifact, since before `settings.rs` became a folder there was no import to miss it). Flipping a
-  row to `experimental: false` is the captain's call and the only *sound* fix; `ci.yml`'s own
-  comment says so. **Do not reach for a source-level lint for the import shape instead.** It was
-  built and measured: the repo has 115 platform-gated item declarations, only 15 of which are
-  imported at all (137 import sites, 117 of them from inside the gated module itself), so deciding
-  a site is wrong needs a module tree, `use`-path resolution, gates inherited from ancestor modules
-  *and* enclosing gated `fn` bodies, and cfg-implication over a finite world — four layers, each of
-  which had to be added to kill a false-positive class. Even then it cannot follow the two paths
-  that matter most: `pub use` re-exports and macro-generated references. `src/tools.rs` reaches
-  `views::InputMethodView` through **both** — a re-export in `views/mod.rs` and the `#[cfg]` the
-  `tools!` macro emits from `hosts:` — so such a lint would stay green over dodo's only
-  platform-conditional tool and its green would mean nothing.
-- **`fmt` and `clippy` are blocking jobs; keep them green.** Run `cargo fmt --all` and
-  `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
-  (34 unformatted files, 12 warnings) is paid off, and **there is no crate-level `allow`** — every
-  suppression is `#[allow]`ed at the item it applies to (or, where a whole module is the pending
-  unit, as an inner attribute under that module's `//!` docs) with the reason and the condition for
-  removing it written next to it. Copy that shape; never widen an `allow` to quieten a lint.
-  Dead-code warnings in a module under construction are **scaffolding, not defects**: annotate,
-  do not delete. `.githooks/pre-push` runs `fmt`, `clippy` and `cargo test --locked` and refuses
-  the push if any fails; it is opt-in per clone with `git config core.hooksPath .githooks`
-  (see "Pre-push checks" in `README.md` for its cost and the `--no-verify` bypass).
-  Note that `cargo build` alone does **not** prove the tree is green — `dodo-i18n`'s per-area
-  sample tables are exhaustive over each area's `Text`, so new strings break `cargo test` while
-  the app still builds.
-  The original `build (windows-x64)` failure was a `#[cfg(unix)]`-only bollard connector;
-  the platform split in `crates/dodo-docker/src/services/engine.rs` fixed it, and release run `31655518790`
-  later built and smoke-tested both Windows x64 and macOS x64. Those rows remain
-  `experimental` and non-blocking in ordinary CI; the release publish gate still requires every
-  platform. See the honesty note atop `.github/workflows/ci.yml` for what has actually run.
-- **No `--release` build runs on a push any more.** `ci.yml` does `cargo check` per platform plus
-  one debug build; the four-platform release matrix lives in
-  `.github/workflows/release-profile.yml` (weekly + manual) and, for a tag, in `release.yml`. The
-  accepted cost — release-only failures surface up to a week late — is stated at the top of both
-  `ci.yml` and "CI architecture" in `docs/release.md`. Do not quietly re-add a release build to
-  the push path.
-- **dodo's source is MIT (`LICENSE`), and that does not settle how binaries may be distributed.**
-  `gpui -> sum_tree -> ztracing -> zlog` pulls GPL-3.0-or-later into every build.
-  `THIRD-PARTY-NOTICES.md` is the authority: it records the verified chain and keeps the
-  distribution question explicitly **open**. `deny.toml` deliberately carries no `allow` or
-  `exceptions` entry for those crates so `cargo deny` keeps reporting them — do not silence it,
-  and do not write a conclusion about that question into the repo.
-- **`rusqlite` and `sqlx` cannot be in the same graph, even switched off.** Both declare
-  `links = "sqlite3"` through `libsqlite3-sys` — at versions that do not overlap (`rusqlite 0.40`
-  needs `0.38`, `sqlx 0.9` needs `>=0.30.1, <0.38`) — and cargo refuses to resolve a graph
-  containing two packages linking the same native library, `optional = true` or not. The error
-  names `libsqlite3-sys` and says nothing about which of your dependencies wanted it. This rules
-  out a "sqlx for the network backends, rusqlite for SQLite" mix unless the versions are pinned to
-  a compatible pair; it cost the design round one failed build and is recorded here so it costs
-  the next one none.
-- **`Cargo.lock` really is the only possible pin on the four git dependencies.** Explicit
-  `rev = "…"` pins were tried and cannot work here — upstream depends on itself through unpinned
-  default-branch refs, and the three resulting cargo errors are recorded in
-  `docs/build-optimization.md`. Hence `--locked` everywhere, and `cargo update` only ever as its
-  own reviewed commit.
-- **`dodo --version` / `--build-info`** print what `build.rs` embedded and exit before any window
-  opens (`print_build_metadata_and_exit` in `src/main.rs`). That path is how CI proves a packaged
-  binary runs at all — a GUI app cannot open a window on a headless runner — so keep it free of
-  GPUI initialisation.
-
-## Skills
-
-Detailed, verified knowledge lives in `.claude/skills/<name>/SKILL.md`. Load one when its trigger
-fires — they are written to be read at the moment of need, not up front, so a session that never
-touches a module never pays for its internals. This table is the single index; the four
-`dodo-*-internals` skills hold what used to be inlined in this file as a per-module wall of text.
-
-| Skill | Load it when |
-|---|---|
-| `dodo-api-explorer-internals` | Touching anything under `crates/dodo-api-explorer/` — the send pipeline, scripting/sandbox, consent gating, codegen/curl, collections, or tab/column layout. |
-| `dodo-docker-internals` | Touching anything under `crates/dodo-docker/` — engine discovery, the four list pages, polling, the detail dialog, or a "Coming soon" placeholder. |
-| `dodo-database-internals` | Touching anything under `crates/dodo-database/` — the connection tree, query execution, the `Driver` trait, or result-grid layout. |
-| `dodo-build-release-internals` | Touching `crates/dodo-updater/`, `.github/workflows/`, `Cargo.toml`'s dependencies, `docs/release.md`, `docs/macos-signing.md`, `docs/build-optimization.md`, `scripts/generate-icons.py`, `tools/update-manifest/`, `deny.toml`, or `THIRD-PARTY-NOTICES.md`; preparing or debugging a release. |
-| `gpui-component-recipes` | Writing or editing any `render` / `new` that builds a gpui-component widget (input, code editor, diagnostics, select, dialog, settings panel, sidebar, button, icon); a widget call will not compile; a widget builds but nothing appears on screen; or a code editor draws uncoloured text. |
-| `dodo-tool-view` | Adding, renaming, reordering or removing a sidebar tool — one row in the `tools!` table in `src/tools.rs`; a new sidebar entry does not appear or renders blank; part of a tool page is unreachable at a small window (the pane's scroll container only reveals a tool that reports its own height). |
-| `dodo-i18n-text` | Writing or changing **any** text a user reads — a label, title, placeholder, description, error, dropdown option; or an `i18n` / `i18n_lint` test fails. |
-| `dodo-theming-settings` | Adding or changing a setting, adding or removing a theme or a language, or a settings change does not apply until restart. |
-| `dodo-build-validate` | First `cargo` invocation of a session, adding tests, a build or `cargo test` failing oddly, or being asked whether a UI change actually works. |
-
-Two things that catch everyone and belong here rather than behind a trigger:
-
-- **`Cargo.lock` is the only pin on the four git dependencies.** `cargo update` silently jumps
-  them to upstream HEAD. Never run it as a side effect of another task. An explicit `rev` pin
-  cannot replace it — upstream depends on itself through unpinned default-branch refs, and the
-  three resulting cargo errors are recorded in `docs/build-optimization.md`. Hence `--locked`
-  everywhere, and `cargo update` only ever as its own reviewed commit.
 - **The pinned `gpui-component` source is the reference for every widget question**, at
   `~/.cargo/git/checkouts/gpui-component-*/<rev>/crates/ui/src` (rev from `Cargo.lock`). Its
   `<checkout>/skills/` directory holds the upstream authors' own guidance, which is excellent on
   GPUI fundamentals and stale in a few places — `gpui-component-recipes` records which.
 
+## Router
+
+One index, covering the skills (`.claude/skills/<name>/SKILL.md`, invoked by name), the crate-local
+`AGENTS.md` files, and `docs/`. Load a row when its trigger fires, and not before.
+
+| When you are… | Load |
+|---|---|
+| Running `cargo` for the first time this session; adding tests; a build or `cargo test` failing oddly; asked whether a UI change actually works | skill `dodo-build-validate` |
+| Writing or changing **any** text a user reads — label, title, placeholder, description, error, dropdown option — or an `i18n` / `i18n_lint` test fails | skill `dodo-i18n-text` |
+| Writing or editing a `render` / `new` that builds a gpui-component widget, adding a key binding, or a widget will not compile / builds but does not appear | skill `gpui-component-recipes` |
+| Adding, renaming, reordering or removing a sidebar tool; a new sidebar entry is blank; a tool page is unreachable at a small window | skill `dodo-tool-view` |
+| Adding or changing a setting, a theme or a language, or a settings change does not apply until restart | skill `dodo-theming-settings` |
+| Touching `crates/dodo-api-explorer/` | skill `dodo-api-explorer-internals` |
+| Touching `crates/dodo-docker/` | skill `dodo-docker-internals` |
+| Touching `crates/dodo-database/` | skill `dodo-database-internals` |
+| Touching `crates/dodo-updater/`, `.github/workflows/`, `Cargo.toml`'s dependencies, `scripts/`, `tools/update-manifest/`, `deny.toml` or `THIRD-PARTY-NOTICES.md`; preparing or debugging a release; the application-icon pipeline; the CI platform matrix and its cross-check traps | skill `dodo-build-release-internals` |
+| Touching `crates/dodo-cleaner/` | `crates/dodo-cleaner/AGENTS.md` |
+| Touching `crates/dodo-ime-core/` — the Vietnamese engine and the shared key vocabulary | `crates/dodo-ime-core/AGENTS.md` |
+| Touching `crates/dodo-input-method/` — dodo's own end of the input methods | `crates/dodo-input-method/AGENTS.md` |
+| Touching `crates/dodo-ime-macos/`, installing or enabling the bundle, or the two files the two processes exchange | `docs/macos-input-method.md` |
+| Touching `crates/dodo-ime-windows/` or the Keyboard Hook fallback | `docs/windows-input-method.md` |
+| Signing or notarisation, on any platform | `docs/macos-signing.md` |
+| Cleaner scanner, safety, privacy or limitation detail beyond the crate file | `docs/cleaner/` |
+| Startup, app lifecycle, window close/quit, or the shape of `src/` itself | `docs/architecture/app-shell.md` |
+| Reading or writing anything under `data_dir()`; adding a persisted file; session restore, window geometry, or the sidebar's tool list | `docs/architecture/persistence.md` |
+| Adding a crate, extracting a feature out of the binary, or moving code across a crate boundary | `docs/architecture/workspace-layout.md` |
+| Quick navigation — pasting into whichever tool can read it, normal mode, `Esc` | `src/quick_nav/mod.rs` and `src/quick_nav/models/detect.rs` doc comments |
+| The menu bar / notification-area item | `src/tray/mod.rs`, `src/tray/icon.rs` and `src/tray/menu.rs` doc comments |
+| Binary size, the release profile, or whether a crate split will speed up builds | `docs/build-optimization.md` |
+
 ## Maintaining this file
 
-Keep this file for knowledge useful to almost every future agent session in this project.
-Do not repeat what the codebase already shows; point to the authoritative file or command instead.
-If a fact only matters when touching one module, it belongs in that module's skill (table above),
-not here — this file is the map, not the territory. Prefer rewriting or pruning existing entries
-over appending new ones. When updating this file, preserve this bar for all agents and keep
-entries concise.
+This file is the top tier of four, and the tiering is the point:
+
+1. **Root `AGENTS.md`** — global rules, invariants, and the router. Every session pays for it, so
+   it stays small. Nothing crate-specific belongs here.
+2. **`crates/<crate>/AGENTS.md`** — knowledge local to one crate that its own `lib.rs` docs cannot
+   hold because it spans several files. Only three crates have one; do not add a fourth unless a
+   crate's knowledge is genuinely stranded and no skill covers it.
+3. **`docs/`** — focused feature, platform and architecture knowledge, loaded on demand.
+4. **`.claude/skills/<name>/SKILL.md`** — procedural knowledge behind a trigger, unchanged in shape.
+
+**One owner per fact.** Every fact lives in exactly one file and everything else links to it. If a
+fact only matters when touching one crate, it belongs in that crate's `AGENTS.md`, its `lib.rs`
+docs or its skill — never here. If the source already states it, point at the source instead of
+copying it: keep the *why*, the decision and the trap, and drop the *what*. Prefer rewriting or
+pruning an existing entry over appending a new one, and when you add a row to the router, check
+that nothing else already claims it.

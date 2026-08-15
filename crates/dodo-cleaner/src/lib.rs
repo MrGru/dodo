@@ -9,7 +9,7 @@
 //! outbound edges are only the three kernel crates (`dodo-app-icon`,
 //! `dodo-i18n`, `dodo-paths`), which is what made it extractable at all;
 //! `Cargo.toml` says why each remaining dependency is there, and
-//! `AGENTS.md`'s "feature crate" entry is the authority on the shape. Two
+//! `docs/architecture/workspace-layout.md` is the authority on the shape. Two
 //! seams exist only because of the move and are worth knowing about:
 //! [`paths`] supplies the one impure input `dodo_paths`' pure rules take,
 //! and the `app_icon` / `i18n` aliases below are what keep

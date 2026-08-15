@@ -13,7 +13,7 @@
 //!
 //! 1. **All three compile on every platform.** A module that only compiles on
 //!    its own platform is how this repo shipped a Windows build that did not
-//!    build — `AGENTS.md` records the `#[cfg(unix)]`-only bollard connector
+//!    build — `dodo-build-release-internals` records the `#[cfg(unix)]`-only bollard connector
 //!    that failed `build (windows-x64)` on its one real run. Here, a mistake in
 //!    `windows.rs` is a compile error on this Mac.
 //! 2. **All three are tested on every platform.** Nothing in them is a platform
@@ -27,7 +27,7 @@
 //! The `#[allow(dead_code)]` on each installer is the cost: on any one platform
 //! the other two are constructed only by their tests. It is applied at the
 //! definitions with the reason inline, which is the suppression style
-//! `AGENTS.md` describes.
+//! `dodo-build-release-internals` describes.
 
 pub mod extract;
 pub mod linux;

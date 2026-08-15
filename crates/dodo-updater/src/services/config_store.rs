@@ -5,7 +5,8 @@
 //! `dodo-api-explorer`'s `services::consent_store`: a trait, a
 //! disk implementation, a temp-file-then-rename write, and a `version` field
 //! written from the **first** save with a parser that refuses anything newer.
-//! `AGENTS.md` names that as the pattern to copy and `collections.json`'s
+//! `docs/architecture/persistence.md` names that as the pattern to copy and
+//! `collections.json`'s
 //! `#[serde(default)]`-only versioning as the one not to.
 //!
 //! # Why a *higher* version is refused rather than read

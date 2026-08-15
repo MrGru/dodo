@@ -4,7 +4,8 @@
 //! # It is a `window.open_dialog`, and the body is an entity
 //!
 //! Both for the reasons `docker::views::detail`'s module doc sets out and
-//! `AGENTS.md` repeats. A hand-rolled `div().absolute().inset_0()` scrim cannot
+//! `gpui-component-recipes` repeats. A hand-rolled `div().absolute().inset_0()`
+//! scrim cannot
 //! be modal — it covers only its positioned ancestor and swallows nothing — and
 //! a dialog layer does **not** repaint on the page's `cx.notify()`, so the body
 //! has to be an [`Entity`] whose own `cx.notify()` paints it. That matters more

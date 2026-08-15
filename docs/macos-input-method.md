@@ -281,6 +281,23 @@ produces an input method that installs correctly and types nothing.
 Everything that could get Vietnamese *wrong* is in the pure modules (`keymap`,
 `text`, `ops`, `session`) and is tested without a window server.
 
+That split is the crate's whole design: `keymap`, `text`, `ops` and `session`
+decide everything, while `client.rs` and `controller.rs` decide nothing. Two
+details of it are worth knowing before editing either file.
+
+**The boundary test declares `harness = false`.** `DodoInputController` is
+`MainThreadOnly` and libtest runs every `#[test]` on a spawned thread, where
+`MainThreadMarker::new()` correctly refuses — so the test owns `main`. That is
+in `Cargo.toml` with the same explanation; do not "tidy" it back to a harnessed
+test.
+
+**`IMKTextInput` is hand-written `msg_send!` by necessity.** It is declared in
+Carbon's HIToolbox, not in InputMethodKit, so `objc2-input-method-kit` does not
+bind it and will not. Two traps come with writing it out: `NSNotFound` there is
+`NSIntegerMax`, not `NSUIntegerMax`; and `NSRange`s are UTF-16 while the engine
+counts graphemes, which `text.rs` converts through the engine's own walk so the
+two definitions cannot drift. `client.rs`'s module doc is the authority.
+
 ## 5. What was verified, and what was not
 
 **Verified for the signing fix, in an isolated worktree:** the locally assembled
@@ -461,6 +478,14 @@ dodo writes what the input method should type like; the input method says what i
 has applied. `crates/dodo-ime-ipc` is the contract and its crate docs are the
 authority — it exists because neither process can link the other's code, so the
 alternative was two copies of one schema kept in step by nothing.
+
+That it is a *crate* is forced twice over: `dodo-ime-core` cannot hold the
+schema, because its `purity_lint` forbids `serde::` by test, and dodo must not
+link `dodo-ime-macos`, which would drag InputMethodKit into a UI application for
+four string constants. A drifted field name between two hand-kept copies would
+not fail to compile either — it reads as absent, so the user's setting silently
+has no effect. The status file's key set is pinned by a test for the same
+reason: adding a field to it has to be deliberate.
 
 ```text
   Dodo.app  ──writes──▶  input-method.json         ──reads──▶  the bundle

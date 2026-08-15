@@ -16,7 +16,7 @@
 //! the script. It is wrong, and the repository's own notes say so from both
 //! ends:
 //!
-//! - `AGENTS.md` records that "a later scripting round only moves the [unresolved
+//! - `dodo-api-explorer-internals` records that "a later scripting round only moves the [unresolved
 //!   variable] check to after the pre-request hook", which is only true if the
 //!   substitution moves with it.
 //! - The shipped template `pm.variables.set("timestamp", Date.now())` is

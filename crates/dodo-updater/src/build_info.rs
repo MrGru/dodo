@@ -5,7 +5,8 @@
 //! and its **target triple**, to decide which `update.json` entry describes it.
 //! Both are `env!` values dodo's own `build.rs` sets into
 //! `build_info::VERSION_INFO`, and a library crate is handed none of them —
-//! nor may it grow a build script of its own to re-derive one (`AGENTS.md`).
+//! nor may it grow a build script of its own to re-derive one
+//! (`docs/architecture/workspace-layout.md`).
 //! So `main.rs` hands them over once, at [`crate::init`], the same way its
 //! `paths` module hands `dodo-paths` the one impure input those pure rules
 //! take.

@@ -5,7 +5,8 @@
 //! [`variable_store`](crate::services::variable_store): a trait,
 //! a disk implementation, a temp-file-then-rename write, and a `version` field
 //! written from the **first** save with a parser that refuses anything newer.
-//! `AGENTS.md` names that as the pattern to copy; this is a place where getting
+//! `docs/architecture/persistence.md` names that as the pattern to copy; this is
+//! a place where getting
 //! it wrong would mean half-reading a record of what the user agreed to run.
 //!
 //! Why persist at all: an approval that expired every launch would train the

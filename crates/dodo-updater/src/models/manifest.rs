@@ -9,7 +9,8 @@
 //!
 //! Exactly the pattern
 //! `dodo-api-explorer`'s `services::consent_store::parse_document`
-//! established and `AGENTS.md` names as the one to copy: pull the version out of
+//! established and `docs/architecture/persistence.md` names as the one to copy:
+//! pull the version out of
 //! the raw JSON first, refuse anything higher than this build understands, and
 //! only then deserialize. `serde_json::from_slice` straight into [`Manifest`]
 //! would happily read a version-2 document with whatever fields still lined up

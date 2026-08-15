@@ -13,7 +13,8 @@
 //! ```
 //!
 //! It is a function rather than a small binary on purpose — dodo has no
-//! `[[bin]]` and is not getting one (see `AGENTS.md`), and a test helper reaches
+//! `[[bin]]` and is not getting one (see `docs/architecture/workspace-layout.md`),
+//! and a test helper reaches
 //! the same place with no packaging, no argument parsing and no second target to
 //! keep compiling.
 //!

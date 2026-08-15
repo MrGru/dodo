@@ -40,7 +40,8 @@ use crate::services::log;
 /// `#[allow(dead_code)]`: all three installers are compiled on every platform
 /// on purpose — a platform-specific module that only compiles on its own
 /// platform is how this repo shipped a Windows build that did not build (see
-/// `AGENTS.md` on `docker/services/engine.rs`) — but only one is *constructed*,
+/// `dodo-build-release-internals` on `crates/dodo-docker/src/services/engine.rs`)
+/// — but only one is *constructed*,
 /// by the single `#[cfg(target_os)]` in
 /// [`platform_installer`](super::platform_installer).
 #[allow(dead_code)]

@@ -6,7 +6,7 @@
 //! builds a private **current-thread** runtime per `Client` and blocks on it.
 //! That adds no threads — the thread driving it is the GPUI background-executor
 //! thread that called in — and it is structurally what `reqwest::blocking`
-//! already does inside dodo. It is also why `AGENTS.md` says `docker::services`
+//! already does inside dodo. It is also why `dodo-docker-internals` says `docker::services`
 //! owns the only tokio runtime dodo *constructs*.
 //!
 //! # Why the client sits behind a `Mutex`

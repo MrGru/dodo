@@ -2,13 +2,15 @@
 //! is a *setting* rather than data.
 //!
 //! Every other entry in the Settings dialog resets on launch by deliberate
-//! design (`AGENTS.md`, and `settings.rs`'s own module doc). This one does not,
+//! design (`docs/architecture/persistence.md`, and `settings.rs`'s own module
+//! doc). This one does not,
 //! and the reason is the same as `updater.json`'s `skipped_version`: the setting
 //! holds **text the user typed**. A detector pattern someone spent a minute
 //! getting right, thrown away at the next launch, would be worse than not
 //! offering the field at all.
 //!
-//! It follows the file discipline `AGENTS.md` names as the one to copy —
+//! It follows the file discipline `docs/architecture/persistence.md` names as the
+//! one to copy —
 //! `script-consent.json`'s and `updater.json`'s, pointedly **not**
 //! `collections.json`'s:
 //!

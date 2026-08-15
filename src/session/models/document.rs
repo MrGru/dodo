@@ -8,7 +8,8 @@
 //! once, before the window exists — see [`super::super`]'s module doc for the
 //! argument.
 //!
-//! It follows the file discipline `AGENTS.md` names as the one to copy —
+//! It follows the file discipline `docs/architecture/persistence.md` names as the
+//! one to copy —
 //! `quick-nav.json`'s and `updater.json`'s, pointedly **not**
 //! `collections.json`'s:
 //!

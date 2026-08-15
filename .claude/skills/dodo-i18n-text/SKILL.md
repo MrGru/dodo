@@ -48,6 +48,14 @@ scope; the compiler says so if it does not. `main.rs` aliases the crate with
 *string* never touches any of this. `Str` itself stays holdable and comparable: `ConsoleEntry` keeps
 dodo's own lines as an unrendered `Str` so they re-translate when the language changes.
 
+**The one-directory-per-area shape is the answer to a defect, not a preference.** It used to be a
+single 7,595-line `src/i18n.rs` whose `Str::text` matched on the *pair* `(Str, Language)`, so
+adding a third language meant editing all 937 strings instead of adding files. The `samples!` macro
+replaced the other half of that: a 940-line hand-numbered `position()` table, where every new
+string meant renumbering. Now a variant with no sample is a compile error and there are no index
+numbers to keep in step. If a change you are making would put a string back into a shared list
+keyed by position, or make a language a `match` arm rather than a file, it is undoing this.
+
 **`std::mem::discriminant` on a `Str` no longer identifies a string.** Every string in an area
 shares one `Str` variant, so a test meaning "the same variant, ignoring the runtime values it
 carries" has to reach into the area's own enum — `docker::models::inspect` and

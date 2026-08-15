@@ -17,6 +17,27 @@ a key, so a switch favours a harmless pass-through gap over two transformers.
 Linux has no row until it has an IBus host. macOS remains InputMethodKit/Event
 Tap; see [`macos-input-method.md`](macos-input-method.md).
 
+## The DLL's shape
+
+`crates/dodo-ime-windows` is a `cdylib` that **Windows** loads into other
+people's applications, independently of dodo — dodo neither links it nor starts
+it. It links only the pure engine (`dodo-ime-core`) and the IPC contract
+(`dodo-ime-ipc`), which is the same rule every native host follows: no gpui, no
+HTTP client, nothing from the UI application, ever, in somebody else's input
+path.
+
+Its TSF edit session performs **marked composition** rather than injecting keys,
+which is the difference between it and the Keyboard Hook fallback and the reason
+only the fallback can get a browser address bar wrong. It re-reads the settings
+file before each key, so selecting Keyboard Hook makes TSF pass through with no
+restart of anything.
+
+`input-method.json` and `input-method-status.json` are the two files the two
+processes exchange; the contract, its single-writer rule and its version rule are
+documented once, in [`macos-input-method.md`](macos-input-method.md) §8, and
+apply here unchanged except for the wake mechanism — Windows uses a named event
+where macOS posts a distributed notification.
+
 ## Native TSF install, reinstall, and removal
 
 A Windows release ZIP contains:

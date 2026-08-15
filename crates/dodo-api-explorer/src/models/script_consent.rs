@@ -48,7 +48,8 @@ use crate::models::script::{ScriptOrigin, is_runnable, script_hash};
 /// The schema version written into every consent file.
 ///
 /// Present from the first write, and refused when it is *higher* than this —
-/// the pattern `models::variables` argues at length and `AGENTS.md` names as
+/// the pattern `models::variables` argues at length and
+/// `docs/architecture/persistence.md` names as
 /// the one to copy. Half-reading a file that records what the user agreed to
 /// run would be the worst possible place to guess.
 pub const SCHEMA_VERSION: u32 = 1;

@@ -1,7 +1,7 @@
 //! `updater.json` — the first thing dodo persists that is a *setting*.
 //!
 //! Everything in the Settings dialog resets on launch by deliberate design
-//! (`AGENTS.md`), and the three files under
+//! (`docs/architecture/persistence.md`), and the three files under
 //! [`data_dir`](crate::paths::data_dir) that survive a restart are all *data*:
 //! saved collections, environments, script approvals. This is the first durable
 //! setting, so it follows

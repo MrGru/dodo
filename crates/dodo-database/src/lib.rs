@@ -117,7 +117,7 @@
 //! `postgres` crate is a synchronous façade over `tokio-postgres` and builds a
 //! private **current-thread** tokio runtime per client. That adds no threads
 //! (the calling background-executor thread drives it) and this module never
-//! names `tokio`, but it is why `AGENTS.md` now says `docker::services` owns
+//! names `tokio`, but it is why `dodo-docker-internals` says `docker::services` owns
 //! the only tokio runtime dodo *constructs* rather than the only one that
 //! exists.
 //!
