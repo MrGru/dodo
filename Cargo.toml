@@ -70,11 +70,11 @@ default-members = [
     "crates/dodo-dialog-slot",
     "crates/dodo-docker",
     "crates/dodo-i18n",
-    "crates/dodo-input-method",
     "crates/dodo-ime-core",
     "crates/dodo-ime-ipc",
     "crates/dodo-ime-macos",
     "crates/dodo-ime-windows",
+    "crates/dodo-input-method",
     "crates/dodo-paths",
     "crates/dodo-updater",
 ]
