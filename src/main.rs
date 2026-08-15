@@ -11,7 +11,10 @@
 
 mod api_explorer;
 mod app;
-mod app_icon;
+// The icon set moved out to `crates/dodo-app-icon`; this alias is what keeps the
+// 39 modules that draw one spelling it `crate::app_icon::AppIcon`. There is no
+// `src/app_icon.rs` any more — the crate is the whole of it.
+use dodo_app_icon as app_icon;
 mod assets;
 mod build_info;
 mod cleaner;

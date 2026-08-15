@@ -1,3 +1,14 @@
+//! The icons dodo draws.
+//!
+//! One enum naming every SVG the app asks for, and the `IconNamed` impl that
+//! turns a variant into the `icons/<name>.svg` path an asset source loads.
+//! Registering a variant here is what makes an SVG reachable at all.
+//!
+//! The paths are *logical*: nothing here opens a file. `dodo`'s `src/assets.rs`
+//! is what resolves them — out of the binary's own embedded `assets/icons` when
+//! it has the file, and out of `gpui-component-assets` when it does not — which
+//! is why this crate can sit beside the artwork rather than inside it.
+
 use gpui::SharedString;
 use gpui_component::{Icon, IconNamed};
 

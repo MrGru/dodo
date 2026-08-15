@@ -1611,6 +1611,7 @@ dependencies = [
  "block2 0.6.2",
  "bollard",
  "dispatch2",
+ "dodo-app-icon",
  "dodo-i18n",
  "dodo-ime-core",
  "dodo-ime-ipc",
@@ -1650,6 +1651,14 @@ dependencies = [
  "unicode-normalization",
  "windows-sys 0.61.2",
  "winresource",
+]
+
+[[package]]
+name = "dodo-app-icon"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
 ]
 
 [[package]]
