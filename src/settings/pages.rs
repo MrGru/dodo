@@ -6,7 +6,11 @@ use gpui_component::setting::{SettingField, SettingGroup, SettingItem, SettingPa
 
 use super::appearance::{font_size_field, radius_field, theme_field};
 use super::features::features_page;
-use super::general::{StartupStatus, language_field, run_scripts_field, start_with_os_field};
+use super::general::{StartupStatus, language_field, run_scripts_field};
+// The declaration in `general` carries this gate and so does the use site
+// below; the import needs it too, or Linux fails to resolve the name.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use super::general::start_with_os_field;
 use super::quick_nav::quick_nav_page;
 use super::search::Setting;
 use crate::app_icon::AppIcon;

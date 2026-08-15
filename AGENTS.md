@@ -749,6 +749,24 @@ Ten things about build and release that catch people:
   a change to a `cfg`-shaped part of `crates/dodo-input-method/`, `src/tray/` or `src/layout.rs`
   is worth
   auditing by hand before it reaches the captain's Windows machine.
+  **CI does compile all four targets and the non-Mac rows are `experimental: true`, so their
+  failures are `continue-on-error` and do not block a merge** — which is how three platform
+  breakages reached `main` on 2026-08-15 alone: a platform arm returning the wrong type
+  (`reveal_label`), the same in a module the first sweep missed (`input_method_view`), and an
+  **ungated `use` of a `#[cfg]`-gated item** (`settings::general::start_with_os_field`, imported
+  by `settings/pages.rs` without the gate its declaration and its use site both carry — a split
+  artifact, since before `settings.rs` became a folder there was no import to miss it). Flipping a
+  row to `experimental: false` is the captain's call and the only *sound* fix; `ci.yml`'s own
+  comment says so. **Do not reach for a source-level lint for the import shape instead.** It was
+  built and measured: the repo has 115 platform-gated item declarations, only 15 of which are
+  imported at all (137 import sites, 117 of them from inside the gated module itself), so deciding
+  a site is wrong needs a module tree, `use`-path resolution, gates inherited from ancestor modules
+  *and* enclosing gated `fn` bodies, and cfg-implication over a finite world — four layers, each of
+  which had to be added to kill a false-positive class. Even then it cannot follow the two paths
+  that matter most: `pub use` re-exports and macro-generated references. `src/tools.rs` reaches
+  `views::InputMethodView` through **both** — a re-export in `views/mod.rs` and the `#[cfg]` the
+  `tools!` macro emits from `hosts:` — so such a lint would stay green over dodo's only
+  platform-conditional tool and its green would mean nothing.
 - **`fmt` and `clippy` are blocking jobs; keep them green.** Run `cargo fmt --all` and
   `cargo clippy --all-targets --locked -- -D warnings` before committing. The pre-existing debt
   (34 unformatted files, 12 warnings) is paid off, and **there is no crate-level `allow`** — every
