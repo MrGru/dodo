@@ -116,7 +116,7 @@ pub fn read_versioned<T: DeserializeOwned>(
 /// Temp file beside the target, then `rename` over it: within one directory
 /// `rename(2)` is atomic, so the other process either reads the previous
 /// complete file or the new complete file. This is the same shape every store
-/// under `src/api_explorer/services/` uses, and here it is load-bearing rather
+/// under `crates/dodo-api-explorer/src/services/` uses, and here it is load-bearing rather
 /// than merely careful — the reader is a *different process* and cannot be
 /// asked to wait.
 ///

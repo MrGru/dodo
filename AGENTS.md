@@ -35,14 +35,15 @@ not a callback that force-quits) plus a macOS-only `cmd-w` binding, needed becau
 no menu bar for that shortcut to hang off. The doc comments there carry the reasoning. The Windows `--build-info` path has
 run on a release runner; interactive window lifecycle still needs captain testing.
 
-Most tools are a single `src/<tool>.rs`. **`src/api_explorer/`, `crates/dodo-database/` and
-`crates/dodo-docker/` are the exceptions** and the pattern to copy when a tool outgrows one file:
-`models/` (plain data, no GPUI, unit tested), `services/` (the trait that is the only place naming
-the outside-world crate), `state/`, `components/`, `views/`. Each one's own `mod.rs` / `lib.rs` doc
+Most tools are a single `src/<tool>.rs`. **`crates/dodo-api-explorer/`, `crates/dodo-database/`
+and `crates/dodo-docker/` are the exceptions** and the pattern to copy when a tool outgrows one
+file: `models/` (plain data, no GPUI, unit tested), `services/` (the trait that is the only place
+naming the outside-world crate), `state/`, `components/`, `views/`. Each one's own `lib.rs` doc
 comments are the authority on its split and what shipped when; the matching skill below is where
 the non-obvious parts of each are written down — load it before changing anything in one of these
-three rather than inferring the design from the files cold. Docker and the Database Explorer have
-followed the Cleaner out of the binary; see the feature-crate entry below.
+three rather than inferring the design from the files cold. **All three have followed the Cleaner
+out of the binary**, so no tool that outgrew one file is a `src/` module any more; see the
+feature-crate entry below.
 
 **`crates/dodo-cleaner/` is the same shape but started unfinished, rounds have been landing
 since, and on 2026-08-15 it moved out of the binary entirely** — it was `src/cleaner/`, and any
@@ -98,7 +99,7 @@ one — it runs an already-queued callback by hand, which is why the failed redr
 passed while the captain's idle window remained blank.
 
 **dodo persists ten things across restarts, and reads an eleventh another process writes**, all
-under `data_dir()` (`src/paths.rs`) and each
+under `data_dir()` (`src/paths.rs`, plus each feature crate's own `paths` seam) and each
 behind a trait so the state layer never learns where they live: `collections.json`
 (`api_explorer::services::collection_store`), `environments.json` (`services::variable_store`),
 `script-consent.json` (`services::consent_store`, the imported scripts the user has approved),
@@ -618,6 +619,19 @@ Ten things about build and release that catch people:
   leave `connections.json` and `query-data.json` behind, so every saved connection and query would
   silently vanish on the next launch. `src/i18n_lint.rs` reaches across to its twelve view and
   component files the same way it already did for the Cleaner's three.
+
+  **`crates/dodo-api-explorer` is the fourth and the last**, extracted the same day: 77 files,
+  the largest feature dodo has, and the one whose inbound surface is widest — `layout.rs`
+  (`ApiExplorer`), `main.rs` (`init`), `settings.rs` (`ScriptPolicy` and
+  `models::script_consent::ConsentPolicy`) and `quick_nav` (`models::snapshot::RequestSnapshot`,
+  `services::curl`). Applying the Database rule to that surface leaves **both** `models` and
+  `services` `pub`, with `components`, `state` and `views` `pub(crate)`. Only `rquickjs` left the
+  root `Cargo.toml` entirely; `reqwest`, `base64` and `percent-encoding` are now declared in two
+  manifests each, because the updater, the Encoder/Decoder and quick navigation still name them in
+  the binary — **a duplicated dependency line is not a duplicated package**, and expecting every
+  dependency to leave with its crate is the wrong instinct. Its `paths` seam guards three files.
+  With this one the binary's own test count falls from 976 to 477.
+
   **A feature crate does not make the build faster, and this one was measured to find out.**
   "Splitting the binary into crates" in `docs/build-optimization.md` is the authority — the method,
   the per-unit breakdown, and why a non-interleaved A/B of build times lies. The summary, from three
@@ -720,7 +734,7 @@ touches a module never pays for its internals. This table is the single index; t
 
 | Skill | Load it when |
 |---|---|
-| `dodo-api-explorer-internals` | Touching anything under `src/api_explorer/` — the send pipeline, scripting/sandbox, consent gating, codegen/curl, collections, or tab/column layout. |
+| `dodo-api-explorer-internals` | Touching anything under `crates/dodo-api-explorer/` — the send pipeline, scripting/sandbox, consent gating, codegen/curl, collections, or tab/column layout. |
 | `dodo-docker-internals` | Touching anything under `crates/dodo-docker/` — engine discovery, the four list pages, polling, the detail dialog, or a "Coming soon" placeholder. |
 | `dodo-database-internals` | Touching anything under `crates/dodo-database/` — the connection tree, query execution, the `Driver` trait, or result-grid layout. |
 | `dodo-build-release-internals` | Touching `src/updater/`, `.github/workflows/`, `Cargo.toml`'s dependencies, `docs/release.md`, `docs/macos-signing.md`, `docs/build-optimization.md`, `scripts/generate-icons.py`, `tools/update-manifest/`, `deny.toml`, or `THIRD-PARTY-NOTICES.md`; preparing or debugging a release. |

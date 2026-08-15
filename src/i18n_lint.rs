@@ -54,60 +54,60 @@ const SOURCES: [(&str, &str); 34] = [
         include_str!("../crates/dodo-cleaner/src/views/uninstall_review_dialog.rs"),
     ),
     (
-        "src/api_explorer/views/explorer.rs",
-        include_str!("api_explorer/views/explorer.rs"),
+        "crates/dodo-api-explorer/src/views/explorer.rs",
+        include_str!("../crates/dodo-api-explorer/src/views/explorer.rs"),
     ),
     (
-        "src/api_explorer/views/collections_panel.rs",
-        include_str!("api_explorer/views/collections_panel.rs"),
+        "crates/dodo-api-explorer/src/views/collections_panel.rs",
+        include_str!("../crates/dodo-api-explorer/src/views/collections_panel.rs"),
     ),
     (
-        "src/api_explorer/views/history_panel.rs",
-        include_str!("api_explorer/views/history_panel.rs"),
+        "crates/dodo-api-explorer/src/views/history_panel.rs",
+        include_str!("../crates/dodo-api-explorer/src/views/history_panel.rs"),
     ),
     (
-        "src/api_explorer/views/request_tabs.rs",
-        include_str!("api_explorer/views/request_tabs.rs"),
+        "crates/dodo-api-explorer/src/views/request_tabs.rs",
+        include_str!("../crates/dodo-api-explorer/src/views/request_tabs.rs"),
     ),
     (
-        "src/api_explorer/views/request_editor.rs",
-        include_str!("api_explorer/views/request_editor.rs"),
+        "crates/dodo-api-explorer/src/views/request_editor.rs",
+        include_str!("../crates/dodo-api-explorer/src/views/request_editor.rs"),
     ),
     (
-        "src/api_explorer/views/request_body.rs",
-        include_str!("api_explorer/views/request_body.rs"),
+        "crates/dodo-api-explorer/src/views/request_body.rs",
+        include_str!("../crates/dodo-api-explorer/src/views/request_body.rs"),
     ),
     (
-        "src/api_explorer/views/request_auth.rs",
-        include_str!("api_explorer/views/request_auth.rs"),
+        "crates/dodo-api-explorer/src/views/request_auth.rs",
+        include_str!("../crates/dodo-api-explorer/src/views/request_auth.rs"),
     ),
     (
-        "src/api_explorer/views/request_scripts.rs",
-        include_str!("api_explorer/views/request_scripts.rs"),
+        "crates/dodo-api-explorer/src/views/request_scripts.rs",
+        include_str!("../crates/dodo-api-explorer/src/views/request_scripts.rs"),
     ),
     (
-        "src/api_explorer/views/response_viewer.rs",
-        include_str!("api_explorer/views/response_viewer.rs"),
+        "crates/dodo-api-explorer/src/views/response_viewer.rs",
+        include_str!("../crates/dodo-api-explorer/src/views/response_viewer.rs"),
     ),
     // The Generate code dialog. Its *snippets* are code and are deliberately not
     // translated (see `services::codegen::javascript`), but they are built in the
     // service layer, which this never scans — everything a user reads as language
     // in this file is a label, a tab or the secrets notice.
     (
-        "src/api_explorer/views/generate_code.rs",
-        include_str!("api_explorer/views/generate_code.rs"),
+        "crates/dodo-api-explorer/src/views/generate_code.rs",
+        include_str!("../crates/dodo-api-explorer/src/views/generate_code.rs"),
     ),
     (
-        "src/api_explorer/components/key_value_table.rs",
-        include_str!("api_explorer/components/key_value_table.rs"),
+        "crates/dodo-api-explorer/src/components/key_value_table.rs",
+        include_str!("../crates/dodo-api-explorer/src/components/key_value_table.rs"),
     ),
     (
-        "src/api_explorer/components/empty_state.rs",
-        include_str!("api_explorer/components/empty_state.rs"),
+        "crates/dodo-api-explorer/src/components/empty_state.rs",
+        include_str!("../crates/dodo-api-explorer/src/components/empty_state.rs"),
     ),
     (
-        "src/api_explorer/components/later_step.rs",
-        include_str!("api_explorer/components/later_step.rs"),
+        "crates/dodo-api-explorer/src/components/later_step.rs",
+        include_str!("../crates/dodo-api-explorer/src/components/later_step.rs"),
     ),
     // The update dialog. Its *release notes* pane is deliberately not
     // translated — that text arrives in `update.json` and belongs to the

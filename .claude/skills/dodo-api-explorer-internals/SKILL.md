@@ -1,9 +1,9 @@
 ---
 name: dodo-api-explorer-internals
-description: Deep internals of src/api_explorer/ that no single file makes obvious - the send pipeline's exact step order and why pre-request scripts run before variable substitution but prepare runs last, the QuickJS sandbox and its Eval-intrinsic gotcha, script-consent gating and provenance, why pm.test/pm.expect are JavaScript not Rust bindings, the syntax-checker and Format action, why codegen and curl-parsing are separate modules, the secret-variable masking policy for generated code, curl paste-to-rebuild, tab-title derivation, and the min_w_0 layout rule. Load before touching anything under src/api_explorer/ - the send pipeline, scripting/sandbox, consent gating, codegen/curl, collections, or tab/column layout.
+description: Deep internals of crates/dodo-api-explorer/src/ that no single file makes obvious - the send pipeline's exact step order and why pre-request scripts run before variable substitution but prepare runs last, the QuickJS sandbox and its Eval-intrinsic gotcha, script-consent gating and provenance, why pm.test/pm.expect are JavaScript not Rust bindings, the syntax-checker and Format action, why codegen and curl-parsing are separate modules, the secret-variable masking policy for generated code, curl paste-to-rebuild, tab-title derivation, and the min_w_0 layout rule. Load before touching anything under crates/dodo-api-explorer/src/ - the send pipeline, scripting/sandbox, consent gating, codegen/curl, collections, or tab/column layout.
 ---
 
-`src/api_explorer/` is the largest module in dodo and the only one with thirteen things worth
+`crates/dodo-api-explorer/src/` is the largest module in dodo and the only one with thirteen things worth
 knowing before touching it that no single file makes obvious:
 
 - **The whole send pipeline lives in `services/send.rs`, in this order:**

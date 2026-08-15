@@ -1,7 +1,7 @@
 # `crates/` holds code that shares this lockfile, which is what separates it
 # from `tools/`.
 #
-# There are eight members, in three groups.
+# There are eleven members, in three groups.
 #
 # `crates/dodo-app-icon`, `crates/dodo-i18n` and `crates/dodo-paths` are *kernel*
 # crates: code many of dodo's modules use, lifted out so it can be depended on
@@ -11,12 +11,16 @@
 # either: the graph is wide and shallow, because a chain of small crates compiles
 # more slowly than one big one.
 #
-# `crates/dodo-cleaner` is a *feature* crate — a whole tool of the app, lifted
-# out of the binary rather than a piece many tools share. It is the first, and
-# it is the shape to copy: its only outbound edges were the three kernel crates
-# above, `layout.rs` was its only inbound one, and `main.rs` aliases it back to
-# `crate::cleaner` so neither side's call sites changed. `AGENTS.md`'s "feature
-# crate" entry records what the move bought and what it did not.
+# `crates/dodo-cleaner`, `crates/dodo-docker`, `crates/dodo-database` and
+# `crates/dodo-api-explorer` are *feature* crates — whole tools of the app,
+# lifted out of the binary rather than pieces many tools share. The Cleaner was
+# the first and is the shape the other three copy: their only outbound edges
+# were the three kernel crates above, their inbound surface was one or two
+# files, and `main.rs` aliases each back to `crate::cleaner` / `crate::docker` /
+# `crate::database` / `crate::api_explorer` so neither side's call sites
+# changed. `AGENTS.md`'s "feature crate" entry records what the moves bought and
+# what they did not — and it is explicit that build speed was measured and is
+# not among it.
 #
 # The other four are the input method. `crates/dodo-ime-core` is the engine,
 # linked *into* dodo. `crates/dodo-ime-ipc` is the settings and identifier
@@ -31,7 +35,7 @@
 # bundle types with would be two different resolutions that nothing compares. One
 # workspace, one `Cargo.lock`, one `--locked`.
 #
-# `default-members` names all nine (the root package and every crate), so a bare
+# `default-members` names all twelve (the root package and every crate), so a bare
 # `cargo test` / `cargo clippy --all-targets` at the root covers each crate's own
 # tests. **Adding a crate means adding it here in the same commit**; without it
 # cargo defaults to the root package alone and the new crate's tests silently
@@ -48,6 +52,7 @@
 members = ["crates/*"]
 default-members = [
     ".",
+    "crates/dodo-api-explorer",
     "crates/dodo-app-icon",
     "crates/dodo-cleaner",
     "crates/dodo-database",
@@ -144,6 +149,17 @@ dodo-cleaner = { path = "crates/dodo-cleaner" }
 # and `docker::services` is still the only place in dodo that constructs a
 # tokio runtime. See that crate's `lib.rs` for the seam.
 dodo-docker = { path = "crates/dodo-docker" }
+# The API Explorer, whole — the largest feature dodo has. The binary names
+# five items from it: `layout.rs`'s `ApiExplorer`, `main.rs`'s
+# `api_explorer::init`, `settings.rs`'s `ScriptPolicy` and
+# `models::script_consent::ConsentPolicy` for the "Run scripts" row, and
+# `quick_nav`'s `models::snapshot::RequestSnapshot` / `services::curl` for
+# routing a pasted cURL command. `main.rs` aliases the crate back to
+# `crate::api_explorer`. `rquickjs` went with it and left this file entirely;
+# `reqwest`, `base64` and `percent-encoding` are declared in both, because the
+# updater, the Encoder/Decoder and quick navigation still name them here. See
+# that crate's `lib.rs` for the seam.
+dodo-api-explorer = { path = "crates/dodo-api-explorer" }
 # The Database Explorer, whole. The binary names four items from it —
 # `layout.rs`'s `DatabaseView`, `main.rs`'s `database::init`, and
 # `quick_nav`'s `models::uri` / `ParsedUri` for routing a pasted connection
@@ -182,12 +198,13 @@ anyhow = "1.0"
 # is a blocking trait that only ever runs on GPUI's background executor, never
 # on the UI thread.
 #
-# **Exactly two modules may name this crate**: `api_explorer::services::http`
-# and `updater::services` (its `manifest_source` and `download`). The updater
-# was added to that list in the round that built it, rather than quietly
-# breaking a stated rule — and it needs the blocking client for a second
-# reason: `Response::bytes_stream()` is async and would need a tokio runtime,
-# which `docker::services` is the only place allowed to own.
+# **Exactly one module in this crate may name it**: `updater::services` (its
+# `manifest_source` and `download`). The other permitted namer,
+# `api_explorer::services::http`, went to `crates/dodo-api-explorer`, which
+# declares the identical line — the two resolve to one package. The updater
+# needs the blocking client for a second reason: `Response::bytes_stream()` is
+# async and would need a tokio runtime, which `docker::services` is the only
+# place allowed to own.
 reqwest = { version = "0.13", default-features = false, features = [
     "rustls",
     "blocking",
@@ -198,7 +215,12 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # Reads macOS app-bundle Info.plist files and Mail metadata conservatively.
 plist = "1"
+# The Encoder/Decoder tool and quick navigation's Base64 detector.
+# `crates/dodo-api-explorer` declares the same line for Basic authorization.
 base64 = "0.22.1"
+# The Encoder/Decoder tool's URL encode/decode. `crates/dodo-api-explorer` and
+# `crates/dodo-database` declare the same line; all three resolve to one
+# package.
 percent-encoding = "2.3.2"
 nucleo-matcher = "0.3"
 unicode-normalization = "0.1"
@@ -232,15 +254,6 @@ futures-util = "0.3.33"
 # uses it today, because Windows and Linux tray support would use the same seam
 # and a `cfg` here would have to be removed again.
 futures-channel = "0.3"
-# The JavaScript engine behind the API Explorer's scripts (QuickJS-NG, via C).
-# Only `api_explorer::services::script` may name it, the same containment rule
-# `reqwest` and `bollard` follow. Deliberately minimal features: no `loader`
-# (a module loader is a whole attack surface — a script cannot `require`), no
-# `macro`, no `futures`. `rquickjs-sys` ships pre-generated bindings for all
-# four release targets, so no `bindgen` and no libclang enters the build; it
-# compiles four C files with `cc` and pointedly not `quickjs-libc.c`, which is
-# what would have supplied file, process and socket access.
-rquickjs = { version = "0.12.1", default-features = false, features = ["std"] }
 
 
 # Two kernel32 calls only — `GetStdHandle` and `AttachConsole` — so that

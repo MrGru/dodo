@@ -24,7 +24,7 @@
 //! # Threads, and the crash that decided them
 //!
 //! This is **blocking by contract**, like `Transport::execute` and every store in
-//! `src/api_explorer/services/`: it copies a directory tree, shells out twice and
+//! `crates/dodo-api-explorer/src/services/`: it copies a directory tree, shells out twice and
 //! sleeps between registration attempts. Callers run it on GPUI's background
 //! executor, so none of that touches the UI thread.
 //!

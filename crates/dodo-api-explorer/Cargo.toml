@@ -1,0 +1,75 @@
+[package]
+name = "dodo-api-explorer"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "dodo's API Explorer: the send pipeline, the QuickJS script sandbox and its consent gate, saved collections and environments, and the response viewer."
+
+# Every dependency below is one the API Explorer already had while it was
+# `src/api_explorer/`; nothing was added by the move and nothing was left
+# behind. The list is short for the largest feature dodo has, because the whole
+# outside world it touches is one HTTP client, one JavaScript engine and the
+# three files it saves.
+[dependencies]
+# The method badges, tree glyphs, toolbar icons and status marks `views` and
+# `components` draw. Re-exported as `crate::app_icon` in `lib.rs` so every call
+# site still reads `crate::app_icon::AppIcon`.
+dodo-app-icon = { path = "../dodo-app-icon" }
+# Every string the API Explorer shows — five of `dodo-i18n`'s twenty areas are
+# this crate's. The `gpui` feature is what brings `t()` and the active-language
+# global with it: the catalogue itself is pure, but the view files render a
+# `Str` into a `SharedString` and that needs an `App`. See that crate's
+# `Cargo.toml` for why the feature exists at all.
+dodo-i18n = { path = "../dodo-i18n", features = ["gpui"] }
+# `data_dir()`, where `services::collection_store` writes `collections.json`,
+# `services::variable_store` writes `environments.json` and
+# `services::consent_store` writes `script-consent.json`. `src/paths.rs` here
+# is the seam that resolves the host; see its module doc.
+dodo-paths = { path = "../dodo-paths" }
+# Only the twenty-seven files under `views/` and `components/` may name these
+# two. The other 50 — `models`, `services` and `state` — are gpui-free on
+# purpose: the send pipeline's ordering, the QuickJS sandbox, the consent gate,
+# the curl parser and the four code generators are all tested with no `App` and
+# no frame.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+# The HTTP client the whole tool exists to drive. `default-features = false`
+# drops `default-tls`, `charset` and `system-proxy`; `rustls` then selects
+# rustls with the platform certificate verifier, so no OpenSSL is required to
+# build. `blocking` is deliberate: `services::Transport` is a blocking trait
+# that only ever runs on GPUI's background executor, never on the UI thread —
+# which is also why no async runtime appears in this crate at all.
+#
+# **Only `services::http` may name it**, the containment rule this crate's
+# `lib.rs` states. The binary keeps its own `reqwest` line for
+# `updater::services`, which is the one other module in dodo allowed to name
+# it; the two resolve to a single package.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+    "blocking",
+    "http2",
+] }
+# The JavaScript engine behind the pre-request and post-response scripts
+# (QuickJS-NG, via C). **Only `services::script` may name it**, the same
+# containment rule `reqwest` above follows — and this crate is now the only
+# place in the workspace that names it at all. Deliberately minimal features:
+# no `loader` (a module loader is a whole attack surface — a script cannot
+# `require`), no `macro`, no `futures`. `rquickjs-sys` ships pre-generated
+# bindings for all four release targets, so no `bindgen` and no libclang enters
+# the build; it compiles four C files with `cc` and pointedly not
+# `quickjs-libc.c`, which is what would have supplied file, process and socket
+# access.
+rquickjs = { version = "0.12.1", default-features = false, features = ["std"] }
+# Basic authorization's credential encoding, and the Binary body type's
+# round-trip through a request snapshot. The binary keeps its own line for
+# `encoder_decoder` and `quick_nav`.
+base64 = "0.22.1"
+# Encoding a query parameter and a form field on the way out. The binary keeps
+# its own line for `encoder_decoder`, and `dodo-database` has one for its URI
+# parser; all three resolve to one package.
+percent-encoding = "2.3.2"
+# `collections.json`, `environments.json` and `script-consent.json` — their
+# documents and, for the latter two, their explicit `"version"` field — plus
+# the JSON a response viewer parses into a tree and a script hands back.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

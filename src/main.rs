@@ -9,7 +9,14 @@
     windows_subsystem = "windows"
 )]
 
-mod api_explorer;
+// The API Explorer is a *feature* crate — `crates/dodo-api-explorer`, the
+// fourth and largest module taken out of this binary. `layout.rs` names
+// `ApiExplorer`, `run_app` below calls `api_explorer::init`, `settings.rs`
+// names `ScriptPolicy` and `models::script_consent::ConsentPolicy`, and
+// `quick_nav` reads `models::snapshot::RequestSnapshot` and `services::curl`
+// to route a pasted cURL command; this alias is what keeps all of those lines
+// reading `crate::api_explorer::…`. There is no `src/api_explorer/` any more.
+use dodo_api_explorer as api_explorer;
 mod app;
 // The icon set moved out to `crates/dodo-app-icon`; this alias is what keeps the
 // 39 modules that draw one spelling it `crate::app_icon::AppIcon`. There is no
@@ -117,6 +124,18 @@ mod paths {
         fn the_database_crate_resolves_the_same_host_as_this_binary() {
             assert_eq!(super::current(), dodo_database::paths::current());
             assert_eq!(super::data_dir(), dodo_database::paths::data_dir());
+        }
+
+        /// `dodo_api_explorer::paths` is the fourth and last copy of the same
+        /// seam, and it guards three files rather than two: a `data_dir()`
+        /// that did not match the binary's would leave `collections.json`,
+        /// `environments.json` and `script-consent.json` behind on the next
+        /// launch, so every saved request, every environment variable and
+        /// every approved script would silently vanish.
+        #[test]
+        fn the_api_explorer_crate_resolves_the_same_host_as_this_binary() {
+            assert_eq!(super::current(), dodo_api_explorer::paths::current());
+            assert_eq!(super::data_dir(), dodo_api_explorer::paths::data_dir());
         }
     }
 }
