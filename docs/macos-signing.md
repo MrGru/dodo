@@ -1,19 +1,27 @@
-# macOS code signing and notarisation — readiness
+# macOS code signing and notarisation
 
-**Status: not implemented, and deliberately so.** dodo ships unsigned today
-(`docs/release.md`, "Future readiness"). Nothing here is enabled by any workflow
-or script; this file exists so that the day the repo owner decides to turn it
-on, the work is *procurement followed by an afternoon of plumbing* rather than a
-week of discovery.
+**Status: implemented, and never yet exercised against Apple.** The repo owner
+holds an individual Apple Developer Program membership, the six secrets in §2
+exist on `MrGru/dodo`, and the plumbing is in the tree:
+`.github/workflows/release.yml` sets up the keychain, `scripts/package.sh` signs
+and notarises the plain binary, and `scripts/macos-app-bundle.sh` signs the
+bundle inside-out, notarises it and staples the ticket. **No release run has
+gone through that path yet.** Everything about the *shape* of the code was
+tested locally; everything that needs the certificate or the notary service was
+not, and is marked accordingly below.
+
+**The unsigned path is unchanged and is still the default.** With no secrets —
+a fork, a clone, a local `scripts/package.sh` — every script ad-hoc signs
+exactly as it always did and the release notes still tell users to clear
+quarantine. That is not a fallback bolted on; it is the same code path, guarded.
 
 **This is a separate file rather than a section of `docs/release.md` on
-purpose.** `docs/release.md` is a runbook for someone cutting a release —
-everything in it is a thing you do today. This is a shopping list and a design,
-for a decision nobody has taken. Folding it in would add four hundred lines to an
-already long runbook and bury the one part that matters, which is
-[the checklist](#1-what-the-repo-owner-must-personally-obtain). `docs/release.md`
-links here from "Required GitHub Secrets" and "Future readiness"; those remain
-the authority on how a release works, and this file is the authority on signing.
+purpose.** `docs/release.md` is a runbook for someone cutting a release. This
+is the design, the procurement checklist and the trap list behind one part of
+it. Folding it in would add four hundred lines to an already long runbook.
+`docs/release.md` links here from "Required GitHub Secrets" and "Future
+readiness"; those remain the authority on how a release works, and this file is
+the authority on signing.
 
 ## How to read the confidence labels
 
@@ -30,6 +38,16 @@ whole release to discover, so every non-obvious claim below carries one of:
   executed. The URL is given.
 - **INFERRED** — reasoning from the above. Called out as such every time.
 
+The implementation round added one more, and it is the important one:
+
+- **UNEXERCISED** — written, reviewed against the documentation, and *not run
+  against Apple*. Every `codesign --sign <real identity>`, every
+  `notarytool submit`, every `stapler staple` in this repository is
+  UNEXERCISED until a real release run says otherwise. The certificate and the
+  notarisation key live on the repo owner's machine and in GitHub secrets; the
+  session that wrote the code had neither, and deliberately did not fake one.
+  What *was* run is stated where it applies.
+
 ---
 
 ## Contents
@@ -37,14 +55,22 @@ whole release to discover, so every non-obvious claim below carries one of:
 1. [What the repo owner must personally obtain](#1-what-the-repo-owner-must-personally-obtain)
 2. [CI/CD secrets, by exact name](#2-cicd-secrets-by-exact-name)
 3. [Entitlements — including the input method](#3-entitlements--including-the-input-method)
-4. [What changes in the release workflow](#4-what-changes-in-the-release-workflow)
+4. [What the release workflow does](#4-what-the-release-workflow-does)
 5. [What signing buys, and what it does not](#5-what-signing-buys-and-what-it-does-not)
 6. [What breaks if we get it wrong, and how to verify success](#6-what-breaks-if-we-get-it-wrong-and-how-to-verify-success)
 7. [Compatibility audit — what is already in the tree](#7-compatibility-audit--what-is-already-in-the-tree)
+8. [What is still owed](#8-what-is-still-owed)
 
 ---
 
 ## 1. What the repo owner must personally obtain
+
+**All of this has been done.** The membership is an **individual** one, the
+signing identity is `Developer ID Application: Nguyen Manh Duan (8C925DTA32)`
+and the Team ID is `8C925DTA32`; notarisation uses **Option B**, the App Store
+Connect API key. The section is kept because it is the record of *what* each
+value is and how it is renewed or replaced — the day the certificate expires,
+or the key is rotated, this is the checklist again.
 
 Nobody but the account holder can do any of this: it needs a credit card, an
 Apple Account with two-factor authentication, and (for two of the items) the
@@ -76,11 +102,11 @@ account facts.
     `Developer ID Application: Jane Doe (ABCDE12345)`.
   - *Organisation*: needs a free **D-U-N-S number** registered to the legal
     entity, and the name shown is the company's.
-  - dodo is a personal project by one author, so *individual* is the default
-    reading — but it publishes the author's legal name in every downloaded
-    binary forever. That is a privacy decision, not a technical one, and it is
-    the repo owner's to make. It is also **not reversible without a new Team
-    ID**, which changes the app's TCC identity (see §5).
+  - dodo is a personal project by one author, and *individual* is what the repo
+    owner enrolled as — so every downloaded binary carries the author's legal
+    name, forever, and `codesign -dvvv` prints it. That was a privacy decision
+    taken knowingly. It is **not reversible without a new Team ID**, which
+    changes the app's TCC identity (see §5).
 - **Membership lapsing does not brick what is already shipped.** **READ**
   ([create Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/)):
   existing signed apps keep distributing; you just cannot create new
@@ -168,7 +194,13 @@ one.
 Notarisation is a separate authentication from signing. `notarytool` accepts two
 forms — **VERIFIED**, from `xcrun notarytool submit --help` on this machine.
 
-**Option A — Apple ID + app-specific password.** Three values:
+**Option B was chosen.** `MACOS_NOTARY_APPLE_ID` and `MACOS_NOTARY_PASSWORD`
+are **not set** on the repository and nothing in the tree reads them; Option A
+stays documented only so a future reader knows what the alternative was and why
+it lost. The key is a **Team** key, so `--issuer` is passed unconditionally —
+see the trap below.
+
+**Option A — Apple ID + app-specific password. NOT USED.** Three values:
 `--apple-id`, `--team-id`, `--password`.
 
 - The app-specific password is created at
@@ -181,7 +213,7 @@ forms — **VERIFIED**, from `xcrun notarytool submit --help` on this machine.
 - It is a credential for the whole Apple Account, not scoped to notarisation. It
   can be revoked individually from the same page.
 
-**Option B — App Store Connect API key. RECOMMENDED.** Three values:
+**Option B — App Store Connect API key. IN USE.** Three values:
 `--key` (a file path), `--key-id`, `--issuer`.
 
 - Created at [App Store Connect](https://appstoreconnect.apple.com) → **Users
@@ -199,6 +231,9 @@ forms — **VERIFIED**, from `xcrun notarytool submit --help` on this machine.
   > **Required for Team API Keys. Do not provide for Individual API Keys.**
   Passing it for an Individual key, or omitting it for a Team key, fails
   authentication with an error that does not say which of the two you did.
+  dodo's key is a **Team** key, so both packaging scripts pass `--issuer`
+  unconditionally. Do not "make it conditional" to be safe: for this key,
+  omitting it is the failure.
 
 **Why B is recommended:** the key is scoped to App Store Connect and revocable
 without touching the Apple Account's own sign-in; an app-specific password is a
@@ -233,30 +268,33 @@ Worth stating, because each of these is a thing people go and get by mistake:
 
 ## 2. CI/CD secrets, by exact name
 
-`docs/release.md` ("Required GitHub Secrets") already reserves five names. This
-section says what goes in each and how to produce the value. **None of these is
-referenced by any workflow today.**
-
-| Secret | Route | Contents | How to produce the value |
-|---|---|---|---|
-| `MACOS_CERTIFICATE` | both | base64 of the Developer ID Application `.p12` | `base64 -i DeveloperID.p12 \| pbcopy` |
-| `MACOS_CERTIFICATE_PWD` | both | the password you invented when exporting the `.p12` | you chose it (§1.3) |
-| `MACOS_NOTARY_TEAM_ID` | both | the 10-character Team ID | developer.apple.com → Membership details |
-| `MACOS_NOTARY_APPLE_ID` | A only | the Apple Account email | it is your email |
-| `MACOS_NOTARY_PASSWORD` | A only | the app-specific password, `abcd-efgh-ijkl-mnop` | account.apple.com (§1.4) |
-
-If **Option B** (App Store Connect API key) is chosen — which this document
-recommends — three further names are needed. They are proposed here, not
-reserved anywhere yet:
+**Six secrets, all of them set on `MrGru/dodo`, and all six read by
+`.github/workflows/release.yml`'s `build` job.** They are read at *job* level,
+because `secrets` is not available in any `if:` — §2.2.
 
 | Secret | Contents | How to produce the value |
 |---|---|---|
+| `MACOS_CERTIFICATE` | base64 of the Developer ID Application `.p12` | `base64 -i DeveloperID.p12 \| pbcopy` |
+| `MACOS_CERTIFICATE_PWD` | the password you invented when exporting the `.p12` | you chose it (§1.3) |
+| `MACOS_NOTARY_TEAM_ID` | the 10-character Team ID, `8C925DTA32` | developer.apple.com → Membership details |
 | `MACOS_NOTARY_API_KEY` | base64 of `AuthKey_XXXXXXXXXX.p8` | `base64 -i AuthKey_XXXXXXXXXX.p8 \| pbcopy` |
 | `MACOS_NOTARY_API_KEY_ID` | the 10-character Key ID | shown in App Store Connect and in the filename |
 | `MACOS_NOTARY_API_ISSUER_ID` | the Issuer UUID | top of the App Store Connect → Keys page |
 
-With Option B, `MACOS_NOTARY_APPLE_ID` and `MACOS_NOTARY_PASSWORD` go unused.
-`MACOS_NOTARY_TEAM_ID` is still needed — for `codesign`, not for `notarytool`.
+`MACOS_NOTARY_TEAM_ID` is not a `notarytool` argument under Option B — the API
+key authenticates on its own. It is what `codesign --sign` resolves the identity
+from, and it is the reason there is no separate identity secret.
+
+**`MACOS_NOTARY_APPLE_ID` and `MACOS_NOTARY_PASSWORD` are the Option A names and
+are deliberately absent.** Nothing reads them. Setting them would do nothing;
+adding a code path for them would add a second, untested authentication route to
+maintain.
+
+**All six or none.** The keychain step fails with a named missing secret if
+`MACOS_CERTIFICATE` is present and any of the other five is not. Half a
+credential set otherwise produces failures that look like something else — an
+identity `codesign` cannot resolve, or an authentication error `notarytool` will
+not attribute.
 
 **Deliberately not a secret: the keychain password.** Recipes on the internet
 often add a `MACOS_KEYCHAIN_PASSWORD`. It protects a keychain that exists for
@@ -272,9 +310,20 @@ keychain. So `--sign "$MACOS_NOTARY_TEAM_ID"` is enough and there is no
 
 ### 2.1 — Setting up the keychain on a runner
 
-This is the part that is fiddly for reasons that are not obvious, so it is
-written out. **INFERRED from the tool documentation; not executed here** — there
-is no certificate to execute it with.
+This is the part that is fiddly for reasons that are not obvious. It is now the
+"Set up signing keychain (macOS)" step in `.github/workflows/release.yml`, which
+is the authority on the exact text; the sketch below is kept because it is the
+*reasoning*, comment for comment. **UNEXERCISED** — the step has never run
+against a real certificate. The reasoning is **INFERRED** from the tool
+documentation, as it always was.
+
+Two things the workflow adds beyond the sketch. It asserts that at least one
+`Developer ID Application` identity actually landed in the keychain, and it does
+so by **counting** rather than printing: the identity's common name is the
+certificate holder's legal name, and while that is public the moment anything
+ships, a CI log is no place to put it. And it deletes the keychain and the
+decoded `.p8` in an `if: always()` step in the same job, so a failed build does
+not leave credentials on the runner.
 
 ```bash
 KEYCHAIN="$RUNNER_TEMP/dodo-signing.keychain-db"
@@ -306,8 +355,8 @@ security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
 
 ### 2.2 — The `if:` guard that does not work
 
-`.github/workflows/release.yml`'s future-signing comment currently records the
-guard as `if: runner.os == 'macOS' && secrets.MACOS_CERTIFICATE != ''`. **That
+An earlier note in `.github/workflows/release.yml` recorded the guard as
+`if: runner.os == 'macOS' && secrets.MACOS_CERTIFICATE != ''`. **That
 expression is invalid.** **READ**
 ([GitHub contexts reference](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts),
 fetched 2026-08-08): the `secrets` context is not available in
@@ -324,8 +373,18 @@ available in `steps.if`. So the working shape is:
         if: runner.os == 'macOS' && env.MACOS_CERTIFICATE != ''
 ```
 
-The comment in `release.yml` has been corrected to this form in the same commit
-as this document. Nothing was enabled.
+That is the shape `release.yml` uses, in three places: the keychain step, the
+credential-cleanup step, and the `meta` job, which resolves once whether this
+run is a signed one so the publish job can write truthful release notes. A
+matrix job cannot answer that question for the publish job — four rows, one
+output slot — so `meta` reads the secret and emits a `macos_signed` output.
+
+**VERIFIED by execution** that the release-notes step produces the right text in
+both directions: with `MACOS_SIGNED=true` it describes a signed, notarised,
+stapled `dodo.app` and the online-checked plain binary; with the variable unset
+it prints the original `xattr -dr com.apple.quarantine` instructions unchanged.
+The guard *expressions* themselves are **UNEXERCISED** — GitHub evaluates them,
+not a shell.
 
 ---
 
@@ -418,7 +477,7 @@ So: one `codesign` invocation for the inner bundle, same flags as the outer, no
 
 ---
 
-## 4. What changes in the release workflow
+## 4. What the release workflow does
 
 ### 4.1 — The ordering constraint, stated once
 
@@ -445,44 +504,74 @@ looks like something else:
 
 ### 4.2 — Where the steps actually go
 
-`.github/workflows/release.yml`'s current comment says the sign hook goes
+An earlier note in `.github/workflows/release.yml` said the sign hook goes
 "between packaging and upload". **That placement is wrong**, per constraint 3
 above: by then the `.tar.gz` and its `.sha256` already exist and contain the
-unsigned bundle. The comment has been corrected in the same commit as this
-document.
+unsigned bundle.
 
-The correct home is **inside the packaging scripts**, which is where
-`scripts/macos-app-bundle.sh`'s own footer has always implied it:
+The signing lives **inside the packaging scripts**, and the workflow owns only
+the keychain, which is the one part that is a property of the runner rather than
+of the package. This is what runs:
 
 ```
-scripts/package.sh
-  ├─ stage the plain binary                       (line 100)
-  │    → SIGN the binary copy in the stage dir     ← new
-  ├─ tar  dodo-vX-macos-arm64.tar.gz              (line 182)
-  ├─ checksum                                      (line 184)
+release.yml  build job (macOS rows only, and only when the secrets exist)
+  ├─ Set up signing keychain            temporary keychain, import, partition
+  │                                     list, search list, decode the .p8
   │
-  └─ if --app-bundle:
-       scripts/macos-app-bundle.sh                 (line 199)
-         ├─ assemble dodo.app
-         ├─ SIGN  Contents/Helpers/<IME>.app       ← new, when the IME exists
-         ├─ SIGN  dodo.app                         ← new
-         ├─ ditto -c -k --keepParent → a TEMPORARY zip
-         ├─ xcrun notarytool submit --wait         ← new
-         ├─ xcrun stapler staple dodo.app          ← new
-         └─ rm the temporary zip
-       tar  dodo-vX-macos-arm64-app.tar.gz        (line 202)
-       checksum                                    (line 204)
+  └─ Package (Unix) → scripts/package.sh --sign <TEAMID> --notary-*
+       ├─ stage the plain binary
+       │    → codesign the binary copy in the stage dir
+       │    → ditto -c -k → temp zip → notarytool submit --wait
+       │      (NOT stapled — §4.3)
+       ├─ tar  dodo-vX-macos-arm64.tar.gz
+       ├─ checksum
+       │
+       └─ if --app-bundle:
+            scripts/macos-input-method-bundle.sh --sign <TEAMID>
+            scripts/macos-app-bundle.sh --sign <TEAMID> --notary-*
+              ├─ assemble dodo.app, nesting the IME at Contents/Helpers/
+              ├─ codesign  Contents/Helpers/Dodo Vietnamese.app   (inner first)
+              ├─ codesign  dodo.app                               (then outer)
+              ├─ ditto -c -k --keepParent → a TEMPORARY zip
+              ├─ xcrun notarytool submit --wait   → assert `status: Accepted`
+              ├─ xcrun stapler staple dodo.app
+              ├─ rm the temporary zip
+              └─ codesign --verify --deep --strict / spctl / stapler validate
+          tar  dodo-vX-macos-arm64-app.tar.gz
+          checksum
+
+  Verify archives → scripts/verify-release.sh   (§6.2 step 6, on the extract)
+  Remove signing credentials                    (if: always())
 ```
+
+The nested input method is notarised **by the outer bundle's submission** and
+does not get one of its own: the notary service checks every executable in the
+submission, not just the outermost. It is signed twice, though — once standalone
+by `macos-input-method-bundle.sh` and again with `--force` once nested — which
+costs one `codesign` call and keeps the standalone bundle in the stage directory
+honest.
+
+**One `notarytool` invocation is not the same as one round trip.** A macOS
+matrix row makes two submissions: the plain binary and the `.app`. Each is a
+`--wait` with no upper bound, which is why the `build` job now states an
+explicit `timeout-minutes` (§4.4).
 
 The temporary zip exists **only** to satisfy the notary service, which does not
 accept a `.tar.gz` — it takes a zip, a UDIF disk image, or a flat installer
 package (**READ**; `notarytool submit --help` says only "Path to the archive").
-`ditto -c -k --keepParent` is the correct way to build it. The *published*
-artifact stays `dodo-vX-macos-arm64-app.tar.gz`, because
+`ditto -c -k --keepParent` is the correct way to build it — **VERIFIED by
+execution** on an ad-hoc bundle: the zip it produces has `dodo.app/` as its
+root, which is what the notary service expects to find a bundle in. The
+plain-binary form, `ditto -c -k <file> <zip>`, was run too and produces a
+one-entry archive.
+
+The *published* artifact stays `dodo-vX-macos-arm64-app.tar.gz`, because
 `tools/update-manifest/src/platform.rs` selects the macOS entry **by exact
 filename** and `models::manifest` asserts the URL ends in `-app.tar.gz`
 (`AGENTS.md`, `docs/release.md`). **Renaming the artifact would break the
-in-app updater; do not "simplify" the zip into being the release asset.**
+in-app updater; do not "simplify" the zip into being the release asset.** Both
+temporary zips are written under `mktemp -d` and removed by the script, with a
+`trap` so a failed submission does not leave one behind.
 
 ### 4.3 — The plain-binary archive can be signed but never stapled
 
@@ -495,24 +584,34 @@ executable bundles such as '.app'."* A bare Mach-O is none of those.
 The practical consequence is small: a notarised-but-unstapled binary is accepted
 by Gatekeeper only when the machine can reach Apple to check online, and the
 plain archive is the one a terminal user extracts and runs, where Gatekeeper's
-quarantine path is already different. Sign it anyway — it costs one extra
-`codesign` call and it makes `codesign -dvvv` on the shipped binary say something
-truthful.
+quarantine path is already different. It is signed and notarised anyway — it
+costs one extra `codesign` call and one extra submission, and it makes
+`codesign -dvvv` on the shipped binary say something truthful.
 
-### 4.4 — Two knock-on effects worth knowing before you start
+`scripts/package.sh` does this on the **staged copy** in `dist/.stage/`, never
+on `target/<triple>/release/dodo`: the `.app` bundle takes its own copy from the
+build output and signs that inside the bundle, and signing the build output in
+place would make a second run of the script sign an already signed binary. The
+release notes say plainly that this archive is checked online rather than
+stapled, so nobody reads a missing ticket as a broken release.
 
-- **Signing needs the network, twice.** `--timestamp` contacts Apple's timestamp
-  authority; `notarytool` obviously does. A release build becomes dependent on
-  Apple's availability. `notarytool submit --wait` typically returns in minutes
-  but has no upper bound; the macOS matrix job's timeout needs to accommodate it.
-- **The `-app.tar.gz` stops being byte-reproducible.** `docs/build-optimization.md`
-  ("Reproducibility") and `SOURCE_DATE_EPOCH` in `release.yml` exist so that
-  re-running a release for the same tag produces the same bytes. A secure
-  timestamp is *the current time from Apple's TSA* and a notarisation ticket is
-  issued per submission, so two runs of the same tag will differ. This is not
-  fixable and not a defect; it should be written into
-  `docs/build-optimization.md` when signing lands, so the next person does not
-  spend a day chasing it.
+### 4.4 — Two knock-on effects, now live
+
+- **A macOS release build depends on Apple's availability.** `--timestamp`
+  contacts Apple's timestamp authority on every `codesign`; `notarytool`
+  obviously does. `notarytool submit --wait` typically returns in minutes but
+  has no upper bound. The `build` job previously had no `timeout-minutes` at
+  all and so inherited GitHub's 6-hour default; it now states
+  `timeout-minutes: 360` explicitly, with a comment saying why, because a
+  ceiling that exists by accident is one somebody tightens to "how long a build
+  takes" without thinking about the notary. **360 is the maximum a hosted job
+  may ask for**, so this is the ceiling raised as far as it goes.
+- **The `-app.tar.gz` has stopped being byte-reproducible**, and that is
+  expected. A secure timestamp is *the current time from Apple's TSA* and a
+  notarisation ticket is issued per submission, so two runs of the same tag
+  differ in bytes even though `SOURCE_DATE_EPOCH` keeps everything else fixed.
+  Recorded in `docs/build-optimization.md` ("Reproducibility") so the next
+  person does not spend a day chasing it.
 
 ---
 
@@ -536,17 +635,21 @@ That experiment was **not re-run here**. It is the single most important fact in
 this document and it is somebody else's measurement — but it was measured three
 ways on the same OS version this file was written on.
 
-### The current workaround, which already ships
+### The workaround that is still shipped, conditionally
 
-dodo's generated release notes tell users to run
+dodo's generated release notes used to tell every user to run
 
 ```
 xattr -dr com.apple.quarantine /Applications/dodo.app
 ```
 
-(`docs/release.md`, and `crates/dodo-updater/src/services/installers/macos.rs` does the
-equivalent automatically for in-app updates). That line is the mitigation, it is
-already there, and it is sufficient for the app to run today.
+They still do — but only for a build with no signing secrets, which is what a
+fork produces. A signed run's notes describe the signature instead and give the
+three commands a suspicious user can check it with.
+`crates/dodo-updater/src/services/installers/macos.rs` still does the `xattr`
+equivalent automatically for in-app updates, and deliberately keeps doing it:
+removing an extended attribute cannot invalidate a signature or a stapled ticket
+(§7.3, §7.4), and a user who obtained the archive some other way still benefits.
 
 ### What it does buy
 
@@ -598,6 +701,8 @@ confirm.
 | `--options runtime` omitted | notarisation rejected: *the executable does not have the hardened runtime enabled* |
 | `get-task-allow` entitlement present | notarisation rejected outright |
 | A `.tar.gz` handed to `notarytool` | submission rejected as an unsupported archive format |
+| `notarytool` reports `status: Invalid` but exits 0 | nothing at all — which is why both scripts `grep` the output for `status: Accepted` rather than trusting the exit status |
+| Only some of the six secrets set | the keychain step fails naming the missing one, before anything is signed |
 | `stapler staple` run before notarisation finished | *The staple and validate action failed! Error 65* |
 | Anything re-signed after stapling | ticket silently invalidated; `stapler validate` fails on the shipped archive (**VERIFIED** from `man stapler`) |
 | Archive built before signing | `codesign --verify` passes on `dist/dodo.app` and fails on the extracted copy; the published SHA-256 covers the unsigned bundle |
@@ -638,9 +743,16 @@ xcrun stapler validate /tmp/dodo-verify/dodo.app
 spctl --assess --type execute --verbose=4 /tmp/dodo-verify/dodo.app
 ```
 
-Step 6 belongs in `scripts/verify-release.sh` when signing lands, guarded on the
-signing being on, so a regression is caught by the release rather than by a user.
-§7.3 records why it is expected to pass.
+**Step 6 is now in `scripts/verify-release.sh`**, which the release workflow runs
+on every archive it built, so a ticket that did not survive packaging fails the
+release rather than the user. The guard is the bundle's own signature rather
+than a flag — `codesign -dvv` is asked whether the authority is
+`Developer ID Application`, and only then are `stapler validate` and `spctl`
+required. An ad-hoc bundle prints "no notarisation ticket to check" and moves
+on, which is **VERIFIED by execution**: a full ad-hoc `scripts/package.sh
+--app-bundle` run followed by `verify-release.sh` on the resulting
+`-app.tar.gz` passes and takes the skip branch. The Developer ID branch is
+**UNEXERCISED**.
 
 If notarisation is rejected, the log is the only thing that says why:
 
@@ -656,8 +768,10 @@ not guess before reading it.
 
 ## 7. Compatibility audit — what is already in the tree
 
-The second half of this round's question: **would anything dodo builds now have
-to be undone to get to signing?** This is what was checked.
+The question the readiness round asked: **would anything dodo builds have to be
+undone to get to signing?** The answer was no, and turning signing on did not
+change it — nothing in this section had to be revisited when the plumbing
+landed. It is kept as the record of what was checked and why each answer holds.
 
 ### 7.1 — The file-based IPC stays correct, and signing does not make XPC worth revisiting
 
@@ -779,8 +893,10 @@ after signing — it just stops being necessary. Leave it: it is already
 documented as best-effort and non-fatal, and a user who obtained the archive
 some other way still benefits.
 
-The module's doc comment says "dodo's binaries are **not** code-signed or
-notarised", which is true today and is the sentence to update when this lands.
+The module's doc comment used to say "dodo's binaries are **not** code-signed or
+notarised". It now says what is actually true — official macOS builds are
+signed and notarised, builds without the secrets are not, and `strip_quarantine`
+is correct and harmless either way.
 
 ### 7.5 — Everything else checked, with nothing to change
 
@@ -805,9 +921,40 @@ notarised", which is true today and is the sentence to update when this lands.
 - **Windows.** `scripts/package.ps1`'s equivalent hook signs the `.exe` *before*
   zipping it, which is the same constraint 3 as above. Nothing here changes it.
 
-**No incompatibility was found that requires code changes now.** The three
-corrections made alongside this document are all to recorded *plans* — the
-deprecated `--deep` recipe in `scripts/macos-app-bundle.sh`'s footer, the wrong
-step placement and the invalid `secrets`-in-`if` guard in
+**No incompatibility was found, and none appeared when signing was turned on.**
+The three corrections the readiness round made were all to recorded *plans* —
+the deprecated `--deep` recipe in `scripts/macos-app-bundle.sh`'s footer, the
+wrong step placement and the invalid `secrets`-in-`if` guard in
 `.github/workflows/release.yml` — plus the nesting-location constraint in §7.2,
-which costs nothing because the thing it constrains has not been built.
+which cost nothing because it was adopted before the nested bundle existed. All
+four are now the shipped behaviour.
+
+---
+
+## 8. What is still owed
+
+The honest list, so nothing here reads as finished when it is not.
+
+- **A real release run.** Everything that touches the certificate or Apple is
+  UNEXERCISED. The first tagged release with the secrets in place is the test,
+  and it is the kind that either passes or produces a `notarytool log` URL. §6.1
+  is the table to read it against.
+- **`README.md` still says "Builds are **not** code-signed or notarised", and it
+  is right until the first signed release exists.** Every archive a user can
+  download today was built before this landed. Change that sentence — and the
+  `xattr -dr com.apple.quarantine` line in the macOS install steps, which
+  becomes an unnecessary no-op — as part of the release that first ships signed,
+  not before.
+- **The TCC claim in §5 is still INFERRED.** Whether a signed dodo keeps its
+  Desktop/Documents/Downloads grants across a self-update has not been measured.
+  It costs one update cycle to confirm and should not be quoted as settled until
+  it is.
+- **The `Info.plist` usage-description strings are still absent** (§3.2). They
+  control the sentence a user reads in a TCC prompt, they are unrelated to
+  signing, and adding them is a user-visible change that deserves its own round.
+- **Windows signing is untouched.** `scripts/package.ps1` still zips an unsigned
+  `.exe`. The constraint is identical — sign before the archive — and
+  `docs/release.md`'s "Future readiness" is where that work is described.
+- **`update.json`'s `signature` field is still `null`.** A different mechanism
+  solving a different problem; Developer ID signing did not address it and must
+  not be read as having done so.

@@ -658,6 +658,21 @@ still depends on the absolute path of the build directory and on the exact
 toolchain build, and no `--remap-path-prefix` is configured. Nobody has run a
 rebuild-and-diff experiment here.
 
+**The signed macOS archives are not byte-reproducible across runs, and that is
+expected.** Since Developer ID signing landed, a macOS release run does two
+things whose output is a function of *when* it happened rather than of what was
+built: `codesign --timestamp` embeds a secure timestamp fetched from Apple's
+timestamp authority at signing time, and `xcrun stapler staple` attaches a
+notarisation ticket that Apple issues per submission. So re-running a release
+for the same tag produces a `-app.tar.gz` — and a plain `-macos-` archive —
+with different bytes and a different SHA-256, even though `SOURCE_DATE_EPOCH`
+still pins everything else. Both are non-negotiable: the hardened runtime
+requires a secure timestamp, and notarisation requires the hardened runtime.
+This is not a defect and there is nothing to fix; a re-run publishes a
+*differently-hashed but equally valid* archive, and the manifest and `SHA256SUMS`
+are regenerated from whatever that run actually produced.
+[docs/macos-signing.md](macos-signing.md) §4.4 is the authority.
+
 ### The rev-pinning problem, and why `Cargo.lock` is the only pin
 
 Four dependencies come from git with **no `rev`**:

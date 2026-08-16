@@ -7,15 +7,19 @@
 //!
 //! # The quarantine attribute
 //!
-//! dodo's binaries are **not code-signed or notarised** (`docs/release.md`), so
-//! anything downloaded by a browser carries `com.apple.quarantine` and
-//! Gatekeeper refuses to open it. dodo's own download does not set the
-//! attribute — it is applied by the downloading application, and this one does
-//! not apply it — but the archive may carry it in its extended attributes, so
-//! `xattr -dr` is run over the extracted bundle before the swap. Its failure is
-//! logged and does not stop the install: on a Mac where it is not needed the
-//! command is a no-op, and refusing to update because a cleanup step was
-//! unnecessary would be absurd.
+//! Official macOS archives are code-signed with a Developer ID certificate and
+//! notarised, and `dodo.app` carries a stapled ticket (`docs/macos-signing.md`);
+//! a build made without those secrets — a fork, a local `scripts/package.sh` —
+//! is ad-hoc signed, and anything a browser downloads carries
+//! `com.apple.quarantine`, which Gatekeeper then refuses to open. dodo's own
+//! download does not set the attribute — it is applied by the downloading
+//! application, and this one does not apply it — but the archive may carry it
+//! in its extended attributes, so `xattr -dr` is run over the extracted bundle
+//! before the swap. **This stays correct now that signing exists**: removing an
+//! extended attribute cannot invalidate a signature or a stapled ticket, since
+//! neither lives in one. Its failure is logged and does not stop the install:
+//! on a Mac where it is not needed the command is a no-op, and refusing to
+//! update because a cleanup step was unnecessary would be absurd.
 //!
 //! # Refusing is a normal outcome
 //!

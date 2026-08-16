@@ -10,8 +10,9 @@
 #   1. the archive exists and its .sha256 sidecar matches
 #   2. the contents list (printed, so a reviewer sees what shipped)
 #   3. the binary and required native host are at their exact package paths,
-#      executable modes survive where applicable, and LICENSE and
-#      THIRD-PARTY-NOTICES.md shipped with them
+#      executable modes survive where applicable, signatures still verify, a
+#      Developer ID signed bundle still carries its notarisation ticket, and
+#      LICENSE and THIRD-PARTY-NOTICES.md shipped with them
 #   4. the binary runs: `dodo --build-info` (see the caveat below)
 #   5. the embedded metadata is real — version matches, commit is not
 #      `unknown` and not `-dirty`, and the tag matches when one was expected
@@ -132,6 +133,23 @@ case "$archive_name" in
                 || die "the nested input-method signature is invalid"
             codesign --verify --deep --strict --verbose=2 "$app" \
                 || die "the outer app signature is invalid"
+
+            # The check the whole signing round exists for, and the one that
+            # cannot be done on dist/dodo.app: whether the notarisation ticket
+            # survived into what actually ships. Guarded on the bundle's own
+            # signature rather than on a flag, so it is self-describing — an
+            # ad-hoc bundle (every local build, every fork) skips it, and a
+            # Developer ID bundle must have a valid ticket or this fails here
+            # rather than at a user. docs/macos-signing.md §6.2, step 6.
+            if codesign -dvv "$app" 2>&1 | grep -q '^Authority=Developer ID Application'; then
+                xcrun stapler validate "$app" \
+                    || die "Developer ID signed but the notarisation ticket did not survive packaging"
+                spctl --assess --type execute --verbose=4 "$app" \
+                    || die "Gatekeeper rejects the packaged bundle"
+                ok "notarisation ticket stapled and accepted by Gatekeeper"
+            else
+                info "ad-hoc signed; no notarisation ticket to check"
+            fi
         fi
         ok "macOS input method present at its exact path"
         ;;

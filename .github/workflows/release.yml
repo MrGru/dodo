@@ -67,6 +67,14 @@ jobs:
       prerelease: ${{ steps.resolve.outputs.prerelease }}
       source_date_epoch: ${{ steps.resolve.outputs.source_date_epoch }}
       publish: ${{ steps.resolve.outputs.publish }}
+      macos_signed: ${{ steps.resolve.outputs.macos_signed }}
+    env:
+      # Read here, at job level, because the `secrets` context is not available
+      # in any `if:` — see the signing steps in the build job below. The publish
+      # job needs the answer for the release notes, and a matrix job's outputs
+      # cannot give it one (four rows, one output slot), so it is resolved once
+      # in this job and passed down.
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
     steps:
       # Full history: `git log` on the tagged commit needs the commit object,
       # and a default shallow checkout of a tag does not always carry it.
@@ -115,6 +123,18 @@ jobs:
           epoch="$(git log -1 --pretty=%ct)"
           echo "source_date_epoch=$epoch" >> "$GITHUB_OUTPUT"
 
+          # Whether the macOS archives in this run will be Developer ID signed,
+          # notarised and stapled. Only the presence of the certificate secret
+          # is knowable here; the build job fails hard if the rest of the set is
+          # incomplete, so "the secret exists" and "the artifacts are signed"
+          # cannot diverge in a run that reaches publish. A fork has no secret
+          # and gets `false`, which is what keeps its release notes truthful.
+          if [ -n "${MACOS_CERTIFICATE:-}" ]; then
+            echo "macos_signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "macos_signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
           echo "releasing $tag (version $version, epoch $epoch)"
 
   # ---------------------------------------------------------------------------
@@ -131,6 +151,13 @@ jobs:
     # fails the release for any missing platform, experimental included. See
     # "Automatic updates" in docs/release.md for why that is the right default.
     continue-on-error: ${{ matrix.experimental }}
+    # There was no explicit timeout here before, so the job ran under GitHub's
+    # 6-hour default. It is written out now because the macOS rows block on
+    # `xcrun notarytool submit --wait`, which typically returns in minutes but
+    # has no documented upper bound — this is the ceiling that has to
+    # accommodate it, and 360 is the maximum a hosted job may ask for. Do not
+    # tighten it to "how long a build takes" without accounting for the notary.
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -153,6 +180,19 @@ jobs:
             experimental: true
     env:
       SOURCE_DATE_EPOCH: ${{ needs.meta.outputs.source_date_epoch }}
+      # macOS signing and notarisation. These are read at JOB level because the
+      # `secrets` context is not available in `jobs.<id>.if` or in
+      # `jobs.<id>.steps.if` — it is available in `env:`, and `env` is available
+      # in `steps.if`, which is what makes `env.MACOS_CERTIFICATE != ''` below a
+      # working guard (docs/macos-signing.md §2.2). All six are absent on a fork
+      # and in any clone without them, and every step that uses them is guarded,
+      # so the unsigned path stays exactly as it was.
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+      MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
+      MACOS_NOTARY_API_KEY_ID: ${{ secrets.MACOS_NOTARY_API_KEY_ID }}
+      MACOS_NOTARY_API_ISSUER_ID: ${{ secrets.MACOS_NOTARY_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -174,6 +214,85 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      # --- signing -----------------------------------------------------------
+      #
+      # This step is the ONLY signing-related thing the workflow does. The
+      # codesign / notarytool / stapler calls themselves live inside
+      # scripts/package.sh and scripts/macos-app-bundle.sh, because they have to
+      # happen before the tar and its checksum — a signature added between
+      # packaging and upload would not be in the published archive at all
+      # (docs/macos-signing.md §4.1, constraint 3).
+      #
+      # What is left here is the part only a runner needs: a keychain that
+      # exists for this job and is destroyed with it.
+      - name: Set up signing keychain (macOS)
+        if: runner.os == 'macOS' && env.MACOS_CERTIFICATE != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Half a credential set produces failures that look like something
+          # else — an identity that codesign cannot resolve, or an
+          # authentication error notarytool will not attribute. Fail here, with
+          # the name of the missing secret, before anything is signed.
+          for required in MACOS_CERTIFICATE_PWD MACOS_NOTARY_TEAM_ID \
+                          MACOS_NOTARY_API_KEY MACOS_NOTARY_API_KEY_ID \
+                          MACOS_NOTARY_API_ISSUER_ID; do
+            if [ -z "${!required:-}" ]; then
+              echo "::error::MACOS_CERTIFICATE is set but $required is not; set all six or none"
+              exit 1
+            fi
+          done
+
+          keychain="$RUNNER_TEMP/dodo-signing.keychain-db"
+          # Not a secret: this keychain exists for one job on one ephemeral
+          # runner and dies with it, so a generated password is strictly better
+          # than a stored one (docs/macos-signing.md §2).
+          keychain_pwd="$(uuidgen)"
+          cert="$RUNNER_TEMP/dodo-cert.p12"
+          key="$RUNNER_TEMP/dodo-notary-key.p8"
+
+          security create-keychain -p "$keychain_pwd" "$keychain"
+          # Without this the keychain re-locks after 5 minutes of inactivity and
+          # a later codesign fails halfway through the job with an opaque error.
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_pwd" "$keychain"
+
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$cert"
+          security import "$cert" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          rm -f "$cert"
+
+          # THE STEP EVERYONE FORGETS. Without it macOS wants to show a
+          # "codesign wants to use the key … allow?" dialog. A runner has no one
+          # to click it, so codesign blocks and then fails with
+          # errSecInternalComponent, which says nothing about the cause.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_pwd" "$keychain" >/dev/null
+
+          # codesign searches the search LIST, not a path. Prepending is what
+          # makes the imported identity findable; keeping login.keychain-db on
+          # the list avoids surprising other tools in the job.
+          security list-keychain -d user -s "$keychain" login.keychain-db
+
+          # Counted, not printed: the identity's common name is the certificate
+          # holder's legal name. It is public anyway (it is in every signed
+          # binary), but there is no reason for this log to be where it appears.
+          found="$(security find-identity -v -p codesigning "$keychain" \
+                   | grep -c 'Developer ID Application' || true)"
+          echo "Developer ID Application identities in the temporary keychain: $found"
+          if [ "$found" -lt 1 ]; then
+            echo "::error::no Developer ID Application identity in the imported .p12"
+            exit 1
+          fi
+
+          # The App Store Connect API key, as a file, because notarytool takes a
+          # path rather than a value. Deleted by the cleanup step below, in this
+          # same job, whether the job passed or failed.
+          printf '%s' "$MACOS_NOTARY_API_KEY" | base64 --decode > "$key"
+          chmod 600 "$key"
+          echo "MACOS_NOTARY_KEY_PATH=$key" >> "$GITHUB_ENV"
+
       # --- packaging ---------------------------------------------------------
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -185,6 +304,21 @@ jobs:
           # replacement for the plain binary one.
           if [ "${{ runner.os }}" = "macOS" ]; then
             args+=(--app-bundle)
+            # MACOS_NOTARY_KEY_PATH is set only by the keychain step above, so
+            # this is on exactly when that step ran. Without it package.sh
+            # ad-hoc signs, which is the unsigned path a fork takes.
+            #
+            # The Team ID is enough for --sign: codesign resolves it as long as
+            # exactly one matching identity is on the search list, which is
+            # exactly the situation on a freshly created temporary keychain. So
+            # there is no separate identity secret to keep in step with a
+            # certificate rename.
+            if [ -n "${MACOS_NOTARY_KEY_PATH:-}" ]; then
+              args+=(--sign "$MACOS_NOTARY_TEAM_ID"
+                     --notary-key "$MACOS_NOTARY_KEY_PATH"
+                     --notary-key-id "$MACOS_NOTARY_API_KEY_ID"
+                     --notary-issuer "$MACOS_NOTARY_API_ISSUER_ID")
+            fi
           fi
           scripts/package.sh "${args[@]}"
 
@@ -283,32 +417,9 @@ jobs:
           Write-Output "archive size: $($archive.Length) bytes"
           Write-Output "sha256: $actual"
 
-      # --- future: signing ---------------------------------------------------
-      #
-      # Not implemented — no certificates exist for this project.
-      # docs/macos-signing.md is the authority: what has to be bought, the
-      # secrets by name, the entitlements (none), and the ordering. Two things
-      # about the hook that were recorded wrongly here until they were checked:
-      #
-      #   * It does NOT go between packaging and upload. By then the .tar.gz and
-      #     its .sha256 already exist and contain the unsigned bundle. Signing,
-      #     notarising and stapling all happen inside scripts/package.sh and
-      #     scripts/macos-app-bundle.sh, before the tar. The step added here is
-      #     only the keychain setup that has to precede them.
-      #
-      #   * The guard cannot read `secrets` directly. The `secrets` context is
-      #     not available in `jobs.<id>.if` or `jobs.<id>.steps.if`; it IS
-      #     available in `env:`, and `env` IS available in `steps.if`. So:
-      #
-      #       env:                                  # job level
-      #         MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-      #       steps:
-      #         - name: Set up signing keychain (macOS)
-      #           if: runner.os == 'macOS' && env.MACOS_CERTIFICATE != ''
-      #           run: ...                          # docs/macos-signing.md §2.1
-      #
-      # Windows is the same shape in scripts/package.ps1: sign the .exe before
-      # zipping it, for the same reason the macOS hook sits before the tar.
+      # Windows signing is still future work, and is the same shape in
+      # scripts/package.ps1: sign the .exe before zipping it, for the same
+      # reason the macOS signing sits before the tar.
 
       - name: Upload archives
         uses: actions/upload-artifact@v7
@@ -320,6 +431,18 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
           retention-days: 7
+
+      # `always()`, because the whole point is that a failed build does not
+      # leave a decoded certificate or notarisation key on the runner. The
+      # .p12 is already gone — it is removed the moment it is imported — so this
+      # is the .p8, the keychain, and putting the search list back.
+      - name: Remove signing credentials (macOS)
+        if: always() && runner.os == 'macOS' && env.MACOS_CERTIFICATE != ''
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/dodo-cert.p12" "$RUNNER_TEMP/dodo-notary-key.p8"
+          security delete-keychain "$RUNNER_TEMP/dodo-signing.keychain-db" || true
+          security list-keychain -d user -s login.keychain-db || true
 
   # ---------------------------------------------------------------------------
   # Assemble, check, publish.
@@ -391,6 +514,12 @@ jobs:
         id: notes
         env:
           TAG: ${{ needs.meta.outputs.tag }}
+          # Resolved once in the `meta` job. The macOS paragraph is the one
+          # piece of the notes that depends on how the run was configured, and
+          # getting it wrong is worse than saying nothing: telling a user to
+          # clear quarantine on a notarised app is noise, and NOT telling them
+          # on an unsigned one is a download that will not open.
+          MACOS_SIGNED: ${{ needs.meta.outputs.macos_signed }}
         shell: bash
         run: |
           set -euo pipefail
@@ -408,13 +537,33 @@ jobs:
             echo
             echo "### macOS"
             echo
-            echo "The binaries are **not code-signed or notarised** yet, so Gatekeeper"
-            echo "will quarantine them. Clear it with:"
-            echo
-            echo '```sh'
-            echo "xattr -dr com.apple.quarantine dodo.app   # or the extracted binary"
-            echo '```'
-            echo
+            if [ "${MACOS_SIGNED:-false}" = "true" ]; then
+              echo "\`dodo.app\` is **code-signed with a Developer ID certificate, notarised by"
+              echo "Apple and stapled**, so it opens straight from Finder — no Gatekeeper"
+              echo "prompt and no \`xattr\` incantation."
+              echo
+              echo "The plain \`-macos-\` archive (the bare binary, for terminal users) is signed"
+              echo "and notarised too, but a bare executable is not a format a notarisation"
+              echo "ticket can be stapled to, so Gatekeeper checks it against Apple online the"
+              echo "first time it runs."
+              echo
+              echo "Check what you downloaded:"
+              echo
+              echo '```sh'
+              echo "codesign -dvvv dodo.app        # identity, team, hardened runtime"
+              echo "spctl --assess --type execute -v dodo.app"
+              echo "xcrun stapler validate dodo.app"
+              echo '```'
+              echo
+            else
+              echo "The binaries in this build are **not code-signed or notarised**, so"
+              echo "Gatekeeper will quarantine them. Clear it with:"
+              echo
+              echo '```sh'
+              echo "xattr -dr com.apple.quarantine dodo.app   # or the extracted binary"
+              echo '```'
+              echo
+            fi
             echo "### Build provenance"
             echo
             echo "Run \`dodo --build-info\` — every binary records the commit, tag,"

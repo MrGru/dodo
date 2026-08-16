@@ -966,25 +966,38 @@ the same reason nothing else here has ever run on Windows.
 
 ## Required GitHub Secrets
 
-**None today.** The release workflow uses only `${{ github.token }}`, which
-Actions provides automatically, and needs `contents: write` — granted narrowly
-on the `publish` job rather than workflow-wide.
+Beyond `${{ github.token }}`, which Actions provides automatically and which the
+`publish` job narrowly needs `contents: write` for, the release workflow reads
+**six macOS signing secrets**. All six are set on `MrGru/dodo`.
 
-The secrets below are for the future-readiness items in the next section. None
-of them is referenced by any workflow yet; adding one is what turns the
-corresponding commented-out step on. For the macOS rows,
-[docs/macos-signing.md](macos-signing.md) says where each value comes from, how
-to produce it (a `.p12` becomes `MACOS_CERTIFICATE` through `base64 -i`), and
-which three further names are needed if notarisation uses an App Store Connect
-API key instead of an app-specific password.
+**All six or none.** The workflow fails, naming the missing one, if
+`MACOS_CERTIFICATE` is set and any of the other five is not — a half-configured
+set otherwise produces failures that look like something else. With *none* of
+them set, which is what a fork gets, the macOS archives are ad-hoc signed
+exactly as they were before signing existed and the release notes say so. That
+path is not a fallback; it is the same code, guarded.
 
 | Secret | For | Notes |
 |---|---|---|
 | `MACOS_CERTIFICATE` | macOS signing | Developer ID Application cert, base64 `.p12` |
 | `MACOS_CERTIFICATE_PWD` | macOS signing | password for that `.p12` |
-| `MACOS_NOTARY_APPLE_ID` | notarisation | Apple ID with the Developer Program |
-| `MACOS_NOTARY_TEAM_ID` | notarisation | 10-character team identifier |
-| `MACOS_NOTARY_PASSWORD` | notarisation | app-specific password for `notarytool` |
+| `MACOS_NOTARY_TEAM_ID` | macOS signing | 10-character team identifier; this is what `codesign --sign` resolves the identity from |
+| `MACOS_NOTARY_API_KEY` | notarisation | base64 of the App Store Connect API key, `AuthKey_XXXXXXXXXX.p8` |
+| `MACOS_NOTARY_API_KEY_ID` | notarisation | the 10-character Key ID |
+| `MACOS_NOTARY_API_ISSUER_ID` | notarisation | the Issuer UUID; **required**, because dodo's key is a Team key |
+
+[docs/macos-signing.md](macos-signing.md) says where each value comes from and
+how to produce it (a `.p12` becomes `MACOS_CERTIFICATE` through `base64 -i`).
+Note that `MACOS_NOTARY_APPLE_ID` and `MACOS_NOTARY_PASSWORD` — the Apple ID and
+app-specific password route — are **not** used and **not** set: notarisation
+went with the App Store Connect API key, which is scoped and revocable on its
+own. Nothing in the tree reads those two names.
+
+The secrets below are for the future-readiness items in the next section. None
+of them is referenced by any workflow yet.
+
+| Secret | For | Notes |
+|---|---|---|
 | `WINDOWS_CERTIFICATE` | Windows signing | base64 `.pfx` |
 | `WINDOWS_CERTIFICATE_PWD` | Windows signing | password for that `.pfx` |
 | `SYMBOL_UPLOAD_TOKEN` | crash symbolication | whichever service ends up used |
@@ -993,26 +1006,25 @@ API key instead of an app-specific password.
 
 ## Future readiness
 
-Structured for, not implemented. Each entry says where the change goes.
+Structured for, not implemented. Each entry says where the change goes. The
+first entry is the exception, kept here because this is where people look for
+it: macOS signing *was* the flagship item in this section and is now done.
 
-**macOS code signing and notarisation.** [docs/macos-signing.md](macos-signing.md)
-is the authority and is written for the moment the decision is taken: what the
-repo owner must personally buy and create, the secrets by exact name and how to
-produce each value, the entitlements (dodo needs none, and neither will the
-input-method bundle), the ordering constraints, and what breaks. In summary:
-`scripts/macos-app-bundle.sh` ends with the `codesign` / `notarytool` /
-`stapler` sequence as a comment, and that is where it happens — **inside**
-packaging, before `scripts/package.sh` tars the bundle and checksums it, not
-"between packaging and upload" as this section used to say (the published
-SHA-256 is computed from that archive). The `release.yml` guard cannot read
-`secrets` in an `if:`; it reads an `env:` set from the secret at job level.
-Until then archives are unsigned and Gatekeeper quarantines them; the generated
-release notes tell users to run `xattr -dr com.apple.quarantine`. Signing is a
-user-experience purchase — an unsigned dodo, and an unsigned input method, both
-run today.
+**macOS code signing and notarisation — no longer future work.** It is
+implemented and lives inside packaging: `scripts/package.sh` signs and notarises
+the staged plain binary, `scripts/macos-app-bundle.sh` signs the bundle
+inside-out then notarises and staples it, and both run **before** the `tar` and
+its checksum, because the published SHA-256 and the `update.json` entry are
+computed from that archive. The workflow's only job is the temporary keychain.
+[docs/macos-signing.md](macos-signing.md) remains the authority on every part of
+it, and its §8 lists what signing did *not* buy. **It has never run against
+Apple** — the first tagged release with the secrets in place is its first real
+exercise. Nothing about the unsigned path changed: with no secrets the archives
+are ad-hoc signed and the release notes still say to run
+`xattr -dr com.apple.quarantine`.
 
-**Windows code signing.** Same shape, in `scripts/package.ps1` — sign the
-`.exe` *before* zipping it.
+**Windows code signing.** Still future work. Same shape as the macOS half, in
+`scripts/package.ps1` — sign the `.exe` *before* zipping it.
 
 **MSI.** Would be built from the signed `.exe` with WiX or `cargo-wix`, as an
 extra asset alongside the ZIP, never as a replacement for it.
@@ -1156,5 +1168,10 @@ installed copies; the CI job installs a current one. It is a tool problem, not a
 finding about dodo.
 
 **The macOS download will not open** ("dodo is damaged and can't be opened") —
-the binaries are unsigned, so Gatekeeper quarantines them:
-`xattr -dr com.apple.quarantine dodo.app`.
+that means the build was not signed, which is what a fork or any run without the
+six macOS secrets produces. Gatekeeper quarantines it:
+`xattr -dr com.apple.quarantine dodo.app`. On an official release the archives
+are signed, notarised and (for `dodo.app`) stapled, so the message should not
+appear at all — if it does on an official download, check the release run's
+`Verify archives` step, which fails on a Developer ID bundle whose notarisation
+ticket did not survive packaging.

@@ -5,6 +5,8 @@
 #   scripts/macos-app-bundle.sh --binary <path> [--version <v>] [--out <dir>]
 #                               [--input-method <path-to-.app>]
 #                               [--sign <identity>]
+#                               [--notary-key <path-to-.p8>]
+#                               [--notary-key-id <id>] [--notary-issuer <uuid>]
 #
 # Layout produced (the minimum macOS accepts for a GUI app):
 #
@@ -16,9 +18,17 @@
 #   dodo.app/Contents/Helpers/Dodo Vietnamese.app     (only with --input-method)
 #
 # Signing: by default the bundle is ad-hoc signed (--sign -) so it is valid for
-# local use. Pass --sign "Developer ID Application: Name (TEAMID)" for a real
-# identity. When --input-method is provided, the nested bundle is signed first
-# (inside-out), then the outer dodo.app, both with the same identity.
+# local use. Pass --sign "Developer ID Application: Name (TEAMID)" — or just the
+# Team ID, which codesign resolves — for a real identity. When --input-method is
+# provided, the nested bundle is signed first (inside-out), then the outer
+# dodo.app, both with the same identity.
+#
+# Notarisation happens here too, and only when a real identity AND all three
+# --notary-* values are given: an ad-hoc bundle is what a local build and a fork
+# without secrets produce, and the notary service would reject it anyway.
+# docs/macos-signing.md is the authority — §4.1 for the ordering, §4.2 for why
+# these steps live inside this script rather than in the workflow, §2 for where
+# the App Store Connect API key values come from.
 
 set -euo pipefail
 
@@ -29,6 +39,9 @@ version=""
 out_dir="$repo_root/dist"
 input_method=""
 sign_identity="-"  # ad-hoc by default
+notary_key=""
+notary_key_id=""
+notary_issuer=""
 
 die() {
     printf 'macos-app-bundle.sh: %s\n' "$1" >&2
@@ -42,13 +55,25 @@ while [ $# -gt 0 ]; do
         --out) out_dir="${2:?--out needs a value}"; shift 2 ;;
         --input-method) input_method="${2:?--input-method needs a value}"; shift 2 ;;
         --sign) sign_identity="${2:?--sign needs a value}"; shift 2 ;;
-        -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --notary-key) notary_key="${2:?--notary-key needs a value}"; shift 2 ;;
+        --notary-key-id) notary_key_id="${2:?--notary-key-id needs a value}"; shift 2 ;;
+        --notary-issuer) notary_issuer="${2:?--notary-issuer needs a value}"; shift 2 ;;
+        -h|--help) sed -n '2,33p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
 done
 
 [ -n "$binary" ] || die "--binary is required"
 [ -f "$binary" ] || die "no such binary: $binary"
+
+# Checked before anything is assembled: a credential mistake should not cost a
+# whole bundle build and a signing round trip to discover.
+if [ "$sign_identity" = "-" ] && [ -n "$notary_key$notary_key_id$notary_issuer" ]; then
+    die "--notary-* needs a real --sign identity; the ad-hoc one (-) cannot be notarised"
+fi
+if [ -n "$notary_key" ]; then
+    [ -f "$notary_key" ] || die "no such App Store Connect API key: $notary_key"
+fi
 
 if [ -z "$version" ]; then
     version="$(awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version *=/{gsub(/[",]/,"",$3); print $3; exit}' "$repo_root/Cargo.toml")"
@@ -174,32 +199,84 @@ printf 'signing %s with identity: %s\n' "$app" "$sign_identity"
 codesign --force --options runtime --timestamp --sign "$sign_identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app" || die "outer bundle signature verification failed"
 
-# --- Future: notarisation and stapling -----------------------------------
+# --- notarisation and stapling ---------------------------------------------
 #
-# Notarisation still requires an Apple Developer Program membership and is not
-# implemented here. When it is, the steps (recorded in docs/macos-signing.md §4)
-# are:
+# This happens HERE, before scripts/package.sh tars the bundle and checksums it:
+# the published SHA-256 and the update.json entry are computed from that
+# archive, so anything done to dodo.app afterwards is invisible to the release
+# (docs/macos-signing.md §4.1, constraint 3).
 #
-#   1. Import the Developer ID Application certificate into a temporary
-#      keychain (secrets: MACOS_CERTIFICATE, MACOS_CERTIFICATE_PWD). The step
-#      everyone forgets is `security set-key-partition-list`; without it
-#      codesign blocks on a dialog no runner can click.
-#   2. The signing above (inside-out, --options runtime --timestamp) is already
-#      done — notarisation requires the hardened runtime and a secure timestamp.
-#   3. Zip the bundle with `ditto -c -k --keepParent` into a TEMPORARY file —
-#      notarytool takes a zip/dmg/pkg, never a tar.gz — and submit:
-#      xcrun notarytool submit --wait ...   (credentials: docs/macos-signing.md §2)
-#   4. xcrun stapler staple "$app", so the ticket travels with the download.
-#      Nothing may re-sign the bundle after this; that invalidates the ticket.
-#   5. Verify: codesign --verify --deep --strict --verbose=2 "$app"
-#              spctl --assess --type execute "$app"
-#              xcrun stapler validate "$app"
-#      (`--deep` IS still correct for verification.)
-#
-# All five happen HERE, before package.sh tars the bundle and checksums it —
-# the published SHA-256 and update.json entry are computed from that archive,
-# so anything done to dodo.app afterwards is invisible to the release.
-#
-# Until notarisation is implemented the archive is ad-hoc signed only;
-# Gatekeeper will quarantine it and the release notes tell users to clear
-# that themselves (docs/release.md).
+# The keychain the identity comes from is set up by the release workflow, not
+# here — `security set-key-partition-list` is the step everyone forgets, and
+# without it codesign blocks on a dialog no runner can click.
+if [ "$sign_identity" = "-" ]; then
+    # The unsigned path, and the one every local build and every fork without
+    # secrets takes. The bundle is complete and valid; Gatekeeper will
+    # quarantine the download and the release notes say how to clear that.
+    printf 'ad-hoc signed; not notarised (needs --sign plus --notary-key, --notary-key-id, --notary-issuer)\n'
+elif [ -z "$notary_key" ] || [ -z "$notary_key_id" ] || [ -z "$notary_issuer" ]; then
+    # Deliberately a warning rather than an error: a real signature without a
+    # ticket is still a step up from ad-hoc, and rehearsing signing alone is a
+    # legitimate thing to do by hand.
+    printf 'WARNING: signed with %s but NOT notarised — all three --notary-* values are required\n' "$sign_identity" >&2
+else
+    # The notary service takes a zip, a UDIF disk image or a flat installer
+    # package — never a .tar.gz, which is what dodo actually ships. So this zip
+    # is built for Apple and thrown away; the published artifact stays
+    # dodo-vX-macos-<arch>-app.tar.gz, because tools/update-manifest selects the
+    # macOS entry by exact filename and asserts that URL (docs/macos-signing.md
+    # §4.2). Do not "simplify" this zip into being the release asset.
+    #
+    # `ditto -c -k --keepParent` is the documented way to build it: it keeps the
+    # dodo.app directory itself as the archive root, which is what the notary
+    # service expects to find a bundle in.
+    notary_tmp="$(mktemp -d)"
+    trap 'rm -rf "$notary_tmp"' EXIT
+    notary_zip="$notary_tmp/dodo-notarize.zip"
+    ditto -c -k --keepParent "$app" "$notary_zip"
+
+    # --wait blocks until Apple returns a terminal status. Without it the ticket
+    # would not exist yet when stapler runs, which is the "Error 65" everyone
+    # hits. It has no upper bound, which is what the macOS release job's timeout
+    # has to accommodate.
+    #
+    # --issuer is REQUIRED for a Team API key and must NOT be passed for an
+    # Individual one (docs/macos-signing.md §1.4). dodo's key is a Team key, so
+    # this is unconditional rather than "add it if authentication fails".
+    printf 'notarising %s\n' "$app"
+    notary_log="$notary_tmp/notarytool.txt"
+    xcrun notarytool submit "$notary_zip" \
+        --key "$notary_key" \
+        --key-id "$notary_key_id" \
+        --issuer "$notary_issuer" \
+        --wait 2>&1 | tee "$notary_log"
+
+    # Checked rather than trusted to the exit status: notarytool has shipped
+    # versions that exit 0 having reported `status: Invalid`, and an unnoticed
+    # Invalid produces an archive that fails at the user rather than here.
+    submission_id="$(awk '/^ *id: /{print $2; exit}' "$notary_log")"
+    grep -qE '^ *status: Accepted' "$notary_log" \
+        || die "notarisation was not accepted (submission $submission_id); read the reason with:
+    xcrun notarytool log $submission_id --key <key.p8> --key-id <id> --issuer <uuid>"
+
+    # Staple, so the ticket travels inside the bundle and Gatekeeper does not
+    # have to reach Apple on first launch. NOTHING may re-sign the bundle after
+    # this line — code-signing a stapled bundle silently invalidates the ticket
+    # (`man stapler`).
+    xcrun stapler staple "$app"
+
+    rm -rf "$notary_tmp"
+    trap - EXIT
+
+    # Three checks, because each catches something the others do not: that the
+    # signature still verifies with the ticket attached, that Gatekeeper's own
+    # policy engine now accepts the bundle, and that the ticket is really there.
+    # `--deep` is deprecated for *signing* only; it is still correct here.
+    codesign --verify --deep --strict --verbose=2 "$app" \
+        || die "signature verification failed after stapling"
+    spctl --assess --type execute --verbose=4 "$app" \
+        || die "Gatekeeper rejected the notarised bundle"
+    xcrun stapler validate "$app" \
+        || die "no valid stapled notarisation ticket on $app"
+    printf 'notarised and stapled %s\n' "$app"
+fi

@@ -7,20 +7,22 @@ description: How dodo is built, packaged, licensed and released - the in-app upd
 it: `docs/build-optimization.md` (release profile, the measured before/after size table, linker
 findings, the dependency report, startup review, and the measured verdict on splitting the binary
 into crates), `docs/release.md` (CI, the release workflow, packaging, verification, the application
-icon, the in-app updater) and `docs/macos-signing.md` (signing and notarisation as a *procurement*
-document: what the repo owner must personally buy or create, the secrets by exact name, the
-entitlements — dodo needs none, and neither does the input-method bundle — and the ordering).
+icon, the in-app updater) and `docs/macos-signing.md` (the authority on signing and notarisation:
+what the repo owner had to buy or create, the secrets by exact name, the entitlements — dodo needs
+none, and neither does the input-method bundle — the ordering, and §8's list of what is still owed).
 The rest is `Cargo.toml`'s `[profile.*]` comments, `build.rs`, `scripts/` and `.github/`.
 
-**dodo is unsigned on every platform today, and that is a decision the captain made on
-2026-08-08**: signing waits, but must stay reachable, which is what `docs/macos-signing.md` keeps
-true. Three things in it are corrections to plans that were recorded wrongly and would have cost a
-release each — signing happens **inside** `scripts/package.sh` / `macos-app-bundle.sh`, before the
-tar, because the published SHA-256 and `update.json` entry are computed from that archive; a
-workflow `if:` **cannot read `secrets`**, it reads an `env:` set from one at job level; and
-`codesign --deep` is deprecated for *signing* while remaining correct for verifying, so nested
-bundles are signed inside-out, one call each. Signing is a user-experience purchase, not an
-enablement one: an unsigned dodo and an unsigned input method both run today.
+**macOS signing and notarisation are implemented; Windows and Linux are still unsigned.** The six
+`MACOS_*` secrets exist on `MrGru/dodo` and the plumbing is in the tree — but **no release run has
+exercised it**, so treat every claim about the signed path as unverified until one does. Three
+things that would have cost a release each: signing happens **inside** `scripts/package.sh` /
+`macos-app-bundle.sh`, before the tar, because the published SHA-256 and `update.json` entry are
+computed from that archive; a workflow `if:` **cannot read `secrets`**, it reads an `env:` set from
+one at job level; and `codesign --deep` is deprecated for *signing* while remaining correct for
+verifying, so nested bundles are signed inside-out, one call each. Two consequences worth knowing
+before touching either script: with no secrets everything ad-hoc signs exactly as before (that
+path must stay working — it is what a fork gets), and a signed `-app.tar.gz` is **no longer
+byte-reproducible** across runs of the same tag, by design.
 
 ## The in-app updater
 
