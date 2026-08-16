@@ -1764,6 +1764,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dodo-flow"
+version = "0.1.0"
+dependencies = [
+ "dodo-paths",
+ "gpui",
+ "gpui-component",
+ "gpui-component-assets",
+ "gpui_platform",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dodo-i18n"
 version = "0.1.0"
 dependencies = [

@@ -1,7 +1,7 @@
 # The workspace: which shape a new crate takes
 
 The repo is a cargo workspace. It gained `[workspace]` on 2026-08-08, when the input-method engine
-moved to `crates/dodo-ime-core/`, and `cargo metadata --no-deps` at the root now lists seventeen
+moved to `crates/dodo-ime-core/`, and `cargo metadata --no-deps` at the root now lists eighteen
 packages. The root `Cargo.toml`'s header comments are the authority on the rules; this page is why
 they say what they say.
 
@@ -61,9 +61,11 @@ a build script to re-derive them.
 
 ## Feature crates: one whole tool, lifted out in one piece
 
-A kernel crate is code many tools share; a feature crate is one tool of the app. There are eight,
-all extracted during 2026-08-15, and `crates/dodo-cleaner` is the worked example — 93 files, 25,646
-lines, the largest feature dodo has.
+A kernel crate is code many tools share; a feature crate is one tool of the app. There are nine.
+Eight were extracted from the binary during 2026-08-15, and `crates/dodo-cleaner` is the worked
+example — 93 files, 25,646 lines, the largest feature dodo has. The ninth, `crates/dodo-flow`, is
+the first that was **born** a crate: by 2026-08-16 the eight above were themselves the architectural
+reason to be one, so the seam test below was applied to a design rather than to existing code.
 
 The larger ones share one internal shape: `models/` (plain data, no GPUI, unit tested), `services/`
 (**the only layer that names outside-world crates**), `state/`, `components/` and `views/`. A new
@@ -103,7 +105,7 @@ The conventions:
   updater**, so dodo names no HTTP client either.
 - **`src/i18n_lint.rs` reaches across** with `include_str!("../crates/<crate>/src/views/…")`, so a
   moved view is still scanned for untranslated literals from the binary's tests.
-- **A feature crate earns a launcher, and the launcher is an `examples/` target.** Six of the eight
+- **A feature crate earns a launcher, and the launcher is an `examples/` target.** Seven of the nine
   have one — the four stateful tools mount the real view against the real machine and the real
   `data_dir()`; the JSON formatter and Encoder/Decoder are stateless, and the updater and input
   method have none, one being a dialog over the app and the other reading a file another process
@@ -115,7 +117,7 @@ The conventions:
   state and never paint, and an asset source, or every `icons/<name>.svg` resolves to nothing. Keep
   it to a screenful. README's "Running one feature on its own" has the exact commands.
 
-### The eight, and what each one proved
+### The nine, and what each one proved
 
 | Crate | Size | Inbound surface | What left the root manifest |
 |---|---|---|---|
@@ -127,10 +129,11 @@ The conventions:
 | `dodo-input-method` | — | `InputMethod`, `init`, `load`, `views::InputMethodView` | — |
 | `dodo-json-formatter` | 1 file | the tool table | — |
 | `dodo-encoder-decoder` | 1 file | the tool table, `Format` | `percent-encoding` (`base64` stayed: quick navigation's detector uses it) |
+| `dodo-flow` | in progress | none yet — the tool table row lands once the canvas is usable | — (born a crate) |
 
 Three of them are worth a sentence beyond the table. **`dodo-database` is where the "what the binary
 names" rule was decided** rather than a uniform `pub(crate)` sweep. **`dodo-api-explorer` has the
-widest inbound surface of the eight**, which is what leaves both `models` and `services` public, and
+widest inbound surface of them**, which is what leaves both `models` and `services` public, and
 extracting it took the binary's own test count from 976 to 477. And **`dodo-updater` is the one that
 shows what to do when a feature needs something only a binary is given**: `init` *takes*
 `VERSION_INFO.version` and `.target`, its own `build_info` module falls back to `CARGO_PKG_VERSION`

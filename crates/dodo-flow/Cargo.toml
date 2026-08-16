@@ -1,0 +1,53 @@
+[package]
+name = "dodo-flow"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "dodo's Flow Canvas: the infinite-canvas document model, the world/screen transform, the per-platform render budgets and the canvas view."
+
+# The list is short because this slice is the engine's pure core plus an empty
+# themed pane. `lib.rs` explains the phase sequence; the deliberate absences
+# are as much a decision as the presences:
+#
+# - **No `dodo-i18n`, no `dodo-app-icon`.** The canvas shows no user-visible
+#   string and draws no icon until the sidebar row wires it into the app.
+#   Adding either now would be a dependency with no reason, and this file's whole
+#   convention is that every dependency carries its reason.
+# - **No `criterion`.** dodo has no bench harness and is deliberate about every
+#   package in the graph (`deny.toml`, `THIRD-PARTY-NOTICES.md`). The benchmark
+#   is an `examples/flow_bench.rs` printing `Instant` timings.
+[dependencies]
+# `HostOs`, which `budgets` treats as a *parameter* rather than a `cfg` split,
+# so every platform's render ceiling and LOD ladder is asserted from whichever
+# platform you are on — the point of the invariant in the root `AGENTS.md`, and
+# the reason `budgets::for_host` takes a `HostOs` while `budgets::current()` is
+# the one place that reads `cfg!`. Two of dodo's four release targets cannot be
+# built from a Mac at all, so an answer expressed as a `#[cfg]` item would be an
+# answer nobody here can compile.
+dodo-paths = { path = "../dodo-paths" }
+# Only the files under `views/` may name these two. `models/` and `geometry/` —
+# the document, the taxonomy, the styles, the versioned format and every
+# world<->screen formula — are gpui-free on purpose and are unit tested with no
+# `App` and no window. That boundary is what makes the engine testable, and
+# `lib.rs` records why it is very hard to recover once lost.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+# The versioned document format (`models::serialization`). `serde_json`'s
+# `Value` is also the migration ladder's currency: a step rewrites the parsed
+# JSON of an older version, so a migration never has to keep a copy of a
+# retired Rust struct alive.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+# `examples/flow.rs` only: the application runner and the component library's
+# fallback icons, exactly as every other feature crate's launcher takes them.
+# Keeping both here leaves the shipped app's dependency graph unchanged.
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
+    "font-kit",
+] }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+
+[[example]]
+name = "flow"
+path = "examples/flow.rs"
