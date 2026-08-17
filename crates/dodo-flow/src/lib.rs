@@ -37,11 +37,14 @@
 //! render/painter.rs     gpui  (the only painter) <- may name a UI framework
 //! ────────────────────────────────────────────
 //! render/plan.rs        the paint-order contract
-//! render/shapes.rs      the four shapes as outlines
+//! render/shapes.rs      the shapes as outlines
+//! render/edges.rs       routes and markers as primitives
 //! render/grid.rs        the viewport-generated grid
 //! interaction/state.rs  the interaction state machine
-//! models/               the document, serde       no UI framework, no `App`,
-//! geometry/             world<->screen, bounds    no window, unit tested
+//! runtime/              the graph engine: stores,  no UI framework, no `App`,
+//!                       adjacency, dirty, routes   no window, unit tested
+//! models/               the document, serde
+//! geometry/             world<->screen, routing
 //! budgets.rs            the platform's ceilings
 //! ```
 //!
@@ -100,19 +103,50 @@
 //! - [`views`] — pan, zoom and box selection wired to real input, repainting on
 //!   change and never on a clock.
 //!
-//! Still to come, in roughly this order: `runtime/` (the SoA node and edge
-//! stores, the adjacency index and dirty tracking), `spatial/` (the uniform
-//! grid and its viewport, box-select and hit-test queries), the geometry cache,
+//! # What the third slice added: the graph engine
+//!
+//! - [`runtime`] — §17's SoA stores, §20's adjacency index, §19's dirty
+//!   tracking, §4's handles and connection rules, §29's narrow-phase hit test,
+//!   and [`runtime::GraphWorld`] holding them together.
+//! - [`geometry::route`] — §8's five routings as derived world-space geometry;
+//!   [`geometry::arrow`] — its endpoint decorations.
+//! - [`render::edges`] — the one crossing from a world-space route to
+//!   screen-space primitives, markers included.
+//! - [`interaction`] — `DraggingNode` and `Connecting`, so one press means a
+//!   pan, a box selection, a node drag or a connection depending on what it
+//!   landed on.
+//!
+//! **The rule the whole engine exists for**, from §19: moving a node updates
+//! that node, marks its render transform dirty, queues one spatial update,
+//! finds its incident edges *through the adjacency index* and marks only those
+//! edge geometries. `runtime::world`'s
+//! `moving_one_node_in_a_huge_graph_rebuilds_only_its_own_edges` asserts it on
+//! 100,000 nodes and 500,000 edges; measured on the M1, that move costs **0.17
+//! µs against 0.18 µs in a graph a hundred times smaller**, which is the claim
+//! stated as a number rather than as a diagram. `examples/flow_graph_bench.rs`
+//! prints it, and answers §20's "benchmark the representation" while it is
+//! there.
+//!
+//! Still to come, in roughly this order: `spatial/` (the uniform grid and its
+//! viewport, box-select and hit-test queries), the tessellation cache,
 //! `commands/` and `components/`, then the sidebar row and its translated
 //! strings. Nothing is stubbed for them here; the seams are the module
 //! boundaries.
 //!
-//! **Two absences in the second slice are deliberate and load-bearing.** There
-//! is no culling — §40 rule 1 forbids scanning every element to find the
-//! visible ones, and a linear scan written here to fake it would be the thing
-//! nobody remembered to delete once `spatial/` arrived. And a committed box
-//! selection yields a world rectangle and stops, for the same reason: resolving
-//! it into elements is the spatial index's broad phase (§28).
+//! **Three absences are deliberate and load-bearing.** There is no culling —
+//! §40 rule 1 forbids scanning every element to find the visible ones, and a
+//! linear scan written here to fake it would be the thing nobody remembered to
+//! delete once `spatial/` arrived. A committed box selection yields a world
+//! rectangle and stops, for the same reason: resolving it into elements is the
+//! spatial index's broad phase (§28). And **nothing is ever removed** from a
+//! store — an index is a slot number, so removal is either a tombstone or a
+//! swap-remove, and which one is right is decided by the undo history (§30)
+//! that has to restore it, which is Phase 7's.
+//!
+//! The hit test is the one place this could have been fudged and was not:
+//! [`runtime::GraphWorld::hit_test`] takes its candidate set **as an
+//! argument**, so today's launcher passes every node and Phase 4 passes a
+//! spatial query. There is nothing to delete, only an argument to change.
 //!
 //! # Where the budget numbers come from, and what they are not
 //!
@@ -160,6 +194,7 @@ pub use geometry::{Rect, Vec2, Viewport};
 pub use interaction::{InteractionEffect, InteractionEvent, InteractionMachine, InteractionState};
 pub use models::{ElementId, ElementKind, FlowDocument};
 pub use render::{GridSettings, GridStyle, PaintPlan, PaintStats};
+pub use runtime::{ConnectionRules, EdgeEnd, GraphWorld, NodeSpec, PointerTarget};
 pub use views::FlowView;
 
 #[cfg(test)]
@@ -173,7 +208,9 @@ mod tests {
     const PURE_FILES: &[(&str, &str)] = &[
         ("budgets.rs", include_str!("budgets.rs")),
         ("geometry/mod.rs", include_str!("geometry/mod.rs")),
+        ("geometry/arrow.rs", include_str!("geometry/arrow.rs")),
         ("geometry/bounds.rs", include_str!("geometry/bounds.rs")),
+        ("geometry/route.rs", include_str!("geometry/route.rs")),
         (
             "geometry/transform.rs",
             include_str!("geometry/transform.rs"),
@@ -188,12 +225,27 @@ mod tests {
             include_str!("models/serialization.rs"),
         ),
         ("models/style.rs", include_str!("models/style.rs")),
+        ("render/edges.rs", include_str!("render/edges.rs")),
         ("render/grid.rs", include_str!("render/grid.rs")),
         ("render/mod.rs", include_str!("render/mod.rs")),
         ("render/plan.rs", include_str!("render/plan.rs")),
         ("render/shapes.rs", include_str!("render/shapes.rs")),
         ("interaction/mod.rs", include_str!("interaction/mod.rs")),
         ("interaction/state.rs", include_str!("interaction/state.rs")),
+        ("runtime/mod.rs", include_str!("runtime/mod.rs")),
+        ("runtime/adjacency.rs", include_str!("runtime/adjacency.rs")),
+        ("runtime/compact.rs", include_str!("runtime/compact.rs")),
+        (
+            "runtime/connection.rs",
+            include_str!("runtime/connection.rs"),
+        ),
+        ("runtime/dirty.rs", include_str!("runtime/dirty.rs")),
+        ("runtime/edges.rs", include_str!("runtime/edges.rs")),
+        ("runtime/handles.rs", include_str!("runtime/handles.rs")),
+        ("runtime/hit.rs", include_str!("runtime/hit.rs")),
+        ("runtime/nodes.rs", include_str!("runtime/nodes.rs")),
+        ("runtime/routes.rs", include_str!("runtime/routes.rs")),
+        ("runtime/world.rs", include_str!("runtime/world.rs")),
     ];
 
     /// **The crate's central invariant, enforced rather than remembered.**

@@ -11,15 +11,12 @@
 //! # Why four, and why inline at all
 //!
 //! §20 also says the representation must be **benchmarked rather than
-//! asserted**, and `examples/flow_graph_bench.rs` is where that happens: it
-//! builds the 100,000-node / 500,000-edge graph from §19 twice, once with this
-//! and once with `Vec<Vec<u32>>`, and prints build time, incident-lookup time
-//! and resident memory for both. The numbers it printed on the machine of
-//! record are in [`crate::runtime::adjacency`]'s module doc. The short version:
-//! the inline form wins on build time by a wide margin, because the `Vec` form
-//! pays one `malloc` per node per direction — 200,000 allocations for a graph
-//! whose *average* degree is five, i.e. one allocation per list that four
-//! inline slots would have covered.
+//! asserted**, and `examples/flow_graph_bench.rs` is where that happens.
+//! [`crate::runtime::adjacency`]'s module doc holds the measured table and what
+//! it changed; the short version is that the inline slots are worth 2.7× on
+//! build time and 200,000 fewer allocations **on a realistically sparse graph**,
+//! are worth nothing at all at §19's stress density where every list spills
+//! anyway, and make no difference to the walk in either case.
 //!
 //! **This file names no UI framework.**
 

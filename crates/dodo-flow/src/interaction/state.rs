@@ -625,6 +625,368 @@ mod tests {
         }
     }
 
+    // ---- node dragging (§19, §25) ---------------------------------------
+
+    /// A press on a node body drags it. The deltas are **world** deltas and
+    /// they add up to the total travel, which is what `GraphWorld::move_node`
+    /// consumes one at a time.
+    #[test]
+    fn a_press_on_a_node_drags_it_by_the_pointers_own_delta() {
+        let mut machine = InteractionMachine::new();
+
+        let begin = machine.handle(down_on(PointerButton::Left, PointerTarget::Node(NODE)));
+        assert_eq!(begin, InteractionEffect::BeginNodeDrag(NODE));
+        assert_eq!(machine.dragging_node(), Some(NODE));
+        assert!(begin.starts_a_drag(), "the pointer has to be captured");
+
+        // The press was at world (10, 10); each move contributes its own step.
+        let first = machine.handle(move_to(Vec2::ZERO, Vec2::new(30.0, 10.0)));
+        let second = machine.handle(move_to(Vec2::ZERO, Vec2::new(30.0, 40.0)));
+
+        assert_eq!(
+            first,
+            InteractionEffect::DragNodeBy {
+                node: NODE,
+                delta: Vec2::new(20.0, 0.0)
+            }
+        );
+        assert_eq!(
+            second,
+            InteractionEffect::DragNodeBy {
+                node: NODE,
+                delta: Vec2::new(0.0, 30.0)
+            }
+        );
+    }
+
+    /// A press and release that never travelled is a *click*, not a
+    /// zero-length drag — the distinction Phase 7's undo history needs.
+    #[test]
+    fn a_drag_that_never_moved_reports_itself_as_a_click() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(down_on(PointerButton::Left, PointerTarget::Node(NODE)));
+
+        let end = machine.handle(up(PointerButton::Left));
+
+        assert_eq!(
+            end,
+            InteractionEffect::EndNodeDrag {
+                node: NODE,
+                moved: false
+            }
+        );
+        assert!(machine.is_idle());
+        assert_eq!(machine.dragging_node(), None);
+    }
+
+    #[test]
+    fn a_drag_that_moved_says_so_when_it_ends() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(down_on(PointerButton::Left, PointerTarget::Node(NODE)));
+        machine.handle(move_to(Vec2::ZERO, Vec2::new(40.0, 10.0)));
+
+        assert_eq!(
+            machine.handle(up(PointerButton::Left)),
+            InteractionEffect::EndNodeDrag {
+                node: NODE,
+                moved: true
+            }
+        );
+    }
+
+    /// **Cancel puts the node back exactly.** The revert is the negated total
+    /// travel, however many moves it took to get there — so `Esc` mid-drag is
+    /// lossless rather than approximately lossless.
+    #[test]
+    fn cancelling_a_drag_reverts_the_whole_travel_in_one_delta() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(down_on(PointerButton::Left, PointerTarget::Node(NODE)));
+        machine.handle(move_to(Vec2::ZERO, Vec2::new(30.0, 10.0)));
+        machine.handle(move_to(Vec2::ZERO, Vec2::new(30.0, 55.0)));
+        machine.handle(move_to(Vec2::ZERO, Vec2::new(12.0, 55.0)));
+
+        assert_eq!(
+            machine.handle(InteractionEvent::Cancel),
+            InteractionEffect::CancelNodeDrag {
+                node: NODE,
+                // Pressed at (10, 10), ended at (12, 55): travelled (2, 45).
+                revert: Vec2::new(-2.0, -45.0)
+            }
+        );
+        assert!(machine.is_idle());
+    }
+
+    /// A locked node reads as empty canvas to the caller, so this is the
+    /// caller's decision and not the machine's — but a press on a node while
+    /// the pan key is held must still pan, because that binding wins.
+    #[test]
+    fn the_pan_key_wins_over_whatever_is_under_the_pointer() {
+        let mut machine = InteractionMachine::new();
+
+        let effect = machine.handle(InteractionEvent::PointerDown {
+            screen: Vec2::ZERO,
+            world: Vec2::ZERO,
+            button: PointerButton::Left,
+            modifiers: InputModifiers::NONE,
+            pan_key_held: true,
+            target: PointerTarget::Node(NODE),
+        });
+
+        assert_eq!(effect, InteractionEffect::BeginPan);
+        assert!(machine.is_panning());
+    }
+
+    /// A middle press pans wherever it lands. Dragging the canvas out from
+    /// under a node is a pan, not a node drag.
+    #[test]
+    fn a_middle_press_on_a_node_still_pans() {
+        let mut machine = InteractionMachine::new();
+
+        let effect = machine.handle(down_on(PointerButton::Middle, PointerTarget::Node(NODE)));
+
+        assert_eq!(effect, InteractionEffect::BeginPan);
+    }
+
+    /// **The gesture and the propagation rule, end to end.**
+    ///
+    /// Every other test here checks a transition and every test in
+    /// `runtime::world` checks the invalidation; this is the seam between them,
+    /// which is the part a screenshot cannot verify and an interactive check
+    /// would only verify once. A press on a node, three moves, a release — and
+    /// the only routes rebuilt are the dragged node's own.
+    #[test]
+    fn dragging_a_node_through_the_machine_reroutes_only_its_own_edges() {
+        use crate::{
+            geometry::Vec2 as V,
+            models::{ElementKind, GraphNodeKind},
+            runtime::{EdgeEnd, GraphWorld},
+        };
+
+        let mut world = GraphWorld::new();
+        let node = |world: &mut GraphWorld, x: f32| {
+            world.create_node(
+                ElementKind::GraphNode(GraphNodeKind::Default),
+                V::new(x, 0.0),
+                V::new(160.0, 60.0),
+            )
+        };
+        let dragged = node(&mut world, 0.0);
+        let neighbour = node(&mut world, 400.0);
+        let bystander_a = node(&mut world, 800.0);
+        let bystander_b = node(&mut world, 1_200.0);
+
+        world
+            .connect(EdgeEnd::node(dragged), EdgeEnd::node(neighbour))
+            .expect("valid");
+        let untouched = world
+            .connect(EdgeEnd::node(bystander_a), EdgeEnd::node(bystander_b))
+            .expect("valid");
+        world.rebuild_all_geometry();
+        world.dirty_mut().clear_all();
+
+        let before = world.geometry().rebuild_count();
+        let start = world.nodes().position(dragged);
+
+        let mut machine = InteractionMachine::new();
+        let mut effects = vec![machine.handle(InteractionEvent::PointerDown {
+            screen: Vec2::ZERO,
+            world: V::new(10.0, 10.0),
+            button: PointerButton::Left,
+            modifiers: InputModifiers::NONE,
+            pan_key_held: false,
+            target: PointerTarget::Node(dragged),
+        })];
+        for step in 1..=3 {
+            effects
+                .push(machine.handle(move_to(Vec2::ZERO, V::new(10.0 + step as f32 * 15.0, 10.0))));
+        }
+        effects.push(machine.handle(up(PointerButton::Left)));
+
+        // The view's `apply`, in miniature: the only effect that touches the
+        // world is the move, and it goes straight to `GraphWorld::move_node`.
+        for effect in effects {
+            if let InteractionEffect::DragNodeBy { node, delta } = effect {
+                world.move_node(node, delta);
+            }
+        }
+
+        assert_eq!(
+            world.nodes().position(dragged),
+            start + V::new(45.0, 0.0),
+            "the node ends where the pointer left it"
+        );
+        assert_eq!(world.dirty().dirty_edges().len(), 1);
+        assert_eq!(world.dirty().spatial_updates(), &[dragged]);
+        assert!(
+            world.geometry().is_valid(untouched),
+            "an edge between two other nodes was never invalidated"
+        );
+        assert_eq!(world.rebuild_dirty_geometry(), 1);
+        assert_eq!(world.geometry().rebuild_count() - before, 1);
+    }
+
+    // ---- connecting (§4, §8) --------------------------------------------
+
+    /// A press on a **handle** starts a connection rather than a drag — the
+    /// specificity order that lets one button mean four gestures.
+    #[test]
+    fn a_press_on_a_handle_starts_a_connection_rather_than_a_drag() {
+        let mut machine = InteractionMachine::new();
+
+        let effect = machine.handle(down_on(
+            PointerButton::Left,
+            PointerTarget::Handle {
+                node: NODE,
+                handle: HANDLE,
+            },
+        ));
+
+        let source = ConnectionSource {
+            node: NODE,
+            handle: HANDLE,
+        };
+        assert_eq!(effect, InteractionEffect::BeginConnect(source));
+        assert_eq!(machine.dragging_node(), None, "a handle is not a body");
+        assert_eq!(
+            machine.pending_connection(),
+            Some(PendingConnection {
+                source,
+                current_world: Vec2::new(10.0, 10.0)
+            })
+        );
+    }
+
+    /// The preview's loose end follows the pointer — the painter reads it from
+    /// the machine rather than being told, so a repaint from any cause draws
+    /// the preview in the right place.
+    #[test]
+    fn the_pending_connection_follows_the_pointer() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(down_on(
+            PointerButton::Left,
+            PointerTarget::Handle {
+                node: NODE,
+                handle: HANDLE,
+            },
+        ));
+
+        let effect = machine.handle(move_to(Vec2::ZERO, Vec2::new(300.0, 120.0)));
+
+        assert!(matches!(effect, InteractionEffect::UpdateConnect(_)));
+        assert_eq!(
+            machine.pending_connection().map(|p| p.current_world),
+            Some(Vec2::new(300.0, 120.0))
+        );
+    }
+
+    /// **The machine does not validate.** It says where the drop landed and
+    /// hands the pair to whoever owns §4's rules; a drop on a full handle and a
+    /// drop on an empty one are the same transition here.
+    #[test]
+    fn a_dropped_connection_reports_where_it_landed_and_judges_nothing() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(down_on(
+            PointerButton::Left,
+            PointerTarget::Handle {
+                node: NODE,
+                handle: HANDLE,
+            },
+        ));
+
+        let landing = PointerTarget::Handle {
+            node: NodeIndex::new(9),
+            handle: HandleIndex::new(2),
+        };
+        let effect = machine.handle(up_on(PointerButton::Left, landing));
+
+        assert_eq!(
+            effect,
+            InteractionEffect::CommitConnect {
+                source: ConnectionSource {
+                    node: NODE,
+                    handle: HANDLE
+                },
+                target: landing
+            }
+        );
+        assert!(machine.is_idle());
+        assert_eq!(machine.pending_connection(), None);
+    }
+
+    /// §4's whole-node connection mode reaches the world as a node target, so
+    /// dropping on a body is a commit rather than a cancel.
+    #[test]
+    fn a_connection_dropped_on_a_body_still_commits() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(down_on(
+            PointerButton::Left,
+            PointerTarget::Handle {
+                node: NODE,
+                handle: HANDLE,
+            },
+        ));
+
+        let effect = machine.handle(up_on(
+            PointerButton::Left,
+            PointerTarget::Node(NodeIndex::new(4)),
+        ));
+
+        assert!(matches!(
+            effect,
+            InteractionEffect::CommitConnect {
+                target: PointerTarget::Node(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn cancelling_a_connection_leaves_no_trace() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(down_on(
+            PointerButton::Left,
+            PointerTarget::Handle {
+                node: NODE,
+                handle: HANDLE,
+            },
+        ));
+        machine.handle(move_to(Vec2::ZERO, Vec2::new(200.0, 200.0)));
+
+        assert_eq!(
+            machine.handle(InteractionEvent::Cancel),
+            InteractionEffect::CancelConnect
+        );
+        assert!(machine.is_idle());
+        assert_eq!(machine.pending_connection(), None);
+    }
+
+    /// Every gesture that begins a drag has to capture the pointer, or it dies
+    /// the moment the cursor leaves the pane. One assertion over all four so a
+    /// fifth cannot be added without noticing.
+    #[test]
+    fn every_beginning_gesture_captures_the_pointer() {
+        for target in [
+            PointerTarget::Empty,
+            PointerTarget::Node(NODE),
+            PointerTarget::Handle {
+                node: NODE,
+                handle: HANDLE,
+            },
+        ] {
+            let mut machine = InteractionMachine::new();
+            let effect = machine.handle(down_on(PointerButton::Left, target));
+            assert!(effect.starts_a_drag(), "{target:?} -> {effect:?}");
+            assert!(effect.needs_repaint(), "{target:?} -> {effect:?}");
+        }
+
+        let mut machine = InteractionMachine::new();
+        assert!(
+            machine
+                .handle(down_on(PointerButton::Middle, PointerTarget::Empty))
+                .starts_a_drag()
+        );
+    }
+
     #[test]
     fn a_fresh_machine_is_idle_and_draws_no_rectangle() {
         let machine = InteractionMachine::new();

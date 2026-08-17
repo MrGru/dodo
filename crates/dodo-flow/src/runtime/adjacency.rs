@@ -11,28 +11,53 @@
 //!
 //! §20 asks for the representation to be **benchmarked rather than asserted**,
 //! and its own sketch is `Vec<SmallVec<[EdgeIndex; 4]>>`.
-//! `examples/flow_graph_bench.rs` builds §19's graph — 100,000 nodes, 500,000
-//! edges — with this index and with the obvious `Vec<Vec<u32>>`, and prints
-//! both. Measured on an Apple M1 in release, and reproducible with
+//! `examples/flow_graph_bench.rs` builds the same 100,000-node graph through
+//! this index and through the obvious `Vec<Vec<u32>>`, at two densities, and
+//! prints both. Measured on an **Apple M1, release profile, 2026-08-17**:
+//!
+//! | 100,000 nodes | | `CompactList` (4 inline) | `Vec<Vec<u32>>` |
+//! |---|---|---:|---:|
+//! | **dense** — 500,000 edges, degree 10 | build | **12.7 ms** | 21.7 ms |
+//! | | 100,000 incident walks | 0.91 ms | 0.88 ms |
+//! | | lists on the heap | 200,000 | 200,000 |
+//! | **sparse** — 120,000 edges, degree 2.4 | build | **1.2 ms** | 3.2 ms |
+//! | | 100,000 incident walks | 0.49 ms | 0.39 ms |
+//! | | lists on the heap | **0** | 200,000 |
+//! | either | index headers | 9.6 MB | 4.8 MB |
+//!
+//! Reproduce with
 //!
 //! ```sh
 //! cargo run --release -p dodo-flow --example flow_graph_bench --locked
 //! ```
 //!
-//! | | `CompactList` (4 inline) | `Vec<Vec<u32>>` |
-//! |---|---:|---:|
-//! | build the index for 500,000 edges | **13.6 ms** | 35.3 ms |
-//! | 100,000 `incident_edges` lookups | **0.44 ms** | 0.44 ms |
-//! | index memory | 9.6 MB | 4.8 MB + 200,000 allocations |
+//! **The walk — the thing §20 actually specifies — is a wash**, within noise of
+//! each other and slightly *against* the inline form on the sparse scene. Both
+//! are one indexed load and a slice walk; the branch that picks between inline
+//! and spilled storage is what the difference is, and it is worth about 0.1 ms
+//! over a million edge ends. So §20's complexity goal is met by either, and the
+//! choice is made on the other two rows.
 //!
-//! The lookup — the thing §20 actually specifies — is identical, because both
-//! are one indexed load and a slice walk. The build is 2.6× apart, and the
-//! reason is the allocation count: `Vec<Vec<_>>` mallocs once per node per
-//! direction, 200,000 times, for lists whose *median* length is 4. The inline
-//! form spends more resident bytes to make the common list free. Given that a
-//! document is loaded far more often than it is exhaustively rebuilt, either
-//! would have been defensible; the numbers are what chose, which is what §20
-//! asked for.
+//! The build is where they part, and **the reason is allocation count, not
+//! layout**. `Vec<Vec<_>>` mallocs once per node per direction; the inline form
+//! mallocs only for a list longer than four. On a real diagram — a node has an
+//! input, an output and occasionally a second output — that is 200,000
+//! allocations against **none**, and the build is 2.7× apart.
+//!
+//! # What the measurement said that the guess did not
+//!
+//! **At §19's density the four inline slots buy nothing.** 500,000 edges over
+//! 100,000 nodes is an average degree of ten — five per direction — so every
+//! list spills anyway, and the inline array is 4.8 MB of headers that are never
+//! read. The build is still 1.7× faster there, but that is the reserve-on-spill
+//! in [`CompactList::push`] rather than the inline storage.
+//!
+//! Four is kept regardless, and deliberately: it is §20's own number, it is
+//! free on the documents dodo will actually open, and the alternative that
+//! would win at degree ten is not a bigger inline array but a CSR — one flat
+//! edge array with per-node offsets, which is a different structure with a
+//! different rebuild cost. That is a Phase 4 question if the benchmark scenes
+//! say so, and this file is where the numbers to compare against live.
 //!
 //! # Direction is kept, not derived
 //!

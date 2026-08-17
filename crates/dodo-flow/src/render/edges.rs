@@ -422,6 +422,17 @@ mod tests {
         );
         assert_eq!(dotted.path_count(), 1, "a dot is not a path");
         assert_eq!(dotted.quad_count(), 1);
+
+        // And it is a *circle*: a square quad with a corner radius of half its
+        // side, straddling the end of the edge.
+        let dot = dotted.quads()[0];
+        assert_eq!(dot.bounds.size.x, dot.bounds.size.y);
+        assert_eq!(dot.corner_radius, dot.bounds.size.x * 0.5);
+        assert!(
+            dot.bounds.contains_point(Vec2::new(200.0, 100.0)),
+            "the dot covers the end of the edge: {:?}",
+            dot.bounds
+        );
     }
 
     #[test]

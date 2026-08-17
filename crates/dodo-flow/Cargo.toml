@@ -51,3 +51,12 @@ gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 [[example]]
 name = "flow"
 path = "examples/flow.rs"
+
+# The graph engine's numbers. **Release only** — a debug build measures the
+# borrow checker's bookkeeping rather than the data structure, and the two
+# disagree by more than an order of magnitude. It is what answers §20's
+# "benchmark the representation" and what `runtime::adjacency`'s module doc
+# quotes; re-run it before changing that table.
+[[example]]
+name = "flow_graph_bench"
+path = "examples/flow_graph_bench.rs"

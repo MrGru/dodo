@@ -89,7 +89,7 @@ One index, covering the skills (`.claude/skills/<name>/SKILL.md`, invoked by nam
 | Touching `crates/dodo-api-explorer/` | skill `dodo-api-explorer-internals` |
 | Touching `crates/dodo-docker/` | skill `dodo-docker-internals` |
 | Touching `crates/dodo-database/` | skill `dodo-database-internals` |
-| Touching `crates/dodo-flow/` — the Flow Canvas engine, still being built and not yet in the sidebar | `crates/dodo-flow/src/lib.rs`'s doc comment, then `crates/dodo-flow/src/budgets.rs` before changing anything that paints, and `crates/dodo-flow/src/render/plan.rs` before adding a painter — paint order and vertex accounting are contracts there, and both fail silently |
+| Touching `crates/dodo-flow/` — the Flow Canvas engine, still being built and not yet in the sidebar | `crates/dodo-flow/src/lib.rs`'s doc comment, then `crates/dodo-flow/src/budgets.rs` before changing anything that paints, `crates/dodo-flow/src/render/plan.rs` before adding a painter, and `crates/dodo-flow/src/runtime/world.rs` before touching the graph — paint order, vertex accounting and the dirty-propagation rule are contracts there, and all three fail silently |
 | Touching `crates/dodo-updater/`, `.github/workflows/`, `Cargo.toml`'s dependencies, `scripts/`, `tools/update-manifest/`, `deny.toml` or `THIRD-PARTY-NOTICES.md`; preparing or debugging a release; the application-icon pipeline; the CI platform matrix and its cross-check traps | skill `dodo-build-release-internals` |
 | Touching `crates/dodo-cleaner/` | `crates/dodo-cleaner/AGENTS.md` |
 | Touching `crates/dodo-ime-core/` — the Vietnamese engine and the shared key vocabulary | `crates/dodo-ime-core/AGENTS.md` |
