@@ -112,14 +112,29 @@ impl Handle {
     /// model; the transform to screen space is `geometry/transform.rs`'s job
     /// and this never does it.
     pub fn world_position(&self, node_bounds: Rect) -> Vec2 {
-        let b = node_bounds.normalized();
-        let t = self.offset;
-        match self.placement {
-            HandlePlacement::Top => Vec2::new(b.origin.x + b.width() * t, b.origin.y),
-            HandlePlacement::Bottom => b.origin + Vec2::new(b.width() * t, b.height()),
-            HandlePlacement::Left => Vec2::new(b.origin.x, b.origin.y + b.height() * t),
-            HandlePlacement::Right => b.origin + Vec2::new(b.width(), b.height() * t),
-        }
+        handle_world_position(self.placement, self.offset, node_bounds)
+    }
+}
+
+/// **The one formula for where a handle sits**, shared by this model and by the
+/// runtime's SoA [`HandleStore`](crate::runtime::HandleStore).
+///
+/// Free-standing because the runtime store holds a handle's placement and
+/// offset in separate arrays and never assembles a [`Handle`] to ask. Two
+/// copies of this would be a handle that painted in one place and routed from
+/// another, which is a maddening bug to chase and costs nothing to prevent.
+///
+/// The offset is a fraction along the placement edge, measured from its top or
+/// left corner, so a resized node keeps its handles distributed. It is **not**
+/// clamped: §4's arbitrary placement is an offset outside `0.0..=1.0`, which
+/// puts the handle off the edge on purpose.
+pub fn handle_world_position(placement: HandlePlacement, offset: f32, node_bounds: Rect) -> Vec2 {
+    let b = node_bounds.normalized();
+    match placement {
+        HandlePlacement::Top => Vec2::new(b.origin.x + b.width() * offset, b.origin.y),
+        HandlePlacement::Bottom => b.origin + Vec2::new(b.width() * offset, b.height()),
+        HandlePlacement::Left => Vec2::new(b.origin.x, b.origin.y + b.height() * offset),
+        HandlePlacement::Right => b.origin + Vec2::new(b.width(), b.height() * offset),
     }
 }
 

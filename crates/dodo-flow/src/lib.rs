@@ -152,6 +152,7 @@ pub mod geometry;
 pub mod interaction;
 pub mod models;
 pub mod render;
+pub mod runtime;
 pub mod views;
 
 pub use budgets::RenderBudgets;

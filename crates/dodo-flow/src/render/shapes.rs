@@ -39,15 +39,11 @@
 //! **This file names no UI framework.**
 
 use crate::{
-    geometry::{Rect, Vec2},
+    geometry::{CIRCLE_KAPPA as KAPPA, Rect, Vec2},
     models::{RenderQuality, ShapeKind},
     render::plan::PathPaint,
+    runtime::NodeShape,
 };
-
-/// The circular magic constant, `4/3 * (sqrt(2) - 1)`: the control-point offset
-/// that makes a cubic Bézier approximate a quarter circle to within about
-/// 0.02 % of the radius.
-const KAPPA: f32 = 0.552_284_8;
 
 /// One step of an outline. Deliberately smaller than SVG's vocabulary — every
 /// shape the canvas draws reduces to lines and cubics, and quadratics and arcs
@@ -187,9 +183,58 @@ impl Outline {
         let triangles = match paint {
             PathPaint::Fill(_) => points.saturating_sub(2),
             PathPaint::Stroke { .. } => points.saturating_mul(2),
+            // **A dash is a subpath.** Lyon strokes each one separately, with
+            // its own caps, so the count follows the number of dashes rather
+            // than the number of flattened points — which is why a dashed line
+            // measured 63× a solid one across the same distance. The dash count
+            // is what dominates; the solid estimate is the floor, for a pattern
+            // so coarse that the whole path is one dash.
+            PathPaint::DashedStroke { dash, .. } => {
+                let dashes = (self.approximate_length() / dash.period())
+                    .ceil()
+                    .clamp(1.0, MAX_DASHES as f32) as u32;
+                // Four points per dash — two ends, each capped — at two
+                // triangles a point, which is the same per-point model the
+                // solid stroke uses.
+                dashes.saturating_mul(8).max(points.saturating_mul(2))
+            }
         };
 
         ((triangles.saturating_mul(3)) as f32 * SAFETY_MARGIN).ceil() as u32
+    }
+
+    /// A conservative estimate of the outline's length, for the dash count.
+    ///
+    /// Cubics contribute their **control polygon**, which never underestimates
+    /// the arc length — the right direction to be wrong in, because this feeds
+    /// the ceiling that keeps the window from going black.
+    pub fn approximate_length(&self) -> f32 {
+        let mut current = Vec2::ZERO;
+        let mut start = Vec2::ZERO;
+        let mut length = 0.0;
+
+        for command in &self.commands {
+            match *command {
+                SubpathCommand::MoveTo(p) => {
+                    current = p;
+                    start = p;
+                }
+                SubpathCommand::LineTo(p) => {
+                    length += (p - current).length();
+                    current = p;
+                }
+                SubpathCommand::CubicTo { c1, c2, to } => {
+                    length += (c1 - current).length() + (c2 - c1).length() + (to - c2).length();
+                    current = to;
+                }
+                SubpathCommand::Close => {
+                    length += (start - current).length();
+                    current = start;
+                }
+            }
+        }
+
+        length
     }
 }
 
@@ -201,6 +246,14 @@ impl Outline {
 /// found sufficient for every shape in this module across the tolerance range,
 /// with room left over — and the test fails if a future shape breaks it.
 pub const SAFETY_MARGIN: f32 = 1.6;
+
+/// The most dashes one path's estimate may charge for.
+///
+/// The same kind of guard as [`MAX_CUBIC_SEGMENTS`]: a hairline dash pattern on
+/// a path spanning a zoomed-in canvas would otherwise let one edge's estimate
+/// run away with the whole frame budget. Any real pattern at any real length is
+/// far below it.
+pub const MAX_DASHES: u32 = 4_096;
 
 /// The most segments one cubic is allowed to contribute.
 ///
@@ -241,6 +294,38 @@ pub fn prefers_quad(kind: ShapeKind, rotation: f32) -> bool {
     }
 
     matches!(kind, ShapeKind::Rectangle | ShapeKind::RoundedRectangle)
+}
+
+/// **The same routing decision for the runtime's one-byte projection**
+/// ([`NodeShape`]), which is what the paint loop actually reads.
+///
+/// A graph node's body is a rounded rectangle, so it is a quad too — and that
+/// matters more than the drawn shapes do, because a graph of 100,000 nodes is
+/// 100,000 of these and Phase 0 measured quads at twice the throughput.
+pub fn node_prefers_quad(shape: NodeShape) -> bool {
+    matches!(
+        shape,
+        NodeShape::Rectangle | NodeShape::RoundedRectangle | NodeShape::GraphNode
+    )
+}
+
+/// The outline for a runtime node shape, or `None` for one whose painter is a
+/// later phase's.
+///
+/// `None` rather than a rectangle: a kind that silently paints as something
+/// else is a missing feature that looks implemented, which is the same
+/// judgement [`NodeShape::of`] makes.
+pub fn outline_for_node(shape: NodeShape, rect: Rect, corner_radius: f32) -> Option<Outline> {
+    Some(match shape {
+        NodeShape::Rectangle => rectangle(rect),
+        NodeShape::RoundedRectangle | NodeShape::GraphNode => {
+            rounded_rectangle(rect, corner_radius)
+        }
+        NodeShape::Ellipse => ellipse(rect),
+        NodeShape::Diamond => diamond(rect),
+        NodeShape::Triangle => triangle(rect),
+        NodeShape::Other => return None,
+    })
 }
 
 /// An axis-aligned rectangle, counter-clockwise from the top-left.

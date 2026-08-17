@@ -104,6 +104,22 @@ impl DashPattern {
         self.0.is_empty()
     }
 
+    /// The first on/off pair, as the pair the renderer's primitive carries, or
+    /// `None` for a solid stroke.
+    ///
+    /// Longer patterns are truncated, and that is a real limitation rather than
+    /// an oversight: the render primitive is `Copy` so that a frame's paths do
+    /// not allocate, and every pattern anyone has asked for — dashed, dotted,
+    /// dash-dot at a push — fits in two numbers. See
+    /// [`DashSpec`](crate::render::plan::DashSpec).
+    pub fn spec(&self) -> Option<(f32, f32)> {
+        match self.0.as_slice() {
+            [] => None,
+            [on] => Some((*on, *on)),
+            [on, off, ..] => Some((*on, *off)),
+        }
+    }
+
     pub fn dashes(&self) -> &[f32] {
         &self.0
     }

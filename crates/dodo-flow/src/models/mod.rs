@@ -38,9 +38,9 @@ pub mod style;
 
 pub use document::{
     DocumentSettings, Endpoint, FlowDocument, FlowEdge, FlowNode, Handle, HandleDirection,
-    HandlePlacement, Metadata,
+    HandlePlacement, Metadata, handle_world_position,
 };
-pub use ids::{EdgeIndex, ElementId, HandleId, HandleIndex, NodeIndex};
+pub use ids::{EdgeIndex, ElementId, HandleId, HandleIndex, IdAllocator, NodeIndex};
 pub use kind::{CustomKind, ElementKind, GraphNodeKind, LinearKind, ShapeKind};
 pub use serialization::{CURRENT_VERSION, LoadError, SaveError};
 pub use style::{

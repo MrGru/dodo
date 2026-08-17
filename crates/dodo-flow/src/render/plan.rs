@@ -98,16 +98,61 @@ impl QuadPrimitive {
     }
 }
 
-/// How a path is turned into triangles: filled, or stroked at a width.
+/// A dash on, then a dash off, in screen pixels.
 ///
-/// The distinction is not cosmetic — it changes the vertex count by roughly an
-/// order of magnitude, because a stroke emits a quad per flattened segment
-/// where a fill emits a fan over the whole outline. [`Outline::estimated_vertices`]
-/// takes it for that reason.
+/// Two lengths rather than an arbitrary pattern, and the type is `Copy` because
+/// of it — [`PathPaint`] sits in an array with one entry per painted path, and
+/// a `Vec` in there would allocate per dashed edge per frame.
+/// [`DashPattern`](crate::models::DashPattern) in the document may hold a
+/// longer pattern; [`DashPattern::spec`](crate::models::DashPattern::spec)
+/// takes the first two entries, which is every pattern anyone has asked for and
+/// covers dashed and dotted alike.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DashSpec {
+    pub on: f32,
+    pub off: f32,
+}
+
+impl DashSpec {
+    pub fn new(on: f32, off: f32) -> DashSpec {
+        DashSpec { on, off }
+    }
+
+    /// One dash plus one gap. Never zero, so a caller dividing a length by it
+    /// cannot produce an infinity.
+    pub fn period(&self) -> f32 {
+        (self.on.max(0.0) + self.off.max(0.0)).max(f32::EPSILON)
+    }
+}
+
+/// How a path is turned into triangles: filled, stroked, or **stroked with a
+/// dash pattern, which is its own kind rather than a flag on a stroke**.
+///
+/// The distinction between fill and stroke is not cosmetic — it changes the
+/// vertex count by roughly an order of magnitude, because a stroke emits a quad
+/// per flattened segment where a fill emits a fan over the whole outline.
+///
+/// The dashed case is a bigger step again, and it is the reason it is a variant
+/// rather than an `Option<DashSpec>` on [`PathPaint::Stroke`]. Phase 0 measured
+/// a dashed straight line at **376 vertices and 11.8 µs against 6 vertices and
+/// 0.8 µs for the same line solid** — 63× the vertices and 14× the CPU, because
+/// lyon splits the path into one stroked subpath per dash, each with its own
+/// caps. A style flag would make that a free-looking checkbox that quietly
+/// costs a sixty-fourth of the frame's whole vertex budget per edge;
+/// [`Outline::estimated_vertices`] charges it properly, so the black-window
+/// guard sees it coming.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PathPaint {
     Fill(Color),
-    Stroke { color: Color, width: f32 },
+    Stroke {
+        color: Color,
+        width: f32,
+    },
+    DashedStroke {
+        color: Color,
+        width: f32,
+        dash: DashSpec,
+    },
 }
 
 impl PathPaint {
@@ -115,6 +160,15 @@ impl PathPaint {
         match self {
             PathPaint::Fill(color) => *color,
             PathPaint::Stroke { color, .. } => *color,
+            PathPaint::DashedStroke { color, .. } => *color,
+        }
+    }
+
+    /// The stroke width, or `None` for a fill.
+    pub fn width(&self) -> Option<f32> {
+        match self {
+            PathPaint::Fill(_) => None,
+            PathPaint::Stroke { width, .. } | PathPaint::DashedStroke { width, .. } => Some(*width),
         }
     }
 }
@@ -151,6 +205,21 @@ impl PathPrimitive {
         PathPrimitive {
             outline,
             paint: PathPaint::Stroke { color, width },
+            quality,
+        }
+    }
+
+    /// A dashed stroke. **Expensive** — see [`PathPaint`] for the measurement.
+    pub fn dashed_stroke(
+        outline: Outline,
+        color: Color,
+        width: f32,
+        dash: DashSpec,
+        quality: RenderQuality,
+    ) -> PathPrimitive {
+        PathPrimitive {
+            outline,
+            paint: PathPaint::DashedStroke { color, width, dash },
             quality,
         }
     }
@@ -278,6 +347,26 @@ impl PaintPlan {
 
     pub fn is_empty(&self) -> bool {
         self.quads.is_empty() && self.paths.is_empty() && self.texts.is_empty()
+    }
+
+    /// The planned paths, **for tests only**.
+    ///
+    /// Deliberately not part of the crate's surface. [`PaintPlan::paint_into`]
+    /// is the only way primitives leave a plan in a release build, and an
+    /// accessor that survived compilation would be the first step back toward a
+    /// painter choosing its own order — which is the whole thing this file
+    /// exists to make inexpressible. A test asserting what an edge planned is a
+    /// different matter, and `#[cfg(test)]` is the difference.
+    #[cfg(test)]
+    pub(crate) fn paths(&self) -> &[PathPrimitive] {
+        &self.paths
+    }
+
+    /// The planned quads. Test-only, for the same reason as
+    /// [`PaintPlan::paths`].
+    #[cfg(test)]
+    pub(crate) fn quads(&self) -> &[QuadPrimitive] {
+        &self.quads
     }
 
     /// The upper bound on the path vertices this frame will paint, available

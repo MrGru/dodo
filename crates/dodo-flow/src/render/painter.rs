@@ -83,7 +83,7 @@ pub fn build_path(outline: &Outline, paint: PathPaint, tolerance: f32) -> Option
 
     let style = match paint {
         PathPaint::Fill(_) => PathStyle::Fill(FillOptions::default().with_tolerance(tolerance)),
-        PathPaint::Stroke { width, .. } => {
+        PathPaint::Stroke { width, .. } | PathPaint::DashedStroke { width, .. } => {
             if width <= 0.0 {
                 return None;
             }
@@ -96,6 +96,11 @@ pub fn build_path(outline: &Outline, paint: PathPaint, tolerance: f32) -> Option
     };
 
     let mut builder = PathBuilder::fill().with_style(style);
+    if let PathPaint::DashedStroke { dash, .. } = paint {
+        // `dash_array` duplicates an odd-length array to make it even, so the
+        // two-element form is passed through exactly as written.
+        builder = builder.dash_array(&[px(dash.on.max(0.0)), px(dash.off.max(0.0))]);
+    }
     for command in outline.commands() {
         match *command {
             SubpathCommand::MoveTo(p) => builder.move_to(to_point(p)),

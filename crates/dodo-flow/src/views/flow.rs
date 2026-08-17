@@ -73,16 +73,18 @@ use gpui_component::ActiveTheme;
 
 use crate::{
     budgets::RenderBudgets,
-    geometry::{Vec2, Viewport},
+    geometry::{Attachment, EdgeRoute, Rect, RouteOptions, Vec2, Viewport, route},
     interaction::{
-        InputModifiers, InteractionEffect, InteractionEvent, InteractionMachine, PointerButton,
+        ConnectionSource, InputModifiers, InteractionEffect, InteractionEvent, InteractionMachine,
+        PointerButton,
     },
-    models::{Color, ElementKind, FlowDocument},
+    models::{Color, EdgeRouting, FlowDocument, NodeIndex, RenderQuality},
     render::{
-        GridLevel, GridLimits, GridSettings, PaintPlan, PaintStats, WindowPainter, grid,
-        plan::{PathPrimitive, QuadPrimitive},
+        GridLevel, GridLimits, GridSettings, PaintPlan, PaintStats, WindowPainter, edges, grid,
+        plan::{DashSpec, PathPrimitive, QuadPrimitive},
         shapes,
     },
+    runtime::{EdgeEnd, GraphWorld, HitTolerance, NodeShape, PointerTarget},
 };
 
 /// The key-binding context the canvas establishes on its root, so canvas
@@ -134,10 +136,40 @@ fn tracing_input() -> bool {
 /// read per element: `cx.theme()` is a lookup, and this is the inner loop over
 /// every shape in the document.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct ShapeInk {
+struct CanvasInk {
     fill: Color,
     stroke: Color,
+    /// Edges and their markers.
+    edge: Color,
+    /// Handle dots.
+    handle: Color,
+    /// The selection outline, the box-select rectangle and the connection
+    /// preview — everything that says "you are doing something".
+    accent: Color,
 }
+
+/// How big a handle dot is drawn, in **screen** pixels.
+///
+/// Screen rather than world, so a handle stays grabbable when zoomed out and
+/// does not swallow its node when zoomed in. It is the same number
+/// [`HitTolerance::HANDLE_SCREEN_RADIUS`] tests against, less the grabbing
+/// margin — a target you can hit slightly outside is right, a target that is
+/// smaller than it looks is not.
+const HANDLE_SCREEN_RADIUS: f32 = 4.5;
+
+/// The width the connection preview is drawn at, in screen pixels.
+const PREVIEW_WIDTH: f32 = 1.5;
+
+/// A graph node's body radius in world units, when its style does not set one.
+///
+/// A default rather than a hard-coded look: `ElementStyle::corner_radius` wins
+/// whenever a document says anything, and this is only what an unstyled node
+/// falls back to so it reads as a node rather than as a drawn rectangle.
+const GRAPH_NODE_RADIUS: f32 = 6.0;
+
+/// The outline width of a selected element, in screen pixels. Constant on
+/// screen rather than in world units, so selection stays visible at any zoom.
+const SELECTED_STROKE_PIXELS: f32 = 2.0;
 
 /// Applies an element's opacity to one of its colours.
 ///
@@ -151,7 +183,7 @@ fn fade(color: Color, opacity: f32) -> Color {
 
 /// The Flow Canvas.
 pub struct FlowView {
-    document: FlowDocument,
+    world: GraphWorld,
     viewport: Viewport,
     budgets: RenderBudgets,
     focus_handle: FocusHandle,
@@ -171,6 +203,23 @@ pub struct FlowView {
     /// Whether [`PAN_KEY`] is held. The one piece of keyboard state the
     /// interaction machine needs and cannot see for itself.
     pan_key_held: bool,
+
+    /// Routes rebuilt on the last frame. Zero on an idle frame and on a pure
+    /// pan; equal to the dragged node's degree while a node is being dragged.
+    /// The §19 number, observable from outside for a benchmark or a test.
+    rebuilt_routes: u32,
+
+    /// The connection preview's route, kept so that dragging one out rebuilds
+    /// into the same buffers instead of allocating per mouse move (§40 rule 14).
+    preview_route: EdgeRoute,
+
+    /// The one selected node.
+    ///
+    /// **Not a selection model.** §28's selection is a *set*, and resolving a
+    /// box selection into one needs the spatial index's broad phase, which is
+    /// Phase 4's. This is the single node a drag highlights, so that dragging
+    /// has feedback; it is the field Phase 4 replaces, not a design.
+    selection: Option<NodeIndex>,
 }
 
 impl FlowView {
@@ -182,7 +231,7 @@ impl FlowView {
         let budgets = crate::budgets::current();
 
         FlowView {
-            document: FlowDocument::new(),
+            world: GraphWorld::new(),
             viewport: Viewport::default(),
             grid: GridSettings::default(),
             grid_limits: GridLimits::from_budgets(&budgets),
@@ -194,22 +243,42 @@ impl FlowView {
             last_grid: GridLevel::empty(),
             dropped_paths: 0,
             pan_key_held: false,
+            rebuilt_routes: 0,
+            preview_route: EdgeRoute::default(),
+            selection: None,
         }
     }
 
-    pub fn document(&self) -> &FlowDocument {
-        &self.document
+    /// The runtime graph — the stores, the adjacency index and the dirty state.
+    pub fn world(&self) -> &GraphWorld {
+        &self.world
     }
 
-    pub fn document_mut(&mut self) -> &mut FlowDocument {
-        &mut self.document
+    pub fn world_mut(&mut self) -> &mut GraphWorld {
+        &mut self.world
     }
 
-    /// Replaces the document. The viewport is left alone: opening a document
-    /// does not move the camera, because session restore decides where the
-    /// camera was and it is not this method's business.
-    pub fn set_document(&mut self, document: FlowDocument) {
-        self.document = document;
+    /// The world written back out as a document. Allocates; for a save or a
+    /// test, never for a frame.
+    pub fn to_document(&self) -> FlowDocument {
+        self.world.to_document()
+    }
+
+    /// Replaces the document, **rebuilding the runtime from it**.
+    ///
+    /// The viewport is left alone: opening a document does not move the camera,
+    /// because session restore decides where the camera was and it is not this
+    /// method's business.
+    ///
+    /// Anything the document held that the runtime could not represent comes
+    /// back in the [`LoadReport`](crate::runtime::LoadReport) — a dangling edge
+    /// is a fact about the file, and swallowing it here would be the loader
+    /// deciding on the caller's behalf.
+    pub fn set_document(&mut self, document: FlowDocument) -> crate::runtime::LoadReport {
+        let (world, report) = GraphWorld::from_document(&document);
+        self.world = world;
+        self.selection = None;
+        report
     }
 
     pub fn viewport(&self) -> &Viewport {
@@ -256,9 +325,24 @@ impl FlowView {
         self.dropped_paths
     }
 
+    /// **Edge routes rebuilt on the last frame** — §19's number, from outside.
+    ///
+    /// Zero on an idle frame and on a pure pan; while a node is dragged it is
+    /// that node's degree, and nothing else. `runtime::world`'s property test
+    /// asserts the rule; this is how the launcher shows it happening.
+    pub fn rebuilt_routes(&self) -> u32 {
+        self.rebuilt_routes
+    }
+
+    /// The selected node, if any. See the field's own doc — a selection *set*
+    /// is Phase 4's, once the box select can resolve into one.
+    pub fn selection(&self) -> Option<NodeIndex> {
+        self.selection
+    }
+
     /// Frames the whole document, or resets to 1:1 if it is empty.
     pub fn zoom_to_fit(&mut self) {
-        match self.document.content_bounds() {
+        match self.world.content_bounds() {
             Some(content) => self.viewport.zoom_to_fit(content, 48.0),
             None => self.viewport.reset(),
         }
@@ -271,20 +355,23 @@ impl FlowView {
     /// Done per frame rather than at construction because dodo applies a theme
     /// change live — `dodo-theming-settings` is the rule — and a grid cached at
     /// startup would stay dark on a light theme until the app restarted.
-    fn sync_theme(&mut self, cx: &App) -> ShapeInk {
+    fn sync_theme(&mut self, cx: &App) -> CanvasInk {
         let theme = cx.theme();
         let border = from_hsla(theme.border);
 
         self.grid.minor.color = border.with_alpha(border.a * 0.55);
         self.grid.major.color = border;
 
-        ShapeInk {
+        CanvasInk {
             fill: from_hsla(theme.secondary),
             stroke: from_hsla(theme.foreground).with_alpha(0.7),
+            edge: from_hsla(theme.foreground).with_alpha(0.55),
+            handle: from_hsla(theme.primary),
+            accent: from_hsla(theme.selection),
         }
     }
 
-    /// Every shape in the document, as the cheapest primitive that can draw it.
+    /// Every node, as the cheapest primitive that can draw it, and its handles.
     ///
     /// **No culling and no spatial query**, and that is a deliberate hole
     /// rather than an oversight: §40 rule 1 forbids scanning every element to
@@ -294,39 +381,61 @@ impl FlowView {
     /// [`PaintPlan::enforce_vertex_ceiling`] is what stands in for culling
     /// until then — it keeps the window from going black, it does not keep the
     /// frame fast.
-    fn plan_shapes(&mut self, ink: ShapeInk) {
-        let quality = self.document.settings.render_quality;
+    ///
+    /// The loop reads the runtime's hot arrays: a position, a size, a one-byte
+    /// [`NodeShape`] and a style. It never touches
+    /// [`ElementKind`](crate::models::ElementKind), which carries a `String` —
+    /// that is what §17's cold/hot split is for and what §40 rule 9 asks.
+    fn plan_nodes(&mut self, ink: CanvasInk) {
+        let quality = self.world.settings().render_quality;
 
-        for node in &self.document.nodes {
-            if node.hidden {
+        for node in self.world.nodes().indices() {
+            let nodes = self.world.nodes();
+            if nodes.is_hidden(node) {
                 continue;
             }
 
-            let ElementKind::Shape(kind) = &node.kind else {
-                // Graph nodes, text, images and frames are later phases'. A
-                // `_ =>` here would silently draw them as rectangles and hide
-                // the fact that they are not implemented.
+            let shape = nodes.shape(node);
+            if shape == NodeShape::Other {
+                // Text, images, frames and custom kinds are later phases'. A
+                // fallback rectangle here would silently draw them and hide the
+                // fact that they are not implemented.
                 continue;
-            };
+            }
 
-            let screen = self.viewport.world_rect_to_screen(node.bounds());
-            let radius = self
-                .viewport
-                .world_to_screen_length(node.style.corner_radius);
+            let style = nodes.style(node);
+            let screen = self.viewport.world_rect_to_screen(nodes.bounds(node));
+            // A graph node's body has a radius of its own so it reads as a
+            // node rather than as a drawn rectangle; a shape uses what its
+            // style says.
+            let world_radius = if shape == NodeShape::GraphNode && style.corner_radius <= 0.0 {
+                GRAPH_NODE_RADIUS
+            } else {
+                style.corner_radius
+            };
+            let radius = self.viewport.world_to_screen_length(world_radius);
+
             // `None` means "the theme decides", which is the whole reason
             // `models::style` stores colours as `Option<Color>`: a document must
             // not carry a palette, or it would look wrong in the other theme.
-            let fill = fade(node.style.fill.unwrap_or(ink.fill), node.style.opacity);
-            let stroke_color = fade(
-                node.style.stroke.color.unwrap_or(ink.stroke),
-                node.style.opacity,
-            );
+            let fill = fade(style.fill.unwrap_or(ink.fill), style.opacity);
+            let selected = nodes.is_selected(node);
+            let stroke_color = if selected {
+                ink.accent
+            } else {
+                fade(style.stroke.color.unwrap_or(ink.stroke), style.opacity)
+            };
             let stroke_width = self
                 .viewport
-                .world_to_screen_length(node.style.stroke.width);
-            let has_stroke = !node.style.stroke.is_invisible() && stroke_width > 0.0;
+                .world_to_screen_length(style.stroke.width)
+                .max(if selected {
+                    SELECTED_STROKE_PIXELS
+                } else {
+                    0.0
+                });
+            let has_stroke = (!style.stroke.is_invisible() || selected) && stroke_width > 0.0;
 
-            if shapes::prefers_quad(kind.clone(), 0.0) {
+            if shapes::node_prefers_quad(shape) {
                 // Phase 0's measurement, honoured: 20,000 quads hold 60 fps
                 // where the same count of rectangular paths drop to 30 — and a
                 // quad carries its corner radius and its border for free, so
@@ -336,32 +445,146 @@ impl FlowView {
                     quad = quad.with_border(stroke_width, stroke_color);
                 }
                 self.plan.push_quad(quad);
+            } else if let Some(outline) = shapes::outline_for_node(shape, screen, radius) {
+                self.plan
+                    .push_path(PathPrimitive::fill(outline.clone(), fill, quality));
+
+                if has_stroke {
+                    self.plan.push_path(PathPrimitive::stroke(
+                        outline,
+                        stroke_color,
+                        stroke_width,
+                        quality,
+                    ));
+                }
+            }
+
+            self.plan_handles(node, ink);
+        }
+    }
+
+    /// A node's handles, as quads.
+    ///
+    /// **Geometry and data in this phase, not interaction.** A handle is drawn
+    /// so a connection can be aimed at it and so the routing is visible; the
+    /// interactive element with its own hover state and cursor is Phase 5's,
+    /// where §15's LOD decides whether a node is detailed enough to have one at
+    /// all. A circle is a quad with a corner radius of half its side, so a
+    /// hundred thousand of them would still be the cheap primitive.
+    fn plan_handles(&mut self, node: NodeIndex, ink: CanvasInk) {
+        let radius = HANDLE_SCREEN_RADIUS;
+
+        for handle in self.world.nodes().handles(node) {
+            if self.world.handles().is_hidden(handle) {
+                // §4: hidden handles stay connectable. Only the paint is
+                // skipped — routing and hit-testing never read this flag.
                 continue;
             }
 
-            let outline = shapes::outline_for(kind, screen, radius);
-            self.plan
-                .push_path(PathPrimitive::fill(outline.clone(), fill, quality));
-
-            if has_stroke {
-                self.plan.push_path(PathPrimitive::stroke(
-                    outline,
-                    stroke_color,
-                    stroke_width,
-                    quality,
-                ));
-            }
+            let center = self
+                .viewport
+                .world_to_screen(self.world.handle_position(handle));
+            self.plan.push_quad(
+                QuadPrimitive::filled(
+                    Rect::new(center - Vec2::splat(radius), Vec2::splat(radius * 2.0)),
+                    ink.handle,
+                )
+                .with_corner_radius(radius)
+                .with_border(1.0, ink.fill),
+            );
         }
+    }
+
+    /// Every edge, from its **derived** route.
+    ///
+    /// The routes are brought up to date once, at the top of the frame, by
+    /// [`GraphWorld::rebuild_dirty_geometry`] — so this loop rebuilds nothing
+    /// and a pure pan reroutes nothing (§40 rule 6). An edge whose route is
+    /// stale is skipped rather than drawn from a stale one: it will be current
+    /// on the frame the rebuild ran, and painting the old one would show an
+    /// edge hanging off a node that has already moved.
+    fn plan_edges(&mut self, ink: CanvasInk) {
+        let quality = self.world.settings().render_quality;
+
+        for edge in self.world.edges().indices() {
+            if self.world.edges().is_hidden(edge) {
+                continue;
+            }
+            let Some(route) = self.world.route(edge) else {
+                continue;
+            };
+
+            let style = self.world.edges().style(edge);
+            let selected = self.world.edges().is_selected(edge);
+            let color = if selected {
+                ink.accent
+            } else {
+                fade(style.stroke.color.unwrap_or(ink.edge), style.opacity)
+            };
+
+            let paint = edges::EdgePaint {
+                color,
+                width: style.stroke.width,
+                // A dashed edge is the expensive kind, so it is only ever asked
+                // for when the document says so — see `render::plan::PathPaint`.
+                dash: style
+                    .stroke
+                    .dash
+                    .spec()
+                    .map(|(on, off)| DashSpec::new(on, off)),
+                start_marker: style.start_marker,
+                end_marker: style.end_marker,
+                quality,
+            };
+
+            edges::plan_edge(&mut self.plan, route, &paint, &self.viewport);
+        }
+    }
+
+    /// The connection being dragged out of a handle, if there is one (§8).
+    ///
+    /// Routed exactly like a committed edge — same router, same options — so
+    /// the preview bends the way the edge will and there is no second opinion
+    /// about where it would go. The loose end faces back the way the source
+    /// leaves, which is what makes the curve settle instead of kinking as the
+    /// pointer crosses the node.
+    fn plan_connection_preview(&mut self, ink: CanvasInk) {
+        let Some(pending) = self.interaction.pending_connection() else {
+            return;
+        };
+
+        let source = self.world.attachment(
+            EdgeEnd::handle(pending.source.node, pending.source.handle),
+            pending.current_world,
+        );
+        let target = Attachment::new(pending.current_world, source.side.opposite());
+
+        route::route_into(
+            &mut self.preview_route,
+            EdgeRouting::Bezier,
+            source,
+            target,
+            &RouteOptions::DEFAULT,
+        );
+
+        edges::plan_connection_preview(
+            &mut self.plan,
+            &self.preview_route,
+            ink.accent,
+            self.viewport.screen_to_world_length(PREVIEW_WIDTH),
+            RenderQuality::BALANCED,
+            &self.viewport,
+        );
     }
 
     /// The box-selection rectangle: **a quad**, so it adds no path batch on top
     /// of the frame it is drawn over.
-    fn plan_selection_rect(&mut self, cx: &App) {
+    fn plan_selection_rect(&mut self, ink: CanvasInk) {
         let Some(world) = self.interaction.selection_rect() else {
             return;
         };
 
-        let accent = from_hsla(cx.theme().selection);
+        let accent = ink.accent;
         self.plan.push_quad(
             QuadPrimitive::filled(
                 self.viewport.world_rect_to_screen(world),
@@ -384,6 +607,11 @@ impl FlowView {
         ));
         let ink = self.sync_theme(cx);
 
+        // **Before anything is planned**, and only for what actually changed:
+        // an idle frame finds an empty queue and does no work at all, which is
+        // what makes §40 rule 6 hold by construction rather than by care.
+        self.rebuilt_routes = self.world.rebuild_dirty_geometry();
+
         self.plan.clear();
         self.last_grid = grid::generate(
             &self.grid,
@@ -391,8 +619,13 @@ impl FlowView {
             &self.grid_limits,
             &mut self.plan,
         );
-        self.plan_shapes(ink);
-        self.plan_selection_rect(cx);
+        // Edges under nodes, nodes under the overlays. The *paint* order is
+        // `PaintPlan`'s and is by primitive kind whatever this order is; this
+        // one decides what sits on top within a kind.
+        self.plan_edges(ink);
+        self.plan_nodes(ink);
+        self.plan_connection_preview(ink);
+        self.plan_selection_rect(ink);
 
         self.dropped_paths = self.plan.enforce_vertex_ceiling(&self.budgets);
 
@@ -400,6 +633,53 @@ impl FlowView {
         self.last_paint = self.plan.paint_into(&mut painter);
 
         self.install_input(bounds, hitbox, window, cx);
+    }
+
+    /// Replaces the selection with at most one node.
+    ///
+    /// A set is §28's and needs the spatial index's broad phase to build from a
+    /// rectangle; this is the one-node case a drag needs, and it is written as
+    /// a method so Phase 4 replaces one body rather than four call sites.
+    fn select_only(&mut self, node: Option<NodeIndex>) {
+        if self.selection == node {
+            return;
+        }
+
+        if let Some(previous) = self.selection {
+            self.world.set_node_selected(previous, false);
+        }
+        if let Some(node) = node {
+            self.world.set_node_selected(node, true);
+        }
+        self.selection = node;
+    }
+
+    /// Turns a dropped connection into an edge, or into nothing.
+    ///
+    /// **The validation is the world's** (§4) — this only says where the drop
+    /// landed. A refusal is silent on the canvas and visible under
+    /// `DODO_FLOW_TRACE_INPUT`: the connection tool that colours a handle by
+    /// [`ConnectionError`](crate::runtime::ConnectionError) is Phase 5's, and
+    /// the reason is already carried for it.
+    fn commit_connection(&mut self, source: ConnectionSource, target: PointerTarget) {
+        let end = match target {
+            PointerTarget::Handle { node, handle } => EdgeEnd::handle(node, handle),
+            // §4's whole-node connection mode: dropping on a body connects to
+            // the node, and the router picks a point on its border.
+            PointerTarget::Node(node) => EdgeEnd::node(node),
+            PointerTarget::Empty => {
+                trace(format_args!("Connect dropped on empty canvas"));
+                return;
+            }
+        };
+
+        match self
+            .world
+            .connect(EdgeEnd::handle(source.node, source.handle), end)
+        {
+            Ok(edge) => trace(format_args!("Connect ok, edge={edge}")),
+            Err(error) => trace(format_args!("Connect refused: {error}")),
+        }
     }
 
     // ---- input ----------------------------------------------------------
@@ -413,8 +693,23 @@ impl FlowView {
             window.capture_pointer(hitbox.id);
         }
 
-        if let InteractionEffect::PanBy(delta) = effect {
-            self.viewport.pan_by(delta);
+        match effect {
+            InteractionEffect::PanBy(delta) => self.viewport.pan_by(delta),
+
+            // **The propagation rule, entered from a gesture.** Everything the
+            // move invalidates is decided by `GraphWorld::move_node`; the view
+            // does not know which edges exist and must not.
+            InteractionEffect::DragNodeBy { node, delta } => self.world.move_node(node, delta),
+            InteractionEffect::CancelNodeDrag { node, revert } => {
+                self.world.move_node(node, revert)
+            }
+            InteractionEffect::BeginNodeDrag(node) => self.select_only(Some(node)),
+            InteractionEffect::BeginBoxSelect(_) => self.select_only(None),
+            InteractionEffect::BeginConnect(source) => self.select_only(Some(source.node)),
+            InteractionEffect::CommitConnect { source, target } => {
+                self.commit_connection(source, target)
+            }
+            _ => {}
         }
 
         effect.needs_repaint()
@@ -436,9 +731,10 @@ impl FlowView {
         modifiers: gpui::Modifiers,
     ) -> InteractionEvent {
         let screen = self.local(position, bounds);
+        let world = self.viewport.screen_to_world(screen);
         InteractionEvent::PointerDown {
             screen,
-            world: self.viewport.screen_to_world(screen),
+            world,
             button,
             modifiers: InputModifiers {
                 shift: modifiers.shift,
@@ -447,6 +743,37 @@ impl FlowView {
                 command: modifiers.platform,
             },
             pan_key_held: self.pan_key_held,
+            target: self.target_at(world),
+        }
+    }
+
+    /// **What is under the pointer** — §29's two phases, with the broad one
+    /// still standing open.
+    ///
+    /// `nodes().indices()` is the candidate set, and it is the whole document.
+    /// That is deliberate and it is **not** the linear scan §40 rule 1 forbids:
+    /// rule 1 is about scanning every element *per frame* to find the visible
+    /// ones, and this runs once per pointer press, on an event a human
+    /// generated. Phase 4's uniform grid replaces this one argument with a
+    /// query — there is nothing else here to delete, which is why the candidate
+    /// set is a parameter of `GraphWorld::hit_test` rather than something it
+    /// fetches for itself.
+    ///
+    /// A **locked** node reads as empty canvas, so a press on one starts a box
+    /// selection instead of a drag that would be refused — §26's behaviour, and
+    /// cheaper to answer here than to explain after the fact.
+    fn target_at(&self, world: Vec2) -> PointerTarget {
+        let tolerance = HitTolerance::new(
+            self.viewport
+                .screen_to_world_length(HitTolerance::HANDLE_SCREEN_RADIUS),
+        );
+
+        match self
+            .world
+            .hit_test(world, self.world.nodes().indices(), tolerance)
+        {
+            PointerTarget::Node(node) if self.world.nodes().is_locked(node) => PointerTarget::Empty,
+            target => target,
         }
     }
 
@@ -537,9 +864,14 @@ impl FlowView {
                 trace(format_args!("MouseUp button={button:?}"));
 
                 view.update(cx, |this, cx| {
-                    let effect = this
-                        .interaction
-                        .handle(InteractionEvent::PointerUp { button });
+                    let world = this
+                        .viewport
+                        .screen_to_world(this.local(event.position, bounds));
+                    let effect = this.interaction.handle(InteractionEvent::PointerUp {
+                        button,
+                        world,
+                        target: this.target_at(world),
+                    });
                     // A committed box selection is where Phase 4 will resolve
                     // world rectangle into element ids, through the spatial
                     // index's broad phase (§28).

@@ -29,19 +29,32 @@
 //!   rectangle is anchored to the document, so zooming or scrolling mid-drag
 //!   leaves it over the same content instead of sliding out from under it.
 //!
+//! # The machine is told what is under the pointer, and never asks
+//!
+//! [`InteractionEvent::PointerDown`] carries a
+//! [`PointerTarget`](crate::runtime::PointerTarget), resolved by whoever raised
+//! the event. That is what lets one press mean four different gestures — pan,
+//! box select, drag a node, drag a connection out of a handle — without this
+//! file knowing a graph exists. It also keeps the hit test where §29 wants it:
+//! a broad phase the caller owns, and a narrow phase in `runtime`.
+//!
 //! # What this phase deliberately does not do
 //!
 //! [`InteractionEffect::CommitBoxSelect`] hands back a world rectangle and
 //! stops. Turning that rectangle into a set of element ids needs the spatial
 //! index's broad phase (§28), which is Phase 4's — and a linear scan over every
 //! element would be exactly the thing §40 rule 1 forbids, written in a place it
-//! would be easy to forget to remove. The states §25 lists beyond these three
-//! (`DraggingElements`, `Connecting`, `Resizing`, …) arrive with the phases
-//! that can implement them; the enum is where they will go.
+//! would be easy to forget to remove. §25's remaining states (`Resizing`,
+//! `Rotating`, `EditingText`, …) arrive with the phases that can implement
+//! them; the enum is where they will go.
 //!
 //! **This file names no UI framework.**
 
-use crate::geometry::{Rect, Vec2};
+use crate::{
+    geometry::{Rect, Vec2},
+    models::{HandleIndex, NodeIndex},
+    runtime::PointerTarget,
+};
 
 /// The pointer buttons the canvas distinguishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -110,6 +123,46 @@ pub enum InteractionState {
         /// go of shift before the mouse button still meant an additive select.
         additive: bool,
     },
+    /// §25's `DraggingElements`, for one node. Multi-node dragging waits for
+    /// Phase 4, because a selection is a set of elements and resolving a box
+    /// selection into one is the spatial index's job.
+    DraggingNode {
+        node: NodeIndex,
+        /// World units: where the pointer was at the last move, so every move
+        /// contributes a *delta*. Anchoring to the pointer rather than to the
+        /// node is what stops the node jumping to centre itself under the
+        /// cursor on the first move.
+        last_world: Vec2,
+        /// Everything the node has moved so far, so [`InteractionEvent::Cancel`]
+        /// can put it back exactly.
+        total: Vec2,
+    },
+    /// §25's `Connecting`: an edge is being dragged out of a handle and has not
+    /// landed yet (§8's connection preview).
+    Connecting {
+        source: ConnectionSource,
+        /// Where the pointer is, in world units — the loose end of the preview.
+        current_world: Vec2,
+    },
+}
+
+/// The handle a pending connection started from.
+///
+/// A connection always starts at a **handle**, never at a node body, because a
+/// press on a body is already the drag gesture. §4's whole-node connection mode
+/// applies at the other end: a connection may be *dropped* on a node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnectionSource {
+    pub node: NodeIndex,
+    pub handle: HandleIndex,
+}
+
+/// A connection in progress, for the painter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PendingConnection {
+    pub source: ConnectionSource,
+    /// World units.
+    pub current_world: Vec2,
 }
 
 /// What happened, in the machine's own vocabulary.
@@ -124,6 +177,9 @@ pub enum InteractionEvent {
         /// was held. Passed in rather than read from `modifiers` because it is
         /// a key rather than a modifier, and because §26 wants it rebindable.
         pan_key_held: bool,
+        /// What the press landed on, resolved by the caller. See the module
+        /// doc: this is what lets one press mean four gestures.
+        target: PointerTarget,
     },
     PointerMove {
         screen: Vec2,
@@ -131,6 +187,12 @@ pub enum InteractionEvent {
     },
     PointerUp {
         button: PointerButton,
+        /// Where the release happened, in world units. Only a pending
+        /// connection reads it, and only to say where it was dropped.
+        world: Vec2,
+        /// What was under the pointer at the release. A connection lands on
+        /// this; every other gesture ignores it.
+        target: PointerTarget,
     },
     /// `Esc`, a lost window focus, or anything else that means "stop".
     Cancel,
@@ -168,6 +230,44 @@ pub enum InteractionEffect {
     CommitBoxSelect(BoxSelection),
     /// The drag was abandoned; stop drawing the rectangle.
     CancelBoxSelect,
+
+    /// A node drag started. The view captures the pointer and may mark the node
+    /// selected.
+    BeginNodeDrag(NodeIndex),
+    /// Move this node by this **world** delta — [`GraphWorld::move_node`](crate::runtime::GraphWorld::move_node),
+    /// and nothing else in the graph.
+    DragNodeBy {
+        node: NodeIndex,
+        delta: Vec2,
+    },
+    /// The drag finished. `moved` is false for a press-and-release that never
+    /// travelled, which is a *click* and which a later phase turns into a
+    /// selection rather than into an undo entry.
+    EndNodeDrag {
+        node: NodeIndex,
+        moved: bool,
+    },
+    /// The drag was abandoned; move the node by this delta to put it back
+    /// exactly where it started.
+    CancelNodeDrag {
+        node: NodeIndex,
+        revert: Vec2,
+    },
+
+    /// A connection started being dragged out of a handle.
+    BeginConnect(ConnectionSource),
+    /// The loose end moved; repaint the preview.
+    UpdateConnect(PendingConnection),
+    /// The connection was dropped. **The machine does not know whether it is
+    /// valid** — validation is §4's and lives in
+    /// [`GraphWorld::validate_connection`](crate::runtime::GraphWorld::validate_connection),
+    /// so the view asks the world and the world refuses or connects.
+    CommitConnect {
+        source: ConnectionSource,
+        target: PointerTarget,
+    },
+    /// The connection was abandoned; stop drawing the preview.
+    CancelConnect,
 }
 
 impl InteractionEffect {
@@ -177,7 +277,10 @@ impl InteractionEffect {
     pub fn starts_a_drag(&self) -> bool {
         matches!(
             self,
-            InteractionEffect::BeginPan | InteractionEffect::BeginBoxSelect(_)
+            InteractionEffect::BeginPan
+                | InteractionEffect::BeginBoxSelect(_)
+                | InteractionEffect::BeginNodeDrag(_)
+                | InteractionEffect::BeginConnect(_)
         )
     }
 
@@ -212,6 +315,30 @@ impl InteractionMachine {
         matches!(self.state, InteractionState::Panning { .. })
     }
 
+    /// The node being dragged, for a painter that wants to show it differently.
+    pub fn dragging_node(&self) -> Option<NodeIndex> {
+        match self.state {
+            InteractionState::DraggingNode { node, .. } => Some(node),
+            _ => None,
+        }
+    }
+
+    /// The connection being dragged, or `None`. **The painter's only question**
+    /// about a pending connection — where it comes from and where its loose end
+    /// is.
+    pub fn pending_connection(&self) -> Option<PendingConnection> {
+        match self.state {
+            InteractionState::Connecting {
+                source,
+                current_world,
+            } => Some(PendingConnection {
+                source,
+                current_world,
+            }),
+            _ => None,
+        }
+    }
+
     /// The selection rectangle to draw, in **world** units, or `None` when no
     /// box selection is in progress. The painter's only question.
     pub fn selection_rect(&self) -> Option<Rect> {
@@ -238,6 +365,7 @@ impl InteractionMachine {
                     button,
                     modifiers,
                     pan_key_held,
+                    target,
                 },
             ) => match button {
                 // Middle-drag always pans, and space-drag turns a left press
@@ -256,14 +384,36 @@ impl InteractionMachine {
                     };
                     InteractionEffect::BeginPan
                 }
-                PointerButton::Left => {
-                    self.state = InteractionState::BoxSelecting {
-                        anchor_world: world,
-                        current_world: world,
-                        additive: modifiers.is_additive(),
-                    };
-                    InteractionEffect::BeginBoxSelect(Rect::from_corners(world, world))
-                }
+                // What the press landed on decides which of the three
+                // left-button gestures this is. The order is the order of
+                // specificity: a handle sits on a node, and a node sits on the
+                // canvas.
+                PointerButton::Left => match target {
+                    PointerTarget::Handle { node, handle } => {
+                        let source = ConnectionSource { node, handle };
+                        self.state = InteractionState::Connecting {
+                            source,
+                            current_world: world,
+                        };
+                        InteractionEffect::BeginConnect(source)
+                    }
+                    PointerTarget::Node(node) => {
+                        self.state = InteractionState::DraggingNode {
+                            node,
+                            last_world: world,
+                            total: Vec2::ZERO,
+                        };
+                        InteractionEffect::BeginNodeDrag(node)
+                    }
+                    PointerTarget::Empty => {
+                        self.state = InteractionState::BoxSelecting {
+                            anchor_world: world,
+                            current_world: world,
+                            additive: modifiers.is_additive(),
+                        };
+                        InteractionEffect::BeginBoxSelect(Rect::from_corners(world, world))
+                    }
+                },
                 // The context menu is a later phase's, and swallowing the press
                 // here would make it impossible to add without changing this
                 // match — which is the point of it being explicit.
@@ -309,6 +459,37 @@ impl InteractionMachine {
                 InteractionEffect::UpdateBoxSelect(Rect::from_corners(anchor_world, world))
             }
 
+            (
+                InteractionState::DraggingNode {
+                    node,
+                    last_world,
+                    total,
+                },
+                InteractionEvent::PointerMove { world, .. },
+            ) => {
+                let delta = world - last_world;
+                self.state = InteractionState::DraggingNode {
+                    node,
+                    last_world: world,
+                    total: total + delta,
+                };
+                InteractionEffect::DragNodeBy { node, delta }
+            }
+
+            (
+                InteractionState::Connecting { source, .. },
+                InteractionEvent::PointerMove { world, .. },
+            ) => {
+                self.state = InteractionState::Connecting {
+                    source,
+                    current_world: world,
+                };
+                InteractionEffect::UpdateConnect(PendingConnection {
+                    source,
+                    current_world: world,
+                })
+            }
+
             (InteractionState::Idle, InteractionEvent::PointerMove { .. }) => {
                 InteractionEffect::None
             }
@@ -319,7 +500,7 @@ impl InteractionMachine {
                     button: started_with,
                     ..
                 },
-                InteractionEvent::PointerUp { button },
+                InteractionEvent::PointerUp { button, .. },
             ) => {
                 if button == started_with {
                     self.state = InteractionState::Idle;
@@ -335,7 +516,7 @@ impl InteractionMachine {
                     current_world,
                     additive,
                 },
-                InteractionEvent::PointerUp { button },
+                InteractionEvent::PointerUp { button, .. },
             ) => {
                 if button == PointerButton::Left {
                     self.state = InteractionState::Idle;
@@ -343,6 +524,36 @@ impl InteractionMachine {
                         rect: Rect::from_corners(anchor_world, current_world),
                         additive,
                     })
+                } else {
+                    InteractionEffect::None
+                }
+            }
+
+            (
+                InteractionState::DraggingNode { node, total, .. },
+                InteractionEvent::PointerUp { button, .. },
+            ) => {
+                if button == PointerButton::Left {
+                    self.state = InteractionState::Idle;
+                    InteractionEffect::EndNodeDrag {
+                        node,
+                        // A press and release that never travelled is a click,
+                        // not a zero-length drag, and the difference matters to
+                        // the undo history Phase 7 builds on this.
+                        moved: total != Vec2::ZERO,
+                    }
+                } else {
+                    InteractionEffect::None
+                }
+            }
+
+            (
+                InteractionState::Connecting { source, .. },
+                InteractionEvent::PointerUp { button, target, .. },
+            ) => {
+                if button == PointerButton::Left {
+                    self.state = InteractionState::Idle;
+                    InteractionEffect::CommitConnect { source, target }
                 } else {
                     InteractionEffect::None
                 }
@@ -360,6 +571,17 @@ impl InteractionMachine {
                 self.state = InteractionState::Idle;
                 InteractionEffect::CancelBoxSelect
             }
+            (InteractionState::DraggingNode { node, total, .. }, InteractionEvent::Cancel) => {
+                self.state = InteractionState::Idle;
+                InteractionEffect::CancelNodeDrag {
+                    node,
+                    revert: Vec2::ZERO - total,
+                }
+            }
+            (InteractionState::Connecting { .. }, InteractionEvent::Cancel) => {
+                self.state = InteractionState::Idle;
+                InteractionEffect::CancelConnect
+            }
         }
     }
 }
@@ -368,13 +590,22 @@ impl InteractionMachine {
 mod tests {
     use super::*;
 
+    const NODE: NodeIndex = NodeIndex::new(7);
+    const HANDLE: HandleIndex = HandleIndex::new(3);
+
+    /// A press on empty canvas.
     fn down(button: PointerButton) -> InteractionEvent {
+        down_on(button, PointerTarget::Empty)
+    }
+
+    fn down_on(button: PointerButton, target: PointerTarget) -> InteractionEvent {
         InteractionEvent::PointerDown {
             screen: Vec2::new(100.0, 100.0),
             world: Vec2::new(10.0, 10.0),
             button,
             modifiers: InputModifiers::NONE,
             pan_key_held: false,
+            target,
         }
     }
 
@@ -383,7 +614,15 @@ mod tests {
     }
 
     fn up(button: PointerButton) -> InteractionEvent {
-        InteractionEvent::PointerUp { button }
+        up_on(button, PointerTarget::Empty)
+    }
+
+    fn up_on(button: PointerButton, target: PointerTarget) -> InteractionEvent {
+        InteractionEvent::PointerUp {
+            button,
+            world: Vec2::new(10.0, 10.0),
+            target,
+        }
     }
 
     #[test]
@@ -442,6 +681,7 @@ mod tests {
             button: PointerButton::Left,
             modifiers: InputModifiers::NONE,
             pan_key_held: true,
+            target: PointerTarget::Empty,
         });
 
         assert_eq!(effect, InteractionEffect::BeginPan);
@@ -510,6 +750,7 @@ mod tests {
             button: PointerButton::Left,
             modifiers: InputModifiers::shift(),
             pan_key_held: false,
+            target: PointerTarget::Empty,
         });
         machine.handle(move_to(Vec2::ZERO, Vec2::splat(10.0)));
 

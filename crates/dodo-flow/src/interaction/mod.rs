@@ -7,6 +7,12 @@
 //! `MouseDownEvent` into an [`InteractionEvent`] and an
 //! [`InteractionEffect`] back into a `capture_pointer` or a `cx.notify()`.
 //!
+//! What is under the pointer is **passed in** rather than looked up: a
+//! `PointerDown` carries a [`PointerTarget`](crate::runtime::PointerTarget), so
+//! one press means a pan, a box selection, a node drag or a connection without
+//! this module knowing that a graph exists. §29's broad phase stays the
+//! caller's.
+//!
 //! Zoom is deliberately **not** in the machine. It is stateless — every wheel
 //! notch and every pinch delta is a complete instruction — so modelling it as a
 //! state would add a variant that is entered and left within one event, and
@@ -15,6 +21,6 @@
 pub mod state;
 
 pub use state::{
-    BoxSelection, InputModifiers, InteractionEffect, InteractionEvent, InteractionMachine,
-    InteractionState, PointerButton,
+    BoxSelection, ConnectionSource, InputModifiers, InteractionEffect, InteractionEvent,
+    InteractionMachine, InteractionState, PendingConnection, PointerButton,
 };

@@ -16,15 +16,21 @@
 //! selection rect ─┘   (quads | paths | text)                all quads, all paths, all text
 //! ```
 //!
+//! [`edges`] joins them for a graph edge: it is the one place a world-space
+//! [`EdgeRoute`](crate::geometry::EdgeRoute) becomes screen-space primitives,
+//! markers included.
+//!
 //! [`plan`] is where the two contracts Phase 0 made structural live: paint
 //! order batched by primitive kind, and painted-vertex accounting. Read its doc
 //! before adding a painter.
 
+pub mod edges;
 pub mod grid;
 pub mod painter;
 pub mod plan;
 pub mod shapes;
 
+pub use edges::{EdgePaint, plan_connection_preview, plan_edge};
 pub use grid::{GridLevel, GridLimits, GridSettings, GridStyle};
 pub use painter::WindowPainter;
 pub use plan::{PaintPlan, PaintStats, PathPaint, PathPrimitive, PrimitiveSink, QuadPrimitive};
