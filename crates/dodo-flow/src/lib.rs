@@ -30,18 +30,29 @@
 //! through the whole app. `examples/flow.rs` opens the canvas alone in about a
 //! second.
 //!
-//! # The boundary that matters: no UI framework below `views/`
+//! # The boundary that matters: almost no UI framework outside `views/`
 //!
 //! ```text
-//! views/            gpui, gpui-component        <- the only layer that may
+//! views/                gpui, gpui-component     <- may name a UI framework
+//! render/painter.rs     gpui  (the only painter) <- may name a UI framework
 //! ────────────────────────────────────────────
-//! models/           the document, serde
-//! geometry/         world<->screen, bounds       no UI framework, no `App`,
-//! budgets.rs        the platform's ceilings      no window, unit tested
+//! render/plan.rs        the paint-order contract
+//! render/shapes.rs      the four shapes as outlines
+//! render/grid.rs        the viewport-generated grid
+//! interaction/state.rs  the interaction state machine
+//! models/               the document, serde       no UI framework, no `App`,
+//! geometry/             world<->screen, bounds    no window, unit tested
+//! budgets.rs            the platform's ceilings
 //! ```
 //!
-//! Every layer below `views/` is plain Rust and plain `f32`. GPUI's
+//! Everything on the lower side is plain Rust and plain `f32`. GPUI's
 //! `Point<Pixels>` appears at the render boundary and nowhere else.
+//!
+//! Note that the line is drawn **per file, not per directory**. `render/` and
+//! `interaction/` each hold one GPUI file and the rest pure, which is what lets
+//! the paint-order contract, the grid's bounded output, the vertex estimate and
+//! every interaction transition be asserted by ordinary unit tests with no
+//! window anywhere.
 //!
 //! **This is worth more than it looks and it is very hard to recover once
 //! lost.** A `Point<Pixels>` in a document struct means the document can only
@@ -75,12 +86,33 @@
 //!   named place.
 //! - [`views`] — [`FlowView`], an empty themed pane.
 //!
+//! # What the second slice added
+//!
+//! - [`render`] — **the two contracts Phase 0 made structural**:
+//!   [`render::plan`] batches paint by primitive kind so interleaving is not
+//!   expressible, and counts the vertices actually painted;
+//!   [`render::shapes`] turns the four canvas shapes into outlines and decides
+//!   which of them should be a quad instead; [`render::grid`] generates the
+//!   background from the viewport with a bounded primitive count at any zoom;
+//!   [`render::painter`] is the one file that paints.
+//! - [`interaction`] — [`InteractionMachine`], §25's explicit state, with
+//!   `Idle`, `Panning` and `BoxSelecting` and pure transitions.
+//! - [`views`] — pan, zoom and box selection wired to real input, repainting on
+//!   change and never on a clock.
+//!
 //! Still to come, in roughly this order: `runtime/` (the SoA node and edge
 //! stores, the adjacency index and dirty tracking), `spatial/` (the uniform
-//! grid and its viewport, box-select and hit-test queries), `render/` (snapshot
-//! extraction and the canvas painters), `interaction/`, `commands/` and
-//! `components/`, then the sidebar row and its translated strings. Nothing is
-//! stubbed for them here; the seams are the module boundaries.
+//! grid and its viewport, box-select and hit-test queries), the geometry cache,
+//! `commands/` and `components/`, then the sidebar row and its translated
+//! strings. Nothing is stubbed for them here; the seams are the module
+//! boundaries.
+//!
+//! **Two absences in the second slice are deliberate and load-bearing.** There
+//! is no culling — §40 rule 1 forbids scanning every element to find the
+//! visible ones, and a linear scan written here to fake it would be the thing
+//! nobody remembered to delete once `spatial/` arrived. And a committed box
+//! selection yields a world rectangle and stops, for the same reason: resolving
+//! it into elements is the spatial index's broad phase (§28).
 //!
 //! # Where the budget numbers come from, and what they are not
 //!
@@ -117,12 +149,16 @@
 // what that boundary is worth; `Cargo.toml` says why each dependency is here.
 pub mod budgets;
 pub mod geometry;
+pub mod interaction;
 pub mod models;
+pub mod render;
 pub mod views;
 
 pub use budgets::RenderBudgets;
 pub use geometry::{Rect, Vec2, Viewport};
+pub use interaction::{InteractionEffect, InteractionEvent, InteractionMachine, InteractionState};
 pub use models::{ElementId, ElementKind, FlowDocument};
+pub use render::{GridSettings, GridStyle, PaintPlan, PaintStats};
 pub use views::FlowView;
 
 #[cfg(test)]
@@ -151,6 +187,12 @@ mod tests {
             include_str!("models/serialization.rs"),
         ),
         ("models/style.rs", include_str!("models/style.rs")),
+        ("render/grid.rs", include_str!("render/grid.rs")),
+        ("render/mod.rs", include_str!("render/mod.rs")),
+        ("render/plan.rs", include_str!("render/plan.rs")),
+        ("render/shapes.rs", include_str!("render/shapes.rs")),
+        ("interaction/mod.rs", include_str!("interaction/mod.rs")),
+        ("interaction/state.rs", include_str!("interaction/state.rs")),
     ];
 
     /// **The crate's central invariant, enforced rather than remembered.**
