@@ -7,7 +7,7 @@
 //! cloning the document. The obvious next step is a second enum of inverses —
 //! and it is the wrong one. Every inverse of an edit is itself an edit: undoing
 //! a move is a move, undoing a removal is a restore, undoing a style change is
-//! another style change. So [`apply`](super::apply) takes an `EditCommand` and
+//! another style change. So [`apply`](mod@super::apply) takes an `EditCommand` and
 //! **returns the `EditCommand` that undoes it**, undo is `apply` of that, and
 //! redo is `apply` of what undo returned. One enum, one applier, and no second
 //! path that can drift from the first.

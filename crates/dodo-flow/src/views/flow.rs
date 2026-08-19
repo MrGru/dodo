@@ -60,6 +60,27 @@
 //! about how mouse, scroll and pinch arrive was read from GPUI's source rather
 //! than observed. The trace is how that gets checked on a real machine, and it
 //! costs one atomic load per event when it is off.
+//!
+//! **Keyboard input has a precondition the mouse does not**: it goes down the
+//! *focus* path. See [`KEY_CONTEXT`] — a canvas that never takes focus has
+//! every one of its bindings silently dead, which is what Phase 2's `Esc` and
+//! space-to-pan turned out to be. This view focuses on mount and refocuses on
+//! every press.
+//!
+//! # Where an edit goes
+//!
+//! Nothing here changes the document. The view holds a
+//! [`FlowEditor`] rather than a [`GraphWorld`] and there is **no
+//! `world_mut`**;
+//! every gesture that means an edit goes through
+//! [`apply_gesture`](crate::commands::gesture::apply_gesture),
+//! which turns §25's effects into §30's commands. `commands::editor`'s module
+//! doc says why that is enforced by ownership rather than by convention, and
+//! `commands::gesture`'s says why the mapping is not in this file.
+//!
+//! Two effects stay here because they are not the document's: `PanBy` moves the
+//! camera, and `CommitBoxSelect` needs the spatial broad phase to say what its
+//! rectangle contains.
 
 use std::sync::OnceLock;
 

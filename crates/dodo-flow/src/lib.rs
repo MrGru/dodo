@@ -35,8 +35,11 @@
 //! ```text
 //! views/flow.rs         gpui, gpui-component     <- may name a UI framework
 //! views/nodes.rs        gpui  (the rich elements)<- may name a UI framework
+//! views/keymap.rs       gpui  (the bindings)      <- may name a UI framework
 //! render/painter.rs     gpui  (the only painter) <- may name a UI framework
 //! ────────────────────────────────────────────
+//! commands/             §30's deltas, the applier, the
+//!                       history, the gesture mapping
 //! render/plan.rs        paint order, and the clip
 //! render/lod.rs         §15's ladder: what to simplify
 //! render/snapshot.rs    §24's extraction: compact indices only
@@ -352,14 +355,81 @@
 //! fix; it is a re-fit of a Phase 4 formula every recorded estimate in the
 //! crate is stated against, which is a phase's work rather than a side effect.
 //!
-//! Still to come, in roughly this order: `commands/` and undo, then the sidebar
-//! row and its translated strings. Nothing is stubbed for them here; the seams
-//! are the module boundaries.
+//! # What the seventh slice added: one mutation path
 //!
-//! **One absence is still deliberate and load-bearing**: **nothing is ever
-//! removed** from a store. An index is a slot number, so removal is either a
-//! tombstone or a swap-remove, and which one is right is decided by the undo
-//! history (§30) that has to restore it, which is Phase 7's.
+//! §30's commands and undo. The feature is undo; **the deliverable is the
+//! shape**, because an edit that changes the world behind the history's back
+//! does not fail then — it fails three undos later, with no stack trace and no
+//! reproduction.
+//!
+//! - [`commands::edit`] — the delta vocabulary, and it is *both directions*:
+//!   every inverse of an edit is itself an edit, so [`mod@commands::apply`] returns
+//!   the command that undoes the one it just made. One enum, one applier, and
+//!   no second path that can drift from the first. `Rotate`, `Group` and
+//!   `Ungroup` are **left out** rather than stubbed — the engine has no angle
+//!   and no hierarchy resolver, and a variant nobody can apply is worse than an
+//!   absent one.
+//! - [`commands::editor`] — [`FlowEditor`], the world and the history welded
+//!   together. **It owns its [`GraphWorld`] privately and never lends `&mut` to
+//!   it**, which is the whole enforcement: a caller cannot write the bypass
+//!   because there is no reference to write it through. [`views::FlowView`]
+//!   holds one of these instead of a world, and `world_mut` is gone.
+//! - [`commands::history`] — the stacks, bounded, holding deltas and nothing
+//!   else. Two mechanisms, deliberately not one: *merging* folds consecutive
+//!   moves of the same nodes so a drag does not grow the stack sixty times a
+//!   second, and *gesture grouping* pops a whole gesture as one step so that
+//!   edits which cannot merge still undo together.
+//! - [`commands::gesture`] — §25's interaction effects as commands, moved out
+//!   of `views/flow.rs` so that "a whole drag is one undo step" is a unit test
+//!   driving the real state machine rather than something you check by
+//!   dragging.
+//! - [`commands::keys`] — §26's bindings as a total function of a `HostOs`, so
+//!   every platform's answer is asserted from any machine; `views::keymap` is
+//!   the four lines that need `gpui`.
+//!
+//! **The absence Phase 3 left open is closed, and undo is what closed it.**
+//! Removal is a **tombstone** — [`runtime::NodeFlags::REMOVED`] — because an
+//! undo entry *is* a held index: a swap-remove moves another node into the
+//! freed slot and silently repoints every entry already on the stack, and it
+//! cannot restore an element at its own index at all. Compaction is a document
+//! round-trip and nothing else. [`runtime::NodeStore`]'s module doc has the
+//! argument.
+//!
+//! ## What undo restores, and why almost none of it is written down
+//!
+//! Undoing a node move restores the node, its spatial-index entry, its incident
+//! edges' routes, the dirty flags and the geometry cache — and **not one line
+//! in `commands/` deals with any of those**. An undo is an ordinary edit
+//! applied through the ordinary mutators, so §19's propagation runs for it
+//! exactly as it ran for the edit. `commands`'s own tests assert that at the
+//! frame level: after an undo, the visible set, the painted bounds, the routes,
+//! the index occupancy **and the whole [`render::PaintPlan`]** equal the frame
+//! before the edit was made.
+//!
+//! ## The two corrections Phase 7 sends back
+//!
+//! 1. **A coalesced translation is not invertible in `f32`.** Sixty two-unit
+//!    steps and one hundred-and-twenty-unit step back miss by about two
+//!    ten-millionths: sixty additions round sixty times, the subtraction rounds
+//!    once. Invisible on screen, and *not* invisible to the frame-equivalence
+//!    property above, because the node's painted bounds and therefore its
+//!    spatial cell can differ. So [`commands::EditCommand::MoveNodes`] keeps
+//!    its delta going forward and its inverse is `SetNodePositions`, absolute —
+//!    and the merge rule for the two halves is different on purpose, one
+//!    summing and one keeping the earliest. `commands::edit` pins the
+//!    arithmetic in a test so nobody simplifies it back.
+//! 2. **Every key binding scoped to the canvas was dead, and had been since
+//!    Phase 2.** GPUI dispatches a key event down the *focus* path and falls
+//!    back to the dispatch tree's **root** when nothing is focused, so a canvas
+//!    that never takes focus has its key context, its handlers and its actions
+//!    outside the path entirely — `Esc` and the space-to-pan key included.
+//!    Nothing reports it. [`views::FlowView`] now focuses on mount and refocuses
+//!    on every press. The plan's own risk entry says live input delivery here
+//!    was source-verified and never observed; this is what that cost, and the
+//!    keystrokes themselves still need a human at the keyboard to confirm.
+//!
+//! Still to come: the sidebar row and its translated strings. Nothing is
+//! stubbed for them here; the seams are the module boundaries.
 //!
 //! # Where the budget numbers come from, and what they are not
 //!

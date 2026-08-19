@@ -12,7 +12,8 @@
 //!
 //! Here it is a pure function of an editor and an effect, and
 //! `a_press_sixty_moves_and_a_release_is_one_undo_step` at the bottom drives
-//! the real [`InteractionMachine`] through a real drag with no window anywhere.
+//! the real [`InteractionMachine`](crate::interaction::InteractionMachine) through
+//! a real drag with no window anywhere.
 //! That test is the phase's coalescing requirement, asserted rather than
 //! demonstrated.
 //!

@@ -728,7 +728,7 @@ impl GraphWorld {
     /// [`restore_edge`](GraphWorld::restore_edge) can put back exactly what
     /// went, and nothing that was already gone.
     ///
-    /// The node keeps its slot; see [`NodeStore`](crate::runtime::NodeStore)'s
+    /// The node keeps its slot; see [`NodeStore`]'s
     /// module doc for why undo makes that the only workable choice.
     pub fn remove_node(&mut self, node: NodeIndex, cascaded: &mut Vec<EdgeIndex>) -> bool {
         if !self.nodes.is_live(node) {
