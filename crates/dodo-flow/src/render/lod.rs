@@ -1115,4 +1115,142 @@ mod tests {
             assert_eq!(plan.edges, expected, "at zoom {zoom}");
         }
     }
+
+    // ---- §13: what a hand costs the ladder -------------------------------
+
+    fn hand() -> SketchStyle {
+        SketchStyle::DEFAULT
+    }
+
+    /// **The zoom rule.** A hand-drawn wobble is a 2 px feature, so it dies at
+    /// the same zoom a curve does — below `curve_to_quad_zoom` the ladder is
+    /// already painting curved bodies as quads, and a sketched outline is
+    /// nothing but curves.
+    #[test]
+    fn the_hand_is_dropped_below_the_zoom_a_curve_survives() {
+        let budgets = budgets();
+        let load = healthy();
+
+        for zoom in [2.0, 1.0, 0.6, 0.4] {
+            assert!(
+                LodPlan::choose(&budgets, zoom, load, Some(hand()))
+                    .sketch
+                    .is_some(),
+                "a sparse scene should still be drawn by hand at zoom {zoom}"
+            );
+        }
+        for zoom in [0.34, 0.2, 0.05] {
+            assert!(
+                LodPlan::choose(&budgets, zoom, load, Some(hand()))
+                    .sketch
+                    .is_none(),
+                "the hand should be dropped at zoom {zoom}"
+            );
+        }
+    }
+
+    /// **The load rule, and the measurement that forced it.** A sketched node
+    /// body is two paths of a few hundred vertices where a clean one is a quad
+    /// of none, so Phase 4's dense scene — comfortable clean — is several times
+    /// over the frame budget sketched. The ladder draws it clean rather than
+    /// letting the edge layer pay for the node layer's decision.
+    #[test]
+    fn a_dense_scene_is_drawn_clean_however_much_it_was_asked_for_a_hand() {
+        let dense = SceneLoad {
+            visible_nodes: 1_584,
+            visible_edges: 3_182,
+            mean_edge_screen_length: 34.0,
+            path_bodied_fraction: 0.0,
+            mean_node_screen_size: 160.0,
+        };
+        let plan = LodPlan::choose(&budgets(), 1.0, dense, Some(hand()));
+
+        assert!(plan.sketch.is_none(), "1,584 sketched bodies do not fit");
+        assert_eq!(
+            plan.max_edges, dense.visible_edges,
+            "and dropping the hand must give the edges their budget back"
+        );
+    }
+
+    /// The boundary of that rule, measured rather than asserted in the
+    /// abstract: how many nodes of a normal size a hand can draw in one frame.
+    /// The number is what the launcher's overlay and Phase 6's tables report,
+    /// and a change to the generator that moved it a long way should be a
+    /// visible diff here.
+    #[test]
+    fn the_hand_fits_a_few_hundred_nodes_a_frame() {
+        let budgets = budgets();
+        let mut fits = 0;
+        for nodes in 1..4_000 {
+            let load = SceneLoad {
+                visible_nodes: nodes,
+                visible_edges: 40,
+                mean_edge_screen_length: 200.0,
+                path_bodied_fraction: 0.0,
+                mean_node_screen_size: 160.0,
+            };
+            if LodPlan::choose(&budgets, 1.0, load, Some(hand())).sketch.is_some() {
+                fits = nodes;
+            } else {
+                break;
+            }
+        }
+
+        assert!(
+            (200..=900).contains(&fits),
+            "a 160 px hand should fit a few hundred bodies a frame, not {fits}"
+        );
+    }
+
+    /// A sketched edge is `stroke_count` paths and several times the vertices,
+    /// and the ladder has to know it — an estimate that ignored the hand would
+    /// hand the frame a budget it had already spent.
+    #[test]
+    fn a_sketched_edge_costs_the_ladder_more_than_a_clean_one() {
+        for rung in [EdgeDetail::Full, EdgeDetail::Coarse] {
+            let clean = rung.estimated_vertices_with(200.0, RenderQuality::BALANCED, None);
+            let sketched =
+                rung.estimated_vertices_with(200.0, RenderQuality::BALANCED, Some(hand()));
+
+            assert!(
+                sketched > clean,
+                "{rung:?}: a hand must cost more than a clean line, {sketched} vs {clean}"
+            );
+            assert_eq!(rung.paths_per_edge_with(Some(hand())), 4, "two strokes, two markers");
+        }
+    }
+
+    /// And below `Coarse` the hand stops, because those rungs have already
+    /// thrown away curvature to survive the frame. Drawing what is left of it
+    /// twice would spend exactly what the rung was reached to save.
+    #[test]
+    fn the_bottom_rungs_are_never_drawn_by_hand() {
+        for rung in [EdgeDetail::Polyline, EdgeDetail::Hairline] {
+            assert!(!rung.keeps_sketch());
+            assert_eq!(
+                rung.estimated_vertices_with(200.0, RenderQuality::BALANCED, Some(hand())),
+                rung.estimated_vertices(200.0, RenderQuality::BALANCED),
+            );
+            assert_eq!(rung.paths_per_edge_with(Some(hand())), 1);
+        }
+    }
+
+    /// The hairball, sketched: the ladder still bounds it, and the hand is the
+    /// first thing it gives up rather than the last.
+    #[test]
+    fn a_hairball_asked_for_a_hand_is_still_bounded() {
+        let budgets = budgets();
+        let plan = LodPlan::choose(&budgets, 1.0, hairball(), Some(hand()));
+
+        assert!(plan.sketch.is_none() || plan.edges == EdgeDetail::Hairline);
+        assert!(plan.max_edges <= budgets.target_paths_per_frame);
+        assert!(
+            plan.max_edges * plan.edges.estimated_vertices_with(
+                hairball().mean_edge_screen_length,
+                RenderQuality::BALANCED,
+                plan.sketch,
+            ) <= budgets.target_path_vertices_per_frame,
+        );
+    }
+
 }

@@ -1198,4 +1198,215 @@ mod tests {
         assert_eq!(fade(half, -1.0).a, 0.0);
         assert_eq!(fade(half, 4.0).a, 0.5);
     }
+
+    // ---- §13: the sketch renderer ---------------------------------------
+
+    /// A world drawn by hand, from the same document as `document`.
+    fn sketched(columns: u32, rows: u32) -> GraphWorld {
+        let mut world = document(columns, rows);
+        world.settings_mut().render_style = crate::models::RenderStyle::Sketch;
+        world
+    }
+
+    fn viewport() -> Viewport {
+        Viewport::new(Vec2::new(-200.0, -120.0), 1.0, Vec2::new(1_440.0, 900.0))
+    }
+
+    /// **§13's central claim, as a test**: the same document, the same visible
+    /// set, the same elements — a different *drawing*.
+    ///
+    /// Not "more paths": the same nodes and the same edges, drawn by a hand.
+    /// A sketch mode that quietly dropped or added elements would be a second
+    /// document, which is exactly what §13 says it must not be.
+    #[test]
+    fn sketch_draws_the_same_scene_by_hand() {
+        let clean = frame(&document(6, 4), &viewport());
+        let sketch = frame(&sketched(6, 4), &viewport());
+
+        assert_eq!(clean.1.drawn_nodes(), sketch.1.drawn_nodes());
+        assert_eq!(clean.1.edges, sketch.1.edges);
+        assert_eq!(clean.1.skipped_edges, sketch.1.skipped_edges);
+
+        assert!(sketch.1.sketched_bodies > 0, "no body was drawn by hand");
+        assert_eq!(clean.1.sketched_bodies, 0);
+        assert!(
+            sketch.0.paths().len() > clean.0.paths().len(),
+            "a hand-drawn scene is more paths than a clean one: {} vs {}",
+            sketch.0.paths().len(),
+            clean.0.paths().len()
+        );
+    }
+
+    /// Every node body a hand drew is `stroke_count` paths, and every one of
+    /// them carries a cache key that says which pass it is. Two passes filed
+    /// under one key would paint the same squiggle twice.
+    #[test]
+    fn every_sketch_pass_is_its_own_cache_entry() {
+        let world = sketched(3, 2);
+        let (plan, _) = frame(&world, &viewport());
+
+        let keys: Vec<_> = plan.paths().iter().filter_map(|path| path.key).collect();
+        let sketch_keys: Vec<_> = keys
+            .iter()
+            .filter(|key| matches!(key.part, GeometryPart::SketchStroke(_)))
+            .collect();
+
+        assert!(!sketch_keys.is_empty(), "nothing was keyed as a sketch pass");
+        let mut unique = sketch_keys.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            sketch_keys.len(),
+            "two sketch passes shared a cache key"
+        );
+        assert!(
+            sketch_keys.iter().all(|key| key.sketch != CLEAN),
+            "a sketched path was keyed as a clean one, so a toggle would serve it"
+        );
+    }
+
+    /// **§13's other half, and §40 rule 5: a repaint regenerates nothing.**
+    ///
+    /// Two identical frames through a real geometry cache: everything the
+    /// second frame asks for is already there, so not one sketch outline is
+    /// tessellated twice. The stand-in geometry is a vertex buffer, which is
+    /// all the cache's policy operates on — see `render::cache`.
+    #[test]
+    fn a_repaint_regenerates_no_sketch_geometry() {
+        let world = sketched(6, 4);
+        let view = viewport();
+        let budgets = for_backend(RenderBackend::Metal);
+        let mut cache: crate::render::cache::GeometryCache<FakeGeometry> =
+            crate::render::cache::GeometryCache::new(&budgets);
+
+        let mut tessellations = Vec::new();
+        for _ in 0..3 {
+            let (plan, _) = frame(&world, &view);
+            cache.begin_frame(
+                crate::render::cache::ScreenAnchor::of(&view),
+                false,
+            );
+
+            let mut built = 0;
+            for path in plan.paths() {
+                let Some(key) = path.key else {
+                    continue;
+                };
+                if cache.get(&key).is_none() {
+                    built += 1;
+                    cache.insert(key, FakeGeometry(path.outline.flattened_points(0.25)));
+                }
+            }
+            cache.end_frame();
+            tessellations.push(built);
+        }
+
+        assert!(tessellations[0] > 0, "the first frame must build something");
+        assert_eq!(
+            &tessellations[1..],
+            &[0, 0],
+            "a repaint rebuilt sketch geometry that had not changed: {tessellations:?}"
+        );
+    }
+
+    /// The determinism property where it actually matters: **through the whole
+    /// planning path**, not only through the generator. Two frames of an
+    /// unchanged scene must plan bit-identical outlines, or the cache above is
+    /// hitting on a key whose geometry moved.
+    #[test]
+    fn two_frames_of_an_unchanged_scene_plan_identical_geometry() {
+        let world = sketched(6, 4);
+        let view = viewport();
+
+        let first = frame(&world, &view).0;
+        let second = frame(&world, &view).0;
+
+        assert_eq!(first.paths().len(), second.paths().len());
+        for (a, b) in first.paths().iter().zip(second.paths()) {
+            assert_eq!(
+                a.outline.commands(),
+                b.outline.commands(),
+                "a repaint drew a different squiggle"
+            );
+        }
+    }
+
+    /// Moving a node redraws *that* node's hand and nobody else's — the sketch
+    /// version of §19's rule, and what keeps a drag from re-tessellating the
+    /// whole screen.
+    #[test]
+    fn moving_one_node_redraws_only_its_own_hand() {
+        let mut world = sketched(6, 4);
+        let view = viewport();
+        let before: Vec<_> = frame(&world, &view)
+            .0
+            .paths()
+            .iter()
+            .filter_map(|path| path.key)
+            .collect();
+
+        // A node the camera can actually see — the visible set at this
+        // viewport starts at index 7.
+        world.move_node(NodeIndex::new(8), Vec2::new(12.0, 7.0));
+        world.rebuild_dirty_geometry();
+        world.clear_spatial_updates();
+
+        let after: Vec<_> = frame(&world, &view)
+            .0
+            .paths()
+            .iter()
+            .filter_map(|path| path.key)
+            .collect();
+
+        let changed = after.iter().filter(|key| !before.contains(key)).count();
+        assert!(changed > 0, "the moved node must get a new key");
+        assert!(
+            changed < after.len() / 2,
+            "moving one node invalidated {changed} of {} keys",
+            after.len()
+        );
+    }
+
+    /// **The zoom rule, end to end**: a sketch stroke at overview zoom is
+    /// invisible detail bought at several times the price, so the ladder draws
+    /// clean and the plan says so.
+    #[test]
+    fn the_ladder_degrades_sketch_to_clean_when_zoomed_out() {
+        let world = sketched(6, 4);
+
+        for zoom in [1.0, 0.6, 0.4] {
+            let view = Viewport::new(Vec2::ZERO, zoom, Vec2::new(1_440.0, 900.0));
+            assert!(
+                frame(&world, &view).1.sketched_bodies > 0,
+                "sketch should survive at zoom {zoom}"
+            );
+        }
+
+        for zoom in [0.3, 0.15, 0.05] {
+            let view = Viewport::new(Vec2::ZERO, zoom, Vec2::new(1_440.0, 900.0));
+            let (plan, stats) = frame(&world, &view);
+            assert_eq!(
+                stats.sketched_bodies, 0,
+                "sketch should be degraded to clean at zoom {zoom}"
+            );
+            // And it must be genuinely cheaper, not merely renamed.
+            let clean = frame(&document(6, 4), &view).0;
+            assert_eq!(plan.estimated_path_vertices(), clean.estimated_path_vertices());
+        }
+    }
+
+    /// A vertex buffer and nothing else — the same stand-in `render::cache`'s
+    /// own tests use, because the cache's policy never looks at geometry.
+    #[derive(Debug, Clone, PartialEq)]
+    struct FakeGeometry(u32);
+
+    impl crate::render::cache::CachedGeometry for FakeGeometry {
+        fn vertex_count(&self) -> u32 {
+            self.0
+        }
+
+        fn transform(&mut self, _scale: f32, _offset: Vec2) {}
+    }
+
 }

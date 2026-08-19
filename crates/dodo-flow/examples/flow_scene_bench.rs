@@ -47,15 +47,15 @@ use dodo_flow::{
     budgets::{self, CACHE_BYTES_PER_VERTEX, RenderBudgets},
     geometry::{Rect, Vec2, Viewport},
     instrument::{Instruments, Probe},
-    models::{Color, NodeIndex},
+    models::{Color, ElementId, NodeIndex, RenderQuality, RenderStyle, SketchStyle},
     render::{
-        GridLimits, GridSettings, PaintPlan, RenderSnapshot, SceneInk, SceneOptions,
+        GridLimits, GridSettings, Outline, PaintPlan, RenderSnapshot, SceneInk, SceneOptions,
         cache::{CacheStats, GeometryCache, ScreenAnchor},
         lod::LodPlan,
         painter::build_path,
-        plan::{PathPrimitive, PrimitiveSink, QuadPrimitive, TextPrimitive},
+        plan::{PathPaint, PathPrimitive, PrimitiveSink, QuadPrimitive, TextPrimitive},
         registry::NodeRendererRegistry,
-        scene,
+        scene, shapes, sketch,
         snapshot::SnapshotCounts,
     },
     runtime::{BoxQuery, GraphWorld},
@@ -370,11 +370,25 @@ struct SceneResult {
     counts: SnapshotCounts,
     /// Every GPUI element the frame would have created — §16's number.
     elements: u32,
+    /// Node bodies §13's hand actually drew — zero when the ladder degraded it.
+    sketched_bodies: u32,
 }
 
 fn measure_scene(spec: SceneSpec, budgets: &RenderBudgets) -> SceneResult {
+    measure_scene_styled(spec, budgets, RenderStyle::Clean)
+}
+
+/// The same frame, drawn clean or by hand (§13). The *document* is identical
+/// either way — the style is one field on it — which is the property the sketch
+/// numbers below are a measurement of.
+fn measure_scene_styled(
+    spec: SceneSpec,
+    budgets: &RenderBudgets,
+    style: RenderStyle,
+) -> SceneResult {
     let start = Instant::now();
-    let world = scenes::build(&spec);
+    let mut world = scenes::build(&spec);
+    world.settings_mut().render_style = style;
     let build_millis = millis(start.elapsed());
 
     let start = Instant::now();
@@ -423,11 +437,11 @@ fn measure_scene(spec: SceneSpec, budgets: &RenderBudgets) -> SceneResult {
         &scene_options(budgets),
     );
     let estimated_vertices = plan.estimated_path_vertices();
+    let sketched_bodies = stats.sketched_bodies;
     let culled_paths = plan.culled_paths();
     let paths = plan.path_count();
     let quads = plan.quad_count();
     let dropped_paths = plan.enforce_vertex_ceiling(budgets);
-    let _ = stats;
 
     // The real thing, through the same `paint_into` a window would use.
     let mut painter = HeadlessPainter::default();
@@ -461,6 +475,7 @@ fn measure_scene(spec: SceneSpec, budgets: &RenderBudgets) -> SceneResult {
         lod: snapshot.lod().expect("a frame was extracted"),
         counts: snapshot.counts(),
         elements: snapshot.element_count(),
+        sketched_bodies,
     }
 }
 
@@ -969,6 +984,235 @@ fn main() {
     println!("\n§23  the geometry cache");
     measure_geometry_cache(SceneSpec::DENSE, &budgets);
     measure_geometry_cache(SceneSpec::LARGE, &budgets);
+
+    println!("\n§13 / §50  how much does sketch mode add? — per primitive");
+    measure_sketch_primitives();
+
+    println!("\n§13 / §50  and per scene, clean against hand-drawn");
+    measure_sketch_scenes(&budgets);
+
+    println!("\n§13 / §15  what the ladder can afford");
+    measure_sketch_limits(&budgets);
+
+    println!("\n§13 / §23  sketch geometry through the cache — a pure pan");
+    measure_geometry_cache_styled(SceneSpec::LARGE, &budgets, RenderStyle::Sketch);
+    measure_geometry_cache_styled(SceneSpec::MEDIUM, &budgets, RenderStyle::Sketch);
+}
+
+// ---------------------------------------------------------------------------
+// §13 / §50 — how much does sketch mode add?
+// ---------------------------------------------------------------------------
+
+/// **The per-primitive answer**: what one shape costs clean and by hand.
+///
+/// Real tessellations through `render::painter::build_path`, so these are the
+/// vertices GPUI would upload rather than the estimate the guard spends. Both
+/// columns are tessellated at the tolerance their own path would use — the
+/// document's for clean, [`SketchStyle::TOLERANCE_FACTOR`]× it for sketch —
+/// because that is what the renderer actually does and a comparison at one
+/// tolerance would flatter the clean column.
+fn measure_sketch_primitives() {
+    let style = SketchStyle::DEFAULT;
+    let quality = RenderQuality::BALANCED;
+    let sketch_quality = style.quality(quality);
+    let body = Rect::new(Vec2::new(20.0, 20.0), Vec2::new(160.0, 64.0));
+
+    let stroke = PathPaint::Stroke {
+        color: Color::WHITE,
+        width: 1.5,
+    };
+    let fill = PathPaint::Fill(Color::WHITE);
+
+    let mut line = Outline::with_capacity(2);
+    line.move_to(Vec2::new(20.0, 60.0));
+    line.line_to(Vec2::new(220.0, 60.0));
+
+    let mut curve = Outline::with_capacity(2);
+    curve.move_to(Vec2::new(20.0, 60.0));
+    curve.cubic_to(
+        Vec2::new(120.0, 10.0),
+        Vec2::new(120.0, 110.0),
+        Vec2::new(220.0, 60.0),
+    );
+
+    let mut arrow = Outline::with_capacity(4);
+    arrow.move_to(Vec2::new(220.0, 60.0));
+    arrow.line_to(Vec2::new(206.0, 52.0));
+    arrow.line_to(Vec2::new(206.0, 68.0));
+    arrow.close();
+
+    let cases: [(&str, Outline, PathPaint); 7] = [
+        ("rectangle", shapes::rectangle(body), stroke),
+        ("rounded r8", shapes::rounded_rectangle(body, 8.0), stroke),
+        ("diamond", shapes::diamond(body), stroke),
+        ("ellipse", shapes::ellipse(body), stroke),
+        ("line 200px", line, stroke),
+        ("bezier 200px", curve, stroke),
+        ("arrow head", arrow, fill),
+    ];
+
+    println!(
+        "  {:<13} {:>8} {:>8} {:>7} {:>10} {:>10} {:>7} {:>9} {:>9}",
+        "primitive",
+        "clean v",
+        "sketch v",
+        "x",
+        "clean µs",
+        "sketch µs",
+        "x",
+        "clean est",
+        "sktch est"
+    );
+
+    for (name, outline, paint) in cases {
+        let (clean_vertices, clean_micros) = tessellate(&outline, paint, quality);
+
+        let seed = sketch::element_seed(&style, ElementId::new(11), 1);
+        let strokes = sketch::strokes(&outline, &style, seed);
+        let mut sketch_vertices = 0;
+        let mut sketch_micros = 0.0;
+        for pass in &strokes {
+            let (vertices, micros) = tessellate(pass, paint, sketch_quality);
+            sketch_vertices += vertices;
+            sketch_micros += micros;
+        }
+
+        // The estimate beside the reality: the black-window guard spends the
+        // estimate, so how loose it is on hand-drawn geometry is a number this
+        // phase owes the next one.
+        let clean_estimate = outline.estimated_vertices(paint, quality);
+        let sketch_estimate: u32 = strokes
+            .iter()
+            .map(|pass| pass.estimated_vertices(paint, sketch_quality))
+            .sum();
+
+        println!(
+            "  {:<13} {:>8} {:>8} {:>6.1}x {:>9.2} {:>10.2} {:>6.1}x {:>9} {:>9}",
+            name,
+            clean_vertices,
+            sketch_vertices,
+            sketch_vertices as f64 / clean_vertices.max(1) as f64,
+            clean_micros,
+            sketch_micros,
+            sketch_micros / clean_micros.max(f64::EPSILON),
+            clean_estimate,
+            sketch_estimate,
+        );
+    }
+
+    // What `SketchStyle::TOLERANCE_FACTOR` is actually worth, measured rather
+    // than assumed: the same two shapes at four flattening tolerances.
+    for factor in [1.0f32, 2.0, 3.0, 4.0] {
+        let quality = RenderQuality::new(RenderQuality::BALANCED.flattening_tolerance * factor);
+        let seed = sketch::element_seed(&style, ElementId::new(11), 1);
+        let (mut vertices, mut cost) = (0u32, 0.0);
+        for shape in [shapes::rectangle(body), shapes::ellipse(body)] {
+            for pass in sketch::strokes(&shape, &style, seed) {
+                let (built, micros) = tessellate(&pass, stroke, quality);
+                vertices += built;
+                cost += micros;
+            }
+        }
+        println!(
+            "  tolerance x{factor:.0}: a sketched rectangle and ellipse are {vertices} painted \
+             vertices, {cost:.2} µs"
+        );
+    }
+
+    println!(
+        "  a clean rectangle is not a path at all in this engine — it is a quad, at 0 path\n           vertices and no batch. The rows above are the *path* cost of one that has to be one."
+    );
+}
+
+/// Tessellates one outline `REPEATS` times and reports its vertices and its
+/// per-build cost.
+fn tessellate(outline: &Outline, paint: PathPaint, quality: RenderQuality) -> (u32, f64) {
+    let tolerance = quality.flattening_tolerance;
+    let vertices = build_path(outline, paint, tolerance)
+        .map(|path| path.vertices.len() as u32)
+        .unwrap_or(0);
+
+    let start = Instant::now();
+    for _ in 0..REPEATS {
+        std::hint::black_box(build_path(outline, paint, tolerance));
+    }
+    (vertices, micros(start.elapsed(), REPEATS))
+}
+
+/// **The per-scene answer**: what a whole frame costs clean and by hand, and
+/// which of the ladder's two rules the scene ran into.
+fn measure_sketch_scenes(budgets: &RenderBudgets) {
+    println!(
+        "  {:<10} {:>8} {:>9} {:>11} {:>11} {:>12} {:>8} {:>9}",
+        "scene", "paths", "bodies", "est. verts", "painted", "tessellate", "hand?", "edge rung"
+    );
+
+    for spec in [
+        SceneSpec::SMALL,
+        SceneSpec::MEDIUM,
+        SceneSpec::LARGE,
+        SceneSpec::DENSE,
+        SceneSpec::SCATTERED,
+    ] {
+        for style in [RenderStyle::Clean, RenderStyle::Sketch] {
+            let result = measure_scene_styled(spec, budgets, style);
+            println!(
+                "  {:<10} {:>8} {:>9} {:>11} {:>11} {:>9.3} ms {:>8} {:>9}",
+                format!(
+                    "{} {}",
+                    spec.name,
+                    if style == RenderStyle::Clean { "clean" } else { "sketch" }
+                ),
+                result.paths,
+                result.sketched_bodies,
+                result.estimated_vertices,
+                result.painted_vertices,
+                result.tessellation_micros / 1_000.0,
+                if result.lod.sketch.is_some() { "kept" } else { "-" },
+                format!("{:?}", result.lod.edges),
+            );
+        }
+    }
+}
+
+/// **Where the ladder draws the line**, in the two variables it decides from:
+/// how many nodes are on screen, and how far the camera is zoomed out.
+fn measure_sketch_limits(budgets: &RenderBudgets) {
+    use dodo_flow::render::lod::SceneLoad;
+
+    let hand = SketchStyle::DEFAULT;
+    let mut fits = 0;
+    for nodes in 1..8_000u32 {
+        let load = SceneLoad {
+            visible_nodes: nodes,
+            visible_edges: 40,
+            mean_edge_screen_length: 200.0,
+            path_bodied_fraction: 0.0,
+            mean_node_screen_size: 160.0,
+        };
+        if LodPlan::choose(budgets, 1.0, load, Some(hand)).sketch.is_some() {
+            fits = nodes;
+        } else {
+            break;
+        }
+    }
+    println!("  a 160 px hand fits {fits} node bodies in one frame before the ladder drops it");
+
+    let load = SceneLoad {
+        visible_nodes: 40,
+        visible_edges: 60,
+        mean_edge_screen_length: 200.0,
+        path_bodied_fraction: 0.0,
+        mean_node_screen_size: 160.0,
+    };
+    let mut lowest = 0.0;
+    for step in (1..=200).rev() {
+        let zoom = step as f32 / 100.0;
+        if LodPlan::choose(budgets, zoom, load, Some(hand)).sketch.is_some() {
+            lowest = zoom;
+        }
+    }
+    println!("  and it survives down to zoom {lowest:.2}, where a 2 px wobble stops being visible");
 }
 
 /// **§23's cache during a pure pan** — the number Phase 4 asked this phase for.
@@ -978,7 +1222,12 @@ fn main() {
 /// cache can be exercised exactly as a frame would: plan, look up, translate on
 /// a hit, tessellate and insert on a miss.
 fn measure_geometry_cache(spec: SceneSpec, budgets: &RenderBudgets) {
+    measure_geometry_cache_styled(spec, budgets, RenderStyle::Clean);
+}
+
+fn measure_geometry_cache_styled(spec: SceneSpec, budgets: &RenderBudgets, style: RenderStyle) {
     let mut world = scenes::build(&spec);
+    world.settings_mut().render_style = style;
     let mut index = SpatialIndex::for_world(&world);
     world.clear_spatial_updates();
 
@@ -1028,9 +1277,10 @@ fn measure_geometry_cache(spec: SceneSpec, budgets: &RenderBudgets) {
 
     let elapsed = start.elapsed();
     println!(
-        "  {} frames of pure pan on the {} scene ({:.1} ms total)",
+        "  {} frames of pure pan on the {} scene, {:?} ({:.1} ms total)",
         frames,
         spec.name,
+        style,
         millis(elapsed)
     );
     println!(

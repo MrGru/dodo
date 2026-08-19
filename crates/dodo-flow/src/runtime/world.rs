@@ -1996,4 +1996,67 @@ mod tests {
     fn an_empty_report_is_the_clean_one() {
         assert!(LoadReport::default().is_clean());
     }
+
+    /// **§13's structural claim, as a test**: switching between clean and
+    /// hand-drawn is a *renderer* strategy, so it must not touch the graph.
+    ///
+    /// Nothing is recreated, no element version moves, no edge is queued for a
+    /// rebuild and no spatial update is raised — so the toggle costs one field
+    /// write and one repaint whatever the document's size, and the geometry
+    /// cache's entries stay valid for the mode that is being switched away
+    /// from. A sketch mode that rewrote elements would be a second document,
+    /// which is exactly what §13 forbids.
+    #[test]
+    fn switching_render_style_touches_no_element() {
+        let mut world = GraphWorld::new();
+        let a = graph_node(&mut world, 0.0, 0.0);
+        let b = graph_node(&mut world, 400.0, 120.0);
+        let (source, target) = (out(&world, a), to_in(&world, b));
+        world.connect(source, target).expect("a valid connection");
+        world.rebuild_all_geometry();
+        world.dirty_mut().clear_all();
+
+        let before = world.to_document();
+        let node_versions: Vec<u32> = world
+            .nodes()
+            .indices()
+            .map(|node| world.nodes().version(node))
+            .collect();
+        let edge_versions: Vec<u32> = world
+            .edges()
+            .indices()
+            .map(|edge| world.geometry().version(edge))
+            .collect();
+
+        world.settings_mut().render_style = crate::models::RenderStyle::Sketch;
+
+        assert_eq!(world.rebuild_dirty_geometry(), 0, "no route was invalidated");
+        assert!(
+            world.dirty().spatial_updates().is_empty(),
+            "no element moved, so the index has nothing to do"
+        );
+        assert_eq!(
+            node_versions,
+            world
+                .nodes()
+                .indices()
+                .map(|node| world.nodes().version(node))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            edge_versions,
+            world
+                .edges()
+                .indices()
+                .map(|edge| world.geometry().version(edge))
+                .collect::<Vec<_>>(),
+        );
+
+        // And the document differs in exactly one field.
+        let after = world.to_document();
+        assert_eq!(after.nodes, before.nodes);
+        assert_eq!(after.edges, before.edges);
+        assert_ne!(after.settings.render_style, before.settings.render_style);
+    }
+
 }
