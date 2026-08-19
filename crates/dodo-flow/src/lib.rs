@@ -168,9 +168,10 @@
 //!
 //! | | |
 //! |---|---|
-//! | viewport query at 100,000 nodes / 300,000 edges | **2.4 µs**, against 1,697 µs for the same question by scan |
+//! | viewport query at 100,000 nodes / 300,000 edges | **2.3 µs**, against 1,863 µs for the same question by scan |
 //! | the same query at 5,000 nodes | 2.3 µs — **it does not grow with the document** |
-//! | one node moved in a 300,000-edge graph | **0.50 µs** (Phase 3's 0.17 µs propagation, plus the index) |
+//! | tessellating the dense frame from scratch | 3.08 ms, 19 % of a 16.7 ms frame — the case for §23's cache |
+//! | one node moved in a 300,000-edge graph | **0.51 µs** (Phase 3's 0.17 µs propagation, plus the index) |
 //! | painted vertices, worst scene | **132,888** — 5.5 % of the 2.4 M ceiling, 38 % of the 60 fps budget |
 //! | path batches per frame | **1**, against a budget of 64 |
 //! | offscreen paths reaching the painter | **0**, by construction |

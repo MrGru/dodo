@@ -364,8 +364,10 @@ fn measure_scene(spec: SceneSpec, budgets: &RenderBudgets) -> SceneResult {
     }
     let query_micros = micros(start.elapsed(), REPEATS);
 
-    // The same answer the slow way, over fewer repeats because it is slow.
-    let scan_repeats = if spec.nodes > 20_000 { 5 } else { 50 };
+    // The same answer the slow way. Fewer repeats on the big scenes because it
+    // is slow, but not so few that the number is noise — five repeats of the
+    // small scene's scan varied by 3x between runs, which is not a measurement.
+    let scan_repeats = if spec.nodes > 20_000 { 30 } else { 500 };
     let start = Instant::now();
     let mut scanned = (0, 0);
     for _ in 0..scan_repeats {

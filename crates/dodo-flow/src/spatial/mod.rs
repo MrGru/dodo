@@ -28,25 +28,35 @@
 //!
 //! | scene | nodes / edges | index build | viewport query | brute-force scan | visible |
 //! |---|---:|---:|---:|---:|---:|
-//! | small | 100 / 200 | 0.04 ms | 4.6 µs | 2.0 µs | 37 n / 76 e |
-//! | medium | 5,000 / 15,000 | 0.76 ms | 2.3 µs | 50 µs | 36 n / 117 e |
-//! | large | 100,000 / 300,000 | 14.2 ms | **2.4 µs** | 1,697 µs | 36 n / 126 e |
-//! | dense | 20,000 / 40,000 | 1.84 ms | 69.7 µs | 187 µs | 1,584 n / 3,182 e |
+//! | small | 100 / 200 | 0.04 ms | 4.5 µs | 1.9 µs | 37 n / 76 e |
+//! | medium | 5,000 / 15,000 | 0.77 ms | 2.3 µs | 84 µs | 36 n / 117 e |
+//! | large | 100,000 / 300,000 | 14.7 ms | **2.3 µs** | 1,863 µs | 36 n / 126 e |
+//! | dense | 20,000 / 40,000 | 1.69 ms | 67.8 µs | 184 µs | 1,584 n / 3,182 e |
 //!
-//! **The viewport query does not grow with the document.** 2.4 µs at 100,000
+//! The microsecond columns move about 20 % between runs on a laptop with other
+//! things running; the ratios below do not, and they are what the claims are
+//! made of.
+//!
+//! **The viewport query does not grow with the document.** 2.3 µs at 100,000
 //! nodes and 300,000 edges against 2.3 µs at 5,000 — and against a brute-force
-//! scan of the same question at 1,697 µs, which is **707× slower** and is the
+//! scan of the same question at 1,863 µs, which is **~800× slower** and is the
 //! only one of the two that grows. That flatness is the claim the architecture
 //! rests on, and it is a measurement rather than a complexity argument.
+//!
+//! `spatial::index`'s `query_cost_is_set_by_the_viewport_and_not_by_the_document`
+//! is the same property without a clock: a 144× larger document at the same
+//! camera must visit *exactly* the same candidates, because the cells a query
+//! touches are a property of the query. That is the version that runs in CI.
 //!
 //! The dense scene is larger because it *finds* 4,766 elements rather than 162.
 //! A query proportional to what it returns is exactly the property §16 asks
 //! for.
 //!
-//! **The small scene is the honest exception**: at 100 nodes the scan is
-//! faster than the index (2.0 µs against 4.6 µs), because 300 elements fit in
-//! cache and a hash and a chain walk do not pay for themselves. The index is
-//! not there for small documents, and nothing here pretends otherwise.
+//! **The small scene is the honest exception**: at 100 nodes the scan is about
+//! twice as fast as the index (1.9 µs against 4.5 µs, and the ratio holds
+//! across runs), because 300 elements fit in cache and a hash plus a chain walk
+//! does not pay for itself. The index is not there for small documents, and
+//! nothing here pretends otherwise.
 //!
 //! # Why a uniform hash grid, benchmarked rather than assumed
 //!
@@ -70,8 +80,9 @@
 //! is the trade, stated as numbers so the next person can retake it rather than
 //! re-derive it.
 //!
-//! Against the scan the answer is not close: **209×**, and the gap grows with
-//! the document because the scan is the only one of the three that does.
+//! Against the scan the answer is not close: **~210×** on the node query
+//! alone, and the gap grows with the document because the scan is the only one
+//! of the three that does.
 //!
 //! # Cell size
 //!
@@ -100,8 +111,8 @@
 //!
 //! | | per move |
 //! |---|---:|
-//! | 1,000 sub-cell moves (a real drag) | **0.50 µs** |
-//! | 1,000 cell-crossing moves | 0.76 µs |
+//! | 1,000 sub-cell moves (a real drag) | **0.51 µs** |
+//! | 1,000 cell-crossing moves | 0.77 µs |
 //!
 //! and the number behind the gap: a sub-cell move re-linked the index **2 times
 //! in 1,000**. [`SpatialIndex::update`](UniformGrid::update) compares the new
@@ -120,7 +131,7 @@
 //! | | large (local edges) | scattered (document-crossing edges) |
 //! |---|---:|---:|
 //! | visible edges | 126 | **61,104** |
-//! | viewport query | 2.4 µs | **1,721 µs** |
+//! | viewport query | 2.3 µs | **1,737 µs** |
 //! | oversized items | 0 | **276,549** |
 //! | estimated vertices | 31,188 | **147,761,694** |
 //! | paths dropped by the black-window guard | 0 | **60,061** |
