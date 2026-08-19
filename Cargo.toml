@@ -69,6 +69,7 @@ default-members = [
     "crates/dodo-ime-windows",
     "crates/dodo-input-method",
     "crates/dodo-json-formatter",
+    "crates/dodo-mermaid",
     "crates/dodo-paths",
     "crates/dodo-updater",
 ]
@@ -177,6 +178,11 @@ dodo-api-explorer = { path = "crates/dodo-api-explorer" }
 dodo-encoder-decoder = { path = "crates/dodo-encoder-decoder" }
 # The JSON formatter, whole. The tool table is its only consumer.
 dodo-json-formatter = { path = "crates/dodo-json-formatter" }
+# The Mermaid workspace, whole. The tool table is its only consumer. Born as
+# its own crate rather than lifted, the same way `dodo-flow` was — every
+# feature crate here is one, and the workspace plan's "no new crate" guidance
+# was written without that convention in view.
+dodo-mermaid = { path = "crates/dodo-mermaid" }
 # The Database Explorer, whole. The binary names four items from it —
 # `layout.rs`'s `DatabaseView`, `main.rs`'s `database::init`, and
 # `quick_nav`'s `models::uri` / `ParsedUri` for routing a pasted connection

@@ -35,6 +35,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::EncoderDecoderTitle => "Encoder / Decoder".into(),
         Text::ApiExplorerTitle => "API Explorer".into(),
         Text::CleanerTitle => "Cleaner".into(),
+        Text::MermaidTitle => "Mermaid".into(),
         Text::RunScripts => "Run scripts".into(),
         Text::RunScriptsDescription => {
                 "Whether the API Explorer runs the scripts a request carries. A script that \

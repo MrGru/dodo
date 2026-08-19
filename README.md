@@ -50,6 +50,13 @@ edited: row changes accumulate as pending edits, are shown for confirmation, and
 commit or roll back in one transaction — only where the result carries real
 primary/unique-key identity. Redis is read-only.
 
+**Mermaid** — a tabbed workspace for Mermaid diagrams: an editor, a live SVG
+preview and an Editor/Split/Preview toggle. Rendering runs through
+[`mermaid-rs-renderer`](https://github.com/1jehuang/mermaid-rs-renderer), an
+embedded Rust library — no Mermaid.js, Node, WebView or external process — on a
+debounced background task, so a syntax error while typing keeps the last good
+diagram on screen instead of blanking it.
+
 **Cleaner** — safety-first disk cleanup: scan a category, review what was found,
 move it to the Trash. Scanning never deletes, cleanup is allow-list bounded, and
 nothing leaves the review step without being selected. macOS lists fourteen
@@ -152,7 +159,7 @@ for building GPUI apps apply.
 cargo run
 ```
 
-Six feature crates can also be launched on their own, in a window containing
+Seven feature crates can also be launched on their own, in a window containing
 nothing but that view:
 
 ```sh
@@ -162,6 +169,7 @@ cargo run -p dodo-database       --example database       --locked
 cargo run -p dodo-api-explorer   --example api_explorer   --locked
 cargo run -p dodo-json-formatter --example json_formatter --locked
 cargo run -p dodo-encoder-decoder --example encoder_decoder --locked
+cargo run -p dodo-mermaid        --example mermaid        --locked
 ```
 
 These are the same views the app mounts, reading the same data directory and
