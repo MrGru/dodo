@@ -403,8 +403,17 @@
 //! applied through the ordinary mutators, so §19's propagation runs for it
 //! exactly as it ran for the edit. `commands`'s own tests assert that at the
 //! frame level: after an undo, the visible set, the painted bounds, the routes,
-//! the index occupancy **and the whole [`render::PaintPlan`]** equal the frame
-//! before the edit was made.
+//! the index occupancy **and every primitive the painter would be handed** —
+//! collected through [`render::PaintPlan::paint_into`], in paint order — equal
+//! the frame before the edit was made.
+//!
+//! **One thing is deliberately not equal, and it is worth knowing about**: the
+//! §23 geometry cache version. A version only ever goes *up*, and the write
+//! that undoes an edit is still a write, so after an undo the geometry is
+//! identical and its cache key is new. That is the safe direction — a spurious
+//! miss costs one tessellation, where a version returning to a value it had
+//! held before would serve geometry from a state the element has left. The
+//! property test compares the versions separately and asserts exactly that.
 //!
 //! ## The two corrections Phase 7 sends back
 //!

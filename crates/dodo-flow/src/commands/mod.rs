@@ -54,8 +54,13 @@ mod tests {
             GraphNodeKind, NodeIndex, ShapeKind,
         },
         render::{
-            GridSettings, PaintPlan, SceneInk, SceneOptions, SceneStats, grid::GridLimits,
-            registry::NodeRendererRegistry, scene, snapshot::RenderSnapshot,
+            GridSettings, Outline, PaintPlan, SceneInk, SceneOptions, SceneStats,
+            cache::{GeometryOwner, GeometryPart},
+            grid::GridLimits,
+            plan::{PathPaint, PathPrimitive, PrimitiveSink, QuadPrimitive, TextPrimitive},
+            registry::NodeRendererRegistry,
+            scene,
+            snapshot::RenderSnapshot,
         },
         runtime::{BoxQuery, ConnectionRules, EdgeEnd, EdgeSpec, GraphWorld, NodeSpec},
         scenes::SceneSpec,
@@ -85,8 +90,76 @@ mod tests {
         routes: Vec<(EdgeIndex, Vec2, Vec<RouteSegment>)>,
         indexed_nodes: usize,
         indexed_edges: usize,
-        plan: PaintPlan,
+        painted: Painted,
         scene: SceneStats,
+    }
+
+    /// Everything the painter is handed, in paint order.
+    #[derive(Debug, Default)]
+    struct Painted {
+        quads: Vec<QuadPrimitive>,
+        paths: Vec<PaintedPath>,
+        texts: Vec<TextPrimitive>,
+        /// The §23 cache versions this frame filed its geometry under, in
+        /// order. Collected but **not** part of the equality — see
+        /// [`PaintedPath`].
+        versions: Vec<u32>,
+    }
+
+    /// One path as the painter sees it, **minus its cache version**.
+    ///
+    /// The version is deliberately outside the comparison, and this is the one
+    /// place the phase's "the same frame" claim has a caveat worth stating. A
+    /// §23 cache version only ever goes *up* — it is bumped by every write that
+    /// changes what an element looks like, and the write that undoes one is
+    /// still a write — so after an undo the geometry is identical and its cache
+    /// key is new. That is the safe direction and it is on purpose: a spurious
+    /// miss costs one tessellation, where a version that returned to a value it
+    /// had held before would serve geometry from a state the element is no
+    /// longer in.
+    ///
+    /// So the outline, the paint, the tolerance and *which element and part*
+    /// the path belongs to are compared exactly, and the version is asserted
+    /// separately to have moved forward.
+    #[derive(Debug, Clone, PartialEq)]
+    struct PaintedPath {
+        outline: Outline,
+        paint: PathPaint,
+        quality: crate::models::RenderQuality,
+        filed_under: Option<(GeometryOwner, GeometryPart)>,
+    }
+
+    /// **Written out rather than derived, to leave `versions` out of it.** See
+    /// [`PaintedPath`] for why a §23 cache version is expected to differ after
+    /// an undo while the geometry filed under it is expected not to.
+    impl PartialEq for Painted {
+        fn eq(&self, other: &Painted) -> bool {
+            self.quads == other.quads && self.paths == other.paths && self.texts == other.texts
+        }
+    }
+
+    impl PrimitiveSink for Painted {
+        fn quad(&mut self, quad: &QuadPrimitive) {
+            self.quads.push(*quad);
+        }
+
+        fn path(&mut self, path: &PathPrimitive) -> u32 {
+            if let Some(key) = path.key {
+                self.versions.push(key.version);
+            }
+            self.paths.push(PaintedPath {
+                outline: path.outline.clone(),
+                paint: path.paint,
+                quality: path.quality,
+                filed_under: path.key.map(|key| (key.owner, key.part)),
+            });
+            path.estimated_vertices()
+        }
+
+        fn text(&mut self, text: &TextPrimitive) -> u32 {
+            self.texts.push(text.clone());
+            0
+        }
     }
 
     /// A theme's colours, fixed. The canvas is theme-driven and this test is
@@ -141,9 +214,14 @@ mod tests {
             &SceneOptions::new(GridSettings::default(), GridLimits::from_budgets(&budgets)),
         );
 
+        // Through `paint_into`, so this collects exactly what a real painter is
+        // handed, in the order the paint-order contract puts it in.
+        let mut painted = Painted::default();
+        plan.paint_into(&mut painted);
+
         let world = editor.world();
         Frame {
-            plan,
+            painted,
             scene,
             visible_nodes: visible.nodes().to_vec(),
             visible_edges: visible.edges().to_vec(),
@@ -173,6 +251,16 @@ mod tests {
         }
     }
 
+    /// A node the frame paints something for that also has an edge — so moving
+    /// it changes the plan and the routes together.
+    fn visible_connected_node(frame: &Frame, world: &GraphWorld) -> NodeIndex {
+        *frame
+            .visible_nodes
+            .iter()
+            .find(|node| world.incident_edges(**node).count() > 0)
+            .expect("the scene changed; it has no visible connected node")
+    }
+
     fn scene_editor() -> (FlowEditor, SpatialIndex, Viewport) {
         let spec = SceneSpec::SMALL;
         let document = crate::scenes::build(&spec).to_document();
@@ -198,21 +286,35 @@ mod tests {
         let before = frame(&mut editor, &mut index, &viewport);
         // A frame that draws nothing would pass every assertion below without
         // meaning any of them.
-        assert!(before.plan.path_count() > 0 && before.plan.quad_count() > 0);
+        assert!(!before.painted.paths.is_empty() && !before.painted.quads.is_empty());
         assert!(before.scene.edges > 0 && !before.visible_nodes.is_empty());
 
-        // A node with edges, moved far enough to cross cells.
-        let node = NodeIndex::new(3);
+        // **A node the frame actually paints**, so the plan is under test and
+        // not only the indices. Moved far enough to cross spatial cells.
+        let node = visible_connected_node(&before, editor.world());
         editor
             .apply(EditCommand::move_node(node, Vec2::new(517.0, -389.0)))
             .unwrap();
         let moved = frame(&mut editor, &mut index, &viewport);
-        assert_ne!(moved, before, "the move changed nothing to undo");
+        assert_ne!(
+            moved.painted.paths, before.painted.paths,
+            "the move never reached the paint plan, so nothing below is tested"
+        );
 
         assert!(editor.undo());
         let after = frame(&mut editor, &mut index, &viewport);
 
         assert_eq!(after, before, "undo left the derived state somewhere else");
+        // The one thing that is deliberately *not* equal — see `PaintedPath`.
+        assert!(
+            after
+                .painted
+                .versions
+                .iter()
+                .zip(&before.painted.versions)
+                .any(|(now, then)| now > then),
+            "a §23 cache version returned to a value it had held before"
+        );
     }
 
     /// The same property for the edit that changes the *shape* of the world
@@ -224,14 +326,17 @@ mod tests {
         let before = frame(&mut editor, &mut index, &viewport);
         let document_before = editor.to_document();
 
-        let node = NodeIndex::new(2);
+        let node = visible_connected_node(&before, editor.world());
         let degree = editor.world().incident_edges(node).count();
-        assert!(degree > 0, "the scene changed; pick a connected node");
 
         editor
             .apply(EditCommand::remove(vec![node], Vec::new()))
             .unwrap();
         let removed = frame(&mut editor, &mut index, &viewport);
+        assert_ne!(
+            removed.painted.paths, before.painted.paths,
+            "the removal never reached the paint plan"
+        );
         assert!(
             removed.indexed_nodes < before.indexed_nodes,
             "the removed node stayed in the spatial index"
@@ -258,7 +363,12 @@ mod tests {
         let clean = frame(&mut editor, &mut index, &viewport);
         let clean_document = editor.to_document();
 
-        let node = NodeIndex::new(4);
+        let node = visible_connected_node(&clean, editor.world());
+        let doomed = *clean
+            .visible_nodes
+            .iter()
+            .find(|other| **other != node)
+            .expect("the scene shows more than one node");
         editor
             .apply(EditCommand::move_node(node, Vec2::new(90.0, 40.0)))
             .unwrap();
@@ -266,7 +376,7 @@ mod tests {
             .apply(EditCommand::resize_node(node, Vec2::new(220.0, 130.0)))
             .unwrap();
         editor
-            .apply(EditCommand::remove(vec![NodeIndex::new(1)], Vec::new()))
+            .apply(EditCommand::remove(vec![doomed], Vec::new()))
             .unwrap();
         let edited = frame(&mut editor, &mut index, &viewport);
         let edited_document = editor.to_document();
