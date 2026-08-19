@@ -183,6 +183,7 @@
 // what that boundary is worth; `Cargo.toml` says why each dependency is here.
 pub mod budgets;
 pub mod geometry;
+pub mod instrument;
 pub mod interaction;
 pub mod models;
 pub mod render;
@@ -192,9 +193,10 @@ pub mod views;
 
 pub use budgets::RenderBudgets;
 pub use geometry::{Rect, Vec2, Viewport};
+pub use instrument::{Instruments, Probe};
 pub use interaction::{InteractionEffect, InteractionEvent, InteractionMachine, InteractionState};
 pub use models::{ElementId, ElementKind, FlowDocument};
-pub use render::{GridSettings, GridStyle, PaintPlan, PaintStats};
+pub use render::{GridSettings, GridStyle, PaintPlan, PaintStats, SceneInk, SceneOptions};
 pub use runtime::{
     BoxQuery, BoxSelectMode, ConnectionRules, EdgeEnd, GraphWorld, NodeSpec, PointerTarget,
     SelectionSet,
@@ -212,6 +214,7 @@ mod tests {
     /// disk when the test ran.
     const PURE_FILES: &[(&str, &str)] = &[
         ("budgets.rs", include_str!("budgets.rs")),
+        ("instrument.rs", include_str!("instrument.rs")),
         ("geometry/mod.rs", include_str!("geometry/mod.rs")),
         ("geometry/arrow.rs", include_str!("geometry/arrow.rs")),
         ("geometry/bounds.rs", include_str!("geometry/bounds.rs")),
@@ -235,6 +238,7 @@ mod tests {
         ("render/grid.rs", include_str!("render/grid.rs")),
         ("render/mod.rs", include_str!("render/mod.rs")),
         ("render/plan.rs", include_str!("render/plan.rs")),
+        ("render/scene.rs", include_str!("render/scene.rs")),
         ("render/shapes.rs", include_str!("render/shapes.rs")),
         ("interaction/mod.rs", include_str!("interaction/mod.rs")),
         ("interaction/state.rs", include_str!("interaction/state.rs")),

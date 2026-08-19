@@ -185,6 +185,15 @@ pub struct GridLevel {
     pub clamped_by_budget: bool,
 }
 
+impl Default for GridLevel {
+    /// The same as [`GridLevel::empty`]: a frame that has not drawn a grid yet
+    /// has drawn no grid, and any other default would be a spacing nobody
+    /// chose.
+    fn default() -> GridLevel {
+        GridLevel::empty()
+    }
+}
+
 impl GridLevel {
     /// The grid drew nothing: [`GridStyle::None`], or a pane with no area.
     pub fn empty() -> GridLevel {

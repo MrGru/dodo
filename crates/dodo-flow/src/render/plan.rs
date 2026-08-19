@@ -44,6 +44,26 @@
 //! correctness signal, and [`PaintPlan::enforce_vertex_ceiling`] spends it
 //! before the frame rather than after.
 //!
+//! # The clip is a property of the plan, not of the painters
+//!
+//! Phase 0's other measurement: 16,000 fully **offscreen** paths still cost
+//! 6.3 ms of CPU per frame, because GPUI's content-mask rejection happens after
+//! `paint_path` has cloned and scaled the vertex buffer. So "no offscreen path
+//! reaches the painter" is a correctness property, and it is made structural
+//! the same way the paint order was — [`PaintPlan::clear`] **takes the frame's
+//! clip rectangle**, and [`PaintPlan::push_path`] rejects anything whose
+//! painted extent misses it.
+//!
+//! That is deliberately the plan's job rather than each painter's. A painter
+//! that forgot the check would be a silent 6 ms; a painter that cannot express
+//! the mistake is a contract. [`PaintStats::culled_paths`] counts what the
+//! rejection caught, so a scene extractor whose own culling is wrong shows up
+//! as a number rather than as a slow frame.
+//!
+//! The broad phase in [`crate::spatial`] is what keeps this from being the
+//! *only* culling: rejecting here still costs a rectangle test per element, and
+//! a document with 100,000 nodes must not pay 100,000 of them per frame.
+//!
 //! **This file names no UI framework.** Coordinates are pane-relative screen
 //! pixels as plain [`Vec2`]; the sink adds the element's origin.
 
@@ -258,6 +278,25 @@ pub struct PaintStats {
     /// Vertices the sink reported actually painting — not the estimate.
     pub path_vertices: u32,
     pub glyphs: u32,
+
+    /// **Contiguous runs of paths the scene saw**, which is what each
+    /// full-viewport intermediate render pass costs ~0.1 ms for.
+    ///
+    /// Always 0 or 1, because [`PaintPlan::paint_into`] is the only emitter and
+    /// emits every path in one run. It is reported rather than assumed because
+    /// [`RenderBudgets::max_path_batches_per_frame`] is an exit criterion, and
+    /// a criterion nobody measures is a criterion nobody keeps.
+    pub path_batches: u32,
+
+    /// Paths the clip rejected before the painter saw them.
+    ///
+    /// **Zero in a healthy frame**: the spatial broad phase should have
+    /// rejected them already, and this is what notices when it did not.
+    pub culled_paths: u32,
+
+    /// Quads the clip rejected. A quad is cheap, so this is a diagnostic
+    /// rather than a budget.
+    pub culled_quads: u32,
 }
 
 impl PaintStats {
@@ -268,6 +307,19 @@ impl PaintStats {
 
     pub fn within_frame_target(&self, budgets: &RenderBudgets) -> bool {
         budgets.within_frame_target(self.path_vertices)
+    }
+
+    /// Whether this frame stayed inside
+    /// [`RenderBudgets::max_path_batches_per_frame`] — Phase 0's second
+    /// structural finding, and the one no CPU profiler shows.
+    pub fn within_batch_budget(&self, budgets: &RenderBudgets) -> bool {
+        self.path_batches <= budgets.max_path_batches_per_frame
+    }
+
+    /// **The culling property**: no offscreen path reached the painter, and
+    /// none had to be rejected on the way. See [`PaintPlan::push_path`].
+    pub fn culled_nothing(&self) -> bool {
+        self.culled_paths == 0
     }
 }
 
@@ -301,36 +353,108 @@ pub trait PrimitiveSink {
 /// Held on the view and `clear`ed each frame rather than reallocated —
 /// requirements §40 rule 14, and pan is the hot path this exists to keep
 /// allocation-free.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PaintPlan {
     quads: Vec<QuadPrimitive>,
     paths: Vec<PathPrimitive>,
     texts: Vec<TextPrimitive>,
+    /// The pane, in the same pane-relative screen pixels the primitives use.
+    /// Nothing outside it is kept — see the module doc.
+    clip: Rect,
+    culled_paths: u32,
+    culled_quads: u32,
+}
+
+impl Default for PaintPlan {
+    fn default() -> PaintPlan {
+        PaintPlan {
+            quads: Vec::new(),
+            paths: Vec::new(),
+            texts: Vec::new(),
+            clip: PaintPlan::UNBOUNDED,
+            culled_paths: 0,
+            culled_quads: 0,
+        }
+    }
 }
 
 impl PaintPlan {
+    /// The clip a plan starts with: everything. A plan is useless until
+    /// [`clear`](PaintPlan::clear) gives it the frame's real pane, and this is
+    /// what it does in the meantime — keeping everything is the answer that
+    /// cannot silently lose geometry.
+    pub const UNBOUNDED: Rect = Rect::new(
+        Vec2::new(f32::MIN / 4.0, f32::MIN / 4.0),
+        Vec2::new(f32::MAX / 2.0, f32::MAX / 2.0),
+    );
+
     pub fn new() -> PaintPlan {
         PaintPlan::default()
     }
 
-    /// Empties the buckets, **keeping their capacity**. The point of the type
-    /// being owned by the view rather than built per frame.
-    pub fn clear(&mut self) {
+    /// **Starts a frame**: empties the buckets, keeping their capacity, and
+    /// takes the pane every primitive will be clipped against.
+    ///
+    /// The clip is a parameter rather than a setter because a frame that
+    /// forgot to set it would paint the whole document — see the module doc for
+    /// what that costs and why it is a correctness question. `clip` is
+    /// pane-relative screen pixels, so it is normally
+    /// `Rect::new(Vec2::ZERO, pane_size)`.
+    pub fn clear(&mut self, clip: Rect) {
         self.quads.clear();
         self.paths.clear();
         self.texts.clear();
+        self.clip = clip.normalized();
+        self.culled_paths = 0;
+        self.culled_quads = 0;
     }
 
+    /// The pane this frame is clipped against.
+    pub fn clip(&self) -> Rect {
+        self.clip
+    }
+
+    /// Adds a quad, unless it misses the clip.
     pub fn push_quad(&mut self, quad: QuadPrimitive) {
+        // The border is drawn inside the bounds, so the bounds are the whole
+        // painted extent — unlike a stroked path, which straddles its outline.
+        if !quad.bounds.normalized().intersects(self.clip) {
+            self.culled_quads += 1;
+            return;
+        }
         self.quads.push(quad);
     }
 
+    /// Adds a path, **unless its painted extent misses the clip**.
+    ///
+    /// The extent is the outline's bounds grown by half the stroke width, which
+    /// is exactly how far a stroke reaches outside the geometry it follows; a
+    /// fill reaches no further than its outline. An outline with no bounds at
+    /// all — an empty path — is dropped, because it would paint nothing.
     pub fn push_path(&mut self, path: PathPrimitive) {
-        self.paths.push(path);
+        let extent = path
+            .outline
+            .bounds()
+            .map(|bounds| bounds.inflate(path.paint.width().unwrap_or(0.0) * 0.5));
+
+        match extent {
+            Some(extent) if extent.intersects(self.clip) => self.paths.push(path),
+            _ => self.culled_paths += 1,
+        }
     }
 
     pub fn push_text(&mut self, text: TextPrimitive) {
         self.texts.push(text);
+    }
+
+    /// Paths the clip rejected this frame. **Zero means the spatial broad phase
+    /// did its job**; see the module doc.
+    pub fn culled_paths(&self) -> u32 {
+        self.culled_paths
+    }
+
+    pub fn culled_quads(&self) -> u32 {
+        self.culled_quads
     }
 
     pub fn quad_count(&self) -> u32 {
@@ -420,7 +544,11 @@ impl PaintPlan {
     /// quads, then all paths, then all text — one contiguous run each, so the
     /// scene sees at most one path batch from the canvas layer.
     pub fn paint_into<S: PrimitiveSink + ?Sized>(&self, sink: &mut S) -> PaintStats {
-        let mut stats = PaintStats::default();
+        let mut stats = PaintStats {
+            culled_paths: self.culled_paths,
+            culled_quads: self.culled_quads,
+            ..PaintStats::default()
+        };
 
         for quad in &self.quads {
             sink.quad(quad);
@@ -434,6 +562,11 @@ impl PaintPlan {
                 stats.path_vertices = stats.path_vertices.saturating_add(vertices);
             }
         }
+
+        // One run, because this loop is the only emitter and it does not stop
+        // to paint anything else. The `PrimitiveKind` ordering test is what
+        // proves the claim; this is what reports it.
+        stats.path_batches = u32::from(stats.paths > 0);
 
         for text in &self.texts {
             stats.glyphs = stats.glyphs.saturating_add(sink.text(text));
@@ -486,6 +619,12 @@ mod tests {
             Color::WHITE,
             RenderQuality::BALANCED,
         )
+    }
+
+    /// A pane large enough for the fixtures above and small enough that
+    /// "offscreen" is easy to write.
+    fn a_pane() -> Rect {
+        Rect::new(Vec2::ZERO, Vec2::new(400.0, 300.0))
     }
 
     fn a_text() -> TextPrimitive {
@@ -604,11 +743,107 @@ mod tests {
         let quad_capacity = plan.quads.capacity();
         let path_capacity = plan.paths.capacity();
 
-        plan.clear();
+        plan.clear(a_pane());
 
         assert!(plan.is_empty());
         assert_eq!(plan.quads.capacity(), quad_capacity);
         assert_eq!(plan.paths.capacity(), path_capacity);
+        assert_eq!(plan.clip(), a_pane());
+    }
+
+    /// **The culling property, as a contract of the plan itself.** A painter
+    /// cannot hand an offscreen path to the sink, whatever it believes.
+    #[test]
+    fn a_path_outside_the_clip_never_reaches_the_sink() {
+        let mut plan = PaintPlan::new();
+        plan.clear(a_pane());
+
+        plan.push_path(a_path());
+        plan.push_path(PathPrimitive::fill(
+            shapes::diamond(rect(-9_000.0, -9_000.0)),
+            Color::WHITE,
+            RenderQuality::BALANCED,
+        ));
+        plan.push_quad(QuadPrimitive::filled(rect(50_000.0, 0.0), Color::WHITE));
+
+        let mut sink = RecordingSink {
+            vertices_per_path: 3,
+            ..RecordingSink::default()
+        };
+        let stats = plan.paint_into(&mut sink);
+
+        assert_eq!(sink.log, vec![PrimitiveKind::Path]);
+        assert_eq!(stats.culled_paths, 1);
+        assert_eq!(stats.culled_quads, 1);
+        assert!(!stats.culled_nothing());
+    }
+
+    /// A stroke straddles its outline, so a path just outside the pane can
+    /// still paint into it. Culling on the outline alone would clip a border.
+    #[test]
+    fn a_stroke_that_reaches_into_the_pane_survives() {
+        let mut plan = PaintPlan::new();
+        plan.clear(a_pane());
+
+        // Outline sits 6 units left of the pane; a 20-unit stroke reaches 10
+        // units past its own outline, so it paints into the pane.
+        let outline = shapes::rectangle(Rect::new(Vec2::new(-26.0, 10.0), Vec2::new(20.0, 20.0)));
+        plan.push_path(PathPrimitive::stroke(
+            outline.clone(),
+            Color::WHITE,
+            20.0,
+            RenderQuality::BALANCED,
+        ));
+        // The same outline filled reaches no further than itself.
+        plan.push_path(PathPrimitive::fill(
+            outline,
+            Color::WHITE,
+            RenderQuality::BALANCED,
+        ));
+
+        assert_eq!(plan.path_count(), 1);
+        assert_eq!(plan.culled_paths(), 1);
+    }
+
+    /// A fresh plan keeps everything, because a plan that silently dropped
+    /// geometry before its first `clear` would be a trap.
+    #[test]
+    fn an_unbounded_plan_culls_nothing() {
+        let mut plan = PaintPlan::new();
+        plan.push_path(PathPrimitive::fill(
+            shapes::diamond(rect(-1e6, 1e6)),
+            Color::WHITE,
+            RenderQuality::BALANCED,
+        ));
+
+        assert_eq!(plan.path_count(), 1);
+        assert_eq!(plan.culled_paths(), 0);
+    }
+
+    /// Phase 0's second structural finding, reported rather than assumed: the
+    /// canvas layer is one contiguous run of paths, so it is one batch.
+    #[test]
+    fn a_frame_is_one_path_batch_and_an_empty_one_is_none() {
+        let budgets = for_backend(RenderBackend::Metal);
+        let mut plan = PaintPlan::new();
+        plan.clear(a_pane());
+
+        let mut sink = RecordingSink {
+            vertices_per_path: 5,
+            ..RecordingSink::default()
+        };
+        assert_eq!(plan.paint_into(&mut sink).path_batches, 0);
+
+        for _ in 0..300 {
+            plan.push_quad(a_quad());
+            plan.push_path(a_path());
+        }
+        let stats = plan.paint_into(&mut sink);
+
+        assert_eq!(stats.paths, 300);
+        assert_eq!(stats.path_batches, 1);
+        assert!(stats.within_batch_budget(&budgets));
+        assert!(stats.culled_nothing());
     }
 
     #[test]
