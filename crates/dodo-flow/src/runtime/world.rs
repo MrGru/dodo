@@ -1015,6 +1015,7 @@ fn floating_point(bounds: Rect, side: Side, toward: Vec2) -> Vec2 {
 #[cfg(test)]
 mod tests {
     use super::{GraphWorld, LoadReport};
+    use crate::geometry::Rect;
     use crate::{
         geometry::{Side, Vec2},
         models::{
@@ -1022,8 +1023,8 @@ mod tests {
             HandleDirection, HandleId, HandlePlacement, NodeIndex, ShapeKind,
         },
         runtime::{
-            ConnectionError, ConnectionRules, EdgeEnd, HandleSpec, HitTolerance, NodeDirty,
-            PointerTarget,
+            BoxQuery, BoxSelectMode, ConnectionError, ConnectionRules, EdgeEnd, HandleSpec,
+            HitTolerance, NodeDirty, NodeFlags, PointerTarget,
         },
     };
 
@@ -1075,6 +1076,241 @@ mod tests {
     }
 
     // ---- the property the architecture exists for ------------------------
+
+    // ---- §28: box selection ---------------------------------------------
+
+    /// Three nodes in a row, joined left-to-right, with every route built.
+    fn row(world: &mut GraphWorld) -> [NodeIndex; 3] {
+        let a = graph_node(world, 0.0, 0.0);
+        let b = graph_node(world, 400.0, 0.0);
+        let c = graph_node(world, 800.0, 0.0);
+        world
+            .connect(out(world, a), to_in(world, b))
+            .expect("valid");
+        world
+            .connect(out(world, b), to_in(world, c))
+            .expect("valid");
+        world.rebuild_all_geometry();
+        [a, b, c]
+    }
+
+    /// Every node, as the broad phase would have handed them over. **A scan is
+    /// legitimate in a test** — it is the oracle standing in for the spatial
+    /// index, which this file must never reach for.
+    fn all_nodes(world: &GraphWorld) -> Vec<NodeIndex> {
+        world.nodes().indices().collect()
+    }
+
+    fn all_edges(world: &GraphWorld) -> Vec<crate::models::EdgeIndex> {
+        world.edges().indices().collect()
+    }
+
+    #[test]
+    fn a_band_selects_what_it_touches_and_nothing_else() {
+        let mut world = GraphWorld::new();
+        let [a, b, c] = row(&mut world);
+
+        // Over the first node only.
+        let band = Rect::new(Vec2::new(-20.0, -20.0), Vec2::new(200.0, 100.0));
+        let changed =
+            world.apply_box_selection(BoxQuery::at_zoom(band, 1.0), all_nodes(&world), Vec::new());
+
+        assert_eq!(changed, 1);
+        assert!(world.selection().contains_node(a));
+        assert!(!world.selection().contains_node(b));
+        assert!(!world.selection().contains_node(c));
+        // The store flag and the set agree, which is the invariant that makes
+        // the painter and the command layer see the same selection.
+        assert!(world.nodes().is_selected(a));
+        assert!(!world.nodes().is_selected(b));
+    }
+
+    #[test]
+    fn enclose_is_stricter_than_touch() {
+        let mut world = GraphWorld::new();
+        let [a, _, _] = row(&mut world);
+
+        // Clips the node's left half only.
+        let band = Rect::new(Vec2::new(-20.0, -20.0), Vec2::new(100.0, 100.0));
+
+        world.apply_box_selection(
+            BoxQuery::at_zoom(band, 1.0).with_mode(BoxSelectMode::Enclose),
+            all_nodes(&world),
+            Vec::new(),
+        );
+        assert!(
+            !world.selection().contains_node(a),
+            "Enclose selected a node the band only clipped"
+        );
+
+        world.apply_box_selection(
+            BoxQuery::at_zoom(band, 1.0).with_mode(BoxSelectMode::Touch),
+            all_nodes(&world),
+            Vec::new(),
+        );
+        assert!(world.selection().contains_node(a));
+    }
+
+    /// **The case a bounds-only test gets wrong**, and the reason
+    /// `EdgeRoute::intersects_rect` flattens the curve: an edge crossing the
+    /// band is selected even though neither of its ends is inside it.
+    #[test]
+    fn an_edge_crossing_the_band_is_selected_with_both_ends_outside() {
+        let mut world = GraphWorld::new();
+        row(&mut world);
+
+        // A tall, narrow band in the gap between the first two nodes: it
+        // touches no node at all, and the edge runs straight through it.
+        let band = Rect::new(Vec2::new(250.0, -200.0), Vec2::new(40.0, 400.0));
+        let changed = world.apply_box_selection(
+            BoxQuery::at_zoom(band, 1.0),
+            all_nodes(&world),
+            all_edges(&world),
+        );
+
+        assert_eq!(changed, 1, "the band should have caught exactly one edge");
+        assert!(world.selection().nodes().is_empty());
+        assert_eq!(world.selection().edges().len(), 1);
+        assert!(world.edges().is_selected(world.selection().edges()[0]));
+    }
+
+    /// And the case that must *not* be selected: a band beside the edge, whose
+    /// bounding box overlaps the route's but which the curve never enters.
+    #[test]
+    fn a_band_beside_an_edge_does_not_select_it() {
+        let mut world = GraphWorld::new();
+        row(&mut world);
+
+        let band = Rect::new(Vec2::new(250.0, 200.0), Vec2::new(40.0, 100.0));
+        world.apply_box_selection(
+            BoxQuery::at_zoom(band, 1.0),
+            all_nodes(&world),
+            all_edges(&world),
+        );
+
+        assert!(
+            world.selection().is_empty(),
+            "the band selected an edge it misses"
+        );
+    }
+
+    #[test]
+    fn a_band_replaces_the_selection_unless_it_is_additive() {
+        let mut world = GraphWorld::new();
+        let [a, b, _] = row(&mut world);
+
+        let first = Rect::new(Vec2::new(-20.0, -20.0), Vec2::new(200.0, 100.0));
+        let second = Rect::new(Vec2::new(380.0, -20.0), Vec2::new(200.0, 100.0));
+
+        world.apply_box_selection(BoxQuery::at_zoom(first, 1.0), all_nodes(&world), Vec::new());
+        world.apply_box_selection(
+            BoxQuery::at_zoom(second, 1.0),
+            all_nodes(&world),
+            Vec::new(),
+        );
+        assert_eq!(
+            world.selection().single_node(),
+            Some(b),
+            "the band did not replace"
+        );
+        assert!(
+            !world.nodes().is_selected(a),
+            "a deselected node kept its flag"
+        );
+
+        world.apply_box_selection(
+            BoxQuery::at_zoom(first, 1.0).additive(true),
+            all_nodes(&world),
+            Vec::new(),
+        );
+        assert_eq!(world.selection().nodes().len(), 2);
+        assert!(world.selection().contains_node(a));
+        assert!(world.selection().contains_node(b));
+    }
+
+    #[test]
+    fn a_locked_or_hidden_element_is_never_selected_by_a_band() {
+        let mut world = GraphWorld::new();
+        let [a, b, _] = row(&mut world);
+        world.nodes.set_flag(a, NodeFlags::LOCKED, true);
+        world.set_node_hidden(b, true);
+
+        let band = Rect::new(Vec2::new(-500.0, -500.0), Vec2::new(2_000.0, 1_000.0));
+        world.apply_box_selection(BoxQuery::at_zoom(band, 1.0), all_nodes(&world), Vec::new());
+
+        assert!(
+            !world.selection().contains_node(a),
+            "a locked node was selected"
+        );
+        assert!(
+            !world.selection().contains_node(b),
+            "a hidden node was selected"
+        );
+    }
+
+    /// §28: the selection holds ids, and clearing it is proportional to the
+    /// selection rather than to the document.
+    #[test]
+    fn clearing_the_selection_touches_only_what_was_selected() {
+        let mut world = GraphWorld::new();
+        for index in 0..200 {
+            graph_node(&mut world, index as f32 * 10.0, 0.0);
+        }
+        world.set_node_selected(NodeIndex::new(3), true);
+        world.set_node_selected(NodeIndex::new(7), true);
+        world.dirty_mut().clear_all();
+
+        world.clear_selection();
+
+        assert!(world.selection().is_empty());
+        assert!(!world.nodes().is_selected(NodeIndex::new(3)));
+        assert_eq!(
+            world.dirty().dirty_nodes().len(),
+            2,
+            "clearing a two-node selection invalidated {} nodes",
+            world.dirty().dirty_nodes().len()
+        );
+    }
+
+    #[test]
+    fn select_only_replaces_and_is_idempotent() {
+        let mut world = GraphWorld::new();
+        let [a, b, _] = row(&mut world);
+
+        world.select_only(Some(a));
+        world.select_only(Some(a));
+        assert_eq!(world.selection().single_node(), Some(a));
+
+        world.select_only(Some(b));
+        assert_eq!(world.selection().single_node(), Some(b));
+        assert!(!world.nodes().is_selected(a));
+
+        world.select_only(None);
+        assert!(world.selection().is_empty());
+    }
+
+    /// The stale-route case: an edge whose geometry has been invalidated and
+    /// not rebuilt is not selected at where it used to be.
+    #[test]
+    fn a_band_does_not_select_an_edge_with_a_stale_route() {
+        let mut world = GraphWorld::new();
+        row(&mut world);
+        world.set_edge_routing(crate::models::EdgeIndex::new(0), EdgeRouting::Step);
+
+        let band = Rect::new(Vec2::new(-500.0, -500.0), Vec2::new(2_000.0, 1_000.0));
+        world.apply_box_selection(BoxQuery::at_zoom(band, 1.0), Vec::new(), all_edges(&world));
+
+        assert!(
+            !world
+                .selection()
+                .contains_edge(crate::models::EdgeIndex::new(0))
+        );
+        assert!(
+            world
+                .selection()
+                .contains_edge(crate::models::EdgeIndex::new(1))
+        );
+    }
 
     /// **§19's target, asserted rather than claimed.**
     ///

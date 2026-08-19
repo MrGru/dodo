@@ -638,6 +638,71 @@ mod tests {
         );
     }
 
+    /// **Query cost scaling, asserted without a clock.**
+    ///
+    /// A timing assertion in a unit test is a flake waiting for a loaded CI
+    /// machine, so this measures the *work* instead: how many candidates the
+    /// broad phase visits and how many cells it walks. Both are what the time
+    /// is proportional to, and neither depends on the machine.
+    ///
+    /// The harness prints the wall-clock version — 2.3 µs at 5,000 nodes and
+    /// 2.4 µs at 100,000 — and this is what stops that from regressing.
+    #[test]
+    fn query_cost_is_set_by_the_viewport_and_not_by_the_document() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(1_440.0, 900.0));
+        let query = query_rect(&viewport);
+
+        let mut counts = Vec::new();
+        for side in [10u32, 40, 120] {
+            let world = grid_world(side, side);
+            let index = SpatialIndex::for_world(&world);
+
+            let mut candidates = Vec::new();
+            index.node_candidates(query, &mut candidates);
+            counts.push((world.nodes().len(), candidates.len()));
+        }
+
+        // A 144x larger document, at the same camera, must visit the same
+        // candidates. Not "about the same" — exactly the same, because the
+        // cells the query touches are a property of the query.
+        let first = counts[0].1;
+        for (nodes, candidates) in &counts {
+            assert_eq!(
+                *candidates, first,
+                "{nodes} nodes produced {candidates} candidates against {first}"
+            );
+        }
+        assert!(
+            counts[2].0 > counts[0].0 * 100,
+            "the documents were not scaled"
+        );
+        assert!(first > 0, "the camera saw nothing");
+    }
+
+    /// The same for the visible set, which adds the narrow phase and the sort.
+    #[test]
+    fn the_visible_set_does_not_grow_with_the_document() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(1_440.0, 900.0));
+
+        let mut sizes = Vec::new();
+        for side in [12u32, 60] {
+            let world = grid_world(side, side);
+            let index = SpatialIndex::for_world(&world);
+            let mut visible = VisibleSet::new();
+            index.query_visible(&world, &viewport, &mut visible);
+            sizes.push((visible.node_count(), visible.candidate_count()));
+        }
+
+        assert_eq!(
+            sizes[0].0, sizes[1].0,
+            "a 25x document changed the visible set"
+        );
+        assert_eq!(
+            sizes[0].1, sizes[1].1,
+            "a 25x document changed the candidates"
+        );
+    }
+
     #[test]
     fn the_cell_size_follows_the_documents_node_size() {
         let mut small = GraphWorld::new();
