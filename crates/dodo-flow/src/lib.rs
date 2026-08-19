@@ -419,7 +419,7 @@ pub use runtime::{
 };
 pub use scenes::SceneSpec;
 pub use spatial::{SpatialIndex, UniformGrid, VisibleSet};
-pub use views::FlowView;
+pub use views::{FlowView, init};
 
 #[cfg(test)]
 mod tests {
@@ -436,6 +436,7 @@ mod tests {
         ("commands/apply.rs", include_str!("commands/apply.rs")),
         ("commands/edit.rs", include_str!("commands/edit.rs")),
         ("commands/editor.rs", include_str!("commands/editor.rs")),
+        ("commands/gesture.rs", include_str!("commands/gesture.rs")),
         ("commands/history.rs", include_str!("commands/history.rs")),
         ("commands/keys.rs", include_str!("commands/keys.rs")),
         ("geometry/mod.rs", include_str!("geometry/mod.rs")),

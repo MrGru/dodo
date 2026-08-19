@@ -73,11 +73,12 @@ use gpui_component::ActiveTheme;
 
 use crate::{
     budgets::RenderBudgets,
+    commands::{FlowEditor, gesture},
     geometry::{Attachment, EdgeRoute, Rect, RouteOptions, Vec2, Viewport, route},
     instrument::{Instruments, Probe},
     interaction::{
-        BoxSelection, ConnectionSource, InputModifiers, InteractionEffect, InteractionEvent,
-        InteractionMachine, PointerButton,
+        BoxSelection, InputModifiers, InteractionEffect, InteractionEvent, InteractionMachine,
+        PointerButton,
     },
     models::{
         Color, EdgeIndex, EdgeRouting, FlowDocument, NodeIndex, RenderQuality, RenderStyle,
@@ -96,7 +97,10 @@ use crate::{
     },
     runtime::{BoxQuery, EdgeEnd, GraphWorld, HitTolerance, PointerTarget, SelectionSet},
     spatial::{SpatialIndex, SyncReport, VisibleSet},
-    views::nodes,
+    views::{
+        keymap::{Redo, Undo},
+        nodes,
+    },
 };
 
 /// The key-binding context the canvas establishes on its root, so canvas
@@ -159,7 +163,12 @@ const PREVIEW_WIDTH: f32 = 1.5;
 
 /// The Flow Canvas.
 pub struct FlowView {
-    world: GraphWorld,
+    /// **The world, and the only door to it** (§30). Held as a
+    /// [`FlowEditor`] rather than as a [`GraphWorld`] on purpose: this view is
+    /// where every gesture lands, so it is where a mutation that bypasses the
+    /// undo history would be written, and an editor lends no `&mut` to the
+    /// world it owns. `commands::editor`'s module doc has the whole argument.
+    editor: FlowEditor,
     viewport: Viewport,
     budgets: RenderBudgets,
     focus_handle: FocusHandle,
@@ -251,7 +260,7 @@ impl FlowView {
         let budgets = crate::budgets::current();
 
         FlowView {
-            world: GraphWorld::new(),
+            editor: FlowEditor::new(),
             viewport: Viewport::default(),
             grid: GridSettings::default(),
             grid_limits: GridLimits::from_budgets(&budgets),
@@ -286,17 +295,29 @@ impl FlowView {
 
     /// The runtime graph — the stores, the adjacency index and the dirty state.
     pub fn world(&self) -> &GraphWorld {
-        &self.world
+        self.editor.world()
     }
 
-    pub fn world_mut(&mut self) -> &mut GraphWorld {
-        &mut self.world
+    /// The editor: the world plus §30's history, and every door that may change
+    /// the document.
+    ///
+    /// **There is deliberately no `world_mut`.** It existed until Phase 7 and it
+    /// was the bypass — a caller holding `&mut GraphWorld` moves a node without
+    /// the history hearing, and the corruption surfaces three undos later with
+    /// nothing to trace it to. Everything that went through it goes through
+    /// [`FlowEditor::apply`] or one of the editor's named non-recording doors.
+    pub fn editor(&self) -> &FlowEditor {
+        &self.editor
+    }
+
+    pub fn editor_mut(&mut self) -> &mut FlowEditor {
+        &mut self.editor
     }
 
     /// The world written back out as a document. Allocates; for a save or a
     /// test, never for a frame.
     pub fn to_document(&self) -> FlowDocument {
-        self.world.to_document()
+        self.editor.world().to_document()
     }
 
     /// Replaces the document, **rebuilding the runtime from it**.
@@ -309,13 +330,14 @@ impl FlowView {
     /// back in the [`LoadReport`](crate::runtime::LoadReport) — a dangling edge
     /// is a fact about the file, and swallowing it here would be the loader
     /// deciding on the caller's behalf.
+    /// **The undo history goes with it.** A stored delta names runtime indices,
+    /// and every index means something else in a different document.
     pub fn set_document(&mut self, document: FlowDocument) -> crate::runtime::LoadReport {
-        let (mut world, report) = GraphWorld::from_document(&document);
+        let report = self.editor.load_document(document);
         // The index is built from the routes, so they have to exist first —
         // and the whole-document rebuild is the one place that is allowed to
         // be proportional to the file rather than to the screen.
-        world.rebuild_all_geometry();
-        self.world = world;
+        self.editor.rebuild_all_geometry();
         self.rebuild_spatial_index();
         report
     }
@@ -325,12 +347,11 @@ impl FlowView {
     ///
     /// Document-proportional, so it belongs to loading rather than to a frame;
     /// [`SpatialIndex::sync`] is the per-frame call. Public because a caller
-    /// that has edited the world through
-    /// [`world_mut`](FlowView::world_mut) — a launcher building a scene, a
+    /// that has replaced the world wholesale — a launcher building a scene, a
     /// benchmark — has to say so.
     pub fn rebuild_spatial_index(&mut self) {
-        self.spatial = SpatialIndex::for_world(&self.world);
-        self.world.clear_spatial_updates();
+        self.spatial = SpatialIndex::for_world(self.editor.world());
+        self.editor.clear_spatial_updates();
         // Every cached tessellation and every shaped line is filed under a
         // runtime index, and a rebuilt world means those indices point at
         // something else. Keeping them would paint one document's geometry for
@@ -395,7 +416,7 @@ impl FlowView {
 
     /// **What is selected** (§28), as compact runtime ids.
     pub fn selection(&self) -> &SelectionSet {
-        self.world.selection()
+        self.editor.world().selection()
     }
 
     /// The spatial index over the world.
@@ -482,7 +503,7 @@ impl FlowView {
 
     /// §13's render style. **A renderer strategy, not document geometry.**
     pub fn render_style(&self) -> RenderStyle {
-        self.world.settings().render_style
+        self.editor.world().settings().render_style
     }
 
     /// **Switches between clean and hand-drawn** (§13).
@@ -495,10 +516,10 @@ impl FlowView {
     /// both hands' entries apart by key ([`GeometryKey::sketch`](crate::render::cache::GeometryKey::sketch)),
     /// so switching back finds the old tessellations still warm.
     pub fn set_render_style(&mut self, style: RenderStyle, cx: &mut Context<Self>) {
-        if self.world.settings().render_style == style {
+        if self.editor.world().settings().render_style == style {
             return;
         }
-        self.world.settings_mut().render_style = style;
+        self.editor.set_render_style(style);
         cx.notify();
     }
 
@@ -512,16 +533,16 @@ impl FlowView {
 
     /// The hand [`RenderStyle::Sketch`] draws with (§13).
     pub fn sketch_style(&self) -> SketchStyle {
-        self.world.settings().sketch
+        self.editor.world().settings().sketch
     }
 
     /// Changes the hand. A different style is a different cache key, so the
     /// visible set re-tessellates once and then stays cached.
     pub fn set_sketch_style(&mut self, style: SketchStyle, cx: &mut Context<Self>) {
-        if self.world.settings().sketch == style {
+        if self.editor.world().settings().sketch == style {
             return;
         }
-        self.world.settings_mut().sketch = style;
+        self.editor.set_sketch_style(style);
         cx.notify();
     }
 
@@ -532,7 +553,7 @@ impl FlowView {
 
     /// Frames the whole document, or resets to 1:1 if it is empty.
     pub fn zoom_to_fit(&mut self) {
-        match self.world.content_bounds() {
+        match self.editor.world().content_bounds() {
             Some(content) => self.viewport.zoom_to_fit(content, 48.0),
             None => self.viewport.reset(),
         }
@@ -574,7 +595,7 @@ impl FlowView {
             return;
         };
 
-        let source = self.world.attachment(
+        let source = self.editor.world().attachment(
             EdgeEnd::handle(pending.source.node, pending.source.handle),
             pending.current_world,
         );
@@ -633,22 +654,22 @@ impl FlowView {
     /// measured — see [`FlowView::pane`].
     fn refresh_snapshot(&mut self) {
         let timer = self.instruments.start();
-        self.rebuilt_routes = self.world.rebuild_dirty_geometry();
+        self.rebuilt_routes = self.editor.rebuild_dirty_geometry();
         self.instruments.record(Probe::EdgeRoute, timer);
 
         let timer = self.instruments.start();
-        self.last_sync = self.spatial.sync(&self.world);
-        self.world.clear_spatial_updates();
+        self.last_sync = self.spatial.sync(self.editor.world());
+        self.editor.clear_spatial_updates();
         self.instruments.record(Probe::SpatialUpdate, timer);
 
         let timer = self.instruments.start();
         self.spatial
-            .query_visible(&self.world, &self.viewport, &mut self.visible);
+            .query_visible(self.editor.world(), &self.viewport, &mut self.visible);
         self.instruments.record(Probe::VisibilityQuery, timer);
 
         let timer = self.instruments.start();
         self.snapshot.extract(
-            &self.world,
+            self.editor.world(),
             &self.visible,
             &self.viewport,
             &self.budgets,
@@ -695,7 +716,7 @@ impl FlowView {
         let options = self.scene_options();
         self.last_scene = scene::plan_scene(
             &mut self.plan,
-            &self.world,
+            self.editor.world(),
             &self.snapshot,
             &self.viewport,
             ink,
@@ -767,7 +788,7 @@ impl FlowView {
             counts.rich_nodes,
             counts.interactive_handles,
             u32::from(self.snapshot.overlay().is_some()),
-            self.world.nodes().len(),
+            self.editor.world().nodes().len(),
         );
         println!(
             "  §15  {} canvas nodes, {} of {} visible edges drawn, {} skipped, {} labels",
@@ -779,8 +800,8 @@ impl FlowView {
         );
         println!(
             "  §13  style {:?}{} — {} bodies drawn by hand",
-            self.world.settings().render_style,
-            match (self.world.settings().sketch_request(), lod.sketch) {
+            self.editor.world().settings().render_style,
+            match (self.editor.world().settings().sketch_request(), lod.sketch) {
                 (Some(_), Some(_)) => ", hand kept",
                 (Some(_), None) => ", hand degraded to clean by the ladder",
                 _ => "",
@@ -822,7 +843,7 @@ impl FlowView {
 
         let query =
             BoxQuery::at_zoom(selection.rect, self.viewport.zoom()).additive(selection.additive);
-        let changed = self.world.apply_box_selection(
+        let changed = self.editor.apply_box_selection(
             query,
             self.node_candidates.iter().copied(),
             self.edge_candidates.iter().copied(),
@@ -833,34 +854,6 @@ impl FlowView {
         // something; `apply_box_selection` counts additions, and the clear is
         // the other half.
         changed > 0 || !selection.additive
-    }
-
-    /// Turns a dropped connection into an edge, or into nothing.
-    ///
-    /// **The validation is the world's** (§4) — this only says where the drop
-    /// landed. A refusal is silent on the canvas and visible under
-    /// `DODO_FLOW_TRACE_INPUT`: the connection tool that colours a handle by
-    /// [`ConnectionError`](crate::runtime::ConnectionError) is Phase 5's, and
-    /// the reason is already carried for it.
-    fn commit_connection(&mut self, source: ConnectionSource, target: PointerTarget) {
-        let end = match target {
-            PointerTarget::Handle { node, handle } => EdgeEnd::handle(node, handle),
-            // §4's whole-node connection mode: dropping on a body connects to
-            // the node, and the router picks a point on its border.
-            PointerTarget::Node(node) => EdgeEnd::node(node),
-            PointerTarget::Empty => {
-                trace(format_args!("Connect dropped on empty canvas"));
-                return;
-            }
-        };
-
-        match self
-            .world
-            .connect(EdgeEnd::handle(source.node, source.handle), end)
-        {
-            Ok(edge) => trace(format_args!("Connect ok, edge={edge}")),
-            Err(error) => trace(format_args!("Connect refused: {error}")),
-        }
     }
 
     // ---- input ----------------------------------------------------------
@@ -875,28 +868,32 @@ impl FlowView {
         }
 
         match effect {
+            // The camera is this view's, and nothing below it knows the camera
+            // exists.
             InteractionEffect::PanBy(delta) => self.viewport.pan_by(delta),
 
-            // **The propagation rule, entered from a gesture.** Everything the
-            // move invalidates is decided by `GraphWorld::move_node`; the view
-            // does not know which edges exist and must not.
-            InteractionEffect::DragNodeBy { node, delta } => self.world.move_node(node, delta),
-            InteractionEffect::CancelNodeDrag { node, revert } => {
-                self.world.move_node(node, revert)
-            }
-            InteractionEffect::BeginNodeDrag(node) => self.world.select_only(Some(node)),
-            InteractionEffect::BeginBoxSelect(_) => self.world.select_only(None),
-            InteractionEffect::BeginConnect(source) => self.world.select_only(Some(source.node)),
-            InteractionEffect::CommitConnect { source, target } => {
-                self.commit_connection(source, target)
-            }
             // **The seam Phase 2 left open.** The machine hands back a world
             // rectangle and says nothing about what is in it; this is where the
             // broad phase and the narrow phase answer that (§28).
             InteractionEffect::CommitBoxSelect(selection) => {
                 return self.commit_box_selection(selection) | effect.needs_repaint();
             }
-            _ => {}
+
+            // **Everything that touches the document goes through §30's
+            // commands**, and the mapping lives in `commands::gesture` rather
+            // than here — see that module for why, and for the drag it lets a
+            // test perform with no window. A refusal is silent on the canvas
+            // and visible under `DODO_FLOW_TRACE_INPUT`: the connection tool
+            // that colours a handle by its reason is a later phase's, and the
+            // reason is already carried for it.
+            other => {
+                let report = gesture::apply_gesture(&mut self.editor, other);
+                match report.connection {
+                    Some(Ok(edge)) => trace(format_args!("Connect ok, edge={edge}")),
+                    Some(Err(error)) => trace(format_args!("Connect refused: {error}")),
+                    None => {}
+                }
+            }
         }
 
         effect.needs_repaint()
@@ -957,10 +954,13 @@ impl FlowView {
         self.spatial.nodes_at(world, radius, &mut candidates);
 
         match self
-            .world
+            .editor
+            .world()
             .hit_test(world, candidates, HitTolerance::new(radius))
         {
-            PointerTarget::Node(node) if self.world.nodes().is_locked(node) => PointerTarget::Empty,
+            PointerTarget::Node(node) if self.editor.world().nodes().is_locked(node) => {
+                PointerTarget::Empty
+            }
             target => target,
         }
     }
@@ -1148,6 +1148,22 @@ impl FlowView {
         }
     }
 
+    /// §26's undo, reached through the action bound in [`crate::init`].
+    ///
+    /// An open gesture is closed by [`FlowEditor::undo`] itself, so pressing
+    /// undo mid-drag takes a whole step rather than folding into the drag.
+    fn on_undo(&mut self, _: &Undo, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.undo() {
+            cx.notify();
+        }
+    }
+
+    fn on_redo(&mut self, _: &Redo, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.redo() {
+            cx.notify();
+        }
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         match event.keystroke.key.as_str() {
             PAN_KEY => self.pan_key_held = true,
@@ -1224,7 +1240,7 @@ impl Render for FlowView {
         // document-sized.
         self.refresh_snapshot();
 
-        let nodes = nodes::nodes(&self.snapshot, &self.world, cx);
+        let nodes = nodes::nodes(&self.snapshot, self.editor.world(), cx);
         let handles = nodes::handles(&self.snapshot, cx);
         let selection = nodes::selection_box(&self.snapshot, cx);
         let toolbar = nodes::toolbar(&self.snapshot, cx);
@@ -1238,6 +1254,8 @@ impl Render for FlowView {
             .overflow_hidden()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
+            .on_action(cx.listener(Self::on_undo))
+            .on_action(cx.listener(Self::on_redo))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
             .child(

@@ -260,6 +260,35 @@ impl CommandHistory {
         step
     }
 
+    /// **Takes a gesture's entries off the stack for good**, newest-first, and
+    /// closes it.
+    ///
+    /// For a drag the user abandoned with `Esc`. The caller applies each
+    /// `undo` to put the world back, and nothing is filed onto the redo stack:
+    /// a drag that was cancelled is not something to redo, and leaving a
+    /// "move back where it started" entry on the undo stack would make the next
+    /// undo walk through a step the user never took.
+    ///
+    /// Only entries belonging to the *open* gesture are taken, and only from
+    /// the top. A gesture that recorded nothing — a click that never moved —
+    /// takes nothing, which is what stops `Esc` from undoing the edit before
+    /// the drag.
+    pub fn abandon_gesture(&mut self) -> Vec<HistoryEntry> {
+        let Some(gesture) = self.gesture.take() else {
+            return Vec::new();
+        };
+
+        let mut spent = Vec::new();
+        while self
+            .undos
+            .back()
+            .is_some_and(|entry| entry.gesture == Some(gesture))
+        {
+            spent.push(self.undos.pop_back().expect("just peeked"));
+        }
+        spent
+    }
+
     /// The same, for redo. Entries come back in the order they must be applied.
     pub fn take_redo(&mut self) -> Vec<HistoryEntry> {
         let Some(top) = self.redos.pop() else {
@@ -438,6 +467,60 @@ mod tests {
             EditCommand::move_node(NodeIndex::new(0), Vec2::new(-10.0, 0.0)),
             "the newest entry was the one dropped"
         );
+    }
+
+    /// `Esc` mid-drag must take the drag off the stack entirely, not turn it
+    /// into a step to walk back through later.
+    #[test]
+    fn abandoning_a_gesture_removes_its_entries_and_leaves_no_redo() {
+        let mut history = CommandHistory::new();
+        let (redo, undo) = move_of(9, 3.0);
+        history.push(redo, undo);
+
+        history.begin_gesture();
+        for _ in 0..10 {
+            let (redo, undo) = move_of(0, 1.0);
+            history.push(redo, undo);
+        }
+
+        let spent = history.abandon_gesture();
+        assert_eq!(
+            spent.len(),
+            1,
+            "the drag was not coalesced before it was dropped"
+        );
+        assert_eq!(
+            spent[0].undo,
+            EditCommand::move_node(NodeIndex::new(0), Vec2::new(-10.0, 0.0))
+        );
+        assert_eq!(history.undo_depth(), 1, "it ate the edit before the drag");
+        assert!(!history.can_redo());
+        assert_eq!(history.open_gesture(), None);
+    }
+
+    /// A press and release that never moved records nothing, and `Esc` after it
+    /// must not reach past the gesture into the edit before it.
+    #[test]
+    fn abandoning_a_gesture_that_recorded_nothing_takes_nothing() {
+        let mut history = CommandHistory::new();
+        let (redo, undo) = move_of(9, 3.0);
+        history.push(redo, undo);
+
+        history.begin_gesture();
+        assert!(history.abandon_gesture().is_empty());
+        assert_eq!(history.undo_depth(), 1);
+    }
+
+    /// With no gesture open there is nothing to abandon, whatever is on the
+    /// stack.
+    #[test]
+    fn abandoning_outside_a_gesture_takes_nothing() {
+        let mut history = CommandHistory::new();
+        let (redo, undo) = move_of(0, 1.0);
+        history.push(redo, undo);
+
+        assert!(history.abandon_gesture().is_empty());
+        assert_eq!(history.undo_depth(), 1);
     }
 
     #[test]

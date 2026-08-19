@@ -5,6 +5,7 @@
 //! apply.rs     the one mutation path, returning each edit's inverse
 //! history.rs   the undo/redo stacks, and gesture grouping
 //! editor.rs    the world and the history welded together
+//! gesture.rs   §25's interaction effects, as commands
 //! keys.rs      §26's binding table, as a function of the host
 //! ```
 //!
@@ -32,12 +33,14 @@
 pub mod apply;
 pub mod edit;
 pub mod editor;
+pub mod gesture;
 pub mod history;
 pub mod keys;
 
 pub use apply::{EditOutcome, apply};
 pub use edit::{EditCommand, EditError, NodeDraft};
 pub use editor::{EditSummary, FlowEditor};
+pub use gesture::{GestureReport, apply_gesture};
 pub use history::{CommandHistory, GestureId, HistoryEntry};
 pub use keys::{Binding, EditAction};
 

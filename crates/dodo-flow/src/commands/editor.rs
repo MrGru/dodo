@@ -231,6 +231,26 @@ impl FlowEditor {
         changed
     }
 
+    /// **Throws away an abandoned gesture**, putting the world back where the
+    /// gesture found it.
+    ///
+    /// For `Esc` during a drag. The entries are applied in reverse and then
+    /// dropped: a cancelled drag is not an undo step and not a redo step, and
+    /// leaving one on the stack would make the next undo walk back through a
+    /// move the user already cancelled.
+    ///
+    /// A gesture that recorded nothing — a click — costs one branch and reaches
+    /// nothing below it.
+    pub fn abandon_gesture(&mut self) -> bool {
+        let mut changed = false;
+        for entry in self.history.abandon_gesture() {
+            let outcome = apply(&mut self.world, entry.undo)
+                .expect("a recorded inverse is always applicable");
+            changed |= outcome.changed;
+        }
+        changed
+    }
+
     /// Issues a fresh document id, for a caller assembling a draft that wants
     /// to name its own.
     pub fn next_id(&mut self) -> ElementId {

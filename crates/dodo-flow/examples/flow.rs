@@ -27,7 +27,9 @@
 //! | drop it on empty canvas | cancel |
 //! | drag on empty space with the left button | rubber band — **it selects on release** |
 //! | shift + drag on empty space | add the band's contents to the selection |
-//! | `Esc` | abandon the drag — a moved node goes back exactly where it was |
+//! | `Esc` | abandon the drag — a moved node goes back exactly where it was, and the drag leaves no undo step |
+//! | `Cmd+Z` / `Ctrl+Z` | undo — **a whole drag is one press**, however many mouse moves it took |
+//! | `Cmd+Shift+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` | redo |
 //!
 //! A connection is refused silently on the canvas: an input handle will not
 //! take a second edge past its limit, a source will not connect to a source,
@@ -475,6 +477,10 @@ fn main() {
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx| {
             gpui_component::init(cx);
+            // §26's bindings, from `commands::keys`'s table. After
+            // `gpui_component::init`, so the canvas's context wins the tie with
+            // the component library's own.
+            dodo_flow::init(cx);
             cx.activate(true);
 
             let options = WindowOptions {
@@ -493,7 +499,7 @@ fn main() {
                         // element, so a launcher that selects nothing shows
                         // none of them — and the whole point of opening this
                         // window is to look at them.
-                        flow.world_mut().select_only(Some(NodeIndex::new(0)));
+                        flow.editor_mut().select_only(Some(NodeIndex::new(0)));
 
                         // §15 without a trackpad: `DODO_FLOW_ZOOM=0.4` opens in
                         // the compact rung and `0.1` in the overview one, which
@@ -503,7 +509,7 @@ fn main() {
                             flow.viewport_mut().zoom_around(Vec2::ZERO, zoom);
                         }
                         if std::env::var_os("DODO_FLOW_SKETCH").is_some() {
-                            flow.world_mut().settings_mut().render_style = RenderStyle::Sketch;
+                            flow.editor_mut().set_render_style(RenderStyle::Sketch);
                         }
                         if benchmarking {
                             // One line before the first frame, so a run that is
