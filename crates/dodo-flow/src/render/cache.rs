@@ -155,6 +155,14 @@ pub enum GeometryPart {
     Stroke,
     StartMarker,
     EndMarker,
+    /// One pass of §13's hand over an outline. **A part per stroke**, because
+    /// each pass is a separate tessellation with a separate vertex buffer —
+    /// filing two of them under one key would serve the second pass the first
+    /// pass's squiggle and the shape would be drawn twice in the same place.
+    SketchStroke(u8),
+    /// The perturbed fill of a shape that has no quad form. Separate from
+    /// [`GeometryPart::Fill`] so a toggle back to clean cannot serve it.
+    SketchFill,
 }
 
 /// Which element a cached tessellation belongs to.
@@ -178,27 +186,62 @@ pub struct GeometryKey {
     /// [`RenderQuality::cache_key`] — the flattening tolerance, quantised.
     /// Phase 0 §3 correction 5.
     pub quality: u32,
+    /// **[`SketchStyle::cache_key`] — §13's hand, or 0 for a clean drawing.**
+    ///
+    /// Here for the same reason the tolerance is: sketch geometry is *derived*
+    /// geometry, so it belongs in this cache, and two hands over the same
+    /// outline are two different pictures. Folding the style in rather than the
+    /// seed is what makes it a `u32`: the per-element seed is derived from the
+    /// element's id, so [`GeometryKey::owner`] already separates two elements
+    /// drawn by the same hand.
+    ///
+    /// The consequence worth naming is the good one: **switching Clean↔Sketch
+    /// changes the key, so neither mode can ever serve the other's geometry,
+    /// and switching back finds the old entries still there** if the pan has
+    /// not aged them out.
+    pub sketch: u32,
 }
 
 impl GeometryKey {
-    pub fn node(node: NodeIndex, part: GeometryPart, version: u32, quality: RenderQuality) -> Self {
+    pub fn node(
+        node: NodeIndex,
+        part: GeometryPart,
+        version: u32,
+        quality: RenderQuality,
+        sketch: u32,
+    ) -> Self {
         GeometryKey {
             owner: GeometryOwner::Node(node),
             part,
             version,
             quality: quality.cache_key(),
+            sketch,
         }
     }
 
-    pub fn edge(edge: EdgeIndex, part: GeometryPart, version: u32, quality: RenderQuality) -> Self {
+    pub fn edge(
+        edge: EdgeIndex,
+        part: GeometryPart,
+        version: u32,
+        quality: RenderQuality,
+        sketch: u32,
+    ) -> Self {
         GeometryKey {
             owner: GeometryOwner::Edge(edge),
             part,
             version,
             quality: quality.cache_key(),
+            sketch,
         }
     }
 }
+
+/// The sketch component of a cache key for a **clean** drawing.
+///
+/// Named rather than a bare `0` at each call site, so a reader of
+/// `GeometryKey::node(node, Fill, version, quality, CLEAN)` can see what the
+/// last argument is without opening this file.
+pub const CLEAN: u32 = 0;
 
 /// **Where the camera was when a tessellation was built**, reduced to the two
 /// numbers that reposition it.
@@ -761,6 +804,7 @@ mod tests {
             GeometryPart::Stroke,
             version,
             RenderQuality::BALANCED,
+            CLEAN,
         )
     }
 
@@ -780,6 +824,7 @@ mod tests {
                     GeometryPart::Stroke,
                     1,
                     RenderQuality::BALANCED,
+                    CLEAN,
                 )
             })
             .collect();
@@ -933,12 +978,14 @@ mod tests {
             GeometryPart::Stroke,
             1,
             RenderQuality::PRECISE,
+            CLEAN,
         );
         let draft = GeometryKey::edge(
             EdgeIndex::new(0),
             GeometryPart::Stroke,
             1,
             RenderQuality::DRAFT,
+            CLEAN,
         );
         assert_ne!(precise, draft);
 
@@ -960,12 +1007,14 @@ mod tests {
             GeometryPart::Fill,
             1,
             RenderQuality::BALANCED,
+            CLEAN,
         );
         let stroke = GeometryKey::node(
             NodeIndex::new(0),
             GeometryPart::Stroke,
             1,
             RenderQuality::BALANCED,
+            CLEAN,
         );
         assert_ne!(fill, stroke);
     }
@@ -992,6 +1041,7 @@ mod tests {
                     GeometryPart::Stroke,
                     1,
                     RenderQuality::BALANCED,
+                    CLEAN,
                 ),
                 path(200),
             );

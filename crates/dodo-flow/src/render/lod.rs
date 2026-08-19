@@ -100,10 +100,11 @@
 use crate::{
     budgets::{DetailLevel, LodThresholds, RenderBudgets},
     geometry::{Rect, Vec2, Viewport},
-    models::RenderQuality,
+    models::{RenderQuality, SketchStyle},
     render::{
         plan::{DashSpec, PathPaint},
         shapes::Outline,
+        sketch,
     },
     runtime::GraphWorld,
     spatial::VisibleSet,
@@ -159,6 +160,16 @@ impl EdgeDetail {
         matches!(self, EdgeDetail::Full)
     }
 
+    /// **Whether §13's hand still draws this edge.**
+    ///
+    /// The rungs below [`EdgeDetail::Coarse`] have already thrown the route's
+    /// curvature away to survive the frame; drawing what is left of it two or
+    /// three times with a wobble would spend the budget the rung was reached to
+    /// save. So sketch stops exactly where curves do — one threshold, not two.
+    pub fn keeps_sketch(self) -> bool {
+        self.keeps_curves()
+    }
+
     /// The flattening tolerance this rung tessellates at, given the document's.
     ///
     /// Multiplying rather than replacing: a document that asked for
@@ -199,6 +210,21 @@ impl EdgeDetail {
     /// [`crate::render::plan`] makes on the real thing and which
     /// `render::painter`'s calibration test keeps honest.
     pub fn estimated_vertices(self, screen_length: f32, quality: RenderQuality) -> u32 {
+        self.estimated_vertices_with(screen_length, quality, None)
+    }
+
+    /// The same estimate, with §13's hand if this frame is drawing one.
+    ///
+    /// The sketch cost is not a multiplier applied afterwards: the synthetic
+    /// route is run through the *real* generator and the real estimator, for
+    /// the reason above — an estimator that models the painter instead of
+    /// calling it is an estimator that drifts.
+    pub fn estimated_vertices_with(
+        self,
+        screen_length: f32,
+        quality: RenderQuality,
+        sketch: Option<SketchStyle>,
+    ) -> u32 {
         let length = screen_length.max(1.0);
         let quality = self.quality(quality);
         let mut outline = Outline::with_capacity(POLYLINE_SEGMENTS + 2);
@@ -229,7 +255,10 @@ impl EdgeDetail {
             color: crate::models::Color::WHITE,
             width: 1.0,
         };
-        let line = outline.estimated_vertices(stroke, quality);
+        let line = match sketch.filter(|_| self.keeps_sketch()) {
+            Some(style) => sketch::estimated_vertices(&outline, &style, 0, stroke, quality),
+            None => outline.estimated_vertices(stroke, quality),
+        };
 
         // A marker is a second path and its own vertices; at the two rungs that
         // keep them, both ends may carry one.
@@ -243,7 +272,24 @@ impl EdgeDetail {
     /// How many **paths** one edge costs at this rung. The other budget — see
     /// the module doc; on the hairball it is the one that is reached first.
     pub fn paths_per_edge(self) -> u32 {
-        if self.keeps_markers() { 3 } else { 1 }
+        self.paths_per_edge_with(None)
+    }
+
+    /// The same count, with §13's hand: **every stroke of a sketched edge is
+    /// its own path**, so `stroke_count` multiplies the budget a hairball
+    /// reaches first. The markers are sketched in one pass each rather than
+    /// two — an arrow head is 10 px of geometry and a second pass over it is
+    /// invisible.
+    pub fn paths_per_edge_with(self, sketch: Option<SketchStyle>) -> u32 {
+        let strokes = match sketch.filter(|_| self.keeps_sketch()) {
+            Some(style) => style.strokes() as u32,
+            None => 1,
+        };
+        if self.keeps_markers() {
+            strokes + 2
+        } else {
+            strokes
+        }
     }
 }
 
@@ -285,6 +331,15 @@ pub struct SceneLoad {
     /// pessimistic assumption is wrong in the common case rather than merely
     /// conservative in it.
     pub path_bodied_fraction: f32,
+    /// The sampled mean of the visible nodes' longer screen side, in pixels.
+    ///
+    /// **Sketch is what needs this.** A clean node body costs either nothing (a
+    /// quad) or a constant (a path); a sketched one costs what its perimeter
+    /// flattens to, which is a function of its size on screen — so the ladder
+    /// cannot decide whether a hand fits in the frame without knowing how big
+    /// the shapes are. Sampled in the same pass as
+    /// [`SceneLoad::path_bodied_fraction`], so it is still O(1).
+    pub mean_node_screen_size: f32,
 }
 
 impl SceneLoad {
@@ -295,11 +350,13 @@ impl SceneLoad {
     /// rung. A flickering LOD tier is worse than a wrong one.
     pub fn measure(world: &GraphWorld, visible: &VisibleSet, viewport: &Viewport) -> SceneLoad {
         let edges = visible.edges();
+        let sample = sample_nodes(world, visible, viewport);
         let mut load = SceneLoad {
             visible_nodes: visible.node_count() as u32,
             visible_edges: edges.len() as u32,
             mean_edge_screen_length: 0.0,
-            path_bodied_fraction: sample_path_bodied(world, visible),
+            path_bodied_fraction: sample.path_bodied_fraction,
+            mean_node_screen_size: sample.mean_screen_size,
         };
 
         if edges.is_empty() {
@@ -327,31 +384,43 @@ impl SceneLoad {
     }
 }
 
-/// The sampled fraction of visible nodes drawn as paths rather than quads.
+/// What one sample of the visible nodes found.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct NodeSample {
+    path_bodied_fraction: f32,
+    mean_screen_size: f32,
+}
+
+/// The sampled shape and size of the visible nodes.
 ///
 /// Sampled for the same reason the edge length is: the decision has to be O(1),
 /// and `NodeStore::shape` is a hot-array read so a sample of
 /// [`LOAD_SAMPLE`] is a handful of bytes. Deterministic stride, so the answer —
 /// and therefore the rung — does not flicker on an unchanged scene.
-fn sample_path_bodied(world: &GraphWorld, visible: &VisibleSet) -> f32 {
+fn sample_nodes(world: &GraphWorld, visible: &VisibleSet, viewport: &Viewport) -> NodeSample {
     let nodes = visible.nodes();
     if nodes.is_empty() {
-        return 0.0;
+        return NodeSample::default();
     }
 
     let stride = nodes.len().div_ceil(LOAD_SAMPLE).max(1);
-    let (mut sampled, mut paths) = (0u32, 0u32);
+    let (mut sampled, mut paths, mut size) = (0u32, 0u32, 0.0f32);
     for &node in nodes.iter().step_by(stride) {
         sampled += 1;
         if !crate::render::shapes::node_prefers_quad(world.nodes().shape(node)) {
             paths += 1;
         }
+        let bounds = world.nodes().bounds(node);
+        size += bounds.size.x.max(bounds.size.y);
     }
 
     if sampled == 0 {
-        0.0
-    } else {
-        paths as f32 / sampled as f32
+        return NodeSample::default();
+    }
+
+    NodeSample {
+        path_bodied_fraction: paths as f32 / sampled as f32,
+        mean_screen_size: viewport.world_to_screen_length(size / sampled as f32),
     }
 }
 
@@ -393,6 +462,14 @@ pub struct LodPlan {
     /// [`RenderBudgets::max_rich_elements`] and zero below full detail.
     pub max_rich_nodes: u32,
     pub handles: HandleDetail,
+    /// **§13's hand for this frame, or `None` for a clean drawing** — which is
+    /// what [`RenderStyle::Sketch`](crate::models::RenderStyle::Sketch) asked
+    /// for, degraded by the two rules in [`LodPlan::choose`].
+    ///
+    /// A rung on the ladder rather than a setting read at the paint site, so
+    /// "sketch was degraded to clean on this frame" is a value a test and a
+    /// benchmark can read, exactly like the edge rung beside it.
+    pub sketch: Option<SketchStyle>,
 }
 
 impl LodPlan {
@@ -404,7 +481,12 @@ impl LodPlan {
     /// budgets fit. A frame that cannot fit even [`EdgeDetail::Hairline`] caps
     /// the edge count instead, which is the last resort and is reported rather
     /// than hidden.
-    pub fn choose(budgets: &RenderBudgets, zoom: f32, load: SceneLoad) -> LodPlan {
+    pub fn choose(
+        budgets: &RenderBudgets,
+        zoom: f32,
+        load: SceneLoad,
+        sketch: Option<SketchStyle>,
+    ) -> LodPlan {
         let lod = &budgets.lod;
         let detail = lod.detail(zoom);
 
@@ -426,6 +508,13 @@ impl LodPlan {
                 DetailLevel::Compact => HandleDetail::Painted,
                 DetailLevel::Overview => HandleDetail::Hidden,
             },
+            // **The zoom rule.** A hand-drawn wobble is a 2 px feature; below
+            // the zoom at which a *curve* is worth tessellating it is smaller
+            // than the line it decorates, and it costs several times the
+            // vertices of the clean shape to draw something nobody can see.
+            // The same threshold as `degrade_curves` on purpose — a sketched
+            // outline is nothing but curves, so the question is the same one.
+            sketch: sketch.filter(|_| !lod.degrade_curves_to_quads(zoom)),
         };
 
         // Below the zoom at which a curve is worth tessellating, an edge's
@@ -433,6 +522,19 @@ impl LodPlan {
         // walking down to the same place every frame.
         if plan.degrade_curves {
             plan.edges = EdgeDetail::Polyline;
+        }
+
+        // **The load rule**, and the one Phase 6's measurements forced. A
+        // sketched node body is two paths of a few hundred vertices where a
+        // clean one is a quad of none, so a scene that is comfortable clean can
+        // be several times over the frame budget sketched. Rather than let the
+        // edge ladder pay for it — walking to `Hairline` and then capping the
+        // edge count, on a scene whose *nodes* are what is expensive — the hand
+        // is dropped for the frame and the picture stays complete.
+        if let Some(style) = plan.sketch
+            && !sketched_nodes_fit(budgets, load, &plan, &style)
+        {
+            plan.sketch = None;
         }
 
         plan.fit_edges(budgets, load);
@@ -453,6 +555,7 @@ impl LodPlan {
 
         loop {
             let fits = self.edge_layer_fits(load, path_budget, vertex_budget);
+
             if fits {
                 self.max_edges = load.visible_edges;
                 return;
@@ -466,10 +569,14 @@ impl LodPlan {
         // The bottom rung still does not fit: cap the count. Whichever budget
         // binds first decides, so a scene bounded by the per-path tax and one
         // bounded by vertices both come out drawable.
-        let per_edge_paths = self.edges.paths_per_edge().max(1);
+        let per_edge_paths = self.edges.paths_per_edge_with(self.sketch).max(1);
         let per_edge_vertices = self
             .edges
-            .estimated_vertices(load.mean_edge_screen_length, RenderQuality::BALANCED)
+            .estimated_vertices_with(
+                load.mean_edge_screen_length,
+                RenderQuality::BALANCED,
+                self.sketch,
+            )
             .max(1);
 
         self.max_edges = (path_budget / per_edge_paths).min(vertex_budget / per_edge_vertices);
@@ -478,14 +585,16 @@ impl LodPlan {
     fn edge_layer_fits(&self, load: SceneLoad, path_budget: u32, vertex_budget: u32) -> bool {
         let paths = load
             .visible_edges
-            .saturating_mul(self.edges.paths_per_edge());
+            .saturating_mul(self.edges.paths_per_edge_with(self.sketch));
         if paths > path_budget {
             return false;
         }
 
-        let per_edge = self
-            .edges
-            .estimated_vertices(load.mean_edge_screen_length, RenderQuality::BALANCED);
+        let per_edge = self.edges.estimated_vertices_with(
+            load.mean_edge_screen_length,
+            RenderQuality::BALANCED,
+            self.sketch,
+        );
         load.visible_edges.saturating_mul(per_edge) <= vertex_budget
     }
 
@@ -520,19 +629,27 @@ impl LodPlan {
 /// budget at all — a quad is a fixed-size instance with no vertex buffer and no
 /// render pass (Phase 0 §1.7), which is the whole reason node bodies are quads.
 fn node_layer_cost(budgets: &RenderBudgets, load: SceneLoad, plan: &LodPlan) -> (u32, u32) {
-    // Two paths — a fill and a stroke — for each node whose body is actually a
-    // path. Under `degrade_curves` even those become quads.
-    let path_bodied = if plan.degrade_curves {
-        0.0
-    } else {
-        load.visible_nodes as f32 * load.path_bodied_fraction.clamp(0.0, 1.0)
-    };
-    let paths = (path_bodied * 2.0).ceil() as u32;
+    // **Sketch changes the shape of this sum, not a coefficient in it.** Every
+    // body is a path when a hand is drawing, whatever `path_bodied_fraction`
+    // says, and each body costs `stroke_count` of them.
+    let (paths, vertices) = match plan.sketch {
+        Some(style) => sketched_node_layer_cost(load, &style),
+        None => {
+            // Two paths — a fill and a stroke — for each node whose body is
+            // actually a path. Under `degrade_curves` even those become quads.
+            let path_bodied = if plan.degrade_curves {
+                0.0
+            } else {
+                load.visible_nodes as f32 * load.path_bodied_fraction.clamp(0.0, 1.0)
+            };
+            let paths = (path_bodied * 2.0).ceil() as u32;
 
-    // The ellipse is the expensive body at 337 vertices, and that is what this
-    // charges for, so the estimate errs the way a guard has to *among the
-    // nodes that are paths at all*.
-    let vertices = paths.saturating_mul(ELLIPSE_VERTEX_ESTIMATE);
+            // The ellipse is the expensive body at 337 vertices, and that is
+            // what this charges for, so the estimate errs the way a guard has
+            // to *among the nodes that are paths at all*.
+            (paths, paths.saturating_mul(ELLIPSE_VERTEX_ESTIMATE))
+        }
+    };
 
     // **The node layer may not take the whole frame.** Even a document of
     // nothing but ellipses has to leave the edges something, or a graph draws
@@ -542,6 +659,66 @@ fn node_layer_cost(budgets: &RenderBudgets, load: SceneLoad, plan: &LodPlan) -> 
     let vertex_cap = (budgets.target_path_vertices_per_frame as f32 * NODE_LAYER_SHARE) as u32;
 
     (paths.min(path_cap), vertices.min(vertex_cap))
+}
+
+/// **What §13's hand costs the node layer**, in the two budgets the ladder
+/// spends.
+///
+/// Every visible node is charged, because a sketched body is a path whatever
+/// its shape is — that is the whole finding of Phase 6, and it is why sketch
+/// mode needed a rule of its own rather than a bigger coefficient. The vertex
+/// figure comes from running the real generator over a rectangle of the scene's
+/// mean node size: a shape's sketch cost is a function of its screen perimeter,
+/// so a constant would be wrong at every zoom but one.
+fn sketched_node_layer_cost(load: SceneLoad, style: &SketchStyle) -> (u32, u32) {
+    let nodes = load.visible_nodes;
+    let paths = nodes.saturating_mul(style.strokes() as u32);
+    (
+        paths,
+        nodes.saturating_mul(sketched_node_vertices(load, style)),
+    )
+}
+
+/// The estimated vertices one sketched node body costs at this scene's mean
+/// node size. See [`sketched_node_layer_cost`].
+fn sketched_node_vertices(load: SceneLoad, style: &SketchStyle) -> u32 {
+    let side = load.mean_node_screen_size.max(1.0);
+    // The mean side is the longer one; a body is wider than it is tall, and
+    // half is the ratio the scene generator and the demo document both use.
+    let body = crate::render::shapes::rectangle(Rect::new(
+        Vec2::ZERO,
+        Vec2::new(side, (side * 0.5).max(1.0)),
+    ));
+    let stroke = PathPaint::Stroke {
+        color: crate::models::Color::WHITE,
+        width: 1.0,
+    };
+
+    sketch::estimated_vertices(&body, style, 0, stroke, RenderQuality::BALANCED)
+}
+
+/// Whether the sketched node layer fits inside its share of the frame.
+///
+/// The node layer's share is [`NODE_LAYER_SHARE`] of each budget, which is what
+/// [`node_layer_cost`] clamps to — so "does not fit" means the clamp would have
+/// fired, and a clamp here would silently hand the edges a budget the nodes
+/// were about to blow through anyway.
+fn sketched_nodes_fit(
+    budgets: &RenderBudgets,
+    load: SceneLoad,
+    plan: &LodPlan,
+    style: &SketchStyle,
+) -> bool {
+    if plan.detail == DetailLevel::Overview {
+        // Nothing on this rung is worth a hand: every node is a box a few
+        // pixels across. Answering `false` rather than filtering earlier keeps
+        // the two rules in one place.
+        return false;
+    }
+
+    let (paths, vertices) = sketched_node_layer_cost(load, style);
+    paths <= (budgets.target_paths_per_frame as f32 * NODE_LAYER_SHARE) as u32
+        && vertices <= (budgets.target_path_vertices_per_frame as f32 * NODE_LAYER_SHARE) as u32
 }
 
 /// The most of each frame budget the node layer may claim before the edges get
@@ -602,6 +779,7 @@ mod tests {
             mean_edge_screen_length: 1_200.0,
             // Graph nodes, so quads.
             path_bodied_fraction: 0.0,
+            mean_node_screen_size: 160.0,
         }
     }
 
@@ -612,12 +790,13 @@ mod tests {
             visible_edges: 126,
             mean_edge_screen_length: 180.0,
             path_bodied_fraction: 0.0,
+            mean_node_screen_size: 160.0,
         }
     }
 
     #[test]
     fn a_healthy_frame_is_not_degraded_at_all() {
-        let plan = LodPlan::choose(&budgets(), 1.0, healthy());
+        let plan = LodPlan::choose(&budgets(), 1.0, healthy(), None);
 
         assert_eq!(plan.edges, EdgeDetail::Full);
         assert_eq!(plan.max_edges, 126, "nothing is skipped");
@@ -632,7 +811,7 @@ mod tests {
     fn the_hairball_scene_is_bounded_by_the_ladder() {
         let budgets = budgets();
         let load = hairball();
-        let plan = LodPlan::choose(&budgets, 1.0, load);
+        let plan = LodPlan::choose(&budgets, 1.0, load, None);
 
         assert!(plan.is_degraded(), "61,104 visible edges must degrade");
 
@@ -665,7 +844,7 @@ mod tests {
     fn the_path_count_is_what_binds_first_on_a_hairball() {
         let budgets = budgets();
         let load = hairball();
-        let plan = LodPlan::choose(&budgets, 1.0, load);
+        let plan = LodPlan::choose(&budgets, 1.0, load, None);
 
         assert!(
             plan.max_edges < load.visible_edges,
@@ -693,15 +872,16 @@ mod tests {
                 visible_edges: edges,
                 mean_edge_screen_length: 400.0,
                 path_bodied_fraction: 0.0,
+                mean_node_screen_size: 160.0,
             };
-            if LodPlan::choose(&budgets, 1.0, load).edges == EdgeDetail::Coarse {
+            if LodPlan::choose(&budgets, 1.0, load, None).edges == EdgeDetail::Coarse {
                 break load;
             }
             edges += 1;
             assert!(edges < 20_000, "no load produced a Coarse frame");
         };
 
-        let plan = LodPlan::choose(&budgets, 1.0, load);
+        let plan = LodPlan::choose(&budgets, 1.0, load, None);
         assert_eq!(plan.edges, EdgeDetail::Coarse);
         assert_eq!(plan.max_edges, load.visible_edges, "nothing was skipped");
     }
@@ -752,15 +932,15 @@ mod tests {
         let load = healthy();
 
         assert_eq!(
-            LodPlan::choose(&budgets, 1.0, load).detail,
+            LodPlan::choose(&budgets, 1.0, load, None).detail,
             DetailLevel::Full
         );
         assert_eq!(
-            LodPlan::choose(&budgets, 0.4, load).detail,
+            LodPlan::choose(&budgets, 0.4, load, None).detail,
             DetailLevel::Compact
         );
         assert_eq!(
-            LodPlan::choose(&budgets, 0.1, load).detail,
+            LodPlan::choose(&budgets, 0.1, load, None).detail,
             DetailLevel::Overview
         );
     }
@@ -773,11 +953,11 @@ mod tests {
         let load = healthy();
 
         assert_eq!(
-            LodPlan::choose(&budgets, 1.0, load).max_rich_nodes,
+            LodPlan::choose(&budgets, 1.0, load, None).max_rich_nodes,
             budgets.max_rich_elements
         );
-        assert_eq!(LodPlan::choose(&budgets, 0.4, load).max_rich_nodes, 0);
-        assert_eq!(LodPlan::choose(&budgets, 0.1, load).max_rich_nodes, 0);
+        assert_eq!(LodPlan::choose(&budgets, 0.4, load, None).max_rich_nodes, 0);
+        assert_eq!(LodPlan::choose(&budgets, 0.1, load, None).max_rich_nodes, 0);
     }
 
     #[test]
@@ -786,15 +966,15 @@ mod tests {
         let load = healthy();
 
         assert_eq!(
-            LodPlan::choose(&budgets, 1.0, load).handles,
+            LodPlan::choose(&budgets, 1.0, load, None).handles,
             HandleDetail::Interactive
         );
         assert_eq!(
-            LodPlan::choose(&budgets, 0.4, load).handles,
+            LodPlan::choose(&budgets, 0.4, load, None).handles,
             HandleDetail::Painted
         );
         assert_eq!(
-            LodPlan::choose(&budgets, 0.1, load).handles,
+            LodPlan::choose(&budgets, 0.1, load, None).handles,
             HandleDetail::Hidden
         );
     }
@@ -807,17 +987,17 @@ mod tests {
         let load = healthy();
 
         assert!(
-            LodPlan::choose(&budgets, 1.0, load)
+            LodPlan::choose(&budgets, 1.0, load, None)
                 .label_font_size
                 .is_some()
         );
         assert_eq!(
-            LodPlan::choose(&budgets, 0.1, load).label_font_size,
+            LodPlan::choose(&budgets, 0.1, load, None).label_font_size,
             None,
             "overview draws boxes"
         );
         assert_eq!(
-            LodPlan::choose(&budgets, 0.25, load).label_font_size,
+            LodPlan::choose(&budgets, 0.25, load, None).label_font_size,
             None,
             "13 world units at 0.25 zoom is 3.25 px, under the readable floor"
         );
@@ -830,7 +1010,9 @@ mod tests {
         let budgets = budgets();
         let load = healthy();
         let mut sizes: Vec<f32> = (1..=400)
-            .filter_map(|step| LodPlan::choose(&budgets, step as f32 / 100.0, load).label_font_size)
+            .filter_map(|step| {
+                LodPlan::choose(&budgets, step as f32 / 100.0, load, None).label_font_size
+            })
             .collect();
         sizes.sort_by(f32::total_cmp);
         sizes.dedup();
@@ -867,8 +1049,9 @@ mod tests {
             visible_edges: 3_182,
             mean_edge_screen_length: 34.0,
             path_bodied_fraction: 0.0,
+            mean_node_screen_size: 160.0,
         };
-        let plan = LodPlan::choose(&budgets(), 1.0, load);
+        let plan = LodPlan::choose(&budgets(), 1.0, load, None);
 
         assert_eq!(
             plan.max_edges, load.visible_edges,
@@ -886,8 +1069,9 @@ mod tests {
             visible_edges: 3_182,
             mean_edge_screen_length: 34.0,
             path_bodied_fraction: 1.0,
+            mean_node_screen_size: 160.0,
         };
-        let plan = LodPlan::choose(&budgets, 1.0, load);
+        let plan = LodPlan::choose(&budgets, 1.0, load, None);
 
         assert!(
             plan.max_edges > 0,
@@ -901,7 +1085,7 @@ mod tests {
 
     #[test]
     fn an_empty_scene_decides_without_dividing_by_zero() {
-        let plan = LodPlan::choose(&budgets(), 1.0, SceneLoad::default());
+        let plan = LodPlan::choose(&budgets(), 1.0, SceneLoad::default(), None);
 
         assert_eq!(plan.edges, EdgeDetail::Full);
         assert_eq!(plan.max_edges, 0);
@@ -917,11 +1101,12 @@ mod tests {
             visible_edges: 12,
             mean_edge_screen_length: 200.0,
             path_bodied_fraction: 0.0,
+            mean_node_screen_size: 160.0,
         };
 
         for step in 4..=200 {
             let zoom = step as f32 / 100.0;
-            let plan = LodPlan::choose(&budgets, zoom, sparse);
+            let plan = LodPlan::choose(&budgets, zoom, sparse, None);
             let expected = if plan.degrade_curves {
                 EdgeDetail::Polyline
             } else {

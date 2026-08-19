@@ -38,6 +38,7 @@ pub mod plan;
 pub mod registry;
 pub mod scene;
 pub mod shapes;
+pub mod sketch;
 pub mod snapshot;
 
 pub use cache::{
@@ -54,6 +55,7 @@ pub use registry::{
 };
 pub use scene::{SceneInk, SceneOptions, SceneStats, plan_scene};
 pub use shapes::Outline;
+pub use sketch::{SketchRng, element_seed, perturb};
 pub use snapshot::{
     CanvasNode, InteractiveHandle, PlannedEdge, RenderSnapshot, RichNode, SnapshotCounts,
     SnapshotOverlay,

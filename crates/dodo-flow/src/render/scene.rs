@@ -66,14 +66,15 @@ use std::sync::Arc;
 use crate::{
     budgets::DetailLevel,
     geometry::{Rect, Vec2, Viewport},
+    models::SketchStyle,
     models::{Color, NodeIndex, RenderQuality},
     render::{
         GridLevel, GridLimits, GridSettings, PaintPlan,
-        cache::{GeometryKey, GeometryPart, TextKey},
+        cache::{CLEAN, GeometryKey, GeometryPart, TextKey},
         edges,
         lod::HandleDetail,
         plan::{DashSpec, PathPrimitive, QuadPrimitive, TextPrimitive},
-        shapes,
+        shapes, sketch,
         snapshot::{CanvasNode, RenderSnapshot},
     },
     runtime::{GraphWorld, NodeShape},
@@ -157,6 +158,13 @@ pub struct SceneStats {
     /// Visible nodes skipped because their kind has no representation yet —
     /// text, images, frames. **Not** a culling number; a not-implemented one.
     pub unsupported_nodes: u32,
+    /// Node bodies drawn by §13's hand this frame, rich ones included.
+    ///
+    /// Reported rather than inferred from the style, because the ladder may
+    /// have degraded sketch to clean — see [`crate::render::lod::LodPlan::sketch`]
+    /// — and "did this frame actually draw a hand?" is the question a benchmark
+    /// and the launcher's overlay ask.
+    pub sketched_bodies: u32,
 }
 
 impl SceneStats {
@@ -258,6 +266,15 @@ fn plan_edges(
             quality,
             detail: lod.edges,
             owner: Some((planned.edge, planned.version)),
+            // The seed is the edge's own id, so an edge wobbles the same way
+            // for the life of the document and differently from its neighbour
+            // — see `render::sketch::element_seed`.
+            sketch: lod.sketch.map(|style| {
+                edges::SketchHand::new(
+                    style,
+                    sketch::element_seed(&style, world.edges().id(planned.edge), SKETCH_EDGE_PART),
+                )
+            }),
         };
 
         edges::plan_edge(plan, route, &paint, viewport);
@@ -323,6 +340,34 @@ fn plan_nodes(
             && (!style.stroke.is_invisible() || canvas.selected)
             && stroke_width > 0.0;
 
+        // **§13's hand, if the ladder kept it.** A node too small to be worth a
+        // border is too small to be worth a wobble either, so `detailed` gates
+        // it here rather than in the ladder — that is a per-node question and
+        // the ladder answers per frame.
+        if let Some(sketch_style) = lod.sketch.filter(|_| canvas.detailed)
+            && plan_sketched_body(
+                plan,
+                SketchedBody {
+                    node: canvas.node,
+                    body: canvas.body,
+                    version: canvas.version,
+                    screen,
+                    radius,
+                    fill,
+                    stroke_color,
+                    stroke_width,
+                    has_stroke,
+                },
+                &sketch_style,
+                world,
+                quality,
+            )
+        {
+            stats.nodes += 1;
+            stats.sketched_bodies += 1;
+            continue;
+        }
+
         // §15 and Phase 0 §3 correction 7: an ellipse is 337 vertices against a
         // rectangle's 24, so below `curve_to_quad_zoom` a curved body is
         // painted as its bounding quad rather than tessellated.
@@ -342,7 +387,13 @@ fn plan_nodes(
             plan.push_quad(quad);
         } else if let Some(outline) = shapes::outline_for_node(canvas.body, screen, radius) {
             plan.push_path(PathPrimitive::fill(outline.clone(), fill, quality).keyed(
-                GeometryKey::node(canvas.node, GeometryPart::Fill, canvas.version, quality),
+                GeometryKey::node(
+                    canvas.node,
+                    GeometryPart::Fill,
+                    canvas.version,
+                    quality,
+                    CLEAN,
+                ),
             ));
 
             if has_stroke {
@@ -353,6 +404,7 @@ fn plan_nodes(
                             GeometryPart::Stroke,
                             canvas.version,
                             quality,
+                            CLEAN,
                         ),
                     ),
                 );
@@ -360,6 +412,167 @@ fn plan_nodes(
         }
 
         stats.nodes += 1;
+    }
+
+    plan_sketched_rich_bodies(plan, world, snapshot, viewport, ink, stats);
+}
+
+/// Everything one node body needs from either half of the renderer, so the
+/// sketch painter can be called from the canvas loop and from the rich one
+/// without either of them growing a copy of it.
+struct SketchedBody {
+    node: NodeIndex,
+    body: NodeShape,
+    version: u32,
+    screen: Rect,
+    radius: f32,
+    fill: Color,
+    stroke_color: Color,
+    stroke_width: f32,
+    has_stroke: bool,
+}
+
+/// **One node body, drawn by hand** (§13). `false` if this shape has no outline
+/// to perturb, in which case the caller falls back to the clean painter.
+///
+/// Three decisions live here and each is a cost one:
+///
+/// - **The fill of a quad-shaped body stays a quad**, with no border. A wobbly
+///   stroke over a crisp fill is what a marker on a whiteboard looks like, and
+///   it halves what a sketched node costs — see [`crate::render::sketch`].
+/// - **Each stroke pass is its own path and its own cache entry**, because each
+///   is a separate tessellation. [`GeometryPart::SketchStroke`] carries the
+///   pass index so two passes cannot collide.
+/// - **The tolerance is [`SketchStyle::quality`]'s**, not the document's: a
+///   deliberately imprecise line does not need a quarter-pixel bow, and this is
+///   worth about half the vertices.
+fn plan_sketched_body(
+    plan: &mut PaintPlan,
+    body: SketchedBody,
+    style: &SketchStyle,
+    world: &GraphWorld,
+    quality: crate::models::RenderQuality,
+) -> bool {
+    let Some(outline) = shapes::outline_for_node(body.body, body.screen, body.radius) else {
+        return false;
+    };
+
+    let id = world.nodes().id(body.node);
+    let sketch_key = style.cache_key();
+    let sketch_quality = style.quality(quality);
+
+    if shapes::node_prefers_quad(body.body) {
+        plan.push_quad(
+            QuadPrimitive::filled(body.screen, body.fill).with_corner_radius(body.radius),
+        );
+    } else {
+        let seed = sketch::element_seed(style, id, SKETCH_FILL_PART);
+        plan.push_path(
+            PathPrimitive::fill(
+                sketch::fill(&outline, style, seed),
+                body.fill,
+                sketch_quality,
+            )
+            .keyed(GeometryKey::node(
+                body.node,
+                GeometryPart::SketchFill,
+                body.version,
+                sketch_quality,
+                sketch_key,
+            )),
+        );
+    }
+
+    if body.has_stroke {
+        let seed = sketch::element_seed(style, id, SKETCH_STROKE_PART);
+        for (pass, stroke) in sketch::strokes(&outline, style, seed)
+            .into_iter()
+            .enumerate()
+        {
+            plan.push_path(
+                PathPrimitive::stroke(stroke, body.stroke_color, body.stroke_width, sketch_quality)
+                    .keyed(GeometryKey::node(
+                        body.node,
+                        GeometryPart::SketchStroke(pass as u8),
+                        body.version,
+                        sketch_quality,
+                        sketch_key,
+                    )),
+            );
+        }
+    }
+
+    true
+}
+
+/// The part salts that keep one element's paths from wobbling in lockstep. See
+/// [`crate::render::sketch::element_seed`].
+const SKETCH_FILL_PART: u64 = 1;
+const SKETCH_STROKE_PART: u64 = 2;
+const SKETCH_EDGE_PART: u64 = 3;
+
+/// **The rich half's bodies, when a hand is drawing them.**
+///
+/// A rich node is a GPUI `div`, and a `div`'s border is a rectangle — there is
+/// no hand-drawn form of it. So in sketch mode the element drops its background
+/// and its border ([`crate::views::nodes`] reads the same flag) and the canvas
+/// paints the body underneath it, exactly as it does for every other node. The
+/// element keeps what it is for: focus, hover, a cursor, editable text.
+///
+/// This is the one place where a rich node reaches the painter at all, and it
+/// is bounded by [`RenderBudgets::max_rich_elements`](crate::budgets::RenderBudgets::max_rich_elements)
+/// like the rest of the rich set.
+fn plan_sketched_rich_bodies(
+    plan: &mut PaintPlan,
+    world: &GraphWorld,
+    snapshot: &RenderSnapshot,
+    viewport: &Viewport,
+    ink: SceneInk,
+    stats: &mut SceneStats,
+) {
+    let Some(lod) = snapshot.lod() else {
+        return;
+    };
+    let Some(sketch_style) = lod.sketch else {
+        return;
+    };
+    let quality = world.settings().render_quality;
+    let nodes = world.nodes();
+
+    for rich in snapshot.rich() {
+        let style = nodes.style(rich.node);
+        let world_radius = if style.corner_radius <= 0.0 {
+            GRAPH_NODE_RADIUS
+        } else {
+            style.corner_radius
+        };
+        let stroke_color = if rich.selected {
+            ink.accent
+        } else {
+            fade(style.stroke.color.unwrap_or(ink.stroke), style.opacity)
+        };
+
+        if plan_sketched_body(
+            plan,
+            SketchedBody {
+                node: rich.node,
+                body: rich.visual.body,
+                version: rich.version,
+                screen: rich.screen,
+                radius: viewport.world_to_screen_length(world_radius),
+                fill: fade(style.fill.unwrap_or(ink.fill), style.opacity),
+                stroke_color,
+                stroke_width: viewport
+                    .world_to_screen_length(style.stroke.width)
+                    .max(SELECTED_STROKE_PIXELS),
+                has_stroke: true,
+            },
+            &sketch_style,
+            world,
+            quality,
+        ) {
+            stats.sketched_bodies += 1;
+        }
     }
 }
 

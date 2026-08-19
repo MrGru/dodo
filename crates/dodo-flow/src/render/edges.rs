@@ -36,12 +36,13 @@ use crate::{
         ArrowGeometry, EdgeRoute, RouteSegment, Vec2, Viewport,
         arrow::{self, ArrowPolygon},
     },
-    models::{ArrowMarker, Color, EdgeIndex, RenderQuality},
+    models::{ArrowMarker, Color, EdgeIndex, RenderQuality, SketchStyle},
     render::{
         Outline, PaintPlan,
-        cache::{GeometryKey, GeometryPart},
+        cache::{CLEAN, GeometryKey, GeometryPart},
         lod::EdgeDetail,
         plan::{DashSpec, PathPrimitive, QuadPrimitive},
+        sketch,
     },
 };
 
@@ -78,6 +79,26 @@ pub struct EdgePaint {
     /// The edge's index and route version, for the geometry cache key. `None`
     /// for a path that is not a document edge — the connection preview.
     pub owner: Option<(EdgeIndex, u32)>,
+    /// **§13's hand, and the seed it draws this edge with.** `None` is a clean
+    /// line — which is also what a rung below [`EdgeDetail::Coarse`] gets, see
+    /// [`EdgeDetail::keeps_sketch`].
+    pub sketch: Option<SketchHand>,
+}
+
+/// A hand and the element it is drawing, kept together so a caller cannot pass
+/// a style without a seed — a shared seed would make every edge in a document
+/// wobble identically, which reads as a rendering artefact rather than as a
+/// drawing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SketchHand {
+    pub style: SketchStyle,
+    pub seed: u64,
+}
+
+impl SketchHand {
+    pub fn new(style: SketchStyle, seed: u64) -> SketchHand {
+        SketchHand { style, seed }
+    }
 }
 
 impl EdgePaint {
@@ -91,6 +112,7 @@ impl EdgePaint {
             quality,
             detail: EdgeDetail::Full,
             owner: None,
+            sketch: None,
         }
     }
 
@@ -106,11 +128,33 @@ impl EdgePaint {
         self
     }
 
-    /// The tolerance this edge is actually tessellated at, once the rung has
-    /// had its say. **This is what goes in the cache key**, so a rung change is
-    /// a miss by construction.
+    /// The tolerance this edge is actually tessellated at, once the rung and
+    /// §13's hand have had their say. **This is what goes in the cache key**,
+    /// so a rung change or a style change is a miss by construction.
     pub fn effective_quality(&self) -> RenderQuality {
-        self.detail.quality(self.quality)
+        let rung = self.detail.quality(self.quality);
+        match self.hand() {
+            Some(hand) => hand.style.quality(rung),
+            None => rung,
+        }
+    }
+
+    /// The hand actually drawing this edge: the style, unless the rung has
+    /// already given up curvature to survive the frame.
+    pub fn hand(&self) -> Option<SketchHand> {
+        self.sketch.filter(|_| self.detail.keeps_sketch())
+    }
+
+    /// The sketch component of this edge's cache key. See
+    /// [`GeometryKey::sketch`].
+    pub fn sketch_key(&self) -> u32 {
+        self.hand().map_or(CLEAN, |hand| hand.style.cache_key())
+    }
+
+    /// Draws this edge with §13's hand.
+    pub fn sketched(mut self, hand: SketchHand) -> EdgePaint {
+        self.sketch = Some(hand);
+        self
     }
 
     pub fn with_markers(mut self, start: ArrowMarker, end: ArrowMarker) -> EdgePaint {
@@ -192,6 +236,14 @@ pub fn plan_edge(plan: &mut PaintPlan, route: &EdgeRoute, paint: &EdgePaint, vie
     let outline = route_outline_at(route, viewport, paint.detail);
     let quality = paint.effective_quality();
 
+    if let Some(hand) = paint.hand() {
+        plan_sketched_edge(plan, &outline, paint, &hand, width, quality);
+        if paint.detail.keeps_markers() {
+            plan_markers(plan, route, paint, viewport, width);
+        }
+        return;
+    }
+
     // A dash is the expensive kind — 63x the vertices of the same line solid —
     // so the ladder drops it at the first rung down, and this is where that is
     // spent rather than in the caller.
@@ -217,12 +269,48 @@ pub fn plan_edge(plan: &mut PaintPlan, route: &EdgeRoute, paint: &EdgePaint, vie
             GeometryPart::Stroke,
             version,
             quality,
+            CLEAN,
         ));
     }
     plan.push_path(path);
 
     if paint.detail.keeps_markers() {
         plan_markers(plan, route, paint, viewport, width);
+    }
+}
+
+/// **One edge, drawn by hand**: [`SketchStyle::stroke_count`] passes over the
+/// same route, each its own path and its own cache entry.
+///
+/// **A sketched edge is never dashed.** A dash costs ~63× the vertices of the
+/// same line solid (Phase 0 §1.2) and it is multiplied by the stroke count
+/// here, which is three budgets' worth of an effect that a hand-drawn line does
+/// not read as anyway — two overlapping wobbles already say "provisional".
+fn plan_sketched_edge(
+    plan: &mut PaintPlan,
+    outline: &Outline,
+    paint: &EdgePaint,
+    hand: &SketchHand,
+    width: f32,
+    quality: RenderQuality,
+) {
+    let sketch_key = hand.style.cache_key();
+
+    for (pass, stroke) in sketch::strokes(outline, &hand.style, hand.seed)
+        .into_iter()
+        .enumerate()
+    {
+        let mut path = PathPrimitive::stroke(stroke, paint.color, width, quality);
+        if let Some((edge, version)) = paint.owner {
+            path = path.keyed(GeometryKey::edge(
+                edge,
+                GeometryPart::SketchStroke(pass as u8),
+                version,
+                quality,
+                sketch_key,
+            ));
+        }
+        plan.push_path(path);
     }
 }
 
@@ -292,6 +380,13 @@ fn marker_path(polygon: &ArrowPolygon, paint: &EdgePaint, screen_width: f32) -> 
         outline.close();
     }
 
+    // **One pass, not `stroke_count`.** A marker is ten pixels of geometry at
+    // the end of a line; a second wobble over it is invisible and it is a whole
+    // extra path, which is the budget a hairball reaches first.
+    if let Some(hand) = paint.hand() {
+        outline = sketch::perturb(&outline, &hand.style, sketch::derived_seed(hand.seed, 3), 0);
+    }
+
     if polygon.filled {
         PathPrimitive::fill(outline, paint.color, paint.effective_quality())
     } else {
@@ -334,6 +429,11 @@ pub fn plan_connection_preview(
         // Never cached: it changes every frame by definition, which is exactly
         // what §23 says not to cache.
         owner: None,
+        // **Never sketched either**, and for the same reason: a preview is
+        // regenerated on every pointer move, so a hand drawn over it would be a
+        // fresh squiggle per frame — the one thing §13 forbids — and it would
+        // wobble under the pointer instead of following it.
+        sketch: None,
     };
 
     plan_edge(plan, route, &paint, viewport);

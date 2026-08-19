@@ -213,7 +213,16 @@ impl RenderSnapshot {
         pane: Rect,
     ) {
         self.load = SceneLoad::measure(world, visible, viewport);
-        let lod = LodPlan::choose(budgets, viewport.zoom(), self.load);
+        // §13's style is the document's, and the ladder decides whether this
+        // frame can afford it — see `LodPlan::sketch`. Asking the settings here
+        // rather than at each paint site is what makes "switching Clean↔Sketch
+        // touches no element" true: one field is read one more time.
+        let lod = LodPlan::choose(
+            budgets,
+            viewport.zoom(),
+            self.load,
+            world.settings().sketch_request(),
+        );
 
         self.lod = Some(lod);
         self.anchor = Some(ScreenAnchor::of(viewport));

@@ -79,7 +79,10 @@ use crate::{
         BoxSelection, ConnectionSource, InputModifiers, InteractionEffect, InteractionEvent,
         InteractionMachine, PointerButton,
     },
-    models::{Color, EdgeIndex, EdgeRouting, FlowDocument, NodeIndex, RenderQuality},
+    models::{
+        Color, EdgeIndex, EdgeRouting, FlowDocument, NodeIndex, RenderQuality, RenderStyle,
+        SketchStyle,
+    },
     render::{
         GridLevel, GridLimits, GridSettings, PaintPlan, PaintStats, SceneInk, SceneOptions,
         SceneStats, WindowPainter,
@@ -475,6 +478,51 @@ impl FlowView {
 
     pub fn instruments_mut(&mut self) -> &mut Instruments {
         &mut self.instruments
+    }
+
+    /// §13's render style. **A renderer strategy, not document geometry.**
+    pub fn render_style(&self) -> RenderStyle {
+        self.world.settings().render_style
+    }
+
+    /// **Switches between clean and hand-drawn** (§13).
+    ///
+    /// One field and a repaint. Nothing is recreated, nothing is marked dirty,
+    /// no route is rebuilt and no element is touched — which is what makes this
+    /// a rendering strategy rather than a second document, and it is asserted
+    /// by `runtime::world`'s
+    /// `switching_render_style_touches_no_element`. The geometry cache keeps
+    /// both hands' entries apart by key ([`GeometryKey::sketch`](crate::render::cache::GeometryKey::sketch)),
+    /// so switching back finds the old tessellations still warm.
+    pub fn set_render_style(&mut self, style: RenderStyle, cx: &mut Context<Self>) {
+        if self.world.settings().render_style == style {
+            return;
+        }
+        self.world.settings_mut().render_style = style;
+        cx.notify();
+    }
+
+    pub fn toggle_render_style(&mut self, cx: &mut Context<Self>) {
+        let next = match self.render_style() {
+            RenderStyle::Clean => RenderStyle::Sketch,
+            RenderStyle::Sketch => RenderStyle::Clean,
+        };
+        self.set_render_style(next, cx);
+    }
+
+    /// The hand [`RenderStyle::Sketch`] draws with (§13).
+    pub fn sketch_style(&self) -> SketchStyle {
+        self.world.settings().sketch
+    }
+
+    /// Changes the hand. A different style is a different cache key, so the
+    /// visible set re-tessellates once and then stays cached.
+    pub fn set_sketch_style(&mut self, style: SketchStyle, cx: &mut Context<Self>) {
+        if self.world.settings().sketch == style {
+            return;
+        }
+        self.world.settings_mut().sketch = style;
+        cx.notify();
     }
 
     /// What [`crate::render::scene`] is given each frame.

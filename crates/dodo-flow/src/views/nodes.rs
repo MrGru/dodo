@@ -78,10 +78,18 @@ const TOOLBAR_GAP_PIXELS: f32 = 8.0;
 /// list that is tens long — not the per-element allocation §40 rule 10 is
 /// about.
 pub fn nodes(snapshot: &RenderSnapshot, world: &GraphWorld, cx: &App) -> Vec<AnyElement> {
+    // **§13's hand, if the ladder kept one.** A `div`'s border is a rectangle
+    // and there is no hand-drawn form of it, so in sketch mode the element
+    // gives up its background and its border and the canvas paints the body
+    // underneath — see `render::scene::plan_sketched_rich_bodies`. Everything
+    // an element is *for* — focus, hover, a cursor, editable text — is
+    // unaffected, which is the whole point of the hybrid renderer.
+    let sketched = snapshot.lod().is_some_and(|lod| lod.sketch.is_some());
+
     snapshot
         .rich()
         .iter()
-        .map(|rich| node(rich, world, cx))
+        .map(|rich| node(rich, world, sketched, cx))
         .collect()
 }
 
@@ -90,7 +98,7 @@ pub fn nodes(snapshot: &RenderSnapshot, world: &GraphWorld, cx: &App) -> Vec<Any
 /// The label is read from the store **through the index** rather than carried
 /// on the snapshot, which is what keeps §24's "compact IDs rather than cloned
 /// metadata" true all the way to the element tree.
-fn node(rich: &RichNode, world: &GraphWorld, cx: &App) -> AnyElement {
+fn node(rich: &RichNode, world: &GraphWorld, sketched: bool, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let accent = accent_color(rich.visual.accent, cx);
     let border = if rich.selected {
@@ -109,16 +117,41 @@ fn node(rich: &RichNode, world: &GraphWorld, cx: &App) -> AnyElement {
         // life of the document.
         .id(("flow-node", rich.node.raw() as usize))
         .rounded(px(radius))
+        .overflow_hidden()
+        .cursor_pointer();
+
+    if sketched {
+        // The hand under this element already drew the border and the fill;
+        // painting them again here would put a crisp rectangle over a wobbly
+        // one, which reads as a rendering bug rather than as a drawing.
+        return decorated(body, rich, world, accent, cx);
+    }
+
+    body = body
         .border(px(if rich.selected { 2.0 } else { 1.0 }))
         .border_color(border)
-        .overflow_hidden()
-        .cursor_pointer()
         .hover(|this| this.border_color(accent));
 
     if rich.visual.filled {
         body = body.bg(theme.secondary);
     }
 
+    decorated(body, rich, world, accent, cx)
+}
+
+/// The accent bar and the label, on whichever body the caller styled.
+///
+/// Split out so the sketch path and the clean path share every child element
+/// and differ only in the two properties that a hand-drawn body owns — the
+/// border and the fill.
+fn decorated(
+    body: gpui::Stateful<Div>,
+    rich: &RichNode,
+    world: &GraphWorld,
+    accent: Hsla,
+    cx: &App,
+) -> AnyElement {
+    let theme = cx.theme();
     let mut children: Vec<AnyElement> = Vec::new();
     if rich.visual.shows_accent_bar {
         children.push(

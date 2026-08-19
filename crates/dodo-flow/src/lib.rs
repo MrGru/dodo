@@ -389,6 +389,7 @@ mod tests {
         ("render/registry.rs", include_str!("render/registry.rs")),
         ("render/scene.rs", include_str!("render/scene.rs")),
         ("render/shapes.rs", include_str!("render/shapes.rs")),
+        ("render/sketch.rs", include_str!("render/sketch.rs")),
         ("render/snapshot.rs", include_str!("render/snapshot.rs")),
         ("interaction/mod.rs", include_str!("interaction/mod.rs")),
         ("interaction/state.rs", include_str!("interaction/state.rs")),
