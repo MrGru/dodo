@@ -32,6 +32,52 @@ pub const MAX_CUBIC_SEGMENTS: u32 = 256;
 ///
 /// The 0.6 coefficient is fitted, not derived, and `render::painter`'s
 /// calibration test is what keeps it honest.
+///
+/// # The known weakness: a nearly-straight cubic is charged as a curve
+///
+/// **The control hull is a good size measure for a real curve and a bad one
+/// for a low-curvature perturbation**, because it is a *length* rather than a
+/// *deviation*: a cubic whose control points sit two pixels off its own chord
+/// has almost the hull of the straight line it nearly is, so it is charged the
+/// segments of a curve spanning that distance while lyon — which flattens
+/// against deviation — emits two or three.
+///
+/// Phase 6 measured what that costs, because §13's hand turns **every straight
+/// side of every shape** into exactly this kind of cubic (Apple M1, release,
+/// 2026-08-19, `flow_scene_bench`):
+///
+/// | | flattened points | painted vertices | estimated | ratio |
+/// |---|---:|---:|---:|---:|
+/// | clean rectangle, stroked | 4 | 24 | 39 | 1.6× — [`SAFETY_MARGIN`](crate::render::shapes::SAFETY_MARGIN), as designed |
+/// | **sketched rectangle, 2 strokes** | ~31 per stroke | 132 | 596 | **4.5×** |
+///
+/// The per-point half of the model is fine — lyon emits about six vertices per
+/// flattened point either way, and the margin covers it. It is the point count
+/// that is out: ~31 against a real ~11.
+///
+/// **What it costs today.** The estimate is what the level-of-detail ladder
+/// spends, so [`crate::render::lod`] believes a 160 px hand-drawn body costs
+/// ~596 vertices when it costs 132, and drops sketch mode at **331 visible
+/// bodies** where the painted reality would fit about 1,400. Between those two
+/// numbers a scene is drawn clean that could have been drawn by hand.
+///
+/// **Why it is recorded rather than fixed.** On the scene that actually reaches
+/// the limit — Phase 4's dense scene, 1,584 visible nodes — the *path* budget
+/// binds first regardless: two strokes each is 3,168 paths against the node
+/// layer's share of 3,000, so the hand is dropped on a count that has nothing
+/// to do with this estimate, and correcting it would not change that frame.
+/// Against that, a deviation-based segment count is a re-fit of the formula
+/// Phase 4 owns, which every recorded vertex estimate in the crate — Phase 4's
+/// tables in [`crate::render::plan`], Phase 5's in [`crate::render::lod`], the
+/// black-window guard's whole margin — is stated against. That is a phase's
+/// work with its own measurements, not a side effect of adding a renderer.
+///
+/// The shape of the fix, for whoever takes it: size the curve by its second
+/// differences (`P₀ − 2P₁ + P₂` and `P₁ − 2P₂ + P₃`), which is the standard
+/// flattening bound and is what makes a nearly-straight cubic cheap, then
+/// re-run `render::painter`'s calibration test across every shape *and* a
+/// sketched one at several tolerances. The estimate must stay above the painted
+/// count everywhere — it guards a black window, not a slow frame.
 pub fn cubic_segments(from: Vec2, c1: Vec2, c2: Vec2, to: Vec2, tolerance: f32) -> u32 {
     let hull = (c1 - from).length() + (c2 - c1).length() + (to - c2).length();
     if !hull.is_finite() || hull <= 0.0 {

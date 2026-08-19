@@ -44,6 +44,7 @@
 //! render/cache.rs       §23's caches, generic over what they hold
 //! render/scene.rs       the snapshot -> primitives
 //! render/shapes.rs      the shapes as outlines
+//! render/sketch.rs      §13's hand, as perturbed outlines
 //! render/edges.rs       routes and markers as primitives
 //! render/grid.rs        the viewport-generated grid
 //! interaction/state.rs  the interaction state machine
@@ -283,9 +284,77 @@
 //! `examples/flow_paint_fit.rs` is committed ready for a human to run.
 //! [`budgets`]'s module doc has the whole decision.
 //!
-//! Still to come, in roughly this order: the sketch renderer, `commands/` and
-//! undo, then the sidebar row and its translated strings. Nothing is stubbed
-//! for them here; the seams are the module boundaries.
+//! # What the sixth slice added: the hand
+//!
+//! §13's sketch renderer, and the word that matters is **renderer**: switching
+//! between [`models::RenderStyle::Clean`] and `Sketch` writes one field on
+//! [`models::DocumentSettings`] and asks for a repaint. No element is created,
+//! moved or rewritten, no version moves, no route is rebuilt and no spatial
+//! update is raised — `runtime::world`'s
+//! `switching_render_style_touches_no_element` asserts every one of those, and
+//! it is what makes the toggle instant on a 100,000-node document.
+//!
+//! - [`render::sketch`] — the generator: a deterministic function from a
+//!   canonical [`render::Outline`] to a wobbly one, seeded per element from its
+//!   [`ElementId`] and the document's own seed. splitmix64, no clock, no state,
+//!   no `rand` — so §49's property (*same element + same seed + same geometry ⇒
+//!   the same geometry*) is the signature rather than a soak test, and §40 rule
+//!   5's "never fresh random values on repaint" cannot be violated by accident.
+//! - [`models::SketchStyle`] — roughness, bowing, stroke count, seed and
+//!   jitter, serialized with the document because a diagram drawn by hand is
+//!   drawn by hand every time it is opened.
+//! - [`render::cache`] — the sketch style is **part of the geometry cache key**,
+//!   beside the version and the flattening tolerance, and each stroke pass is
+//!   its own [`render::cache::GeometryPart`]. So neither mode can serve the
+//!   other's geometry, and switching back finds the old tessellations still
+//!   warm.
+//! - [`render::lod`] — [`render::lod::LodPlan::sketch`], the hand *this frame*
+//!   can afford, degraded to clean by two rules: below `curve_to_quad_zoom`
+//!   (a 2 px wobble is not visible, and a sketched outline is nothing but
+//!   curves) and above what the node layer's share of the frame can hold.
+//!
+//! ## The numbers, beside Phase 4's and Phase 5's
+//!
+//! Same machine, same command, 2026-08-19. **Real tessellations**, not
+//! estimates:
+//!
+//! | | clean | sketch |
+//! |---|---:|---:|
+//! | rectangle body, painted vertices | **0** — it is a quad | **132** as two stroked paths |
+//! | ellipse body, painted vertices | 264 | 312 |
+//! | Bézier edge, 200 px | 144 | 168 |
+//! | **large** scene: paths / painted vertices | 126 / 19,242 | **324 / 32,790** |
+//! | **dense** scene (1,584 bodies) | 2,986 / 17,916 | *identical — the ladder drew it clean* |
+//! | pure pan, 60 frames: geometry cache hit rate | 99.2 % | **99.1 %** |
+//! | pure pan: tessellations over 60 frames | 195 | **484**, against 19,440 with no cache |
+//! | visible bodies a hand fits in one frame | — | **331** |
+//! | zoom at which the hand is dropped | — | **0.35** |
+//!
+//! **The axis-aligned row is the whole finding.** A clean rectangle in this
+//! engine is a quad — zero path vertices, no batch — and a sketched one cannot
+//! be, so sketch mode moves every rectangular node body from the cheapest
+//! primitive the engine has onto two of its most expensive.
+//! [`render::sketch`]'s doc has the full table and the two mitigations that
+//! were measured rather than assumed.
+//!
+//! ## And the correction Phase 6 sends back
+//!
+//! **The vertex estimate is 4.5× the painted reality for hand-drawn geometry,
+//! against 1.6× for clean.** A perturbed straight side is a cubic that is
+//! nearly straight, and
+//! [`geometry::curve::cubic_segments`](crate::geometry::curve::cubic_segments)
+//! sizes a curve by its control hull — a length, where flattening cost is a
+//! deviation. So the ladder drops the hand at 331 visible bodies where the
+//! painted cost would fit about 1,400, and scenes between those numbers are
+//! drawn clean for nothing. It costs the dense scene nothing *today*, because
+//! the path budget binds there first (3,168 paths against a share of 3,000).
+//! That function's doc carries the diagnosis, the numbers and the shape of the
+//! fix; it is a re-fit of a Phase 4 formula every recorded estimate in the
+//! crate is stated against, which is a phase's work rather than a side effect.
+//!
+//! Still to come, in roughly this order: `commands/` and undo, then the sidebar
+//! row and its translated strings. Nothing is stubbed for them here; the seams
+//! are the module boundaries.
 //!
 //! **One absence is still deliberate and load-bearing**: **nothing is ever
 //! removed** from a store. An index is a slot number, so removal is either a

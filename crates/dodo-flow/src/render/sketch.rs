@@ -23,7 +23,7 @@
 //!
 //! The seed itself comes from [`element_seed`]: the document's
 //! [`SketchStyle::seed`] mixed with the element's
-//! [`ElementId`](crate::models::ElementId). Both are serialized, so a reopened
+//! [`ElementId`]. Both are serialized, so a reopened
 //! document wobbles exactly as it did when it was saved — the id rather than
 //! the runtime index on purpose, because an index is a slot number and a
 //! reordered load would redraw every shape.
@@ -43,42 +43,84 @@
 //!
 //! # What this costs, measured
 //!
-//! Apple M1, release, from `cargo run --release -p dodo-flow --example
-//! flow_scene_bench --locked` — real tessellations through
+//! Apple M1, release, 2026-08-19, from `cargo run --release -p dodo-flow
+//! --example flow_scene_bench --locked` — **real tessellations** through
 //! `render::painter::build_path`, not estimates. Clean against sketch at the
-//! default hand (roughness 1, bowing 1, **2 strokes**, jitter 2 px), at
-//! [`RenderQuality::BALANCED`](crate::models::RenderQuality::BALANCED):
+//! default hand (roughness 1, bowing 1, **2 strokes**, jitter 2 px), each
+//! column at the tolerance its own path would use:
 //!
-//! | primitive (160×64 unless stated) | clean vertices | sketch vertices | ×    | clean µs | sketch µs | ×    |
+//! | primitive (160×64 unless stated) | clean verts | sketch verts | × | clean µs | sketch µs | × |
 //! |---|---:|---:|---:|---:|---:|---:|
-//! | rectangle, stroked | 24 | 462 | **19.3×** | 0.65 | 5.19 | 8.0× |
-//! | rounded rectangle r8, stroked | 120 | 480 | **4.0×** | 2.20 | 5.44 | 2.5× |
-//! | diamond, stroked | 24 | 486 | **20.3×** | 0.63 | 5.30 | 8.4× |
-//! | ellipse, stroked | 216 | 384 | **1.8×** | 3.34 | 4.75 | 1.4× |
-//! | line, 200 px | 6 | 156 | **26.0×** | 0.43 | 1.87 | 4.3× |
-//! | Bézier edge, 200 px | 174 | 300 | **1.7×** | 2.65 | 3.62 | 1.4× |
-//! | arrow head (filled) | 12 | 72 | **6.0×** | 0.53 | 1.53 | 2.9× |
+//! | rectangle, stroked | 24 | 132 | **5.5×** | 0.86 | 3.16 | 3.7× |
+//! | rounded rectangle r8, stroked | 120 | 276 | 2.3× | 2.57 | 8.20 | 3.2× |
+//! | diamond, stroked | 24 | 126 | 5.2× | 0.86 | 3.38 | 3.9× |
+//! | ellipse, stroked | 264 | 312 | **1.2×** | 4.77 | 6.51 | 1.4× |
+//! | line, 200 px | 6 | 24 | 4.0× | 0.42 | 1.11 | 2.6× |
+//! | Bézier edge, 200 px | 144 | 168 | **1.2×** | 2.89 | 3.53 | 1.2× |
+//! | arrow head, filled | 3 | 33 | 11.0× | 0.77 | 3.71 | 4.8× |
 //!
-//! **The ratio is not the point; the axis-aligned rows are.** A clean rectangle
-//! in this engine is not a 24-vertex path at all — it is a *quad*, at zero path
-//! vertices and no path batch (Phase 0 §1.7, and `render::shapes::prefers_quad`
-//! is the one place that decides it). A sketched rectangle cannot be a quad,
-//! because a quad has four straight axis-aligned sides by definition. So sketch
-//! mode moves **every rectangular node body from the cheapest primitive the
-//! engine has to two of its most expensive**, and that — not the 1.8× on an
+//! **The ratios are not the point; the axis-aligned rows are.** A clean
+//! rectangle in this engine is not a 24-vertex path at all — it is a *quad*, at
+//! **zero** path vertices and no path batch (Phase 0 §1.7, and
+//! [`shapes::prefers_quad`](crate::render::shapes::prefers_quad) is the one
+//! place that decides it). A sketched rectangle cannot be a quad, because a
+//! quad has four straight axis-aligned sides by definition. So sketch mode
+//! moves **every rectangular node body from the cheapest primitive the engine
+//! has onto two of its most expensive**, and that — not the 1.2× on an
 //! ellipse — is what the budget has to survive. [`crate::render::lod`] is where
-//! that is spent.
+//! it is spent.
+//!
+//! Per scene, same run, clean against hand-drawn:
+//!
+//! | scene | paths | est. verts | painted | tessellate | hand |
+//! |---|---:|---:|---:|---:|---|
+//! | large, clean | 126 | 31,188 | 19,242 | 0.36 ms | — |
+//! | **large, sketch** | 324 | 65,676 | **32,790** | 0.70 ms | kept |
+//! | dense, clean | 2,986 | 59,720 | 17,916 | 1.11 ms | — |
+//! | **dense, sketch** | 2,986 | 59,720 | 17,916 | 1.17 ms | **dropped by the ladder** |
+//! | scattered, sketch | 4,998 | 126,799 | 39,414 | 2.22 ms | kept (36 bodies) |
+//!
+//! So a realistic frame that keeps the hand costs about **2.6× the paths and
+//! 1.7× the painted vertices** of the same frame clean, and the launcher's own
+//! scene agrees: 317 paths / 33,447 vertices sketched against 142 / 15,615
+//! clean, in one path batch either way. A frame that cannot afford it is drawn
+//! clean and says so.
 //!
 //! The two mitigations are both in [`SketchStyle`], and both were measured:
 //!
 //! - **[`SketchStyle::TOLERANCE_FACTOR`]** — sketch geometry is flattened at 3×
 //!   the document's tolerance, because a deliberately imprecise line does not
-//!   need a quarter-pixel bow. A sketched 160×64 rectangle is 1,104 estimated
-//!   vertices at the document tolerance and **518 at 3×**, and the difference
-//!   is invisible at any zoom the shape is legible at.
+//!   need a quarter-pixel bow. A sketched rectangle and ellipse together are
+//!   **714 painted vertices at the document tolerance and 444 at 3×** (14.1 µs
+//!   against 9.1 µs) — 38 % fewer vertices and 35 % less CPU, with no visible
+//!   difference at any zoom the shape is legible at. 4× buys a further 13 % and
+//!   starts to show.
 //! - **[`SketchStyle::stroke_count`]** — a straight multiplier on both frame
 //!   budgets, capped at [`SketchStyle::MAX_STROKES`]. Two is the look; three is
 //!   50 % more of everything for very little more of it.
+//!
+//! # The estimate is much looser here than it is for clean geometry
+//!
+//! The rightmost two columns of the benchmark's primitive table are the vertex
+//! *estimate* beside the reality, and they do not track:
+//!
+//! | | painted | estimated | ratio |
+//! |---|---:|---:|---:|
+//! | clean rectangle | 24 | 39 | 1.6× — the safety margin, as designed |
+//! | **sketched rectangle** | 132 | 596 | **4.5×** |
+//! | clean ellipse | 264 | 509 | 1.9× |
+//! | sketched ellipse | 312 | 576 | 1.8× |
+//!
+//! The cause is in [`cubic_segments`](crate::geometry::curve::cubic_segments),
+//! and its doc carries the full diagnosis and what it costs the ladder. In
+//! short: a perturbed straight side is a cubic that is *nearly straight*, and
+//! the flattening estimate sizes a curve by its control hull, which for that
+//! shape is its whole length. The estimate is conservative — the direction a
+//! black-window guard has to err in — but by 4.5× rather than 1.6×, so
+//! [`crate::render::lod`] drops the hand earlier than the painted cost
+//! requires. It is recorded rather than fixed here, because fixing it means
+//! re-fitting a formula Phase 4 owns and every recorded estimate in the crate
+//! is stated against.
 //!
 //! # Why the fill is not perturbed for a quad-shaped body
 //!

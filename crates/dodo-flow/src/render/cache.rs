@@ -186,7 +186,8 @@ pub struct GeometryKey {
     /// [`RenderQuality::cache_key`] — the flattening tolerance, quantised.
     /// Phase 0 §3 correction 5.
     pub quality: u32,
-    /// **[`SketchStyle::cache_key`] — §13's hand, or 0 for a clean drawing.**
+    /// **[`SketchStyle::cache_key`](crate::models::SketchStyle::cache_key) —
+    /// §13's hand, or 0 for a clean drawing.**
     ///
     /// Here for the same reason the tolerance is: sketch geometry is *derived*
     /// geometry, so it belongs in this cache, and two hands over the same

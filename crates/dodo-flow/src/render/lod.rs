@@ -681,6 +681,15 @@ fn sketched_node_layer_cost(load: SceneLoad, style: &SketchStyle) -> (u32, u32) 
 
 /// The estimated vertices one sketched node body costs at this scene's mean
 /// node size. See [`sketched_node_layer_cost`].
+///
+/// **This number is about 4.5× the vertices such a body actually paints**, and
+/// the reason is not in this module:
+/// [`cubic_segments`](crate::geometry::curve::cubic_segments) sizes a curve by
+/// its control hull, which is the wrong measure for the nearly-straight cubics
+/// §13's hand emits. Its doc carries the measurement and the consequence — the
+/// hand is dropped at 331 visible bodies where the painted cost would fit about
+/// 1,400. Erring high is the right direction for a guard whose failure mode is
+/// a black window; erring this high costs scenes their hand for nothing.
 fn sketched_node_vertices(load: SceneLoad, style: &SketchStyle) -> u32 {
     let side = load.mean_node_screen_size.max(1.0);
     // The mean side is the longer one; a body is wider than it is tall, and
