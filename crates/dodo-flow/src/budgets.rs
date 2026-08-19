@@ -339,8 +339,28 @@ impl RenderBudgets {
     /// because nothing in this slice can measure the healthy region again and a
     /// fitted-to-nothing constant would be worse than an honest over-estimate.
     /// Use it as a ceiling — "this frame will not cost more than" — never as a
-    /// prediction, and re-fit it when the benchmark harness produces its own
-    /// numbers.
+    /// prediction.
+    ///
+    /// # Phase 4 could not re-fit it, and this is why
+    ///
+    /// Phase 1 asked Phase 4's harness to re-fit these two coefficients.
+    /// **It cannot, and the reason is structural rather than an omission.**
+    /// They describe `Window::paint_path` — the clone, the `scale`, the
+    /// `insert_primitive` clone and the Metal renderer's per-batch expansion,
+    /// four traversals of the vertex array ending in a 104-bytes-per-vertex GPU
+    /// upload. Every one of those needs a real `Window`, and
+    /// `examples/flow_scene_bench.rs` is a headless example.
+    ///
+    /// What that harness *can* measure, because `render::painter::build_path`
+    /// needs no window, is **tessellation**: 1.01 µs per path on the dense
+    /// scene and 2.74 µs on the large one, at 3.12 ms and 0.35 ms per frame
+    /// respectively. That is a different cost from this one and is recorded in
+    /// [`crate::render::plan`] rather than folded in here.
+    ///
+    /// Re-fitting these two therefore needs a windowed spike of the shape Phase
+    /// 0 used, and it is worth doing when a phase has a window to hand anyway —
+    /// Phase 5 is the first that does. Until then the pair stays an honest
+    /// over-estimate.
     pub fn predicted_paint_micros(&self, paths: u32, vertices: u32) -> f32 {
         let nanos = paths as f32 * self.nanos_per_path as f32
             + vertices as f32 * self.nanos_per_vertex as f32;

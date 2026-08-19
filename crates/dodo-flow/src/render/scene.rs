@@ -393,6 +393,31 @@ mod tests {
         world
     }
 
+    /// Records the painted extent of every path it is handed, so the
+    /// "zero offscreen paths" criterion is checked on what actually reached a
+    /// sink rather than on what was in the plan.
+    #[derive(Default)]
+    struct RecordingSink {
+        paths: Vec<Rect>,
+    }
+
+    impl crate::render::PrimitiveSink for RecordingSink {
+        fn quad(&mut self, _quad: &crate::render::QuadPrimitive) {}
+
+        fn path(&mut self, path: &crate::render::PathPrimitive) -> u32 {
+            let Some(bounds) = path.outline.bounds() else {
+                return 0;
+            };
+            self.paths
+                .push(bounds.inflate(path.paint.width().unwrap_or(0.0) * 0.5));
+            1
+        }
+
+        fn text(&mut self, _text: &crate::render::plan::TextPrimitive) -> u32 {
+            0
+        }
+    }
+
     fn frame(world: &GraphWorld, viewport: &Viewport) -> (PaintPlan, SceneStats) {
         let index = SpatialIndex::for_world(world);
         let mut visible = VisibleSet::new();
@@ -612,6 +637,126 @@ mod tests {
         let (plan, _) = frame(&world, &viewport);
 
         assert_eq!(plan.clip(), Rect::new(Vec2::ZERO, Vec2::new(640.0, 480.0)));
+    }
+
+    /// **The exit criteria, on §38's own scenes.**
+    ///
+    /// The harness prints these numbers and this test refuses to let them
+    /// regress. It runs the four scenes at their real sizes, which is a couple
+    /// of seconds of a `cargo test` — worth it, because a gate that is only
+    /// checked by a human running a benchmark is a gate nobody checks.
+    #[test]
+    fn every_exit_criterion_holds_on_every_benchmark_scene() {
+        use crate::scenes::{self, BENCH_PANE, SceneSpec};
+
+        let budgets = for_backend(RenderBackend::Metal);
+
+        for spec in SceneSpec::ALL {
+            let world = scenes::build(&spec);
+            assert_eq!(world.nodes().len(), spec.nodes, "{} built short", spec.name);
+            let index = SpatialIndex::for_world(&world);
+            let viewport = spec.viewport(BENCH_PANE);
+
+            let mut visible = VisibleSet::new();
+            index.query_visible(&world, &viewport, &mut visible);
+
+            let mut plan = PaintPlan::new();
+            plan_scene(&mut plan, &world, &visible, &viewport, ink(), &options());
+
+            // 1. Painted vertices stay under the platform ceiling, and are not
+            //    merely under it — the harness records 5.5 % on the worst
+            //    scene, so 25 % is a regression bound with room to spare rather
+            //    than a number tuned to today's measurement.
+            let vertices = plan.estimated_path_vertices();
+            assert!(
+                vertices < budgets.safe_path_vertex_ceiling / 4,
+                "{}: {vertices} estimated vertices, a quarter of the {} safe ceiling is the bound",
+                spec.name,
+                budgets.safe_path_vertex_ceiling
+            );
+
+            // 2. Nothing was dropped, which is the same criterion from the
+            //    other side: the guard is a backstop and culling is what stops
+            //    it firing.
+            let mut guarded = plan.clone();
+            assert_eq!(
+                guarded.enforce_vertex_ceiling(&budgets),
+                0,
+                "{}: the black-window guard had to drop paths",
+                spec.name
+            );
+
+            // 3. One contiguous path batch, against a budget of 64.
+            let mut sink = RecordingSink::default();
+            let stats = plan.paint_into(&mut sink);
+            assert!(
+                stats.within_batch_budget(&budgets),
+                "{}: {} path batches",
+                spec.name,
+                stats.path_batches
+            );
+            assert!(stats.path_batches <= 1);
+
+            // 4. Zero offscreen paths reached the sink.
+            let pane = plan.clip();
+            for path in sink.paths {
+                assert!(
+                    path.intersects(pane),
+                    "{}: an offscreen path reached the painter: {path:?}",
+                    spec.name
+                );
+            }
+
+            // 5. §16: a big document produces a screenful of elements.
+            if spec.nodes > 10_000 && spec.name != "dense" {
+                assert!(
+                    visible.node_count() < 200,
+                    "{}: {} of {} nodes visible",
+                    spec.name,
+                    visible.node_count(),
+                    spec.nodes
+                );
+            }
+        }
+    }
+
+    /// §50: *does pan cause edge-route cache misses? It generally should not.*
+    /// Here it must not, exactly, and it holds by construction — a pan changes
+    /// the viewport and the viewport is not in the world.
+    #[test]
+    fn a_pure_pan_rebuilds_no_route_and_moves_nothing_in_the_index() {
+        use crate::scenes::{self, BENCH_PANE, SceneSpec};
+
+        let mut world = scenes::build(&SceneSpec {
+            nodes: 4_000,
+            edges: 8_000,
+            ..SceneSpec::MEDIUM
+        });
+        let mut index = SpatialIndex::for_world(&world);
+        world.clear_spatial_updates();
+
+        let mut viewport = SceneSpec::MEDIUM.viewport(BENCH_PANE);
+        let mut visible = VisibleSet::new();
+        let mut plan = PaintPlan::new();
+        let before = world.geometry().rebuild_count();
+
+        for frame in 0..60 {
+            viewport.pan_by(Vec2::new(if frame % 2 == 0 { 7.0 } else { 5.0 }, 3.0));
+
+            assert_eq!(world.rebuild_dirty_geometry(), 0, "frame {frame} rerouted");
+            let report = index.sync(&world);
+            world.clear_spatial_updates();
+            assert!(report.is_empty(), "frame {frame} queued a spatial update");
+
+            index.query_visible(&world, &viewport, &mut visible);
+            plan_scene(&mut plan, &world, &visible, &viewport, ink(), &options());
+        }
+
+        assert_eq!(
+            world.geometry().rebuild_count(),
+            before,
+            "sixty frames of pure pan cost route rebuilds"
+        );
     }
 
     #[test]

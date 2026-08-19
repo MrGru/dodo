@@ -60,3 +60,16 @@ path = "examples/flow.rs"
 [[example]]
 name = "flow_graph_bench"
 path = "examples/flow_graph_bench.rs"
+
+# **Phase 4's gate.** §38's scenes and §50's questions: viewport query cost at
+# 100,000 nodes, one node moved in a 300,000-edge graph, painted vertices
+# against the platform ceiling, memory at each scale, and whether a pure pan
+# costs anything it should not. Also §21's own instruction to benchmark the
+# spatial structure rather than assert it — it builds the same scene through
+# the shipping hash grid, a dense array grid and a brute-force scan.
+#
+# **Release only**, and it says so at the top of its own output: a debug build
+# measures the borrow checker rather than the data structure.
+[[example]]
+name = "flow_scene_bench"
+path = "examples/flow_scene_bench.rs"

@@ -64,6 +64,52 @@
 //! *only* culling: rejecting here still costs a rectangle test per element, and
 //! a document with 100,000 nodes must not pay 100,000 of them per frame.
 //!
+//! # What a frame actually costs, measured
+//!
+//! Apple M1, release, 1440×900, 2026-08-19, through
+//! `examples/flow_scene_bench.rs` — which implements [`PrimitiveSink`] itself
+//! and calls `render::painter::build_path`, so these are real tessellations
+//! rather than estimates:
+//!
+//! | scene | quads | paths | estimate | **painted** | batches | culled | dropped |
+//! |---|---:|---:|---:|---:|---:|---:|---:|
+//! | small (100 n) | 3,321 | 76 | 16,276 | 9,972 | 1 | 0 | 0 |
+//! | medium (5 k) | 3,321 | 117 | 24,498 | 14,796 | 1 | 0 | 0 |
+//! | large (100 k) | 3,321 | 126 | 31,188 | 19,242 | 1 | 0 | 0 |
+//! | **dense (1,584 visible)** | 4,843 | 3,104 | 239,900 | **132,888** | 1 | 78 | 0 |
+//!
+//! The worst realistic frame is **132,888 painted vertices — 5.5 % of the
+//! 2.4 M safe ceiling and 38 % of the 350,000 that holds 60 fps**, with 18×
+//! headroom to the cliff. One path batch everywhere against a budget of 64.
+//! Nothing was dropped by [`PaintPlan::enforce_vertex_ceiling`] on any of the
+//! four scenes.
+//!
+//! # The estimate is a bound, and it is loose by about 1.6×
+//!
+//! `estimate` above is what [`PaintPlan::estimated_path_vertices`] spends and
+//! `painted` is what lyon produced. The ratio is 1.63 on small, 1.66 on medium,
+//! 1.62 on large and 1.81 on dense — consistently high, never low, which is the
+//! direction a black-window guard has to err in. It is recorded rather than
+//! tuned out: shaving it would buy nothing (the guard is 18× away from firing)
+//! and would spend the safety margin that makes it a guard.
+//!
+//! # Tessellation, and the case for §23's geometry cache
+//!
+//! The same run, timing `build_path` alone:
+//!
+//! | scene | paths | tessellation | per path |
+//! |---|---:|---:|---:|
+//! | large | 126 | 0.35 ms | 2.74 µs |
+//! | **dense** | 3,104 | **3.12 ms** | 1.01 µs |
+//!
+//! **3.12 ms is 19 % of a 16.7 ms frame, spent rebuilding geometry that did not
+//! change.** Phase 0 measured that translating a cached tessellation for a pan
+//! is about 12× cheaper than rebuilding it, and the dense scene's whole visible
+//! set would be 4.25 MB of cache against
+//! [`RenderBudgets::geometry_cache_max_bytes`]'s 64 MiB. So the cache is worth
+//! building and it fits — it is simply not built yet. See [`crate::spatial`]
+//! for the phase's full results.
+//!
 //! **This file names no UI framework.** Coordinates are pane-relative screen
 //! pixels as plain [`Vec2`]; the sink adds the element's origin.
 

@@ -36,15 +36,21 @@
 //! views/                gpui, gpui-component     <- may name a UI framework
 //! render/painter.rs     gpui  (the only painter) <- may name a UI framework
 //! ────────────────────────────────────────────
-//! render/plan.rs        the paint-order contract
+//! render/plan.rs        paint order, and the clip
+//! render/scene.rs       the visible set -> primitives
 //! render/shapes.rs      the shapes as outlines
 //! render/edges.rs       routes and markers as primitives
 //! render/grid.rs        the viewport-generated grid
 //! interaction/state.rs  the interaction state machine
-//! runtime/              the graph engine: stores,  no UI framework, no `App`,
-//!                       adjacency, dirty, routes   no window, unit tested
+//! spatial/              the uniform grid and its    no UI framework, no `App`,
+//!                       viewport / hit / box query  no window, unit tested
+//! runtime/              the graph engine: stores,
+//!                       adjacency, dirty, routes,
+//!                       selection
 //! models/               the document, serde
-//! geometry/             world<->screen, routing
+//! geometry/             world<->screen, routing, curves
+//! scenes.rs             the benchmark scenes
+//! instrument.rs         the performance probes
 //! budgets.rs            the platform's ceilings
 //! ```
 //!
@@ -127,26 +133,82 @@
 //! prints it, and answers §20's "benchmark the representation" while it is
 //! there.
 //!
-//! Still to come, in roughly this order: `spatial/` (the uniform grid and its
-//! viewport, box-select and hit-test queries), the tessellation cache,
+//! # What the fourth slice added: the gate
+//!
+//! Phase 4 is the phase that proves the three before it, and it was allowed to
+//! return bad news. It did not have to.
+//!
+//! - [`spatial`] — §21's uniform hash grid, [`SpatialIndex`] over it, and the
+//!   [`VisibleSet`] every frame is planned from. **Read its module doc for the
+//!   numbers**; they are the ones that gate every later phase.
+//! - [`render::scene`] — the node, handle and edge planning loops, moved out of
+//!   `views::flow` so that "no offscreen path reaches the painter" is an
+//!   ordinary unit test rather than something you check by looking.
+//! - [`render::plan`] — the clip became part of the plan: `clear` takes the
+//!   pane and `push_path` refuses anything outside it, so a painter cannot
+//!   express the mistake that Phase 0 measured at 6.3 ms a frame.
+//! - [`runtime::selection`] — §28's set: a bitset for "is this selected?" and
+//!   a list for "what is selected?", holding compact ids and never elements.
+//! - [`instrument`] — §39's ten named probes, off unless
+//!   `DODO_FLOW_INSTRUMENT` is set.
+//! - [`scenes`] — §38's four scenes, in the library rather than in the example
+//!   so a test and the harness measure the same thing.
+//!
+//! **The two seams Phase 3 left open are closed, each by changing one thing.**
+//! [`runtime::GraphWorld::hit_test`] took its candidate set as an argument and
+//! now gets a grid query instead of `nodes().indices()`; a committed box
+//! selection yielded a world rectangle and now flows through the broad phase
+//! into [`runtime::GraphWorld::apply_box_selection`]. Neither had a placeholder
+//! to delete.
+//!
+//! ## The numbers, in one place
+//!
+//! Apple M1, release, 1440×900, 2026-08-19, from
+//! `cargo run --release -p dodo-flow --example flow_scene_bench --locked`:
+//!
+//! | | |
+//! |---|---|
+//! | viewport query at 100,000 nodes / 300,000 edges | **2.4 µs**, against 1,697 µs for the same question by scan |
+//! | the same query at 5,000 nodes | 2.3 µs — **it does not grow with the document** |
+//! | one node moved in a 300,000-edge graph | **0.50 µs** (Phase 3's 0.17 µs propagation, plus the index) |
+//! | painted vertices, worst scene | **132,888** — 5.5 % of the 2.4 M ceiling, 38 % of the 60 fps budget |
+//! | path batches per frame | **1**, against a budget of 64 |
+//! | offscreen paths reaching the painter | **0**, by construction |
+//! | paths dropped by the black-window guard | **0** on all four scenes |
+//! | pure pan: edge-route cache misses | **0**; spatial updates **0** |
+//! | memory at 100,000 nodes / 300,000 edges | 128.8 MB runtime + 23.9 MB index, 205 MB resident |
+//!
+//! ## And the three pieces of bad news, because they matter more
+//!
+//! 1. **Culling does not bound a hairball graph.** Every number above assumes
+//!    edges join nodes that are near each other, which real diagrams do. A
+//!    100,000-node document whose edges connect anything to anything puts
+//!    61,104 edges in the viewport, estimates 147 M vertices, and loses 60,061
+//!    paths to the black-window guard. Nothing is wrong with the index — an
+//!    edge that spans the document genuinely *is* visible — and the failure is
+//!    graceful rather than black. But it means **LOD (§15) is required, not
+//!    optional**, and [`spatial`]'s doc carries the table.
+//! 2. **There is no geometry cache yet, and the dense scene wants one.**
+//!    Tessellating that frame from scratch costs **3.12 ms**, 19 % of a 16.7 ms
+//!    frame, for geometry that did not change. Its whole visible set would be
+//!    4.25 MB against [`budgets`]'s 64 MiB bound, so §23's cache both fits and
+//!    pays. It is deferred, not forgotten.
+//! 3. **Phase 1's request to re-fit the paint cost model could not be met.**
+//!    [`budgets::RenderBudgets::predicted_paint_micros`] describes
+//!    `Window::paint_path`, which needs a real window; the harness is headless.
+//!    What it *could* measure — tessellation — is a different cost and is
+//!    recorded separately. The re-fit needs a windowed spike, and Phase 5 is
+//!    the first phase that has a window to hand.
+//!
+//! Still to come, in roughly this order: the tessellation cache and LOD,
 //! `commands/` and `components/`, then the sidebar row and its translated
 //! strings. Nothing is stubbed for them here; the seams are the module
 //! boundaries.
 //!
-//! **Three absences are deliberate and load-bearing.** There is no culling —
-//! §40 rule 1 forbids scanning every element to find the visible ones, and a
-//! linear scan written here to fake it would be the thing nobody remembered to
-//! delete once `spatial/` arrived. A committed box selection yields a world
-//! rectangle and stops, for the same reason: resolving it into elements is the
-//! spatial index's broad phase (§28). And **nothing is ever removed** from a
-//! store — an index is a slot number, so removal is either a tombstone or a
-//! swap-remove, and which one is right is decided by the undo history (§30)
-//! that has to restore it, which is Phase 7's.
-//!
-//! The hit test is the one place this could have been fudged and was not:
-//! [`runtime::GraphWorld::hit_test`] takes its candidate set **as an
-//! argument**, so today's launcher passes every node and Phase 4 passes a
-//! spatial query. There is nothing to delete, only an argument to change.
+//! **One absence is still deliberate and load-bearing**: **nothing is ever
+//! removed** from a store. An index is a slot number, so removal is either a
+//! tombstone or a swap-remove, and which one is right is decided by the undo
+//! history (§30) that has to restore it, which is Phase 7's.
 //!
 //! # Where the budget numbers come from, and what they are not
 //!
@@ -188,6 +250,7 @@ pub mod interaction;
 pub mod models;
 pub mod render;
 pub mod runtime;
+pub mod scenes;
 pub mod spatial;
 pub mod views;
 
@@ -201,6 +264,7 @@ pub use runtime::{
     BoxQuery, BoxSelectMode, ConnectionRules, EdgeEnd, GraphWorld, NodeSpec, PointerTarget,
     SelectionSet,
 };
+pub use scenes::SceneSpec;
 pub use spatial::{SpatialIndex, UniformGrid, VisibleSet};
 pub use views::FlowView;
 
@@ -257,6 +321,7 @@ mod tests {
         ("runtime/routes.rs", include_str!("runtime/routes.rs")),
         ("runtime/selection.rs", include_str!("runtime/selection.rs")),
         ("runtime/world.rs", include_str!("runtime/world.rs")),
+        ("scenes.rs", include_str!("scenes.rs")),
         ("spatial/mod.rs", include_str!("spatial/mod.rs")),
         ("spatial/grid.rs", include_str!("spatial/grid.rs")),
         ("spatial/index.rs", include_str!("spatial/index.rs")),

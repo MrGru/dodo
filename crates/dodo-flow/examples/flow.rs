@@ -25,7 +25,8 @@
 //! | drag out of a handle dot | a connection preview follows the pointer |
 //! | drop it on a handle or a node body | connect, if §4's rules allow it |
 //! | drop it on empty canvas | cancel |
-//! | drag on empty space with the left button | selection rectangle |
+//! | drag on empty space with the left button | rubber band — **it selects on release** |
+//! | shift + drag on empty space | add the band's contents to the selection |
 //! | `Esc` | abandon the drag — a moved node goes back exactly where it was |
 //!
 //! A connection is refused silently on the canvas: an input handle will not
@@ -41,6 +42,7 @@
 //! | `DODO_FLOW_NODES=n` | how many nodes the connected field holds (default 400) |
 //! | `DODO_FLOW_BENCH=1` | drive continuous frames and print frame timings |
 //! | `DODO_FLOW_TRACE_INPUT=1` | print every mouse, scroll and pinch event received |
+//! | `DODO_FLOW_INSTRUMENT=1` | record §39's probes; read them with `FlowView::instruments` |
 //!
 //! `DODO_FLOW_BENCH` deliberately does the thing §35 forbids — it requests an
 //! animation frame from every paint, so the canvas repaints as fast as the
@@ -302,25 +304,35 @@ impl FrameTimer {
         let worst = *self.samples.last().expect("just sorted a non-empty vec");
         let stats = view.last_paint_stats();
         let grid = view.last_grid_level();
+        let visible = view.visible();
 
         println!(
             "frame {:>6} | median {:>6.2} ms ({:>5.1} fps) | p95 {:>6.2} ms | worst {:>6.2} ms \
-             | quads {:>6} paths {:>5} vertices {:>8} | grid level {} spacing {:.0}px \
-             | rerouted {} | dropped {}",
+             | visible {:>5}n/{:>5}e of {}n/{}e | quads {:>6} paths {:>5} vertices {:>8} \
+             | batches {} | grid {} @{:.0}px | rerouted {} | culled {} | dropped {} | selected {}",
             self.frames,
             median.as_secs_f64() * 1000.0,
             1.0 / median.as_secs_f64(),
             p95.as_secs_f64() * 1000.0,
             worst.as_secs_f64() * 1000.0,
+            // §16's rule, live: these two must stay a screenful however large
+            // the document behind them is.
+            visible.node_count(),
+            visible.edge_count(),
+            view.world().nodes().len(),
+            view.world().edges().len(),
             stats.quads,
             stats.paths,
             stats.path_vertices,
+            stats.path_batches,
             grid.level,
             grid.screen_spacing,
             // §19's number, live: zero while panning or idle, and the dragged
             // node's degree while a node is being dragged.
             view.rebuilt_routes(),
+            stats.culled_paths,
             view.dropped_paths(),
+            view.selection().len(),
         );
 
         self.samples.clear();
@@ -373,6 +385,20 @@ fn main() {
                     let flow = cx.new(|cx| {
                         let mut flow = FlowView::new(window, cx);
                         flow.set_document(demo_document(nodes));
+                        if benchmarking {
+                            // One line before the first frame, so a run that is
+                            // only watched for a second still says what it
+                            // built and what the spatial index made of it.
+                            println!(
+                                "scene: {} nodes, {} edges — index over {} node cells, \
+                                 {} edge cells, {:.2} MB",
+                                flow.world().nodes().len(),
+                                flow.world().edges().len(),
+                                flow.spatial().nodes().entry_count(),
+                                flow.spatial().edges().entry_count(),
+                                flow.spatial().memory_bytes() as f64 / 1e6,
+                            );
+                        }
                         flow
                     });
                     FlowWindow {
