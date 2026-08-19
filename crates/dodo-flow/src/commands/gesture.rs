@@ -183,7 +183,12 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
             let end = match target {
                 PointerTarget::Handle { node, handle } => EdgeEnd::handle(node, handle),
                 PointerTarget::Node(node) => EdgeEnd::node(node),
-                PointerTarget::Empty => return GestureReport::default(),
+                // An edge is not a connection target: §8 connects nodes, and
+                // dropping one edge on another has no meaning to give it. Same
+                // answer as empty canvas — the connection is abandoned.
+                PointerTarget::Empty | PointerTarget::Edge(_) => {
+                    return GestureReport::default();
+                }
             };
 
             let spec = EdgeSpec::new(
@@ -493,7 +498,13 @@ mod tests {
     /// and the document's content are the same thing.
     #[test]
     fn each_tool_creates_its_own_kind_at_the_dragged_rectangle() {
-        for tool in CanvasTool::ALL.iter().filter(|tool| tool.creates()) {
+        // **The Text tool is excluded because it does not create on release**,
+        // and that is asserted separately rather than skipped silently — see
+        // `the_text_tool_writes_nothing_until_there_is_text` below.
+        for tool in CanvasTool::ALL
+            .iter()
+            .filter(|tool| tool.creates() && !tool.edits_text_on_release())
+        {
             let mut editor = FlowEditor::new();
             let report = draw(
                 &mut editor,
@@ -513,6 +524,74 @@ mod tests {
             assert_eq!(editor.world().nodes().position(node), Vec2::new(20.0, 30.0));
             assert_eq!(editor.world().nodes().size(node), Vec2::new(120.0, 80.0));
         }
+    }
+
+    /// **The Text tool writes nothing to the document until there is text.**
+    ///
+    /// Drives the real machine through the real drag, exactly as the tests
+    /// beside it do, and asserts the two halves: the release adds no element
+    /// and no undo step, and the commit adds exactly one of each. The failure
+    /// this prevents is an *invisible* element — a text node with no glyphs
+    /// draws nothing at all, so a create-on-release tool would leave one on the
+    /// canvas every time a user pressed Escape.
+    #[test]
+    fn the_text_tool_writes_nothing_until_there_is_text() {
+        use crate::interaction::{InteractionEffect, TextTarget};
+
+        let mut editor = FlowEditor::new();
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::SelectTool(CanvasTool::Text));
+
+        machine.handle(press(PointerTarget::Empty, Vec2::new(20.0, 30.0)));
+        machine.handle(InteractionEvent::PointerMove {
+            screen: Vec2::new(220.0, 52.0),
+            world: Vec2::new(220.0, 52.0),
+        });
+        let effect = machine.handle(InteractionEvent::PointerUp {
+            button: PointerButton::Left,
+            world: Vec2::new(220.0, 52.0),
+            target: PointerTarget::Empty,
+        });
+        apply_gesture(&mut editor, effect);
+
+        let InteractionEffect::BeginTextEdit(target) = effect else {
+            panic!("the text tool must open an editor, not commit: {effect:?}");
+        };
+        assert_eq!(
+            editor.world().nodes().len(),
+            0,
+            "the release must not have added anything"
+        );
+        assert_eq!(editor.history().undo_depth(), 0);
+
+        // Abandoning costs nothing, because nothing was written.
+        assert!(!editor.commit_text(target, "   "));
+        assert_eq!(editor.world().nodes().len(), 0);
+        assert_eq!(editor.history().undo_depth(), 0);
+
+        assert!(editor.commit_text(target, "hello"));
+        assert_eq!(editor.world().nodes().len(), 1);
+        assert_eq!(editor.history().undo_depth(), 1, "one undo step, not two");
+
+        let node = crate::models::NodeIndex::new(0);
+        assert_eq!(editor.world().nodes().kind(node), &ElementKind::Text);
+        assert_eq!(
+            editor.world().nodes().cold(node).label.as_deref(),
+            Some("hello")
+        );
+        assert_eq!(
+            editor.world().nodes().bounds(node),
+            crate::geometry::Rect::new(Vec2::new(20.0, 30.0), Vec2::new(200.0, 22.0)),
+            "the element occupies the rectangle that was dragged"
+        );
+        assert_eq!(target, TextTarget::New(editor.world().nodes().bounds(node)));
+
+        assert!(editor.undo());
+        assert_eq!(
+            editor.world().nodes().live_indices().count(),
+            0,
+            "one press of undo takes the whole thing away"
+        );
     }
 
     /// A created graph node is born connectable. One that was not would look

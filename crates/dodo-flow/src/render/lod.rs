@@ -446,10 +446,14 @@ pub enum HandleDetail {
 pub struct LodPlan {
     pub detail: DetailLevel,
     pub zoom: f32,
-    /// The quantised font size node labels are shaped at, or `None` when a
-    /// label would be too small to read. **`None` is the common case when
-    /// zoomed out**, and it is what §15's "do not lay out rich text that cannot
-    /// be read" costs: nothing.
+    /// The quantised font size a label of the **default** size is shaped at, or
+    /// `None` when it would be too small to read. **`None` is the common case
+    /// when zoomed out**, and it is what §15's "do not lay out rich text that
+    /// cannot be read" costs: nothing.
+    ///
+    /// An element with its own [`FontSize`](crate::models::FontSize) asks
+    /// [`LodPlan::font_size_for`] instead; this is the frame's answer for
+    /// anything with no style to hand, and the number a benchmark prints.
     pub label_font_size: Option<f32>,
     /// Whether a curved shape is painted as its bounding quad (§15, and Phase 0
     /// §3 correction 7: an ellipse is 337 vertices against a rectangle's 24).
@@ -493,7 +497,7 @@ impl LodPlan {
         let mut plan = LodPlan {
             detail,
             zoom,
-            label_font_size: label_font_size(lod, detail, zoom),
+            label_font_size: quantised_font_size(lod, detail, zoom, lod.nominal_label_size),
             degrade_curves: lod.degrade_curves_to_quads(zoom),
             edges: EdgeDetail::Full,
             max_edges: load.visible_edges,
@@ -596,6 +600,25 @@ impl LodPlan {
             self.sketch,
         );
         load.visible_edges.saturating_mul(per_edge) <= vertex_budget
+    }
+
+    /// **The size one element's text is shaped at this frame**, or `None` when
+    /// it is not worth laying out at all.
+    ///
+    /// `world_size` is the element's own
+    /// [`FontStyle::world_size`](crate::models::FontStyle::world_size) — one of
+    /// the four authored steps — so two elements at two sizes get two answers
+    /// from the same rung, and the ladder still bounds how many distinct
+    /// `font_size` values a zoom sweep can produce: at most the four steps
+    /// times the rungs, and in practice far fewer because the steps *are*
+    /// rungs.
+    ///
+    /// A method on the plan rather than a field, because the answer depends on
+    /// the element and a plan is one per frame. It is the same function
+    /// [`LodPlan::label_font_size`] is computed by, so an element and the
+    /// frame's default cannot be quantised differently.
+    pub fn font_size_for(&self, thresholds: &LodThresholds, world_size: f32) -> Option<f32> {
+        quantised_font_size(thresholds, self.detail, self.zoom, world_size)
     }
 
     /// Whether a node this size on screen is worth more than a plain box.
@@ -738,21 +761,29 @@ pub const NODE_LAYER_SHARE: f32 = 0.6;
 /// pessimistic per-node-path charge.
 const ELLIPSE_VERTEX_ESTIMATE: u32 = 337;
 
-/// The label size for a rung, or `None` when it would be unreadable.
+/// **The one place text is decided to be worth laying out, and at what size.**
 ///
-/// The world-space nominal size is scaled by the zoom and then **quantised onto
+/// A world-space size is scaled by the zoom and then **quantised onto
 /// [`LodThresholds::font_size_ladder`]**, which is not an optimisation but the
 /// only thing that makes text survive a zoom gesture: `font_size` is part of
 /// GPUI's shaped-line cache key, so an unquantised size re-shapes every visible
 /// label on every frame of a pinch (Phase 0 §1.9).
-fn label_font_size(lod: &LodThresholds, detail: DetailLevel, zoom: f32) -> Option<f32> {
+///
+/// `None` is §15's first bullet — *do not lay out rich text that cannot be
+/// read* — and it is the answer for the whole `Overview` rung and for anything
+/// rendered below [`LodThresholds::min_readable_font_px`]. Not "lay it out and
+/// skip painting it": the shaping is the cost.
+fn quantised_font_size(
+    lod: &LodThresholds,
+    detail: DetailLevel,
+    zoom: f32,
+    world_size: f32,
+) -> Option<f32> {
     if detail == DetailLevel::Overview {
-        // §15: do not lay out rich text that cannot be read. Not "lay it out
-        // and skip painting it" — the shaping is the cost.
         return None;
     }
 
-    let rendered = lod.nominal_label_size * zoom;
+    let rendered = world_size * zoom;
     if rendered < lod.min_readable_font_px {
         return None;
     }
@@ -1008,7 +1039,79 @@ mod tests {
         assert_eq!(
             LodPlan::choose(&budgets, 0.25, load, None).label_font_size,
             None,
-            "13 world units at 0.25 zoom is 3.25 px, under the readable floor"
+            "16 world units at 0.25 zoom is 4 px, under the readable floor"
+        );
+    }
+
+    /// **Every one of the four authored steps goes through the same rung.**
+    /// The suppression is the point: a document of `S` text and a document of
+    /// `XL` text stop being laid out at different zooms, and neither is ever
+    /// shaped at a size nobody can read.
+    #[test]
+    fn each_authored_step_is_shaped_at_its_own_size_and_suppressed_when_unreadable() {
+        use crate::models::FontSize;
+
+        let budgets = budgets();
+        let thresholds = &budgets.lod;
+        let plan = LodPlan::choose(&budgets, 1.0, healthy(), None);
+
+        for step in FontSize::ALL {
+            assert_eq!(
+                plan.font_size_for(thresholds, step.world_size()),
+                Some(step.world_size()),
+                "at 100 % zoom {} must be shaped at exactly its authored size",
+                step.name()
+            );
+        }
+
+        // Small text disappears before extra-large text does, which is the
+        // whole reason the question is asked per element rather than per frame.
+        let far = LodPlan::choose(&budgets, 0.3, healthy(), None);
+        assert_eq!(
+            far.font_size_for(thresholds, FontSize::Small.world_size()),
+            None,
+            "12 world units at 0.3 zoom is 3.6 px"
+        );
+        assert!(
+            far.font_size_for(thresholds, FontSize::ExtraLarge.world_size())
+                .is_some(),
+            "28 world units at 0.3 zoom is 8.4 px, which reads"
+        );
+
+        let overview = LodPlan::choose(&budgets, 0.1, healthy(), None);
+        for step in FontSize::ALL {
+            assert_eq!(
+                overview.font_size_for(thresholds, step.world_size()),
+                None,
+                "§15: the overview rung lays out no text at all"
+            );
+        }
+    }
+
+    /// The quantiser bounds the *whole* cross-product, not just one size: four
+    /// authored steps swept across four hundred zoom levels must still produce
+    /// only a handful of distinct `font_size` values, because that value is
+    /// GPUI's shaped-line cache key.
+    #[test]
+    fn sweeping_the_zoom_across_all_four_steps_stays_on_the_ladder() {
+        use crate::models::FontSize;
+
+        let budgets = budgets();
+        let mut sizes: Vec<f32> = (1..=400)
+            .flat_map(|step| {
+                let plan = LodPlan::choose(&budgets, step as f32 / 100.0, healthy(), None);
+                FontSize::ALL
+                    .iter()
+                    .filter_map(move |size| plan.font_size_for(&budgets.lod, size.world_size()))
+            })
+            .collect();
+        sizes.sort_by(f32::total_cmp);
+        sizes.dedup();
+
+        assert!(
+            sizes.len() <= budgets.lod.font_size_ladder.len(),
+            "1,600 (zoom, size) pairs produced {} distinct shaped sizes",
+            sizes.len()
         );
     }
 

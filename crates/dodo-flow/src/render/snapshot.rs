@@ -128,6 +128,13 @@ pub struct PlannedEdge {
     /// The route's geometry version — §23's cache key.
     pub version: u32,
     pub selected: bool,
+    /// **The quantised size this edge's label is shaped at, or `None`** (§9).
+    ///
+    /// `None` covers three different facts and the caller does not need to tell
+    /// them apart: the edge has no label, the rung is `Overview`, or the label
+    /// would render below the readable floor. All three mean *do not lay it
+    /// out*, which is §15's first bullet costing nothing.
+    pub label_font_size: Option<f32>,
 }
 
 /// One handle that gets a real element: hoverable, with a cursor (§44).
@@ -234,7 +241,7 @@ impl RenderSnapshot {
         self.overlay = None;
         self.counts = SnapshotCounts::default();
 
-        self.extract_edges(world, visible, viewport, &lod);
+        self.extract_edges(world, visible, viewport, budgets, &lod);
         self.extract_nodes(world, visible, viewport, budgets, registry, hovered, &lod);
         self.extract_controls(world, viewport, &lod, hovered, budgets);
 
@@ -255,9 +262,10 @@ impl RenderSnapshot {
         world: &GraphWorld,
         visible: &VisibleSet,
         viewport: &Viewport,
+        budgets: &RenderBudgets,
         lod: &LodPlan,
     ) {
-        let thresholds = &lod_thresholds(lod);
+        let thresholds = &budgets.lod;
         for &edge in visible.edges() {
             if self.edges.len() as u32 >= lod.max_edges {
                 self.counts.skipped_edges += 1;
@@ -283,10 +291,22 @@ impl RenderSnapshot {
                 continue;
             }
 
+            // **The label's size is decided here, from the edge's own style**,
+            // for the same reason a node's is: the ladder answers per element,
+            // and an edge labelled `XL` survives a zoom-out that an `S` one
+            // does not.
+            let label_font_size = world
+                .edges()
+                .label(edge)
+                .is_some()
+                .then(|| lod.font_size_for(thresholds, world.edges().style(edge).font.world_size()))
+                .flatten();
+
             self.edges.push(PlannedEdge {
                 edge,
                 version: world.geometry().version(edge),
                 selected: world.edges().is_selected(edge),
+                label_font_size,
             });
         }
     }
@@ -304,7 +324,7 @@ impl RenderSnapshot {
         lod: &LodPlan,
     ) {
         let nodes = world.nodes();
-        let thresholds = lod_thresholds(lod);
+        let thresholds = budgets.lod;
 
         for &node in visible.nodes() {
             let shape = nodes.shape(node);
@@ -347,9 +367,12 @@ impl RenderSnapshot {
                 continue;
             }
 
+            // **The element's own step, not the frame's default** (§9). Two
+            // nodes at two authored sizes get two answers from the same rung,
+            // and each disappears at the zoom where *it* stops being readable.
             let label_font_size =
                 if visual.shows_label && detailed && nodes.cold(node).label.is_some() {
-                    lod.label_font_size
+                    lod.font_size_for(&thresholds, nodes.style(node).font.world_size())
                 } else {
                     None
                 };
@@ -521,10 +544,6 @@ fn is_rectangular(body: NodeShape) -> bool {
 /// Re-read from the defaults rather than carried on the plan: the ladder's
 /// thresholds are configuration in [`crate::budgets`], and duplicating them
 /// onto every plan would be a second copy that could disagree with the first.
-fn lod_thresholds(_lod: &LodPlan) -> crate::budgets::LodThresholds {
-    crate::budgets::LodThresholds::DEFAULT
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -829,8 +848,13 @@ mod tests {
 
         assert!(size_of::<RichNode>() <= 48, "{}", size_of::<RichNode>());
         assert!(size_of::<CanvasNode>() <= 48, "{}", size_of::<CanvasNode>());
+        // 24 rather than 16 since §9's edge labels: a `PlannedEdge` carries
+        // the quantised size its label is shaped at, which is an `Option<f32>`
+        // and pads the struct to three words. Still `Copy`, still no heap, and
+        // still one row per *visible* edge — which is the property the bound is
+        // guarding.
         assert!(
-            size_of::<PlannedEdge>() <= 16,
+            size_of::<PlannedEdge>() <= 24,
             "{}",
             size_of::<PlannedEdge>()
         );

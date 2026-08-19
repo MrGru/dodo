@@ -148,7 +148,7 @@ const UNIVERSAL: &[Binding] = &[
 /// The letters are the ones every canvas editor already uses, so a user
 /// arriving from one of them is not retrained: `v` select, `h` hand, `r`
 /// rectangle, `o` ellipse (*not* `e`, which is the eraser everywhere), `d`
-/// diamond, `a` arrow, `l` line, `n` node.
+/// diamond, `a` arrow, `l` line, `n` node, `t` text.
 const TOOLS: &[Binding] = &[
     Binding {
         keystroke: "v",
@@ -181,6 +181,10 @@ const TOOLS: &[Binding] = &[
     Binding {
         keystroke: "n",
         action: EditAction::Tool(CanvasTool::GraphNode),
+    },
+    Binding {
+        keystroke: "t",
+        action: EditAction::Tool(CanvasTool::Text),
     },
 ];
 

@@ -24,6 +24,8 @@
 //!
 //! **This file names no UI framework.**
 
+use std::sync::Arc;
+
 use crate::models::{EdgeIndex, EdgeRouting, ElementId, ElementStyle, HandleIndex, NodeIndex};
 
 /// A [`HandleIndex`] or nothing, in four bytes.
@@ -182,7 +184,13 @@ pub struct EdgeStore {
     styles: Vec<ElementStyle>,
 
     // ---- cold ----
-    labels: Vec<Option<String>>,
+    /// `Arc<str>` rather than `String`, for the same per-frame reason
+    /// [`NodeCold::label`](crate::runtime::NodeCold::label) is: a
+    /// [`TextPrimitive`](crate::render::plan::TextPrimitive) carries the text it
+    /// draws, and §9's edge labels are built once per visible labelled edge per
+    /// frame. An `Arc` clone is a refcount bump; a `String` clone is an
+    /// allocation, which is what §40 rule 10 is about.
+    labels: Vec<Option<Arc<str>>>,
 }
 
 impl EdgeStore {
@@ -235,7 +243,7 @@ impl EdgeStore {
         self.ids.push(spec.id);
         self.z.push(spec.z);
         self.styles.push(spec.style);
-        self.labels.push(spec.label);
+        self.labels.push(spec.label.map(Arc::from));
 
         index
     }
@@ -293,8 +301,13 @@ impl EdgeStore {
         &self.styles[edge.index()]
     }
 
-    pub fn label(&self, edge: EdgeIndex) -> Option<&str> {
-        self.labels[edge.index()].as_deref()
+    /// The edge's label (§9), or `None`.
+    ///
+    /// Returns the `Arc` rather than a `&str` because the paint loop clones it
+    /// into a primitive; a caller that only wants to read the text writes
+    /// `.map(Arc::as_ref)` and pays nothing.
+    pub fn label(&self, edge: EdgeIndex) -> Option<&Arc<str>> {
+        self.labels[edge.index()].as_ref()
     }
 
     /// Whether this edge touches `node` at either end. Used by the duplicate
@@ -327,7 +340,7 @@ impl EdgeStore {
     }
 
     pub fn set_label(&mut self, edge: EdgeIndex, label: Option<String>) {
-        self.labels[edge.index()] = label;
+        self.labels[edge.index()] = label.map(Arc::from);
     }
 
     pub fn style_mut(&mut self, edge: EdgeIndex) -> &mut ElementStyle {

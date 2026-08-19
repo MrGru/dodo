@@ -36,4 +36,4 @@ pub use state::{
     BoxSelection, ConnectionSource, InputModifiers, InteractionEffect, InteractionEvent,
     InteractionMachine, InteractionState, PendingConnection, PointerButton,
 };
-pub use tool::{CanvasTool, CreationGesture, MIN_DRAG_PIXELS, creation_rect};
+pub use tool::{CanvasTool, CreationGesture, MIN_DRAG_PIXELS, TextTarget, creation_rect};

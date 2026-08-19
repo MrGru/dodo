@@ -45,14 +45,29 @@
 //! index's broad phase (§28), which is Phase 4's — and a linear scan over every
 //! element would be exactly the thing §40 rule 1 forbids, written in a place it
 //! would be easy to forget to remove. §25's remaining states (`Resizing`,
-//! `Rotating`, `EditingText`, …) arrive with the phases that can implement
-//! them; the enum is where they will go.
+//! `Rotating`, …) arrive with the phases that can implement them; the enum is
+//! where they will go. `EditingText` is Phase 10's and is now here.
+//!
+//! # Editing text is a state, and the text itself is deliberately not in it
+//!
+//! [`InteractionState::EditingText`] holds a
+//! [`TextTarget`](crate::interaction::TextTarget) and nothing else. The
+//! characters being typed belong to whatever widget is collecting them, which
+//! is `views/`'s business and needs a `Window` to exist at all; keeping them
+//! here would put a `String` — and, in practice, a text-input entity — below
+//! the UI-framework line.
+//!
+//! What this buys is the same thing every other variant buys: *what the next
+//! press means* has exactly one answer. A press while text is being edited
+//! **commits it**, because that is what clicking away from a caret means
+//! everywhere else, and it is one arm rather than a `if self.editing` scattered
+//! through the view.
 //!
 //! **This file names no UI framework.**
 
 use crate::{
     geometry::{Rect, Vec2},
-    interaction::tool::{CanvasTool, CreationGesture, creation_rect},
+    interaction::tool::{CanvasTool, CreationGesture, TextTarget, creation_rect},
     models::{HandleIndex, NodeIndex},
     runtime::PointerTarget,
 };
@@ -156,6 +171,12 @@ pub enum InteractionState {
         /// Where the pointer is, in world units — the loose end of the preview.
         current_world: Vec2,
     },
+    /// §25's `EditingText` (§9): a caret is in something.
+    ///
+    /// **Not a drag**, which is why it is the only state a `PointerUp` does not
+    /// end and the only one entered by something other than a press. It is left
+    /// by a commit, a cancel, or a press anywhere — see the module doc.
+    EditingText { target: TextTarget },
 }
 
 /// The handle a pending connection started from.
@@ -222,6 +243,25 @@ pub enum InteractionEvent {
     /// user who starts a rectangle and then decides they want three more must
     /// not have to abandon the first one to say so.
     SetToolLock(bool),
+    /// **A double-click** (§9): the gesture that opens a text editor.
+    ///
+    /// Its own event rather than a `click_count` on
+    /// [`PointerDown`](InteractionEvent::PointerDown), because the two mean
+    /// entirely different things and folding them together would put a
+    /// `count == 2` branch in front of every gesture in the machine. The caller
+    /// raises this *instead of* a press, and does so only when the platform
+    /// says the click was a double one — which is a question about the mouse
+    /// and its timing, and therefore `views/`'s.
+    DoubleClick {
+        /// Where it landed, in world units. Only the `Empty` arm reads it, to
+        /// place a new text element under the pointer.
+        world: Vec2,
+        target: PointerTarget,
+    },
+    /// **The text being edited is finished** — Enter, or a commit from
+    /// anywhere else. The caller has the characters; this only closes the
+    /// state.
+    FinishTextEdit,
     /// `Esc`, a lost window focus, or anything else that means "stop".
     Cancel,
 }
@@ -334,6 +374,29 @@ pub enum InteractionEffect {
     /// added, which is the point of the tool never touching the document until
     /// the release.
     CancelCreate,
+
+    /// **Put a caret in this** (§9). The view opens a text editor over the
+    /// target and seeds it with whatever text the target already has — which
+    /// is what makes existing text editable again rather than merely
+    /// replaceable.
+    ///
+    /// Raised by a double-click on a node, an edge or empty canvas, and by the
+    /// Text tool finishing its drag. Those two paths differ only in which
+    /// [`TextTarget`] they carry, which is the whole reason the target is a
+    /// type rather than three booleans.
+    BeginTextEdit(TextTarget),
+    /// **Commit whatever is in the editor.** The characters are the view's; the
+    /// target is here so it does not have to remember which one it opened.
+    ///
+    /// Committing *empty* text is meaningful and not a no-op: it clears an
+    /// existing label, and it abandons a pending element. Which of those it is
+    /// is [`FlowEditor::commit_text`](crate::commands::FlowEditor::commit_text)'s
+    /// decision, not this file's.
+    CommitTextEdit(TextTarget),
+    /// The edit was abandoned — `Esc`. Nothing reaches the document, including
+    /// for a pending element, which is why an abandoned Text-tool gesture
+    /// leaves nothing behind.
+    CancelTextEdit,
 }
 
 impl InteractionEffect {
@@ -525,7 +588,11 @@ impl InteractionMachine {
                         };
                         InteractionEffect::BeginNodeDrag(node)
                     }
-                    PointerTarget::Empty => {
+                    // **An edge reads as canvas here** — see
+                    // [`PointerTarget::starts_a_band`]. Edges are not
+                    // draggable, so a press on one starting nothing at all
+                    // would read as a canvas that had stopped responding.
+                    PointerTarget::Empty | PointerTarget::Edge(_) => {
                         self.state = InteractionState::BoxSelecting {
                             anchor_world: world,
                             current_world: world,
@@ -540,6 +607,19 @@ impl InteractionMachine {
                 PointerButton::Right => InteractionEffect::None,
             },
 
+            // ---- a press while a caret is out ----
+            //
+            // **Commits, rather than being ignored.** Clicking away from a text
+            // cursor means "I am done typing" in every editor there is, and the
+            // press itself is consumed: this file's rule is one effect per
+            // event, and committing is unambiguously the more important of the
+            // two. A user who wanted the press as well presses again, on a
+            // canvas that is no longer editing.
+            (InteractionState::EditingText { target }, InteractionEvent::PointerDown { .. }) => {
+                self.state = InteractionState::Idle;
+                InteractionEffect::CommitTextEdit(target)
+            }
+
             // ---- a press while already busy ----
             //
             // Ignored rather than treated as a restart. A second button going
@@ -547,6 +627,51 @@ impl InteractionMachine {
             // silently switching modes under the user's hand — is the exact
             // class of bug the enum exists to prevent.
             (_, InteractionEvent::PointerDown { .. }) => InteractionEffect::None,
+
+            // ---- §9's double-click: the one gesture that opens a caret ----
+            //
+            // From rest only. A double-click that arrives mid-drag is a stray
+            // second press the platform coalesced, and opening an editor under
+            // a moving hand is worse than ignoring it.
+            (InteractionState::Idle, InteractionEvent::DoubleClick { world, target }) => {
+                // A handle sits *on* its node, and there is no text on a
+                // handle — so double-clicking one edits the node it belongs to
+                // rather than doing nothing, which is what a user aiming at the
+                // edge of a small node has actually asked for.
+                let target = match target {
+                    PointerTarget::Node(node) | PointerTarget::Handle { node, .. } => {
+                        TextTarget::Node(node)
+                    }
+                    PointerTarget::Edge(edge) => TextTarget::Edge(edge),
+                    // **Empty canvas creates text**, centred on the pointer,
+                    // exactly as a click with the Text tool does — one rule,
+                    // through `creation_rect`, so the two cannot disagree about
+                    // where a clicked text box goes.
+                    PointerTarget::Empty => TextTarget::New(creation_rect(
+                        CanvasTool::Text,
+                        CreationGesture {
+                            anchor_world: world,
+                            current_world: world,
+                            anchor_screen: Vec2::ZERO,
+                            current_screen: Vec2::ZERO,
+                            constrain: false,
+                        },
+                    )),
+                };
+                self.state = InteractionState::EditingText { target };
+                InteractionEffect::BeginTextEdit(target)
+            }
+
+            // Anywhere else a double-click is a press the machine has already
+            // handled; ignoring it is what stops a second editor opening over
+            // the first.
+            (_, InteractionEvent::DoubleClick { .. }) => InteractionEffect::None,
+
+            (InteractionState::EditingText { target }, InteractionEvent::FinishTextEdit) => {
+                self.state = InteractionState::Idle;
+                InteractionEffect::CommitTextEdit(target)
+            }
+            (_, InteractionEvent::FinishTextEdit) => InteractionEffect::None,
 
             // ---- dragging ----
             (
@@ -626,7 +751,15 @@ impl InteractionMachine {
                 })
             }
 
-            (InteractionState::Idle, InteractionEvent::PointerMove { .. }) => {
+            // A caret is not a drag, so the pointer moving over it and any
+            // stray release both mean nothing. Stated rather than swept into a
+            // wildcard, because "does a move end a text edit?" is a real
+            // question and this is where the answer belongs.
+            (
+                InteractionState::Idle | InteractionState::EditingText { .. },
+                InteractionEvent::PointerMove { .. },
+            ) => InteractionEffect::None,
+            (InteractionState::EditingText { .. }, InteractionEvent::PointerUp { .. }) => {
                 InteractionEffect::None
             }
 
@@ -705,10 +838,18 @@ impl InteractionMachine {
                     if !self.tool_locked {
                         self.tool = CanvasTool::Select;
                     }
-                    InteractionEffect::CommitCreate {
-                        tool,
-                        rect: creation_rect(tool, gesture),
+                    let rect = creation_rect(tool, gesture);
+                    // **The Text tool's release opens a caret instead of
+                    // adding an element** (§9). The document is untouched
+                    // until there is text to put in it, so an abandoned text
+                    // gesture leaves nothing — the same promise every other
+                    // tool keeps by not writing until the release.
+                    if tool.edits_text_on_release() {
+                        let target = TextTarget::New(rect);
+                        self.state = InteractionState::EditingText { target };
+                        return InteractionEffect::BeginTextEdit(target);
                     }
+                    InteractionEffect::CommitCreate { tool, rect }
                 } else {
                     InteractionEffect::None
                 }
@@ -752,6 +893,10 @@ impl InteractionMachine {
             (InteractionState::CreatingShape { .. }, InteractionEvent::Cancel) => {
                 self.state = InteractionState::Idle;
                 InteractionEffect::CancelCreate
+            }
+            (InteractionState::EditingText { .. }, InteractionEvent::Cancel) => {
+                self.state = InteractionState::Idle;
+                InteractionEffect::CancelTextEdit
             }
 
             // ---- picking up a tool (§45) ----
@@ -1711,7 +1856,10 @@ mod tests {
     /// this is here to prevent.
     #[test]
     fn finishing_a_drawing_returns_to_the_select_tool() {
-        for tool in CanvasTool::ALL.iter().filter(|tool| tool.creates()) {
+        for tool in CanvasTool::ALL
+            .iter()
+            .filter(|tool| tool.creates() && !tool.edits_text_on_release())
+        {
             let mut machine = InteractionMachine::new();
             machine.handle(InteractionEvent::SelectTool(*tool));
             machine.handle(press(

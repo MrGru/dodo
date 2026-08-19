@@ -130,7 +130,18 @@ pub enum NodeShape {
     Line,
     /// §7's free arrow: [`Line`](NodeShape::Line) with a head at the end.
     Arrow,
-    /// Text, an image, a frame, a freehand stroke, an embed, a custom kind —
+    /// §9's standalone text: **a body that is nothing but its text**.
+    ///
+    /// It has no outline at all — not an empty one, and not a transparent
+    /// rectangle. A text element is its glyphs, so
+    /// [`outline_for_node`](crate::render::shapes::outline_for_node) answers
+    /// `None` for it and the whole shape/fill/stroke path is skipped; what
+    /// reaches the plan is one [`TextPrimitive`](crate::render::plan::TextPrimitive)
+    /// and nothing else. Its rectangle is still real — it is what the spatial
+    /// index stores, what the selection ring is drawn around and what the text
+    /// is laid out into — it is simply never painted.
+    Text,
+    /// An image, a frame, a freehand stroke, an embed, a custom kind —
     /// everything whose painter is a later phase's. Deliberately **not** drawn
     /// as a rectangle: a kind that silently paints as something else is a
     /// missing feature that looks implemented.
@@ -151,6 +162,7 @@ impl NodeShape {
             ElementKind::Shape(ShapeKind::Triangle) => NodeShape::Triangle,
             ElementKind::Linear(LinearKind::Line) => NodeShape::Line,
             ElementKind::Linear(LinearKind::Arrow) => NodeShape::Arrow,
+            ElementKind::Text => NodeShape::Text,
             // **An elbow is not a diagonal.** Its legs need waypoints, and a
             // node stores a rectangle; drawing it as a straight line would be
             // a different element wearing its name.
@@ -620,8 +632,11 @@ mod tests {
             ))),
             NodeShape::Other
         );
-        assert_eq!(NodeShape::of(&ElementKind::Text), NodeShape::Other);
+        // Text left `Other` in Phase 10, and it left it the only way anything
+        // may: a painter first, then the projection, then the tool.
+        assert_eq!(NodeShape::of(&ElementKind::Text), NodeShape::Text);
         assert_eq!(NodeShape::of(&ElementKind::Frame), NodeShape::Other);
+        assert_eq!(NodeShape::of(&ElementKind::Image), NodeShape::Other);
     }
 
     #[test]

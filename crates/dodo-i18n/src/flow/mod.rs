@@ -34,6 +34,13 @@ pub enum Text {
     ToolArrow,
     ToolLine,
     ToolGraphNode,
+    ToolText,
+
+    // ---- §9's text editor ----
+    /// The prompt inside an empty text editor, on a node, on an edge or on a
+    /// standalone text element. One string for all three: it says what to do,
+    /// and what to do is the same.
+    TextPlaceholder,
 
     // ---- the actions beside the tools ----
     /// Removes the selection, from the toolbar or from the keyboard.

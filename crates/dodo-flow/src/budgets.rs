@@ -196,14 +196,25 @@ pub struct LodThresholds {
     /// visible label on every frame; snapping to a handful of sizes turns that
     /// into a cache hit. GPUI's own layout cache is only two frames deep, so
     /// the engine owns a `ShapedLine` cache on top.
+    ///
+    /// **The four authored steps are rungs of this ladder**, so a label at
+    /// 100 % zoom is shaped at exactly the size it was written at and the
+    /// quantiser is the identity there. That is a contract between two modules
+    /// with nothing else joining them, and
+    /// `the_four_authored_sizes_are_rungs_of_the_ladder` is what holds it.
     pub font_size_ladder: &'static [f32],
     /// Below this rendered height in screen pixels, a label is not drawn at
     /// all — it cannot be read, and shaping it is pure cost.
     pub min_readable_font_px: f32,
-    /// The font size a node label is nominally drawn at in **world** units, so
-    /// its rendered size is this times the zoom before quantisation. Here
-    /// rather than in the renderer because it is the input to the quantisation
-    /// above, and the pair only makes sense read together.
+    /// The font size used when nothing else says, in **world** units, so a
+    /// rendered size is this times the zoom before quantisation. Here rather
+    /// than in the renderer because it is the input to the quantisation above,
+    /// and the pair only makes sense read together.
+    ///
+    /// **An element's own [`FontSize`](crate::models::FontSize) is what the
+    /// renderer actually reads**; this is the frame-level default the ladder
+    /// reports and the fallback for anything with no style to hand. It equals
+    /// [`FontSize::Medium`](crate::models::FontSize::Medium), asserted below.
     pub nominal_label_size: f32,
     /// Below this rendered side in screen pixels, a node is a plain box: no
     /// label, no border, no handles, whatever the zoom rung says.
@@ -233,9 +244,13 @@ impl LodThresholds {
         full_detail_zoom: 0.6,
         compact_zoom: 0.2,
         curve_to_quad_zoom: 0.35,
-        font_size_ladder: &[9.0, 11.0, 13.0, 16.0, 20.0, 28.0],
+        // The four authored steps (12 / 16 / 20 / 28) plus two rungs below
+        // them for zoomed-out text and one above for zoomed-in text — past
+        // which a label is drawn scaled rather than re-shaped, which is the
+        // whole point of a ladder.
+        font_size_ladder: &[8.0, 10.0, 12.0, 16.0, 20.0, 28.0, 40.0],
         min_readable_font_px: 6.0,
-        nominal_label_size: 13.0,
+        nominal_label_size: 16.0,
         // Two node bodies' worth of border and a label's line height do not fit
         // in less; below it the quad is the whole node.
         min_detailed_node_px: 24.0,
@@ -732,19 +747,47 @@ mod tests {
     fn font_sizes_snap_onto_the_ladder_so_a_zoom_does_not_reshape_every_label() {
         let lod = LodThresholds::DEFAULT;
 
-        assert_eq!(lod.quantize_font_size(13.0), 13.0);
-        assert_eq!(lod.quantize_font_size(13.4), 13.0);
-        assert_eq!(lod.quantize_font_size(15.9), 13.0);
+        assert_eq!(lod.quantize_font_size(12.0), 12.0);
+        assert_eq!(lod.quantize_font_size(13.4), 12.0);
+        assert_eq!(lod.quantize_font_size(15.9), 12.0);
         assert_eq!(lod.quantize_font_size(16.0), 16.0);
         assert_eq!(
             lod.quantize_font_size(400.0),
-            28.0,
+            40.0,
             "clamped to the top rung"
         );
         assert_eq!(
             lod.quantize_font_size(0.5),
-            9.0,
+            8.0,
             "clamped to the bottom rung"
+        );
+    }
+
+    /// **The contract between the document's four steps and the render
+    /// ladder.** They are declared in different modules — `models::style` owns
+    /// the authored vocabulary, this one owns what the renderer may shape at —
+    /// and nothing joins them but this assertion. Break it and every label is
+    /// silently shaped one rung below the size it was authored at, at 100 %
+    /// zoom, on every document.
+    #[test]
+    fn the_four_authored_sizes_are_rungs_of_the_ladder() {
+        let lod = LodThresholds::DEFAULT;
+
+        for step in crate::models::FontSize::ALL {
+            let world = step.world_size();
+            assert_eq!(
+                lod.quantize_font_size(world),
+                world,
+                "{} is authored at {world} and would be shaped at {}",
+                step.name(),
+                lod.quantize_font_size(world)
+            );
+        }
+
+        assert_eq!(
+            lod.nominal_label_size,
+            crate::models::FontSize::Medium.world_size(),
+            "the frame default must be the document default"
         );
     }
 

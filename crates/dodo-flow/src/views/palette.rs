@@ -286,6 +286,7 @@ fn label_for(tool: CanvasTool) -> flow::Text {
         CanvasTool::Arrow => flow::Text::ToolArrow,
         CanvasTool::Line => flow::Text::ToolLine,
         CanvasTool::GraphNode => flow::Text::ToolGraphNode,
+        CanvasTool::Text => flow::Text::ToolText,
     }
 }
 
@@ -393,6 +394,13 @@ fn strokes(glyph: Glyph, box_: Rect, ink: Color) -> Vec<(Outline, PathPaint)> {
             paths.push((shapes::ellipse(right), fill));
             paths
         }
+        // **The one tool whose glyph is not its own geometry**, and the module
+        // doc's rule survives it rather than being bent: a text element *is*
+        // its glyphs, so there is no outline for a button to borrow —
+        // `outline_for_node(NodeShape::Text, ..)` answers `None` on purpose. So
+        // this is hand-built like the pointer and the pan cross, for the same
+        // reason they are, and it is still an `Outline` a test can measure.
+        CanvasTool::Text => vec![(text_glyph(box_), stroke)],
     }
 }
 
@@ -458,6 +466,26 @@ pub fn lock_glyph(box_: Rect) -> impl Iterator<Item = Outline> {
         .close();
 
     [shackle, body].into_iter()
+}
+
+/// The Text tool's glyph: a serif capital A, stroked.
+///
+/// An `A` rather than a `T` — both are used by drawing tools, and the `T` is
+/// two strokes that at 14 px read as the cross the Hand tool already owns. The
+/// crossbar is what makes an `A` unmistakable at any size.
+pub fn text_glyph(box_: Rect) -> Outline {
+    let (o, s) = (box_.origin, box_.size);
+    let at = |x: f32, y: f32| Vec2::new(o.x + s.x * x, o.y + s.y * y);
+
+    // Two subpaths: the apex-to-feet vee, and the crossbar across it.
+    let mut outline = Outline::with_capacity(6);
+    outline
+        .move_to(at(0.08, 1.0))
+        .line_to(at(0.5, 0.0))
+        .line_to(at(0.92, 1.0))
+        .move_to(at(0.24, 0.62))
+        .line_to(at(0.76, 0.62));
+    outline
 }
 
 /// The Select tool's glyph: the classic pointer arrow, filled.

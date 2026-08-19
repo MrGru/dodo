@@ -609,6 +609,22 @@ fn within_band(built: f32, now: f32, band: f32) -> bool {
 
 // ---- text -------------------------------------------------------------
 
+/// **Which element a shaped line belongs to.**
+///
+/// Two owners rather than one, because §9's text is on nodes *and* on edges and
+/// an edge label is not a node's. Compact runtime indices, like
+/// [`GeometryOwner`] beside it — a cache never reaches the document format.
+///
+/// Its own type rather than a reuse of [`GeometryOwner`]: they happen to have
+/// the same two arms today and they answer different questions, so a future
+/// geometry part that has no text (or a text owner that has no geometry) does
+/// not have to be added to both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TextOwner {
+    Node(NodeIndex),
+    Edge(EdgeIndex),
+}
+
 /// The cache key for one shaped label.
 ///
 /// `font_size` is in the key because **it is in GPUI's own shaped-line cache
@@ -617,10 +633,17 @@ fn within_band(built: f32, now: f32, band: f32) -> bool {
 /// quantisation is
 /// [`LodThresholds::quantize_font_size`](crate::budgets::LodThresholds::quantize_font_size);
 /// this key is what makes the quantisation pay.
+///
+/// **The position is deliberately not in the key**, which is what makes §40
+/// rule 7 hold: a pure pan moves every label on screen and changes not one of
+/// these, so a panned frame re-shapes nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TextKey {
-    pub node: NodeIndex,
-    /// The node's appearance version, so an edited label is a different line.
+    pub owner: TextOwner,
+    /// The element's appearance version, so an edited label is a different
+    /// line. A node's is [`NodeStore::version`](crate::runtime::NodeStore::version);
+    /// an edge's is its geometry version, which moves when the route does — a
+    /// spurious miss when an edge reroutes, and never a stale label.
     pub version: u32,
     /// The quantised font size, in tenths of a pixel. An integer because `f32`
     /// is neither `Eq` nor `Hash`, and for the same reason
@@ -629,9 +652,17 @@ pub struct TextKey {
 }
 
 impl TextKey {
-    pub fn new(node: NodeIndex, version: u32, font_size: f32) -> TextKey {
+    pub fn node(node: NodeIndex, version: u32, font_size: f32) -> TextKey {
+        TextKey::new(TextOwner::Node(node), version, font_size)
+    }
+
+    pub fn edge(edge: EdgeIndex, version: u32, font_size: f32) -> TextKey {
+        TextKey::new(TextOwner::Edge(edge), version, font_size)
+    }
+
+    pub fn new(owner: TextOwner, version: u32, font_size: f32) -> TextKey {
         TextKey {
-            node,
+            owner,
             version,
             font_size: (font_size.max(0.0) * 10.0).round() as u32,
         }
@@ -1175,7 +1206,7 @@ mod tests {
         let mut keys: Vec<TextKey> = (1..=400)
             .map(|step| {
                 let rendered = lod.nominal_label_size * step as f32 / 100.0;
-                TextKey::new(NodeIndex::new(0), 1, lod.quantize_font_size(rendered))
+                TextKey::node(NodeIndex::new(0), 1, lod.quantize_font_size(rendered))
             })
             .collect();
         keys.sort_unstable();
@@ -1194,7 +1225,7 @@ mod tests {
     #[test]
     fn a_shaped_line_survives_longer_than_the_frameworks_two_frames() {
         let mut cache: ShapedLineCache<u32> = ShapedLineCache::new(&budgets());
-        let key = TextKey::new(NodeIndex::new(0), 1, 13.0);
+        let key = TextKey::node(NodeIndex::new(0), 1, 13.0);
 
         cache.begin_frame();
         cache.insert(key, 42);
@@ -1209,14 +1240,33 @@ mod tests {
         assert_eq!(cache.get(&key), Some(&42));
     }
 
+    /// **A node and an edge that happen to share an index are not the same
+    /// label.** Runtime indices are per-store, so node 3 and edge 3 both exist
+    /// in almost every document; a key that carried a bare `u32` would serve an
+    /// edge's label under a node's rectangle and there is nothing on screen
+    /// that says which one is wrong.
+    #[test]
+    fn a_node_and_an_edge_with_the_same_index_are_different_lines() {
+        let mut cache: ShapedLineCache<u32> = ShapedLineCache::new(&budgets());
+
+        let node = TextKey::node(NodeIndex::new(3), 1, 16.0);
+        let edge = TextKey::edge(EdgeIndex::new(3), 1, 16.0);
+        assert_ne!(node, edge);
+
+        cache.insert(node, 10);
+        cache.insert(edge, 20);
+        assert_eq!(cache.get(&node), Some(&10));
+        assert_eq!(cache.get(&edge), Some(&20));
+    }
+
     #[test]
     fn an_edited_label_is_a_different_shaped_line() {
         let mut cache: ShapedLineCache<u32> = ShapedLineCache::new(&budgets());
         cache.begin_frame();
-        cache.insert(TextKey::new(NodeIndex::new(0), 1, 13.0), 42);
+        cache.insert(TextKey::node(NodeIndex::new(0), 1, 13.0), 42);
 
-        assert_eq!(cache.get(&TextKey::new(NodeIndex::new(0), 2, 13.0)), None);
-        assert_eq!(cache.get(&TextKey::new(NodeIndex::new(0), 1, 16.0)), None);
+        assert_eq!(cache.get(&TextKey::node(NodeIndex::new(0), 2, 13.0)), None);
+        assert_eq!(cache.get(&TextKey::node(NodeIndex::new(0), 1, 16.0)), None);
     }
 
     /// Four times the cache's capacity, offered one label at a time, with the
@@ -1233,7 +1283,7 @@ mod tests {
         cache.begin_frame();
 
         for index in 0..(budgets.max_shaped_lines * 4) {
-            cache.insert(TextKey::new(NodeIndex::new(index), 1, 13.0), index);
+            cache.insert(TextKey::node(NodeIndex::new(index), 1, 13.0), index);
             assert!(cache.len() <= budgets.max_shaped_lines as usize);
         }
     }
@@ -1242,7 +1292,7 @@ mod tests {
     fn an_unused_shaped_line_is_dropped_after_the_retention_window() {
         let mut cache: ShapedLineCache<u32> = ShapedLineCache::new(&budgets());
         cache.begin_frame();
-        cache.insert(TextKey::new(NodeIndex::new(0), 1, 13.0), 42);
+        cache.insert(TextKey::node(NodeIndex::new(0), 1, 13.0), 42);
         cache.end_frame();
 
         for _ in 0..RETAIN_FRAMES {

@@ -305,7 +305,13 @@ pub fn outline_for_node(shape: NodeShape, rect: Rect, corner_radius: f32) -> Opt
         NodeShape::Triangle => triangle(rect),
         NodeShape::Line => line(rect),
         NodeShape::Arrow => arrow(rect),
-        NodeShape::Other => return None,
+        // **A text element has no outline** — not an empty one and not its
+        // rectangle. Its rectangle is where the glyphs are laid out, and
+        // painting it would put a box around every piece of standalone text.
+        // `None` for the same reason `Other` answers `None`: the caller has to
+        // notice, and the caller is the one arm in `plan_nodes` that skips a
+        // body entirely.
+        NodeShape::Text | NodeShape::Other => return None,
     })
 }
 

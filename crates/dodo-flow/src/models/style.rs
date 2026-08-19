@@ -28,6 +28,7 @@
 //! `gpui_component::ActiveTheme`. This is also why [`Color`] is four `f32`s of
 //! this crate's own rather than `gpui::Hsla`: `models/` names no UI framework.
 
+use dodo_paths::HostOs;
 use serde::{Deserialize, Serialize};
 
 /// A straight RGBA colour, components in `0.0..=1.0`, **not** premultiplied.
@@ -169,34 +170,213 @@ pub enum ArrowMarker {
     Diamond,
 }
 
-/// Font properties (§32). Sizes are in **world** units, like stroke widths.
+/// **Four discrete text sizes, and the reason there are four** (§9, §32).
 ///
-/// **The renderer will not use this size directly.** `font_size` is part of
-/// GPUI's shaped-line cache key, so a continuous zoom would re-shape every
-/// label on every frame; the LOD ladder quantises to
-/// the few discrete sizes named in
-/// [`budgets::LodThresholds`](crate::budgets::LodThresholds) before shaping.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Not a number. The captain's property-panel reference fixes the control as
+/// S / M / L / XL, and that is a gift rather than a constraint: Phase 5 found
+/// that `font_size` is part of GPUI's own shaped-line cache key, so a
+/// continuously-sized label is re-shaped on **every frame of a zoom** — 7–11 µs
+/// each against 1.7 µs to paint a cached one. A continuous size field would
+/// have had to be quantised somewhere anyway; making the *document* discrete
+/// means there is no second, disagreeing answer to "what size is this text?".
+///
+/// The world sizes below are rungs of
+/// [`LodThresholds::font_size_ladder`](crate::budgets::LodThresholds::font_size_ladder),
+/// so at 100 % zoom a label is shaped at exactly the size it was authored at
+/// and the quantiser is the identity. `the_four_steps_are_rungs_of_the_ladder`
+/// in [`crate::budgets`] pins that, because the two live in different modules
+/// and nothing else would notice them drifting apart.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
+pub enum FontSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+    ExtraLarge,
+}
+
+impl FontSize {
+    /// The four, in panel order.
+    pub const ALL: &'static [FontSize] = &[
+        FontSize::Small,
+        FontSize::Medium,
+        FontSize::Large,
+        FontSize::ExtraLarge,
+    ];
+
+    /// The size in **world** units, like a stroke width — so text zooms with
+    /// the document rather than staying a constant screen size.
+    pub const fn world_size(self) -> f32 {
+        match self {
+            FontSize::Small => 12.0,
+            FontSize::Medium => 16.0,
+            FontSize::Large => 20.0,
+            FontSize::ExtraLarge => 28.0,
+        }
+    }
+
+    /// The step nearest a world size, for a migration or an import that has a
+    /// number rather than a step. Ties go to the smaller step, which is the
+    /// direction that never makes an old document's text overflow its box.
+    pub fn nearest(world_size: f32) -> FontSize {
+        let mut best = FontSize::Small;
+        let mut best_gap = f32::INFINITY;
+        for &step in FontSize::ALL {
+            let gap = (step.world_size() - world_size).abs();
+            if gap < best_gap {
+                best_gap = gap;
+                best = step;
+            }
+        }
+        best
+    }
+
+    /// A short stable name, for an element id or a test. **Not user-facing** —
+    /// the panel's labels are `dodo_i18n::flow`'s.
+    pub const fn name(self) -> &'static str {
+        match self {
+            FontSize::Small => "s",
+            FontSize::Medium => "m",
+            FontSize::Large => "l",
+            FontSize::ExtraLarge => "xl",
+        }
+    }
+}
+
+/// The three type families the property panel offers (§9, §32).
+///
+/// An enum rather than the font *name* it resolves to, for the same reason
+/// every colour here is an `Option<Color>`: a document must not bake this
+/// build's font stack into its elements. `views/` resolves a family against the
+/// theme, which is the only layer that knows what is installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum FontFamily {
+    /// The hand-drawn face, which is what §13's sketch mode is drawn beside.
+    HandDrawn,
+    /// The theme's UI font.
+    #[default]
+    Normal,
+    /// The theme's monospace font.
+    Code,
+}
+
+impl FontFamily {
+    pub const ALL: &'static [FontFamily] =
+        &[FontFamily::HandDrawn, FontFamily::Normal, FontFamily::Code];
+
+    /// **The faces this family prefers, best first**, for the platform it is
+    /// being drawn on. Empty means *"the theme's own font"* — which is what
+    /// [`Normal`](FontFamily::Normal) means and what
+    /// [`Code`](FontFamily::Code) resolves to through the theme's monospace
+    /// setting rather than through a name.
+    ///
+    /// A total function of a [`HostOs`] rather than an item behind `#[cfg]`,
+    /// which is the root `AGENTS.md` invariant: two of dodo's four release
+    /// targets cannot be built from a Mac, so every platform's answer has to be
+    /// assertable from any machine. `views/` picks the first name the text
+    /// system actually has and falls back to the theme's font, so a machine
+    /// with none of them draws in the UI font rather than in something
+    /// arbitrary.
+    ///
+    /// **dodo ships no hand-drawn face of its own**, deliberately: a bundled
+    /// font is a licence, a build step and about half a megabyte in every
+    /// release artefact, and §13's sketch mode is about the *geometry* rather
+    /// than about the type. So this is a preference over what the platform
+    /// already has, and the honest consequence is recorded in
+    /// [`crate::render::painter`]: on a machine with none of these installed,
+    /// picking Hand-drawn changes nothing on screen.
+    pub const fn preferred_faces(self, host: HostOs) -> &'static [&'static str] {
+        match self {
+            FontFamily::Normal | FontFamily::Code => &[],
+            FontFamily::HandDrawn => match host {
+                HostOs::MacOs => &["Bradley Hand", "Chalkboard", "Marker Felt", "Comic Sans MS"],
+                HostOs::Windows => &["Segoe Print", "Ink Free", "Comic Sans MS"],
+                HostOs::Unix => &["Comic Neue", "Comic Relief", "Purisa", "URW Chancery L"],
+            },
+        }
+    }
+
+    /// A short stable name, for an element id or a test. **Not user-facing.**
+    pub const fn name(self) -> &'static str {
+        match self {
+            FontFamily::HandDrawn => "hand-drawn",
+            FontFamily::Normal => "normal",
+            FontFamily::Code => "code",
+        }
+    }
+}
+
+/// Horizontal alignment within the element's box (§9, §32).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+impl TextAlign {
+    pub const ALL: &'static [TextAlign] = &[TextAlign::Left, TextAlign::Center, TextAlign::Right];
+
+    /// Where a run of `width` starts inside a box of `available`, measured from
+    /// the box's left edge.
+    ///
+    /// Pure arithmetic here rather than a flag handed to the text system,
+    /// because the painter needs the origin anyway — `ShapedLine::paint` takes
+    /// one — and because an alignment that is a number can be asserted with no
+    /// window. Never negative: a run wider than its box starts at the left edge
+    /// and is truncated, rather than being centred into its own neighbours.
+    pub fn offset(self, available: f32, width: f32) -> f32 {
+        let slack = (available - width).max(0.0);
+        match self {
+            TextAlign::Left => 0.0,
+            TextAlign::Center => slack * 0.5,
+            TextAlign::Right => slack,
+        }
+    }
+
+    /// A short stable name, for an element id or a test. **Not user-facing.**
+    pub const fn name(self) -> &'static str {
+        match self {
+            TextAlign::Left => "left",
+            TextAlign::Center => "center",
+            TextAlign::Right => "right",
+        }
+    }
+}
+
+/// Font properties (§32). **The whole text vocabulary the property panel
+/// edits**, and deliberately no more: stroke colour, opacity and layer order
+/// are the element's, not the font's, which is why they are not here.
+///
+/// [`size`](FontStyle::size) is a [`FontSize`] rather than a number — see that
+/// type for why the discreteness is load-bearing rather than a simplification.
+///
+/// **[`Default`] is derived here and hand-written on [`ElementStyle`]**, and
+/// the difference is the point rather than an inconsistency: every field below
+/// is a type whose own default is the one wanted, so a derive cannot go wrong.
+/// `ElementStyle::opacity` is an `f32` whose derived default is `0.0`, which
+/// would make every element of a pre-field document load fully transparent.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FontStyle {
-    pub size: f32,
+    pub size: FontSize,
     /// `None` resolves to the theme's foreground colour at render time.
     pub color: Option<Color>,
-    /// `None` resolves to the theme's UI font.
-    pub family: Option<String>,
+    pub family: FontFamily,
+    pub align: TextAlign,
     pub bold: bool,
     pub italic: bool,
 }
 
-impl Default for FontStyle {
-    fn default() -> FontStyle {
-        FontStyle {
-            size: 14.0,
-            color: None,
-            family: None,
-            bold: false,
-            italic: false,
-        }
+impl FontStyle {
+    /// The authored size in world units — the input the LOD ladder quantises
+    /// against the zoom. **Read this rather than `size.world_size()` at a call
+    /// site**, so a future per-element scale has one place to land.
+    pub fn world_size(&self) -> f32 {
+        self.size.world_size()
     }
 }
 
@@ -500,8 +680,8 @@ impl RenderQuality {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArrowMarker, Color, DashPattern, EdgeRouting, ElementStyle, RenderQuality, RenderStyle,
-        StrokeStyle,
+        ArrowMarker, Color, DashPattern, EdgeRouting, ElementStyle, FontFamily, FontSize,
+        RenderQuality, RenderStyle, StrokeStyle, TextAlign,
     };
 
     #[test]
@@ -613,6 +793,85 @@ mod tests {
 
         let json = serde_json::to_string(&style).unwrap();
         assert_eq!(serde_json::from_str::<ElementStyle>(&json).unwrap(), style);
+    }
+
+    /// The four steps are the vocabulary Phase 11's panel edits, so their world
+    /// sizes are a contract rather than a taste — a document authored at `L`
+    /// must not silently become a different size in a later build.
+    #[test]
+    fn the_four_steps_have_the_sizes_the_panel_names() {
+        assert_eq!(FontSize::ALL.len(), 4);
+        assert_eq!(FontSize::Small.world_size(), 12.0);
+        assert_eq!(FontSize::Medium.world_size(), 16.0);
+        assert_eq!(FontSize::Large.world_size(), 20.0);
+        assert_eq!(FontSize::ExtraLarge.world_size(), 28.0);
+        assert_eq!(FontSize::default(), FontSize::Medium);
+    }
+
+    /// The migration ladder needs this, and so does any import: a number has to
+    /// land on a step, and it has to land on the same one every time.
+    #[test]
+    fn a_world_size_snaps_to_the_nearest_step() {
+        assert_eq!(FontSize::nearest(0.0), FontSize::Small);
+        assert_eq!(FontSize::nearest(12.0), FontSize::Small);
+        assert_eq!(FontSize::nearest(14.0), FontSize::Small, "ties go smaller");
+        assert_eq!(FontSize::nearest(15.0), FontSize::Medium);
+        assert_eq!(FontSize::nearest(21.0), FontSize::Large);
+        assert_eq!(FontSize::nearest(1_000.0), FontSize::ExtraLarge);
+    }
+
+    /// Alignment is arithmetic, so it is asserted with no window. The
+    /// overflow case is the one worth pinning: a run wider than its box must
+    /// start at the left edge rather than be centred into its neighbours.
+    #[test]
+    fn alignment_places_a_run_inside_its_box_and_never_outside_it() {
+        assert_eq!(TextAlign::Left.offset(100.0, 40.0), 0.0);
+        assert_eq!(TextAlign::Center.offset(100.0, 40.0), 30.0);
+        assert_eq!(TextAlign::Right.offset(100.0, 40.0), 60.0);
+
+        for align in TextAlign::ALL {
+            assert_eq!(
+                align.offset(40.0, 100.0),
+                0.0,
+                "{} must not push an over-wide run out of its box",
+                align.name()
+            );
+        }
+    }
+
+    /// The three families and the four sizes are enum variants a panel maps
+    /// over, so a duplicate id would collide two buttons — the same failure the
+    /// palette's `no_two_buttons_share_an_id` guards.
+    #[test]
+    fn every_font_choice_has_its_own_stable_name() {
+        let names: Vec<&str> = FontSize::ALL
+            .iter()
+            .map(|it| it.name())
+            .chain(FontFamily::ALL.iter().map(|it| it.name()))
+            .chain(TextAlign::ALL.iter().map(|it| it.name()))
+            .collect();
+        for (index, name) in names.iter().enumerate() {
+            assert!(!names[index + 1..].contains(name), "{name} appears twice");
+        }
+    }
+
+    /// Every platform's answer, asserted from whichever platform this is —
+    /// the root `AGENTS.md` invariant, and the reason the host is a parameter.
+    #[test]
+    fn the_hand_drawn_family_names_a_face_on_every_platform() {
+        use dodo_paths::HostOs;
+
+        for host in [HostOs::MacOs, HostOs::Windows, HostOs::Unix] {
+            assert!(
+                !FontFamily::HandDrawn.preferred_faces(host).is_empty(),
+                "{host:?} has no hand-drawn candidate at all"
+            );
+            assert!(
+                FontFamily::Normal.preferred_faces(host).is_empty(),
+                "the theme's own font is named by the theme, never here"
+            );
+            assert!(FontFamily::Code.preferred_faces(host).is_empty());
+        }
     }
 
     #[test]

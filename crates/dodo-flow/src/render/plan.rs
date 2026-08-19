@@ -119,7 +119,7 @@ use crate::render::shapes::Outline;
 use crate::{
     budgets::RenderBudgets,
     geometry::{Rect, Vec2},
-    models::{Color, RenderQuality},
+    models::{Color, FontFamily, RenderQuality, TextAlign},
     render::cache::{GeometryKey, TextKey},
 };
 
@@ -344,10 +344,20 @@ pub struct TextPrimitive {
     /// Where the shaped-line cache files this run. See
     /// [`crate::render::cache::ShapedLineCache`].
     pub key: TextKey,
-    /// The width the run is laid out into, in screen pixels — the node's inner
-    /// width. A run wider than this is truncated by the painter rather than
-    /// allowed to spill across its neighbours.
+    /// The width the run is laid out into, in screen pixels — the element's
+    /// inner width. A run wider than this is truncated by the painter rather
+    /// than allowed to spill across its neighbours.
     pub max_width: f32,
+    /// Which face to shape with. Resolved against the theme by the painter,
+    /// which is the only layer that knows what is installed — see
+    /// [`FontFamily`](crate::models::FontFamily).
+    pub family: FontFamily,
+    /// Where the run sits inside [`max_width`](TextPrimitive::max_width).
+    ///
+    /// **Carried rather than baked into `origin`** because alignment needs the
+    /// run's *measured* width, and only the painter has shaped it. Baking it
+    /// here would mean shaping twice or guessing.
+    pub align: TextAlign,
 }
 
 /// What one frame actually painted.
@@ -715,10 +725,12 @@ mod tests {
         TextPrimitive {
             origin: Vec2::ZERO,
             text: "abc".into(),
-            key: TextKey::new(crate::models::NodeIndex::new(0), 1, 12.0),
+            key: TextKey::node(crate::models::NodeIndex::new(0), 1, 12.0),
             max_width: 100.0,
             font_size: 12.0,
             color: Color::WHITE,
+            family: FontFamily::default(),
+            align: TextAlign::default(),
         }
     }
 

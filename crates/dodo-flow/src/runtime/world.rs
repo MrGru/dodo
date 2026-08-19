@@ -46,6 +46,7 @@
 //! **This file names no UI framework.**
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::{
     geometry::{Attachment, EdgeRoute, Rect, RouteOptions, Side, Vec2},
@@ -263,7 +264,7 @@ impl GraphWorld {
                 source: self.endpoint(self.edges.source(edge)),
                 target: self.endpoint(self.edges.target(edge)),
                 routing: self.edges.routing(edge),
-                label: self.edges.label(edge).map(str::to_owned),
+                label: self.edges.label(edge).map(|it| it.to_string()),
                 style: self.edges.style(edge).clone(),
                 z: self.edges.z(edge),
                 hidden: self.edges.is_hidden(edge),
@@ -707,7 +708,8 @@ impl GraphWorld {
     /// Replaces an edge's label. No geometry and no spatial entry: the label is
     /// drawn at the route's midpoint, which has not moved.
     pub fn set_edge_label(&mut self, edge: EdgeIndex, label: Option<String>) {
-        if !self.edges.contains(edge) || self.edges.label(edge) == label.as_deref() {
+        if !self.edges.contains(edge) || self.edges.label(edge).map(Arc::as_ref) == label.as_deref()
+        {
             return;
         }
 
@@ -1153,6 +1155,54 @@ impl GraphWorld {
             (None, Some((node, _))) => PointerTarget::Node(node),
             (None, None) => PointerTarget::Empty,
         }
+    }
+
+    /// **§29's narrow phase for an edge**: the nearest edge whose drawn line
+    /// passes within [`HitTolerance::edge_radius`] of `point`, or `None`.
+    ///
+    /// A second call rather than a third loop inside [`hit_test`](GraphWorld::hit_test),
+    /// and the split is the ranking: bodies and handles win over edges, so a
+    /// caller asks this **only** when `hit_test` answered `Empty`. Fused into
+    /// one function, a labelled edge passing under a node would fight the node
+    /// for every press, and which one won would depend on a distance nobody can
+    /// see.
+    ///
+    /// The candidates come from the caller, exactly as `hit_test`'s do and for
+    /// the same §40 rule 1 reason — the spatial index's edge grid answers this,
+    /// never a scan. `flatten` is how finely each route is walked, in world
+    /// units; a caller with a zoom passes one screen pixel's worth.
+    ///
+    /// Nearest rather than topmost, because two edges crossing have no
+    /// meaningful z between them at the crossing point and the one whose line
+    /// the pointer is actually closest to is the one it was aimed at.
+    pub fn hit_test_edge(
+        &self,
+        point: Vec2,
+        candidates: impl IntoIterator<Item = EdgeIndex>,
+        tolerance: HitTolerance,
+        flatten: f32,
+    ) -> Option<EdgeIndex> {
+        let mut best: Option<(EdgeIndex, f32)> = None;
+
+        for edge in candidates {
+            if !self.edges.is_live(edge) || self.edges.is_hidden(edge) {
+                continue;
+            }
+            // A stale route is not hit rather than hit where it used to be —
+            // the same judgement `apply_box_selection` makes one screen above.
+            let Some(route) = self.geometry.route(edge) else {
+                continue;
+            };
+            let Some(distance) = route.distance_to_point(point, tolerance.edge_radius, flatten)
+            else {
+                continue;
+            };
+            if best.is_none_or(|(_, closest)| distance < closest) {
+                best = Some((edge, distance));
+            }
+        }
+
+        best.map(|(edge, _)| edge)
     }
 }
 

@@ -14,6 +14,8 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::ToolArrow => "Mũi tên".into(),
         Text::ToolLine => "Đường thẳng".into(),
         Text::ToolGraphNode => "Nút đồ thị".into(),
+        Text::ToolText => "Văn bản".into(),
+        Text::TextPlaceholder => "Nhập nội dung".into(),
         Text::Delete => "Xoá phần đang chọn".into(),
         Text::KeepToolActive => "Giữ nguyên công cụ sau khi vẽ".into(),
     }

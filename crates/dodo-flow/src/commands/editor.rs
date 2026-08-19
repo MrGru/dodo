@@ -58,17 +58,21 @@
 //!
 //! **This file names no UI framework.**
 
+use std::sync::Arc;
+
 use crate::{
     commands::{
         apply::{EditOutcome, apply},
-        edit::{EditCommand, EditError},
+        edit::{EditCommand, EditError, NodeDraft},
         history::{CommandHistory, GestureId},
     },
     geometry::RouteOptions,
+    interaction::TextTarget,
     models::{
-        DocumentSettings, EdgeIndex, ElementId, FlowDocument, NodeIndex, RenderStyle, SketchStyle,
+        DocumentSettings, EdgeIndex, ElementId, ElementKind, FlowDocument, NodeIndex, RenderStyle,
+        SketchStyle,
     },
-    runtime::{BoxQuery, ConnectionRules, DirtyState, GraphWorld, LoadReport},
+    runtime::{BoxQuery, ConnectionRules, DirtyState, GraphWorld, LoadReport, NodeSpec},
 };
 
 /// What an applied edit tells its caller.
@@ -213,6 +217,112 @@ impl FlowEditor {
 
         self.apply(EditCommand::remove(nodes, edges))
             .is_ok_and(|summary| summary.changed)
+    }
+
+    /// **The text a target currently holds**, so an editor can be seeded with
+    /// it (§9).
+    ///
+    /// This is the whole of "existing text must be editable again": without it
+    /// the only honest editor is a blank one, and a blank one *replaces* rather
+    /// than edits. `None` for a target that has no text yet — a pending
+    /// element, or an element nobody has typed into — which the caller shows as
+    /// an empty field with a placeholder rather than as the word "None".
+    pub fn text_of(&self, target: TextTarget) -> Option<&str> {
+        match target {
+            TextTarget::Node(node) => self
+                .world
+                .nodes()
+                .contains(node)
+                .then(|| self.world.nodes().cold(node).label.as_deref())
+                .flatten(),
+            TextTarget::Edge(edge) => self
+                .world
+                .edges()
+                .contains(edge)
+                .then(|| self.world.edges().label(edge).map(Arc::as_ref))
+                .flatten(),
+            TextTarget::New(_) => None,
+        }
+    }
+
+    /// **§30's `EditText`, through the one door** (§9).
+    ///
+    /// Three targets, one undo step each, and every one of them an ordinary
+    /// [`apply`](FlowEditor::apply) — so an undone text edit restores the
+    /// label, the node's version, its geometry-cache key and its shaped line
+    /// with nothing here knowing those exist.
+    ///
+    /// **Empty is not "no change", and the three targets disagree about what it
+    /// means**, which is exactly why this decision is here rather than in the
+    /// view:
+    ///
+    /// - On a **node** or an **edge**, empty *clears* the label. That is an
+    ///   edit and it is undoable; a user who selects all and deletes has said
+    ///   something.
+    /// - On a node whose kind is [`ElementKind::Text`], empty **removes the
+    ///   element**. A text element is its glyphs, so an empty one is invisible,
+    ///   unselectable-by-eye and impossible to find again — the exact
+    ///   "control that produces nothing" failure Phase 7.5 recorded, arriving
+    ///   through an edit instead of through a palette.
+    /// - On a **pending** element, empty does nothing at all, because nothing
+    ///   was ever created. That is what makes an abandoned Text-tool gesture
+    ///   free rather than a create-then-delete pair on the undo stack.
+    ///
+    /// Answers whether the document changed, so a caller can decide about
+    /// repainting without diffing.
+    pub fn commit_text(&mut self, target: TextTarget, text: &str) -> bool {
+        let text = text.trim();
+        let value = (!text.is_empty()).then(|| text.to_owned());
+
+        match target {
+            TextTarget::Node(node) => {
+                if !self.world.nodes().contains(node) || !self.world.nodes().is_live(node) {
+                    return false;
+                }
+                // Emptying a *text element* is deleting it. `SetPresence` rather
+                // than a bare label clear, so the node's edges — a text element
+                // has none today, and §11's frames will — cascade the same way
+                // every other removal does.
+                if value.is_none() && *self.world.nodes().kind(node) == ElementKind::Text {
+                    return self
+                        .apply(EditCommand::remove(vec![node], Vec::new()))
+                        .is_ok_and(|summary| summary.changed);
+                }
+                self.apply(EditCommand::SetNodeLabels(vec![(node, value)]))
+                    .is_ok_and(|summary| summary.changed)
+            }
+            TextTarget::Edge(edge) => {
+                if !self.world.edges().contains(edge) || !self.world.edges().is_live(edge) {
+                    return false;
+                }
+                self.apply(EditCommand::SetEdgeLabels(vec![(edge, value)]))
+                    .is_ok_and(|summary| summary.changed)
+            }
+            TextTarget::New(rect) => {
+                let Some(value) = value else {
+                    // Nothing was created, so there is nothing to undo — see
+                    // this method's doc, and `CanvasTool::Text`'s.
+                    return false;
+                };
+                let rect = rect.normalized();
+                let mut spec =
+                    NodeSpec::new(ElementId::NONE, ElementKind::Text, rect.origin, rect.size);
+                spec.label = Some(value);
+                spec.style = self.world.settings().default_style.clone();
+
+                let Ok(summary) = self.apply(EditCommand::AddNodes(vec![NodeDraft::new(spec)]))
+                else {
+                    return false;
+                };
+                // Selecting what was just typed is not an edit — see
+                // `create` in `commands::gesture`, which does the same thing
+                // for every other tool — so the creation stays one undo step.
+                if let Some(node) = summary.added_nodes.first().copied() {
+                    self.select_only(Some(node));
+                }
+                summary.changed
+            }
+        }
     }
 
     /// Opens a gesture: every edit until [`end_gesture`](FlowEditor::end_gesture)

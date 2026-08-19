@@ -392,6 +392,16 @@ impl NodeRendererRegistry {
                 filled: false,
                 ..NodeVisual::FALLBACK
             },
+            // §9's standalone text: it *is* its label, so `shows_label` is the
+            // one thing on this row that matters. No body, no glyph, no fill —
+            // `plan_nodes` skips the whole body pass for `NodeShape::Text`.
+            ElementKind::Text => NodeVisual {
+                body: NodeShape::Text,
+                glyph: NodeGlyph::None,
+                shows_label: true,
+                filled: false,
+                ..NodeVisual::FALLBACK
+            },
             _ => NodeVisual::FALLBACK,
         }
     }

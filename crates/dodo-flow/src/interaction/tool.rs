@@ -23,11 +23,11 @@
 //! release, through §30's one applier — which is what makes a created element
 //! undoable without a single line in `commands/` knowing that a tool exists.
 //!
-//! # Which tools are here, and why the obvious four are not
+//! # Which tools are here, and why the obvious three are not
 //!
-//! Every variant below creates something the engine can *draw*. [`Text`],
-//! [`Frame`], [`Image`] and freehand are deliberately absent: their
-//! [`ElementKind`]s exist and their painters do not, so
+//! Every variant below creates something the engine can *draw*. [`Frame`],
+//! [`Image`] and freehand are deliberately absent: their [`ElementKind`]s exist
+//! and their painters do not, so
 //! [`NodeShape::of`](crate::runtime::NodeShape::of) maps them to
 //! `NodeShape::Other` and
 //! [`RenderSnapshot`](crate::render::RenderSnapshot) counts them as
@@ -35,6 +35,10 @@
 //! create an element the canvas then refuses to paint — **a control that
 //! appears to work and produces nothing**, which is strictly worse than an
 //! absent one and much harder to notice.
+//!
+//! [`Text`] was the fourth until Phase 10, and it left the list the only way
+//! anything may: [`NodeShape::Text`](crate::runtime::NodeShape::Text) and a
+//! painter arrived first, and the tool followed.
 //!
 //! [`Text`]: crate::models::ElementKind::Text
 //! [`Frame`]: crate::models::ElementKind::Frame
@@ -59,7 +63,7 @@
 
 use crate::{
     geometry::{Rect, Vec2},
-    models::{ElementKind, GraphNodeKind, LinearKind, ShapeKind},
+    models::{EdgeIndex, ElementKind, GraphNodeKind, LinearKind, NodeIndex, ShapeKind},
 };
 
 /// How far the pointer must travel, **in screen pixels**, before a press is a
@@ -95,6 +99,20 @@ pub enum CanvasTool {
     /// A React-Flow-style node, born with a source and a target handle so it
     /// can be connected the moment it exists.
     GraphNode,
+    /// §9's standalone text.
+    ///
+    /// **The one creating tool whose release does not add an element.** Every
+    /// other tool commits on the mouse-up; this one opens a text editor over
+    /// the rectangle it drew and the element is added when — and only when —
+    /// non-empty text is committed. See
+    /// [`InteractionEffect::BeginTextEdit`](super::InteractionEffect::BeginTextEdit).
+    ///
+    /// That is not a special case bolted on: an empty text element is
+    /// *invisible*, because a text element is its glyphs. Creating one on
+    /// release would mean a click with the Text tool leaving a selectable,
+    /// undoable, unpaintable thing on the canvas — precisely the failure
+    /// Phase 7.5 caught for Line and Arrow, arriving from the other direction.
+    Text,
 }
 
 impl CanvasTool {
@@ -112,6 +130,7 @@ impl CanvasTool {
         CanvasTool::Arrow,
         CanvasTool::Line,
         CanvasTool::GraphNode,
+        CanvasTool::Text,
     ];
 
     /// A short stable name, for a test, a trace line or a widget id. **Not
@@ -130,6 +149,7 @@ impl CanvasTool {
             CanvasTool::Arrow => "arrow",
             CanvasTool::Line => "line",
             CanvasTool::GraphNode => "graph-node",
+            CanvasTool::Text => "text",
         }
     }
 
@@ -147,7 +167,18 @@ impl CanvasTool {
             CanvasTool::Arrow => ElementKind::Linear(LinearKind::Arrow),
             CanvasTool::Line => ElementKind::Linear(LinearKind::Line),
             CanvasTool::GraphNode => ElementKind::GraphNode(GraphNodeKind::Default),
+            CanvasTool::Text => ElementKind::Text,
         })
+    }
+
+    /// **Whether finishing this tool's gesture opens a text editor instead of
+    /// adding an element.**
+    ///
+    /// A named question rather than `== CanvasTool::Text` in the transition
+    /// function, because it is a property of the tool and the state machine
+    /// should not be the place that knows which tools are textual.
+    pub fn edits_text_on_release(self) -> bool {
+        matches!(self, CanvasTool::Text)
     }
 
     /// Whether a press with this tool starts a creation rather than a
@@ -171,16 +202,76 @@ impl CanvasTool {
             }
             CanvasTool::Arrow | CanvasTool::Line => Vec2::new(160.0, 0.0),
             CanvasTool::GraphNode => Vec2::new(160.0, 80.0),
+            // Wide and one line high: text is read across, and a click that
+            // placed a tall box would leave the caret floating in the middle
+            // of empty space. The height is a `Medium` line plus its leading —
+            // see `FontSize::Medium.world_size()`.
+            CanvasTool::Text => Vec2::new(200.0, 22.0),
         }
     }
 
     /// Whether holding shift while dragging constrains this tool to a square
     /// bounding box — a square, a circle, a regular diamond, a 45° line.
     ///
-    /// True for every creating tool: the constraint is a property of the
-    /// bounding box rather than of the shape, so there is nothing to exclude.
+    /// True for every creating tool **but text**. The constraint is a property
+    /// of the bounding box, and for every drawn shape the bounding box *is* the
+    /// shape; for text it is the column the words are laid into, and squaring
+    /// it means dragging out a wide caption gives a tall narrow one instead.
     pub fn honours_square_constraint(self) -> bool {
-        self.creates()
+        self.creates() && !self.edits_text_on_release()
+    }
+}
+
+/// **What a text edit is about to change** (§9).
+///
+/// Three arms, because §9 asks for three things and the third is not a variant
+/// of the first two: a node's text, an edge's label, and text that **does not
+/// exist yet**.
+///
+/// [`New`](TextTarget::New) is what makes the Text tool honest. A tool that
+/// created its element on release and then opened an editor would leave an
+/// empty — and therefore invisible — element behind whenever the user changed
+/// their mind, plus a second undo step to remove it. Carrying the *rectangle*
+/// instead means the document hears about the text exactly once, when there is
+/// text, which is the same rule §45 states for every other tool.
+///
+/// `Copy`, so it can live in [`InteractionState`](super::InteractionState)
+/// beside the other gestures: a [`Rect`] is four floats and the runtime indices
+/// are `u32`s. Nothing here carries a `String` — the text being typed belongs
+/// to whatever widget is collecting it, and this file is below the UI-framework
+/// line.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextTarget {
+    /// A node's own text — its label, laid out inside its body.
+    Node(NodeIndex),
+    /// An edge's label, positioned along its route.
+    Edge(EdgeIndex),
+    /// A standalone text element that has not been created yet, and the world
+    /// rectangle it will occupy.
+    New(Rect),
+}
+
+impl TextTarget {
+    /// The world rectangle the editor should be drawn over.
+    ///
+    /// `None` for an existing element, because *this* type does not know where
+    /// anything is — the world does, and the caller has it. Returning the
+    /// rectangle only for the arm that carries one is what stops a caller
+    /// silently placing an editor at the origin.
+    pub fn pending_rect(self) -> Option<Rect> {
+        match self {
+            TextTarget::New(rect) => Some(rect),
+            _ => None,
+        }
+    }
+
+    /// A short stable name, for a test or an element id. **Not user-facing.**
+    pub fn name(self) -> &'static str {
+        match self {
+            TextTarget::Node(_) => "node",
+            TextTarget::Edge(_) => "edge",
+            TextTarget::New(_) => "new",
+        }
     }
 }
 
@@ -281,7 +372,7 @@ mod tests {
                 tool.name()
             );
         }
-        assert_eq!(CanvasTool::ALL.len(), 8);
+        assert_eq!(CanvasTool::ALL.len(), 9);
     }
 
     /// **§45's rule, at the level this file can assert it**: the two navigating
@@ -331,7 +422,6 @@ mod tests {
         use crate::runtime::NodeShape;
 
         for kind in [
-            ElementKind::Text,
             ElementKind::Frame,
             ElementKind::Image,
             ElementKind::FreeDraw,
@@ -397,6 +487,58 @@ mod tests {
     fn a_non_creating_tool_ignores_the_constraint() {
         assert!(!CanvasTool::Select.honours_square_constraint());
         assert!(!CanvasTool::Hand.honours_square_constraint());
+    }
+
+    /// **A text box is a column, not a shape**, so squaring it is wrong in a
+    /// way squaring a rectangle is not — shift-dragging a wide caption would
+    /// give a tall narrow one.
+    #[test]
+    fn the_text_tool_is_the_one_creating_tool_the_constraint_does_not_square() {
+        assert!(CanvasTool::Text.creates());
+        assert!(!CanvasTool::Text.honours_square_constraint());
+
+        let wide = creation_rect(
+            CanvasTool::Text,
+            drag(Vec2::ZERO, Vec2::new(300.0, 20.0), true),
+        );
+        assert_eq!(wide.size, Vec2::new(300.0, 20.0));
+
+        for tool in CanvasTool::ALL
+            .iter()
+            .filter(|tool| tool.creates() && **tool != CanvasTool::Text)
+        {
+            assert!(tool.honours_square_constraint(), "{}", tool.name());
+        }
+    }
+
+    /// **Exactly one tool defers its element to a text commit**, and the
+    /// property that matters is the negative half: every other creating tool
+    /// still adds on release, so nothing else silently stopped drawing.
+    #[test]
+    fn only_the_text_tool_opens_an_editor_instead_of_committing() {
+        assert!(CanvasTool::Text.edits_text_on_release());
+        for tool in CanvasTool::ALL
+            .iter()
+            .filter(|tool| **tool != CanvasTool::Text)
+        {
+            assert!(
+                !tool.edits_text_on_release(),
+                "{} would stop creating anything",
+                tool.name()
+            );
+        }
+    }
+
+    /// A pending text element is the only target that knows where it goes; the
+    /// other two are looked up in the world. Returning a rectangle for all
+    /// three would let a caller place an editor at the origin and never notice.
+    #[test]
+    fn only_a_pending_text_target_carries_its_own_rectangle() {
+        let rect = Rect::new(Vec2::new(10.0, 20.0), Vec2::new(200.0, 22.0));
+
+        assert_eq!(TextTarget::New(rect).pending_rect(), Some(rect));
+        assert_eq!(TextTarget::Node(NodeIndex::new(0)).pending_rect(), None);
+        assert_eq!(TextTarget::Edge(EdgeIndex::new(0)).pending_rect(), None);
     }
 
     /// **A click places a default-size element centred on the press**, for

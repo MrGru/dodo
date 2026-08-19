@@ -1217,11 +1217,10 @@ impl FlowView {
                         let world = this
                             .viewport
                             .screen_to_world(this.local(event.position, bounds));
-                        let hovered = match this.target_at(world) {
-                            PointerTarget::Node(node) => Some(node),
-                            PointerTarget::Handle { node, .. } => Some(node),
-                            PointerTarget::Empty => None,
-                        };
+                        // §44's hover is a *node's* — an edge gets no controls
+                        // and no ring — so an edge under the pointer is the
+                        // same answer as empty canvas.
+                        let hovered = this.target_at(world).node();
                         if this.hovered != hovered {
                             this.hovered = hovered;
                             cx.notify();

@@ -28,7 +28,7 @@ use gpui::{
 
 use crate::{
     geometry::{Rect, Vec2},
-    models::Color,
+    models::{Color, FontFamily},
     render::{
         cache::{CachedGeometry, GeometryCache, ScreenAnchor, ShapedLineCache},
         plan::{PathPaint, PathPrimitive, PrimitiveSink, QuadPrimitive, TextPrimitive},
@@ -193,7 +193,50 @@ pub struct WindowPainter<'a> {
     /// translation and nothing has to be rebuilt for it.
     geometry: &'a mut GeometryCache<Path<Pixels>>,
     text: &'a mut ShapedLineCache<ShapedLine>,
-    font: Font,
+    fonts: FontSet,
+}
+
+/// **The three faces §9's [`FontFamily`] resolves to**, chosen once per frame
+/// rather than per label.
+///
+/// Resolved by the caller rather than here for the reason every colour in
+/// `models/` is an `Option<Color>`: the theme is what knows which UI and
+/// monospace faces this build is drawing with, and only `views/` may name a
+/// theme. This painter is handed the answer.
+///
+/// **`hand_drawn` is honestly a preference, not a promise.** dodo ships no
+/// hand-drawn face — see
+/// [`FontFamily::preferred_faces`](crate::models::FontFamily::preferred_faces)
+/// for why — so `views::flow` probes the text system for the platform's
+/// candidates and falls back to `normal`. On a machine with none of them
+/// installed, choosing Hand-drawn changes nothing on screen. That is a
+/// limitation a user meets, and it is recorded here because this is where it is
+/// caused.
+#[derive(Debug, Clone)]
+pub struct FontSet {
+    pub normal: Font,
+    pub hand_drawn: Font,
+    pub code: Font,
+}
+
+impl FontSet {
+    /// All three the same face — the honest default before a theme has been
+    /// consulted, and what [`WindowPainter::new`] uses.
+    pub fn uniform(font: Font) -> FontSet {
+        FontSet {
+            hand_drawn: font.clone(),
+            code: font.clone(),
+            normal: font,
+        }
+    }
+
+    fn face(&self, family: FontFamily) -> &Font {
+        match family {
+            FontFamily::Normal => &self.normal,
+            FontFamily::HandDrawn => &self.hand_drawn,
+            FontFamily::Code => &self.code,
+        }
+    }
 }
 
 impl<'a> WindowPainter<'a> {
@@ -210,14 +253,27 @@ impl<'a> WindowPainter<'a> {
         geometry: &'a mut GeometryCache<Path<Pixels>>,
         text: &'a mut ShapedLineCache<ShapedLine>,
     ) -> WindowPainter<'a> {
-        let font = window.text_style().font();
+        let fonts = FontSet::uniform(window.text_style().font());
+        WindowPainter::with_fonts(window, cx, bounds, geometry, text, fonts)
+    }
+
+    /// The same painter with the theme's three faces (§9). What the canvas
+    /// uses; [`WindowPainter::new`] is the one-face form.
+    pub fn with_fonts(
+        window: &'a mut Window,
+        cx: &'a mut App,
+        bounds: Bounds<Pixels>,
+        geometry: &'a mut GeometryCache<Path<Pixels>>,
+        text: &'a mut ShapedLineCache<ShapedLine>,
+        fonts: FontSet,
+    ) -> WindowPainter<'a> {
         WindowPainter {
             window,
             origin: Vec2::new(bounds.origin.x.as_f32(), bounds.origin.y.as_f32()),
             cx,
             geometry,
             text,
-            font,
+            fonts,
         }
     }
 
@@ -339,7 +395,7 @@ impl PrimitiveSink for WindowPainter<'_> {
                 // own layout does it properly.
                 let run = TextRun {
                     len: text.text.len(),
-                    font: self.font.clone(),
+                    font: self.fonts.face(text.family).clone(),
                     color: to_hsla(text.color),
                     background_color: None,
                     underline: None,
@@ -365,7 +421,18 @@ impl PrimitiveSink for WindowPainter<'_> {
         };
 
         let glyphs = line.len() as u32;
-        let origin = to_point(text.origin + self.origin);
+        // **Alignment is applied here, from the shaped width**, and it could
+        // not have been applied earlier: only the text system knows how wide a
+        // run turned out, and `TextPrimitive::origin` is built before anything
+        // is shaped. GPUI's own `TextAlign` is deliberately not used — it
+        // aligns within the *wrap width* it is handed, which is the same number
+        // as `max_width` and would therefore be a second, disagreeing answer.
+        // One arithmetic offset, asserted with no window by
+        // `TextAlign::offset`.
+        let indent = text
+            .align
+            .offset(text.max_width, line.width.as_f32().max(0.0));
+        let origin = to_point(text.origin + Vec2::new(indent, 0.0) + self.origin);
         // The line height is the font size plus a little leading, which is what
         // a single-line label wants; a full line-height model belongs with §9's
         // multi-line text, which is a later phase's.

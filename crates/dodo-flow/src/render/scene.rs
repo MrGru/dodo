@@ -113,6 +113,16 @@ pub const MIN_OPEN_STROKE_PIXELS: f32 = 1.0;
 /// pixels. Constant on screen for the same reason the handle radius is.
 pub const LABEL_PADDING_PIXELS: f32 = 6.0;
 
+/// The widest an **edge** label is laid out into, in screen pixels.
+///
+/// An edge has no rectangle, so unlike a node's label there is nothing to
+/// inherit a width from. A number rather than "as wide as it likes" because
+/// `ShapedLine::paint` needs a wrap width and because an unbounded label on a
+/// short edge would run across half the diagram. On screen rather than in world
+/// units, like every other text measurement here: what matters is how much of
+/// the *view* one label may cover.
+pub const EDGE_LABEL_MAX_PIXELS: f32 = 220.0;
+
 /// The colours an element falls back to when its own style leaves them unset.
 ///
 /// Resolved from the active theme once per frame by the view and passed down,
@@ -223,6 +233,7 @@ pub fn plan_scene(
     plan_nodes(plan, world, snapshot, viewport, ink, &mut stats);
     plan_handles(plan, world, snapshot, viewport, ink, &mut stats);
     plan_labels(plan, world, snapshot, ink, &mut stats);
+    plan_edge_labels(plan, world, snapshot, viewport, ink, &mut stats);
     stats
 }
 
@@ -313,6 +324,15 @@ fn plan_nodes(
     let quality = world.settings().render_quality;
 
     for canvas in snapshot.canvas() {
+        // **A text element is its glyphs and nothing else** (§9). Skipped here
+        // rather than allowed to fall through, because the fall-through is not
+        // harmless: at low zoom or at a small size `as_quad` below is true for
+        // *every* body, so a text element would paint as a solid rectangle the
+        // moment it stopped being detailed. `plan_labels` is what draws it.
+        if canvas.body == NodeShape::Text {
+            continue;
+        }
+
         let style = nodes.style(canvas.node);
         let screen = canvas.screen;
 
@@ -699,11 +719,21 @@ fn plan_labels(
             continue;
         };
 
-        let inner = canvas.screen.inflate(-LABEL_PADDING_PIXELS);
+        // **A text element has no border to keep clear of**, so it uses its
+        // whole rectangle; every other body insets, or its label sits on its
+        // own outline. The padding is the only difference between the two, and
+        // it is the difference between text that starts where the user placed
+        // it and text that starts six pixels in.
+        let inner = if canvas.body == NodeShape::Text {
+            canvas.screen
+        } else {
+            canvas.screen.inflate(-LABEL_PADDING_PIXELS)
+        };
         if inner.size.x <= 0.0 || inner.size.y <= 0.0 {
             continue;
         }
 
+        let font = &world.nodes().style(canvas.node).font;
         plan.push_text(TextPrimitive {
             // Vertically centred on the body, which is where a node's label
             // belongs; the painter subtracts the line's own height.
@@ -712,9 +742,83 @@ fn plan_labels(
             // label per frame. See `NodeCold::label`.
             text: Arc::clone(label),
             font_size,
-            color: ink.text,
-            key: TextKey::new(canvas.node, canvas.version, font_size),
+            color: fade(
+                font.color.unwrap_or(ink.text),
+                world.nodes().style(canvas.node).opacity,
+            ),
+            key: TextKey::node(canvas.node, canvas.version, font_size),
             max_width: inner.size.x,
+            family: font.family,
+            align: font.align,
+        });
+        stats.labels += 1;
+    }
+}
+
+/// **Edge labels (§9), on the route rather than beside it.**
+///
+/// The position is derived from the route *this frame*, which is what makes
+/// requirement 5 fall out rather than need machinery: Phase 3's dirty
+/// propagation rebuilds an edge's geometry when either endpoint moves, so the
+/// midpoint this reads has already moved and the label is drawn in the right
+/// place with nothing here knowing a node was dragged.
+///
+/// Nothing is cached on position. The shaped-line cache is keyed on the edge,
+/// its geometry version and the quantised size — never on where it is — so a
+/// pure pan moves every label on screen and re-shapes none of them (§40 rule 7).
+fn plan_edge_labels(
+    plan: &mut PaintPlan,
+    world: &GraphWorld,
+    snapshot: &RenderSnapshot,
+    viewport: &Viewport,
+    ink: SceneInk,
+    stats: &mut SceneStats,
+) {
+    let Some(lod) = snapshot.lod() else {
+        return;
+    };
+    if lod.detail == DetailLevel::Overview {
+        return;
+    }
+
+    // One screen pixel in world units — the same precision
+    // [`BoxQuery::at_zoom`](crate::runtime::BoxQuery::at_zoom) flattens at, and
+    // for the same reason: finer than a pixel is precision nobody can see, and
+    // this walk runs per labelled visible edge per frame.
+    let flatten = viewport.screen_to_world_length(1.0).max(f32::MIN_POSITIVE);
+
+    for planned in snapshot.edges() {
+        let Some(font_size) = planned.label_font_size else {
+            continue;
+        };
+        let Some(label) = world.edges().label(planned.edge) else {
+            continue;
+        };
+        let Some(route) = world.route(planned.edge) else {
+            continue;
+        };
+
+        let center = viewport.world_to_screen(route.midpoint(flatten));
+        // The box is the label's own, centred on the route: an edge has no
+        // rectangle of its own to lay text into, so one is made the size of the
+        // space a label is allowed to take. Wider than a node's would be, on
+        // purpose — an edge label that is truncated to nothing tells the reader
+        // less than one that overhangs its route.
+        let half_width = EDGE_LABEL_MAX_PIXELS * 0.5;
+        let style = world.edges().style(planned.edge);
+        plan.push_text(TextPrimitive {
+            origin: Vec2::new(center.x - half_width, center.y - font_size * 0.5),
+            text: Arc::clone(label),
+            font_size,
+            color: fade(style.font.color.unwrap_or(ink.text), style.opacity),
+            key: TextKey::edge(planned.edge, planned.version, font_size),
+            max_width: EDGE_LABEL_MAX_PIXELS,
+            family: style.font.family,
+            // **Centred whatever the style says**, because the box is centred
+            // on the route rather than anchored to anything the author placed.
+            // Honouring the alignment here would move the text off the line it
+            // belongs to, which is the opposite of what the control means.
+            align: crate::models::TextAlign::Center,
         });
         stats.labels += 1;
     }

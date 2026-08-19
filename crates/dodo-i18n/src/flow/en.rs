@@ -14,6 +14,8 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::ToolArrow => "Arrow".into(),
         Text::ToolLine => "Line".into(),
         Text::ToolGraphNode => "Graph node".into(),
+        Text::ToolText => "Text".into(),
+        Text::TextPlaceholder => "Type something".into(),
         Text::Delete => "Delete the selection".into(),
         Text::KeepToolActive => "Keep the tool active after drawing".into(),
     }

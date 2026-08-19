@@ -16,6 +16,8 @@ samples! {
     plain ToolArrow;
     plain ToolLine;
     plain ToolGraphNode;
+    plain ToolText;
+    plain TextPlaceholder;
     plain Delete;
     plain KeepToolActive;
 }

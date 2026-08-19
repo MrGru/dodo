@@ -300,7 +300,7 @@ pub fn apply(world: &mut GraphWorld, command: EditCommand) -> Result<EditOutcome
                 if !world.edge_is_live(edge) {
                     continue;
                 }
-                let was = world.edges().label(edge).map(str::to_owned);
+                let was = world.edges().label(edge).map(|it| it.to_string());
                 if was.as_deref() == label.as_deref() {
                     continue;
                 }

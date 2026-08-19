@@ -282,6 +282,106 @@ impl EdgeRoute {
         }
     }
 
+    /// **The point halfway along the route, by arc length** — where §9's edge
+    /// label goes.
+    ///
+    /// By length rather than by parameter, and the difference is visible on
+    /// every routing but `Straight`: a Bézier's `t = 0.5` sits wherever the
+    /// control points put it, and a step route's is on whichever leg happens to
+    /// be the second of three. Halfway along the *drawn* line is where a reader
+    /// looks for a label, and it is the only definition that agrees with itself
+    /// across the five routings.
+    ///
+    /// Derived every frame rather than stored, which is the same decision
+    /// [`FlowEdge`](crate::models::FlowEdge) makes about the route itself: a
+    /// cached midpoint is one more thing that has to be invalidated when an
+    /// endpoint moves, and this costs one walk of a polyline the route already
+    /// knows how to produce.
+    pub fn midpoint(&self, tolerance: f32) -> Vec2 {
+        // Two passes over the same flattening rather than one pass into a
+        // `Vec`: this runs per labelled visible edge per frame, and §40 rule 14
+        // is about exactly this allocation. The flattening is deterministic, so
+        // the second walk sees the same points as the first.
+        let mut total = 0.0;
+        let mut previous: Option<Vec2> = None;
+        self.for_each_point(tolerance, |point| {
+            if let Some(from) = previous {
+                total += (point - from).length();
+            }
+            previous = Some(point);
+        });
+
+        if total <= 0.0 {
+            // A degenerate route — zero length, or a single point — has its
+            // midpoint at its start. Not an error: two handles in the same
+            // place is an ordinary transient while a node is being dragged.
+            return self.start;
+        }
+
+        let half = total * 0.5;
+        let mut walked = 0.0;
+        let mut found = self.end;
+        let mut previous: Option<Vec2> = None;
+        let mut done = false;
+        self.for_each_point(tolerance, |point| {
+            if done {
+                return;
+            }
+            if let Some(from) = previous {
+                let length = (point - from).length();
+                if walked + length >= half {
+                    let along = if length > 0.0 {
+                        (half - walked) / length
+                    } else {
+                        0.0
+                    };
+                    found = from + (point - from) * along;
+                    done = true;
+                    return;
+                }
+                walked += length;
+            }
+            previous = Some(point);
+        });
+
+        found
+    }
+
+    /// **The distance from `point` to the route's drawn line**, in world units
+    /// — §29's narrow phase for an edge.
+    ///
+    /// The control hull rejects first, exactly as [`intersects_rect`](EdgeRoute::intersects_rect)
+    /// does and for the same reason: it is one rectangle test and it is right
+    /// for almost every edge. The hull is inflated by the tolerance before the
+    /// test, because a point just outside a hull can still be within grabbing
+    /// distance of the curve inside it.
+    ///
+    /// `None` means "not within `tolerance`", rather than a distance the caller
+    /// then has to compare — so the early rejection is expressible and a caller
+    /// cannot forget the comparison.
+    pub fn distance_to_point(&self, point: Vec2, tolerance: f32, flatten: f32) -> Option<f32> {
+        if !self.bounds.inflate(tolerance).contains_point(point) {
+            return None;
+        }
+
+        let mut best = f32::INFINITY;
+        let mut previous: Option<Vec2> = None;
+        self.for_each_point(flatten, |vertex| {
+            if let Some(from) = previous {
+                best = best.min(distance_to_segment(point, from, vertex));
+            }
+            previous = Some(vertex);
+        });
+
+        // A route with no segments is its start point, which is still a thing
+        // a user can aim at while an edge is being formed.
+        if self.segments.is_empty() {
+            best = best.min((point - self.start).length());
+        }
+
+        (best <= tolerance).then_some(best)
+    }
+
     /// **§28's exact test**: whether the route's *curve* passes through `rect`.
     ///
     /// The control hull ([`bounds`](EdgeRoute::bounds)) rejects first, because
@@ -314,6 +414,25 @@ impl EdgeRoute {
         // only thing there is to test.
         hit || (self.segments.is_empty() && rect.contains_point(self.start))
     }
+}
+
+/// The distance from `point` to the segment `a`–`b`.
+///
+/// Free-standing and here rather than in `geometry::bounds` beside
+/// [`segment_intersects_rect`](crate::geometry::segment_intersects_rect),
+/// because a route is the only thing that asks it and a distance is not a
+/// bounds question. Degenerate segments (`a == b`) answer the distance to the
+/// point, which is what a zero-length leg of a step route should give.
+fn distance_to_segment(point: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let span = b - a;
+    let length_squared = span.x * span.x + span.y * span.y;
+    if length_squared <= f32::EPSILON {
+        return (point - a).length();
+    }
+
+    let offset = point - a;
+    let along = ((offset.x * span.x + offset.y * span.y) / length_squared).clamp(0.0, 1.0);
+    (point - (a + span * along)).length()
 }
 
 /// Builds the route for one edge into a fresh [`EdgeRoute`].

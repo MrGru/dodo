@@ -52,7 +52,11 @@ use crate::models::FlowDocument;
 /// [`MIGRATIONS`] that turns a version-`N` `Value` into a version-`N+1` one.
 /// The `the_migration_ladder_is_complete` test fails if the second line is
 /// forgotten.
-pub const CURRENT_VERSION: u32 = 1;
+///
+/// Version 2 is Phase 10's: text became first-class and
+/// [`FontStyle`](crate::models::FontStyle) stopped carrying a continuous
+/// `size`. See [`fonts_became_four_steps`].
+pub const CURRENT_VERSION: u32 = 2;
 
 /// One rung of the ladder: rewrites a document body written by version `from`
 /// into the shape version `from + 1` expects.
@@ -63,13 +67,79 @@ pub type MigrationStep = fn(&mut Value) -> Result<(), LoadError>;
 
 /// The ladder, one entry per version that has ever been written, in order.
 ///
-/// Empty at version 1, which is correct and not a stub: there is exactly one
-/// format so far, so there is nothing to climb. The machinery around it is what
-/// this phase delivers, and it is proven by the
-/// `a_synthetic_ladder_climbs_every_rung` test, which climbs a fabricated
-/// two-step ladder rather than a fake step registered here that nothing would
-/// ever use.
-pub const MIGRATIONS: &[(u32, MigrationStep)] = &[];
+/// **This was empty for nine phases and the machinery around it was still
+/// right.** Version 2 is the first real rung, and it cost three lines plus a
+/// test — which is exactly the argument for having built the ladder at version
+/// 1 rather than promising it: had `from_json` been `serde_json::from_str` all
+/// along, every document written before this phase would now fail to load with
+/// a type error about a float, and there would be nowhere to put the fix.
+pub const MIGRATIONS: &[(u32, MigrationStep)] = &[(1, fonts_became_four_steps)];
+
+/// **Version 1 ▸ 2**: a font's continuous `size` became one of four steps, and
+/// its `family` stopped being a free font name.
+///
+/// Both fields changed *type*, which is the migration case that cannot be
+/// handled by `#[serde(default)]`: a default fills a field that is **missing**,
+/// and these are present with the wrong shape. A version-1 document reaching a
+/// version-2 `FontStyle` without this step fails to parse entirely — one
+/// malformed font on one element and the whole file refuses to open.
+///
+/// The rewrite is deliberately lenient in one direction and strict in none: a
+/// number becomes the nearest
+/// [`FontSize`](crate::models::FontSize) step, and anything else — a string, a
+/// null, a value some other build wrote — is **removed**, so `#[serde(default)]`
+/// answers and the element loads at Medium. Refusing the document instead would
+/// be choosing a parse error over a legible diagram.
+fn fonts_became_four_steps(value: &mut Value) -> Result<(), LoadError> {
+    let Some(nodes) = value.get_mut("nodes").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    for node in nodes {
+        migrate_font(node);
+    }
+
+    let Some(edges) = value.get_mut("edges").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    for edge in edges {
+        migrate_font(edge);
+    }
+
+    Ok(())
+}
+
+/// One element's `style.font`, rewritten in place. Absent at every level is
+/// fine and common — `#[serde(default)]` has covered every one of these fields
+/// since version 1, so most documents have no `font` object at all.
+fn migrate_font(element: &mut Value) {
+    let Some(font) = element
+        .get_mut("style")
+        .and_then(|style| style.get_mut("font"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+
+    match font.get("size").and_then(Value::as_f64) {
+        Some(size) => {
+            let step = crate::models::FontSize::nearest(size as f32);
+            // Serialized through serde rather than through a hand-written name,
+            // so the rewritten value cannot drift from what the enum actually
+            // reads back — a migration that writes a string the loader does not
+            // recognise is worse than no migration.
+            let encoded = serde_json::to_value(step).unwrap_or(Value::Null);
+            font.insert("size".into(), encoded);
+        }
+        None => {
+            font.remove("size");
+        }
+    }
+
+    // A version-1 family was `Option<String>` — a font name, or the theme's.
+    // There is no honest mapping from an arbitrary name onto three families, so
+    // every one of them becomes the theme's font, which is what `None` meant.
+    font.remove("family");
+}
 
 /// Why a document could not be loaded.
 #[derive(Debug)]
@@ -259,8 +329,8 @@ mod tests {
     use crate::{
         geometry::Vec2,
         models::{
-            ElementKind, Endpoint, FlowDocument, RenderQuality, RenderStyle, ShapeKind,
-            ids::ElementId,
+            ElementKind, Endpoint, FlowDocument, FontFamily, FontSize, RenderQuality, RenderStyle,
+            ShapeKind, ids::ElementId,
         },
     };
 
@@ -377,6 +447,57 @@ mod tests {
             FlowDocument::from_json(r#"{"version": 1, "nodes": "not an array"}"#).unwrap_err();
 
         assert!(matches!(err, LoadError::Json(_)), "{err:?}");
+    }
+
+    /// **The ladder's first real rung, driven through the real loader.**
+    ///
+    /// A version-1 document is what every build before Phase 10 wrote, and its
+    /// `font.size` is a float where version 2 wants one of four names. Without
+    /// the step this is not a wrong size — it is a document that will not open.
+    #[test]
+    fn a_version_one_document_loads_with_its_font_snapped_to_a_step() {
+        let json = r#"{
+            "version": 1,
+            "nodes": [
+                {"id": 1, "position": {"x": 0.0, "y": 0.0}, "size": {"x": 10.0, "y": 10.0},
+                 "label": "old", "style": {"font": {"size": 20.0, "family": "Comic Sans MS"}}},
+                {"id": 2, "position": {"x": 0.0, "y": 0.0}, "size": {"x": 10.0, "y": 10.0}}
+            ],
+            "edges": [
+                {"id": 3, "source": {"node": 1, "handle": null},
+                 "target": {"node": 2, "handle": null},
+                 "style": {"font": {"size": 12.4}}}
+            ]
+        }"#;
+
+        let document = FlowDocument::from_json(json).expect("a version-1 document still opens");
+
+        assert_eq!(document.nodes[0].style.font.size, FontSize::Large);
+        assert_eq!(
+            document.nodes[0].style.font.family,
+            FontFamily::Normal,
+            "an arbitrary font name becomes the theme's font, which is what the \
+             absent case always meant"
+        );
+        assert_eq!(
+            document.nodes[1].style.font.size,
+            FontSize::default(),
+            "an element with no font object at all is untouched"
+        );
+        assert_eq!(document.edges[0].style.font.size, FontSize::Small);
+    }
+
+    /// The lenient half, stated on its own: a `size` this build cannot read is
+    /// **dropped** so the default answers, rather than refusing the file.
+    #[test]
+    fn an_unreadable_font_size_defaults_instead_of_failing_the_load() {
+        let json = r#"{
+            "version": 1,
+            "nodes": [{"id": 1, "style": {"font": {"size": "enormous"}}}]
+        }"#;
+
+        let document = FlowDocument::from_json(json).expect("one bad font must not lose the file");
+        assert_eq!(document.nodes[0].style.font.size, FontSize::default());
     }
 
     #[test]
