@@ -14,6 +14,30 @@
 //! than something this file goes and fetches. So there is nothing here for
 //! Phase 4 to delete: it changes one argument.
 //!
+//! # A node's narrow phase is its rectangle, and one kind pays for that
+//!
+//! The narrow phase below tests **containment in the node's bounds**, which is
+//! exact for every closed body the canvas draws — a rectangle, a rounded
+//! rectangle and a graph node *are* their rectangles, and an ellipse or a
+//! diamond inside one is close enough that no user notices the corners.
+//!
+//! It is **not** close for §7's free linear elements.
+//! [`NodeShape::Line`](crate::runtime::NodeShape::Line) and
+//! [`Arrow`](crate::runtime::NodeShape::Arrow) are the diagonal of their box,
+//! so a 400×300 arrow is hit anywhere in 120,000 square units of which it
+//! covers a few hundred — and the empty corners of a long diagonal are exactly
+//! where a user reaches to click the thing *behind* it. Phase 7.5 added the
+//! tools that create them; it did not add a segment-distance narrow phase for
+//! them, and the two are separable because the broad phase already returns the
+//! right candidates.
+//!
+//! The fix is one arm here rather than a new index:
+//! [`segment_intersects_rect`](crate::geometry::segment_intersects_rect) and a
+//! point-to-segment distance against [`HitTolerance`] already exist for edges,
+//! which have the same shape of problem and solved it. Until then a linear
+//! element is grabbed by its box, which is generous rather than wrong — nothing
+//! is unreachable, some things are reachable from further away than they look.
+//!
 //! **This file names no UI framework.**
 
 use crate::models::{HandleIndex, NodeIndex};

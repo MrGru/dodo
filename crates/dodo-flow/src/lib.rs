@@ -441,8 +441,102 @@
 //!    source-verified, never observed" risk has cost. The keystrokes themselves
 //!    still need a human at the keyboard to confirm.
 //!
-//! Still to come: the sidebar row and its translated strings. Nothing is
-//! stubbed for them here; the seams are the module boundaries.
+//! # What the seventh-and-a-half slice added: something to draw with
+//!
+//! §45's tool system, and the half number is the point. It was folded into
+//! "the interaction state machine" when the plan was written, landed nowhere in
+//! Phase 2, and was not named in §53's milestone list either. Seven phases
+//! later the canvas could pan, zoom, drag, select, connect, simplify, sketch
+//! and undo, and **a user still could not create a single element**, because
+//! nothing let them say "now I am drawing a rectangle". It was found by opening
+//! the window.
+//!
+//! That is the transferable part, and it is Phase 7's dead-key-binding lesson
+//! in a second costume: **nothing failed.** Every test passed, every number
+//! held, no warning was printed. A capability was simply absent, and no test in
+//! this crate asks what a person can accomplish — they ask whether what exists
+//! is correct. The two are not the same question and only one of them was being
+//! asked.
+//!
+//! - [`interaction::tool`] — [`CanvasTool`], and the pure geometry a creation
+//!   gesture resolves to: the click-versus-drag threshold in **screen** pixels
+//!   (so it means the same at every zoom), the shift constraint, and the
+//!   default size a click places. §45's rule — *tool activation drives
+//!   interaction state and must not alter the document model* — is a property
+//!   of where the type lives rather than a convention to remember.
+//! - [`interaction::state`] — §25's `CreatingShape`, in the file's own style:
+//!   the whole gesture in one variant, transitions pure, no booleans. Picking a
+//!   tool is an [`InteractionEvent::SelectTool`](interaction::InteractionEvent::SelectTool)
+//!   through the same total transition function as a mouse press, so there is
+//!   no second place the active tool is written and none for it to drift from.
+//! - [`commands::gesture`] — creation as `AddNodes`, through Phase 7's one
+//!   applier. **The element reaches the document exactly once, on the release**,
+//!   which is what makes a created shape undo and redo with no line in
+//!   `commands/` knowing a palette exists — and what makes an abandoned
+//!   creation cost nothing, because there was never a draft to reverse.
+//! - [`commands::keys`] — the eight tool letters, joined to the undo/redo rows
+//!   in one table, so [`views::keymap`] is still four lines and one keystroke
+//!   cannot be bound to two things without a test saying so.
+//! - [`views::palette`] — the strip, and it ships with the canvas rather than
+//!   with the launcher, so Phase 8's sidebar row gets it for nothing.
+//!
+//! ## The palette needs no assets and no strings, and that is why it is drawn
+//!
+//! Each button paints its own tool's shape through
+//! [`render::shapes::outline_for_node`] and
+//! [`render::painter::build_path`] — the same two functions that draw the
+//! element the button creates. `gpui-component`'s icon set has no square,
+//! circle, diamond, pointer or hand, so an icon palette meant eight new SVGs, an
+//! `AppIcon` variant each and a new crate dependency; a labelled one meant
+//! English literals in a crate whose translations are Phase 8's. Drawing the
+//! glyphs costs neither, and it buys a property an icon set cannot have: **a
+//! button cannot drift from what it makes**, because there is one outline
+//! builder and both call it.
+//!
+//! ## The correction Phase 7.5 sends back
+//!
+//! **Two of the tools the brief named could be created and not drawn.**
+//! `NodeShape::of` mapped [`ElementKind::Linear`](models::ElementKind::Linear)
+//! to `NodeShape::Other`, which [`render::snapshot`] counts as
+//! `unsupported_nodes` and skips — so a Line or Arrow button would have added a
+//! real, selectable, undoable element that never appeared on screen. That is
+//! precisely the failure the brief's own rule about `Text`, `Frame` and `Image`
+//! is written to avoid, arriving through a kind that *looked* supported because
+//! its `ElementKind` variant had been there since Phase 1.
+//!
+//! An `ElementKind` existing is not the same as the engine being able to draw
+//! it, and only [`runtime::NodeShape::of`] knows the difference.
+//! `interaction::tool`'s `every_tool_creates_something_the_renderer_can_draw`
+//! is that question asked as a test, so the next tool cannot be added without
+//! answering it.
+//!
+//! Closing it was [`runtime::NodeShape::Line`] and `Arrow` plus
+//! [`render::shapes::is_open`] — an open outline is stroked, never filled, and
+//! **never degraded to its bounding quad**, since the box a diagonal spans is
+//! mostly the part of the canvas it is not covering. Three separate default
+//! behaviours in the paint loop were each wrong for it, which is why the
+//! question has a named function rather than three inline conditions.
+//!
+//! ## And two limitations a user meets, recorded where they are caused
+//!
+//! 1. **An arrow always points from its box's top-left to its bottom-right.** A
+//!    node stores an origin and a size, never a pair of endpoints, so a linear
+//!    element's direction is its diagonal and dragging one out leftwards still
+//!    produces an arrow pointing right. The preview is built from the same
+//!    rectangle by the same builder, so what is committed is what was shown —
+//!    it is consistent rather than wrong. A genuinely free arrow needs §7's
+//!    point list, which is a change to the document model.
+//!    [`render::shapes::line`] and [`interaction::tool::creation_rect`] carry it.
+//! 2. **A linear element's hit test is its whole bounding box.** The narrow
+//!    phase is rectangle containment, which is exact for every closed body and
+//!    generous for a diagonal — the empty corners of a long arrow are where a
+//!    user reaches for whatever is behind it. [`runtime::hit`]'s module doc has
+//!    the diagnosis and the one arm that fixes it.
+//!
+//! Still to come: the sidebar row and its translated strings — **the palette's
+//! labels, tooltips and key hints among them**, which is why it carries none
+//! today. Nothing is stubbed for them here; the seams are the module
+//! boundaries.
 //!
 //! # Where the budget numbers come from, and what they are not
 //!

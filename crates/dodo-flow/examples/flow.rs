@@ -15,9 +15,51 @@
 //!
 //! # What you can do in the window
 //!
+//! **Start at the palette, top left.** It is §45's tool strip and it decides
+//! what a left press means; the eight buttons are Select, Hand, Rectangle,
+//! Diamond, Ellipse, Arrow, Line and Graph node, in that order, each drawn as
+//! the shape it creates. The active one is filled.
+//!
+//! | Tool gesture | Effect |
+//! |---|---|
+//! | click a palette button, or press its letter | pick that tool up |
+//! | with a shape tool, drag on the canvas | draw the element inside the box you drag — the preview is the real shape, not an outline of it |
+//! | with a shape tool, **click** | place it at its default size, centred where you clicked |
+//! | hold shift while drawing | square the box: a square, a circle, a regular diamond, a 45° line |
+//! | `Esc` | abandon what is being drawn **and** go back to Select |
+//! | `Cmd+Z` / `Ctrl+Z` after drawing | remove it — **one press per element**, however long the drag was |
+//!
+//! A creating tool draws over whatever is underneath, so a rectangle dragged
+//! across a node is a rectangle and not a node drag. A graph node is born with
+//! a source handle on its right and a target on its left, so it can be
+//! connected the moment it exists; a drawn shape gets neither, because §4
+//! refuses an edge to one anyway.
+//!
+//! **Two things about the Arrow and Line tools are worth knowing before you
+//! wonder whether they are broken.** An arrow always points from the top-left
+//! of the box you drew to its bottom-right — a node stores an origin and a
+//! size and not a pair of endpoints, so the diagonal is the only direction it
+//! can have, and drawing one leftwards still gives you an arrow pointing right.
+//! And a linear element is grabbed by its whole bounding box rather than by the
+//! line itself, so a long diagonal is selected from its empty corners too.
+//! `render::shapes` and `runtime::hit` carry both, with the shape of the fix.
+//!
+//! The palette has **no labels and no tooltips**, so nothing on screen tells
+//! you that `r` is the rectangle. That is deliberate: every string a dodo user
+//! reads goes through `dodo-i18n`, and the canvas's translations are Phase 8's
+//! — an English label here would be one that phase then has to find and remove.
+//! The table above is the documentation until then, and these are the letters:
+//!
+//! | `v` | `h` | `r` | `d` | `o` | `a` | `l` | `n` |
+//! |---|---|---|---|---|---|---|---|
+//! | select | hand | rectangle | diamond | ellipse | arrow | line | node |
+//!
+//! ## Everything else, which is the Select tool's
+//!
 //! | Gesture | Effect |
 //! |---|---|
-//! | drag with the middle button, or hold space and drag | pan |
+//! | drag with the middle button, or hold space and drag | pan, under any tool |
+//! | pick up the Hand tool, or press `h` | pan with the left button too |
 //! | two-finger trackpad swipe | pan |
 //! | trackpad pinch | zoom, anchored at the pointer |
 //! | Cmd or Ctrl + scroll wheel | zoom, anchored at the pointer |
@@ -30,6 +72,18 @@
 //! | `Esc` | abandon the drag — a moved node goes back exactly where it was, and the drag leaves no undo step |
 //! | `Cmd+Z` / `Ctrl+Z` | undo — **a whole drag is one press**, however many mouse moves it took |
 //! | `Cmd+Shift+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` | redo |
+//!
+//! Every gesture above needing the Select tool is what `v` or `Esc` gets you
+//! back to. The keys are `commands::keys`'s table rather than constants in a
+//! handler (§26), so they are the same on every platform and the whole table is
+//! asserted from any machine.
+//!
+//! **If a key does nothing, suspect focus first.** GPUI dispatches a key event
+//! down the focus path and every canvas binding is scoped to
+//! `FlowView::KEY_CONTEXT`, so a canvas that does not hold the focus has all of
+//! them silently dead — that was true from Phase 2 to Phase 7 and nothing
+//! reported it. Clicking the canvas, or any palette button, takes the focus
+//! back.
 //!
 //! A connection is refused silently on the canvas: an input handle will not
 //! take a second edge past its limit, a source will not connect to a source,
