@@ -139,6 +139,18 @@ fn tracing_input() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("DODO_FLOW_TRACE_INPUT").is_some())
 }
 
+/// Whether to print one line after the first painted frame.
+///
+/// Here rather than in the launcher for one reason: everything worth reporting
+/// — the LOD rung, the element count, the cache — only exists **after** a frame
+/// has been extracted *and* painted, and a wrapper view's `render` runs before
+/// its child's. A launcher can only see those numbers on the second frame, and
+/// a window nobody is looking at may never produce one.
+fn reporting() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("DODO_FLOW_REPORT").is_some())
+}
+
 /// The width the connection preview is drawn at, in screen pixels.
 const PREVIEW_WIDTH: f32 = 1.5;
 
@@ -197,6 +209,9 @@ pub struct FlowView {
     /// from a settled camera (re-tessellate, be correct) — see
     /// [`crate::render::cache`].
     zooming: bool,
+    /// Whether [`reporting`]'s one-shot line has been printed.
+    reported: bool,
+
     /// The text colour the shaped-line cache was filled at. A `ShapedLine`
     /// bakes its colour at shape time, and dodo applies a theme change live, so
     /// a changed ink is a cache that has to go.
@@ -254,6 +269,7 @@ impl FlowView {
             hovered: None,
             pane: Vec2::ZERO,
             zooming: false,
+            reported: false,
             text_ink: None,
             plan: PaintPlan::new(),
             last_paint: PaintStats::default(),
@@ -672,7 +688,62 @@ impl FlowView {
         // settles rather than leaving the canvas with scaled strokes.
         self.zooming = false;
 
+        if reporting() && !self.reported {
+            self.reported = true;
+            self.report_frame();
+        }
+
         self.install_input(bounds, hitbox, window, cx);
+    }
+
+    /// One line describing what the hybrid renderer decided on this frame.
+    ///
+    /// Off unless `DODO_FLOW_REPORT` is set. It is the launcher's acceptance
+    /// check made printable — §16's element count, §15's rung and §23's cache
+    /// on real geometry, rather than on a benchmark scene.
+    fn report_frame(&self) {
+        let Some(lod) = self.snapshot.lod() else {
+            return;
+        };
+        let counts = self.snapshot.counts();
+        let cache = self.geometry_cache.frame_stats();
+
+        println!(
+            "first frame: zoom {:.2} -> {:?} detail, edges {:?}, labels {:?} px",
+            lod.zoom, lod.detail, lod.edges, lod.label_font_size
+        );
+        println!(
+            "  §16  {} GPUI elements ({} rich nodes, {} handles, {} toolbar) \
+             from {} document nodes",
+            self.snapshot.element_count(),
+            counts.rich_nodes,
+            counts.interactive_handles,
+            u32::from(self.snapshot.overlay().is_some()),
+            self.world.nodes().len(),
+        );
+        println!(
+            "  §15  {} canvas nodes, {} of {} visible edges drawn, {} skipped, {} labels",
+            counts.canvas_nodes,
+            counts.edges,
+            self.visible.edge_count(),
+            counts.skipped_edges,
+            self.last_scene.labels,
+        );
+        println!(
+            "  §23  geometry cache {} lookups / {} misses, {:.1} KB; text {} shaped",
+            cache.lookups(),
+            cache.misses,
+            self.geometry_cache.bytes() as f64 / 1e3,
+            self.text_cache.len(),
+        );
+        println!(
+            "  paint {} quads, {} paths, {} vertices, {} batches, {} glyphs",
+            self.last_paint.quads,
+            self.last_paint.paths,
+            self.last_paint.path_vertices,
+            self.last_paint.path_batches,
+            self.last_paint.glyphs,
+        );
     }
 
     /// **Resolves a committed rubber band into a selection** (§28).

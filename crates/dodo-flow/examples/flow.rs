@@ -43,6 +43,8 @@
 //! | `DODO_FLOW_BENCH=1` | drive continuous frames and print frame timings |
 //! | `DODO_FLOW_TRACE_INPUT=1` | print every mouse, scroll and pinch event received |
 //! | `DODO_FLOW_INSTRUMENT=1` | record §39's probes; read them with `FlowView::instruments` |
+//! | `DODO_FLOW_REPORT=1` | print one line after the first painted frame: §15's rung, §16's element count, §23's cache |
+//! | `DODO_FLOW_ZOOM=z` | open at this zoom, to see the LOD ladder without touching the trackpad |
 //!
 //! `DODO_FLOW_BENCH` deliberately does the thing §35 forbids — it requests an
 //! animation frame from every paint, so the canvas repaints as fast as the
@@ -61,9 +63,10 @@ use dodo_flow::{
     geometry::Vec2,
     models::{
         ArrowMarker, Color, DashPattern, EdgeRouting, ElementId, ElementKind, Endpoint,
-        FlowDocument, GraphNodeKind, Handle, HandleDirection, HandlePlacement, ShapeKind,
-        StrokeStyle,
+        FlowDocument, GraphNodeKind, Handle, HandleDirection, HandlePlacement, NodeIndex,
+        ShapeKind, StrokeStyle,
     },
+    render::registry::GenericKind,
 };
 use gpui::{
     AppContext, AssetSource, Context, Entity, IntoElement, ParentElement, QuitMode, Render,
@@ -88,6 +91,12 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         gpui_component_assets::Assets.list(path)
     }
+}
+
+fn env_zoom() -> Option<f32> {
+    std::env::var("DODO_FLOW_ZOOM")
+        .ok()
+        .and_then(|value| value.parse().ok())
 }
 
 fn env_count(name: &str, default: usize) -> usize {
@@ -210,6 +219,29 @@ fn demo_document(nodes: usize) -> FlowDocument {
                 width: 2.0,
                 ..StrokeStyle::default()
             };
+        }
+    }
+
+    // ---- §43's registry: one node per generic kind ------------------------
+    //
+    // Six kinds, and three of them — Process, Decision, Note — have no
+    // `ElementKind` variant at all. They reach the registry by name, through
+    // the same public path a third party would register against, which is what
+    // makes this row a demonstration rather than a decoration. The decision
+    // node comes out a diamond, and a diamond is painted on the canvas rather
+    // than made an element, because a `div` cannot be one.
+    for (index, kind) in GenericKind::ALL.iter().enumerate() {
+        let id = document.add_node(
+            kind.element_kind(),
+            Vec2::new(60.0 + index as f32 * 190.0, 980.0),
+            Vec2::new(170.0, 60.0),
+        );
+        if let Some(node) = document.node_mut(id) {
+            node.label = Some(kind.id().trim_start_matches("dodo.flow.").to_owned());
+            node.handles = vec![
+                Handle::new("out", HandlePlacement::Right, HandleDirection::Source),
+                Handle::new("in", HandlePlacement::Left, HandleDirection::Target),
+            ];
         }
     }
 
@@ -385,6 +417,21 @@ fn main() {
                     let flow = cx.new(|cx| {
                         let mut flow = FlowView::new(window, cx);
                         flow.set_document(demo_document(nodes));
+
+                        // **The acceptance check, made visible on the first
+                        // frame.** §44's controls belong to the selected
+                        // element, so a launcher that selects nothing shows
+                        // none of them — and the whole point of opening this
+                        // window is to look at them.
+                        flow.world_mut().select_only(Some(NodeIndex::new(0)));
+
+                        // §15 without a trackpad: `DODO_FLOW_ZOOM=0.4` opens in
+                        // the compact rung and `0.1` in the overview one, which
+                        // is how the ladder gets checked by eye rather than
+                        // only by test.
+                        if let Some(zoom) = env_zoom() {
+                            flow.viewport_mut().zoom_around(Vec2::ZERO, zoom);
+                        }
                         if benchmarking {
                             // One line before the first frame, so a run that is
                             // only watched for a second still says what it
