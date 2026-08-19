@@ -56,6 +56,32 @@
 //! zoom gesture is in progress, and a settled frame at a new zoom misses on
 //! purpose.
 //!
+//! # What it actually bought, measured
+//!
+//! Apple M1, release, 1440×900, 2026-08-19, from
+//! `cargo run --release -p dodo-flow --example flow_scene_bench --locked` —
+//! sixty frames of pure pan, the case §50 asks about:
+//!
+//! | | dense (2,986 paths) | large (126 paths) |
+//! |---|---:|---:|
+//! | warm hit rate | **99.2 %** | **99.0 %** |
+//! | of those hits, exact translations | 171,560 of 172,860 | 7,104 of 7,173 |
+//! | scaled (under-tessellated) | **0** | **0** |
+//! | tessellations over 60 frames | **4,286** | **195** |
+//! | tessellations without a cache | 179,160 | 7,560 |
+//! | cache held | **0.60 MB** of 67 MB | **0.78 MB** of 67 MB |
+//!
+//! **42× fewer tessellations on the dense scene, and every hit an exact
+//! translation** — no scaling at all, because a pan is not a zoom and the
+//! policy below keeps those apart. The residual misses are the boundary: nodes
+//! and edges entering the viewport for the first time, which is a working set
+//! that turns over rather than a cache that is failing.
+//!
+//! The byte figures are the ones worth staring at. **0.60 MB against a 64 MiB
+//! bound**, for a scene of 1,584 visible nodes — because the cache holds the
+//! screen and not the document. The bound is a backstop that a realistic frame
+//! never approaches, which is exactly what a bound should be.
+//!
 //! # The key, and why it is versions rather than geometry
 //!
 //! [`GeometryKey`] is *(owner, part, version, quality)*. The version comes from

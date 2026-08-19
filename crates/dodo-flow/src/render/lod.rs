@@ -37,6 +37,35 @@
 //! vertices and leaves the path count alone has not helped, which is exactly
 //! the mistake a vertices-only ladder makes.
 //!
+//! # What the ladder did to it, measured
+//!
+//! Apple M1, release, 1440×900, 2026-08-19, from
+//! `cargo run --release -p dodo-flow --example flow_scene_bench --locked`:
+//!
+//! | scattered scene | Phase 4 | with the ladder |
+//! |---|---:|---:|
+//! | visible edges | 61,104 | 61,104 *(unchanged — they really are visible)* |
+//! | edges drawn | 61,104 | **5,000** at [`EdgeDetail::Hairline`] |
+//! | estimated vertices | 147,761,694 | **99,960** — 4 % of the safe ceiling |
+//! | paths | ~183,000 | **4,998** of a 5,000 budget |
+//! | dropped by the black-window guard | **60,061** | **0** |
+//! | GPUI elements | — | **36** |
+//!
+//! The guard stopped firing. That is the point: `enforce_vertex_ceiling` is a
+//! backstop that drops geometry blindly from the end of the plan, and a frame
+//! that reaches it has already lost the argument. The ladder decides *what* to
+//! simplify while it still knows what the elements are.
+//!
+//! The dense scene is the other half of the story, and it degrades far less
+//! because it does not need to:
+//!
+//! | dense scene (1,584 nodes, 3,182 edges visible) | Phase 4 | with the ladder |
+//! |---|---:|---:|
+//! | edge rung | — | [`EdgeDetail::Polyline`] |
+//! | edges drawn | 3,182 | 3,064 *(118 under 4 px on screen)* |
+//! | estimated vertices | 239,900 | **59,720** |
+//! | painted vertices | 132,888 | **17,916** |
+//!
 //! # The ladder, and what each rung refuses to do
 //!
 //! [`LodThresholds`] holds the zoom thresholds — they are configuration, in
@@ -244,6 +273,18 @@ pub struct SceneLoad {
     /// The mean on-screen length of the sampled edges, in screen pixels. Zero
     /// when there are no edges.
     pub mean_edge_screen_length: f32,
+    /// The sampled fraction of visible nodes whose body is a **path** rather
+    /// than a quad, in `0.0..=1.0`.
+    ///
+    /// **Charging every node as a path is how the node layer starves the edge
+    /// one**, and it is not a hypothetical: the first version of this module
+    /// did exactly that, and Phase 4's dense scene — 1,584 visible nodes, every
+    /// one of them a quad — came out with a vertex budget of zero and drew none
+    /// of its 3,182 edges. dodo's own invariant is that *every axis-aligned
+    /// rectangle is a quad*, which is most nodes in most documents, so the
+    /// pessimistic assumption is wrong in the common case rather than merely
+    /// conservative in it.
+    pub path_bodied_fraction: f32,
 }
 
 impl SceneLoad {
@@ -258,6 +299,7 @@ impl SceneLoad {
             visible_nodes: visible.node_count() as u32,
             visible_edges: edges.len() as u32,
             mean_edge_screen_length: 0.0,
+            path_bodied_fraction: sample_path_bodied(world, visible),
         };
 
         if edges.is_empty() {
@@ -282,6 +324,34 @@ impl SceneLoad {
             load.mean_edge_screen_length = viewport.world_to_screen_length(total / sampled as f32);
         }
         load
+    }
+}
+
+/// The sampled fraction of visible nodes drawn as paths rather than quads.
+///
+/// Sampled for the same reason the edge length is: the decision has to be O(1),
+/// and `NodeStore::shape` is a hot-array read so a sample of
+/// [`LOAD_SAMPLE`] is a handful of bytes. Deterministic stride, so the answer —
+/// and therefore the rung — does not flicker on an unchanged scene.
+fn sample_path_bodied(world: &GraphWorld, visible: &VisibleSet) -> f32 {
+    let nodes = visible.nodes();
+    if nodes.is_empty() {
+        return 0.0;
+    }
+
+    let stride = nodes.len().div_ceil(LOAD_SAMPLE).max(1);
+    let (mut sampled, mut paths) = (0u32, 0u32);
+    for &node in nodes.iter().step_by(stride) {
+        sampled += 1;
+        if !crate::render::shapes::node_prefers_quad(world.nodes().shape(node)) {
+            paths += 1;
+        }
+    }
+
+    if sampled == 0 {
+        0.0
+    } else {
+        paths as f32 / sampled as f32
     }
 }
 
@@ -450,21 +520,33 @@ impl LodPlan {
 /// budget at all — a quad is a fixed-size instance with no vertex buffer and no
 /// render pass (Phase 0 §1.7), which is the whole reason node bodies are quads.
 fn node_layer_cost(budgets: &RenderBudgets, load: SceneLoad, plan: &LodPlan) -> (u32, u32) {
-    // Two paths per non-quad node, and the pessimistic assumption that every
-    // visible node is one. Under `degrade_curves` they are all quads instead.
-    let paths_per_node = if plan.degrade_curves { 0 } else { 2 };
-    let paths = load.visible_nodes.saturating_mul(paths_per_node);
+    // Two paths — a fill and a stroke — for each node whose body is actually a
+    // path. Under `degrade_curves` even those become quads.
+    let path_bodied = if plan.degrade_curves {
+        0.0
+    } else {
+        load.visible_nodes as f32 * load.path_bodied_fraction.clamp(0.0, 1.0)
+    };
+    let paths = (path_bodied * 2.0).ceil() as u32;
 
-    // A node body is small and its outline is a handful of points; the ellipse
-    // is the expensive one at 337 vertices, and that is the one this charges
-    // for, so the estimate errs the way a guard has to.
+    // The ellipse is the expensive body at 337 vertices, and that is what this
+    // charges for, so the estimate errs the way a guard has to *among the
+    // nodes that are paths at all*.
     let vertices = paths.saturating_mul(ELLIPSE_VERTEX_ESTIMATE);
 
-    (
-        paths.min(budgets.target_paths_per_frame),
-        vertices.min(budgets.target_path_vertices_per_frame),
-    )
+    // **The node layer may not take the whole frame.** Even a document of
+    // nothing but ellipses has to leave the edges something, or a graph draws
+    // its nodes and none of the lines between them — which is a worse picture
+    // than a simplified one, and the edges are what makes it a graph.
+    let path_cap = (budgets.target_paths_per_frame as f32 * NODE_LAYER_SHARE) as u32;
+    let vertex_cap = (budgets.target_path_vertices_per_frame as f32 * NODE_LAYER_SHARE) as u32;
+
+    (paths.min(path_cap), vertices.min(vertex_cap))
 }
+
+/// The most of each frame budget the node layer may claim before the edges get
+/// theirs. See [`node_layer_cost`].
+pub const NODE_LAYER_SHARE: f32 = 0.6;
 
 /// The measured vertex count of an `arc_to` ellipse (Phase 0 §1.2), used as the
 /// pessimistic per-node-path charge.
@@ -518,6 +600,8 @@ mod tests {
             // The scattered scene's edges span the document; at the bench
             // camera that is most of the pane's diagonal.
             mean_edge_screen_length: 1_200.0,
+            // Graph nodes, so quads.
+            path_bodied_fraction: 0.0,
         }
     }
 
@@ -527,6 +611,7 @@ mod tests {
             visible_nodes: 36,
             visible_edges: 126,
             mean_edge_screen_length: 180.0,
+            path_bodied_fraction: 0.0,
         }
     }
 
@@ -607,6 +692,7 @@ mod tests {
                 visible_nodes: 20,
                 visible_edges: edges,
                 mean_edge_screen_length: 400.0,
+                path_bodied_fraction: 0.0,
             };
             if LodPlan::choose(&budgets, 1.0, load).edges == EdgeDetail::Coarse {
                 break load;
@@ -769,6 +855,50 @@ mod tests {
         );
     }
 
+    /// **The regression this cost model was wrong about.** Phase 4's dense
+    /// scene puts 1,584 visible nodes on screen, every one of them a quad, and
+    /// 3,182 edges with them. Charging the nodes as if they were ellipses took
+    /// the entire vertex budget and left the edges none, so the frame drew a
+    /// field of boxes with nothing joining them.
+    #[test]
+    fn a_dense_field_of_quad_nodes_does_not_starve_its_edges() {
+        let load = SceneLoad {
+            visible_nodes: 1_584,
+            visible_edges: 3_182,
+            mean_edge_screen_length: 34.0,
+            path_bodied_fraction: 0.0,
+        };
+        let plan = LodPlan::choose(&budgets(), 1.0, load);
+
+        assert_eq!(
+            plan.max_edges, load.visible_edges,
+            "quad-bodied nodes cost no paths, so every edge must still fit"
+        );
+    }
+
+    /// And the other direction: a field of *ellipses* really is expensive, and
+    /// the node layer still may not take the whole frame.
+    #[test]
+    fn a_dense_field_of_path_nodes_still_leaves_the_edges_a_budget() {
+        let budgets = budgets();
+        let load = SceneLoad {
+            visible_nodes: 1_584,
+            visible_edges: 3_182,
+            mean_edge_screen_length: 34.0,
+            path_bodied_fraction: 1.0,
+        };
+        let plan = LodPlan::choose(&budgets, 1.0, load);
+
+        assert!(
+            plan.max_edges > 0,
+            "a graph that draws its nodes and none of its edges is not a graph"
+        );
+        assert!(
+            plan.max_edges < load.visible_edges,
+            "and 1,584 ellipses really should have cost the edges something"
+        );
+    }
+
     #[test]
     fn an_empty_scene_decides_without_dividing_by_zero() {
         let plan = LodPlan::choose(&budgets(), 1.0, SceneLoad::default());
@@ -786,6 +916,7 @@ mod tests {
             visible_nodes: 8,
             visible_edges: 12,
             mean_edge_screen_length: 200.0,
+            path_bodied_fraction: 0.0,
         };
 
         for step in 4..=200 {

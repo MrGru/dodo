@@ -33,11 +33,16 @@
 //! # The boundary that matters: almost no UI framework outside `views/`
 //!
 //! ```text
-//! views/                gpui, gpui-component     <- may name a UI framework
+//! views/flow.rs         gpui, gpui-component     <- may name a UI framework
+//! views/nodes.rs        gpui  (the rich elements)<- may name a UI framework
 //! render/painter.rs     gpui  (the only painter) <- may name a UI framework
 //! ────────────────────────────────────────────
 //! render/plan.rs        paint order, and the clip
-//! render/scene.rs       the visible set -> primitives
+//! render/lod.rs         §15's ladder: what to simplify
+//! render/snapshot.rs    §24's extraction: compact indices only
+//! render/registry.rs    §43's node renderer registry
+//! render/cache.rs       §23's caches, generic over what they hold
+//! render/scene.rs       the snapshot -> primitives
 //! render/shapes.rs      the shapes as outlines
 //! render/edges.rs       routes and markers as primitives
 //! render/grid.rs        the viewport-generated grid
@@ -108,6 +113,11 @@
 //!   `Idle`, `Panning` and `BoxSelecting` and pure transitions.
 //! - [`views`] — pan, zoom and box selection wired to real input, repainting on
 //!   change and never on a clock.
+//!
+//! *(The `render/` list above is Phase 2's; `render::cache`, `render::lod`,
+//! `render::registry`, `render::scene` and `render::snapshot` joined it later,
+//! and `views::nodes` with them. All of them except the last name no UI
+//! framework.)*
 //!
 //! # What the third slice added: the graph engine
 //!
@@ -195,16 +205,87 @@
 //!    4.25 MB against [`budgets`]'s 64 MiB bound, so §23's cache both fits and
 //!    pays. It is deferred, not forgotten.
 //! 3. **Phase 1's request to re-fit the paint cost model could not be met.**
-//!    [`budgets::RenderBudgets::predicted_paint_micros`] describes
-//!    `Window::paint_path`, which needs a real window; the harness is headless.
-//!    What it *could* measure — tessellation — is a different cost and is
-//!    recorded separately. The re-fit needs a windowed spike, and Phase 5 is
-//!    the first phase that has a window to hand.
+//!    `predicted_paint_micros` described `Window::paint_path`, which needs a
+//!    real window; the harness is headless. What it *could* measure —
+//!    tessellation — is a different cost and is recorded separately. The re-fit
+//!    needs a windowed spike, and Phase 5 is the first phase that has a window
+//!    to hand. *(Phase 5's answer is in [`budgets`]'s module doc: a window was
+//!    not enough, the helper is deleted, and the harness is committed for a
+//!    human to run.)*
 //!
-//! Still to come, in roughly this order: the tessellation cache and LOD,
-//! `commands/` and `components/`, then the sidebar row and its translated
-//! strings. Nothing is stubbed for them here; the seams are the module
-//! boundaries.
+//! # What the fifth slice added: the hybrid renderer
+//!
+//! Phase 4 proved the architecture and handed forward three things. Phase 5 is
+//! where the canvas stops being only pixels.
+//!
+//! - [`render::lod`] — §15's ladder, and **the only thing that bounds a
+//!   hairball**. It spends *two* budgets: the vertex one, and
+//!   [`budgets::RenderBudgets::target_paths_per_frame`], which is new and which
+//!   the hairball reaches first.
+//! - [`render::snapshot`] — §24's extraction. Compact indices and screen
+//!   rectangles, never cloned metadata and never colours; the boundary a later
+//!   phase can compute in the background.
+//! - [`render::registry`] — §43's node renderer registry, plus six generic
+//!   kinds, three of which register through the same public path a third party
+//!   would use.
+//! - [`render::cache`] — §23's geometry and shaped-line caches, byte-bounded,
+//!   viewport-scoped, generic over what they hold so every property is asserted
+//!   with no window.
+//! - [`views::nodes`] — the rich half: node elements, interactive handles for
+//!   the selected-or-hovered node, a selection ring and a toolbar.
+//!
+//! ## The numbers, beside Phase 4's
+//!
+//! Same machine, same command, 2026-08-19:
+//!
+//! | | Phase 4 | Phase 5 |
+//! |---|---:|---:|
+//! | **scattered**: edges drawn of 61,104 visible | 61,104 | **5,000** |
+//! | **scattered**: estimated vertices | 147,761,694 | **99,960** |
+//! | **scattered**: paths dropped by the black-window guard | 60,061 | **0** |
+//! | **dense**: painted vertices | 132,888 | **17,916** |
+//! | pure pan: geometry cache hit rate | *(no cache)* | **99.2 %**, all exact translations |
+//! | pure pan: tessellations over 60 frames | 179,160 | **4,286** |
+//! | geometry cache held | — | **0.60 MB** of a 64 MiB bound |
+//! | GPUI elements, 100,000-node document | — | **36** |
+//!
+//! **The black-window guard stopped firing**, which is the result that matters:
+//! `enforce_vertex_ceiling` drops geometry blindly from the end of a plan, and
+//! a frame that reaches it has already lost. The ladder simplifies while it
+//! still knows what the elements are.
+//!
+//! ## And what Phase 5 got wrong on the way
+//!
+//! Two mistakes worth the next person's attention, both caught by numbers
+//! rather than by review:
+//!
+//! 1. **The first cost model charged every visible node as an ellipse**, so
+//!    Phase 4's dense scene — 1,584 nodes, every one of them a quad — came out
+//!    with a vertex budget of zero and drew *none* of its 3,182 edges. A
+//!    conservative estimate is not automatically a safe one: being wrong in the
+//!    common case starves the layer that was supposed to be protected.
+//!    [`render::lod::SceneLoad::path_bodied_fraction`] samples what the nodes
+//!    actually cost.
+//! 2. **Both caches evicted to exactly their bound**, so every insert past it
+//!    re-sorted the whole entry set. A test offering the shaped-line cache four
+//!    times its capacity took 22 seconds and took the crate's whole suite with
+//!    it — but it is a per-frame pathology on any document with more labels
+//!    than the cache holds, not a slow test.
+//!    [`render::cache::EVICT_TO_FRACTION`] is the fix and records why.
+//!
+//! ## The measurement Phase 5 still could not take
+//!
+//! Phase 4 said the paint-cost re-fit needed a window and that Phase 5 would
+//! have one. It did, and that was not enough: an unattended GPUI window on
+//! macOS presents its first frame and then stops. `predicted_paint_micros` is
+//! **deleted** rather than left as an unvalidated model, its two coefficients
+//! stay because they are separately load-bearing, and
+//! `examples/flow_paint_fit.rs` is committed ready for a human to run.
+//! [`budgets`]'s module doc has the whole decision.
+//!
+//! Still to come, in roughly this order: the sketch renderer, `commands/` and
+//! undo, then the sidebar row and its translated strings. Nothing is stubbed
+//! for them here; the seams are the module boundaries.
 //!
 //! **One absence is still deliberate and load-bearing**: **nothing is ever
 //! removed** from a store. An index is a slot number, so removal is either a

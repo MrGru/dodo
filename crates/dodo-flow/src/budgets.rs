@@ -55,6 +55,46 @@
 //! [`current`] is the single place that reads `cfg!`.
 //! Every constant below states what it was measured on and when. Where a
 //! number is derived rather than measured, it says so.
+//!
+//! # The one measurement this crate has failed to take, twice
+//!
+//! Phase 1 wrote a `predicted_paint_micros(paths, vertices)` helper over
+//! [`RenderBudgets::nanos_per_path`] and
+//! [`RenderBudgets::nanos_per_vertex`], fitted over the degraded region of
+//! Phase 0's sweep, and asked a later phase to re-fit it against a healthy
+//! frame. It over-predicted a frame measured at 5.0 ms as ~13 ms — 2.6× — and
+//! it was documented as an upper bound rather than tuned, because nothing
+//! could measure it: those coefficients describe `Window::paint_path`, and
+//! Phase 4's harness is headless.
+//!
+//! **Phase 5 had a window and still could not take it.** `paint_path` is only
+//! reached from inside a real paint pass, so the measurement needs a window
+//! that keeps presenting frames — and an unattended GPUI window on macOS
+//! presents the first frame and then stops, because
+//! `request_animation_frame` depends on a display link the window server does
+//! not drive for an app nobody is looking at. Two runs of
+//! `examples/flow_paint_fit.rs` sat at 0 % CPU after config 1 of 10. It is the
+//! same wall Phase 0 hit posting synthetic input events, and the same answer:
+//! **a human has to run it once.**
+//!
+//! So the decision taken, rather than a third attempt:
+//!
+//! - **`predicted_paint_micros` is deleted.** It had exactly one caller — its
+//!   own test — and a composite cost model that has never been validated where
+//!   it is actually spent is worse than no model, because it invites a caller
+//!   to believe it.
+//! - **The two coefficients stay**, because they are separately load-bearing:
+//!   `nanos_per_path` is what
+//!   [`RenderBudgets::target_paths_per_frame`] is derived from and what makes
+//!   the hairball's 92 ms visible. They are honest as a per-unit tax; it was
+//!   the composite that was pretending.
+//! - **`examples/flow_paint_fit.rs` is committed**, with its sweep and its
+//!   least-squares fit ready, so the measurement is one command for whoever is
+//!   sitting in front of the machine:
+//!
+//!   ```sh
+//!   cargo run --release -p dodo-flow --example flow_paint_fit --locked
+//!   ```
 
 use dodo_paths::HostOs;
 
@@ -360,17 +400,28 @@ pub struct RenderBudgets {
     /// buys responsiveness during a live pinch without ever showing a polygon.
     pub retessellation_zoom_band: f32,
 
-    /// The fixed per-path CPU cost, in nanoseconds: `paint_path` consumes the
-    /// path, so a cached one must be cloned into it, and the vertex array is
-    /// traversed four times per painted path per frame.
+    /// **The fixed per-path CPU cost, in nanoseconds** — the tax a path pays
+    /// for existing, whatever its length.
     ///
-    /// Fitted over the degraded region of the sweep — see
-    /// [`RenderBudgets::predicted_paint_micros`] for what that means and why
-    /// the pair is an upper bound rather than a prediction.
+    /// `Window::paint_path` consumes its argument, so a cached path is cloned
+    /// into it, and the vertex array is traversed four times per painted path
+    /// per frame. Phase 0 measured 1.29 µs to clone a 306-vertex path and
+    /// Phase 0 §3 correction 13 records that there is no borrow-based
+    /// alternative without patching gpui.
+    ///
+    /// This is the number [`RenderBudgets::target_paths_per_frame`] is derived
+    /// from, and the one that makes the path count a budget in its own right:
+    /// 61,104 hairline edges is 92 ms of frame before a single vertex is
+    /// counted. See [`crate::render::lod`].
+    ///
+    /// Fitted over the **degraded** region of Phase 0's sweep, where frame time
+    /// is no longer vsync-quantised, so it over-states the healthy region — the
+    /// direction a guard has to err in. See the module doc for why a windowed
+    /// re-fit is still outstanding and what is committed to do it.
     pub nanos_per_path: u32,
 
-    /// The marginal CPU cost per painted vertex, in nanoseconds. Same caveat as
-    /// [`RenderBudgets::nanos_per_path`].
+    /// The marginal CPU cost per painted vertex, in nanoseconds. Same
+    /// provenance and same caveat as [`RenderBudgets::nanos_per_path`].
     pub nanos_per_vertex: u32,
 
     pub lod: LodThresholds,
@@ -386,52 +437,6 @@ impl RenderBudgets {
     /// Whether a frame of this size is expected to hold 60 fps.
     pub fn within_frame_target(&self, vertices: u32) -> bool {
         vertices <= self.target_path_vertices_per_frame
-    }
-
-    /// A **conservative upper bound** on the CPU cost of painting `paths` paths
-    /// totalling `vertices` vertices, in microseconds.
-    ///
-    /// One place for the cost model, so a benchmark harness and the renderer's
-    /// own degradation logic cannot disagree — but read what it is before
-    /// trusting a number out of it. The two coefficients come from a
-    /// decomposition sweep over path count and vertex count, and that fit was
-    /// taken over the
-    /// *degraded* region, where the frame time is no longer vsync-quantised.
-    /// Applied to the healthy 60 fps frame recorded on
-    /// [`target_path_vertices_per_frame`](RenderBudgets::target_path_vertices_per_frame)
-    /// — 1,800 paths and 328,836 vertices, measured at 5.0 ms — it predicts
-    /// ~13 ms, about **2.6× the measurement**.
-    ///
-    /// That gap is real and it is documented here rather than tuned away,
-    /// because nothing in this slice can measure the healthy region again and a
-    /// fitted-to-nothing constant would be worse than an honest over-estimate.
-    /// Use it as a ceiling — "this frame will not cost more than" — never as a
-    /// prediction.
-    ///
-    /// # Phase 4 could not re-fit it, and this is why
-    ///
-    /// Phase 1 asked Phase 4's harness to re-fit these two coefficients.
-    /// **It cannot, and the reason is structural rather than an omission.**
-    /// They describe `Window::paint_path` — the clone, the `scale`, the
-    /// `insert_primitive` clone and the Metal renderer's per-batch expansion,
-    /// four traversals of the vertex array ending in a 104-bytes-per-vertex GPU
-    /// upload. Every one of those needs a real `Window`, and
-    /// `examples/flow_scene_bench.rs` is a headless example.
-    ///
-    /// What that harness *can* measure, because `render::painter::build_path`
-    /// needs no window, is **tessellation**: 1.01 µs per path on the dense
-    /// scene and 2.74 µs on the large one, at 3.12 ms and 0.35 ms per frame
-    /// respectively. That is a different cost from this one and is recorded in
-    /// [`crate::render::plan`] rather than folded in here.
-    ///
-    /// Re-fitting these two therefore needs a windowed spike of the shape Phase
-    /// 0 used, and it is worth doing when a phase has a window to hand anyway —
-    /// Phase 5 is the first that does. Until then the pair stays an honest
-    /// over-estimate.
-    pub fn predicted_paint_micros(&self, paths: u32, vertices: u32) -> f32 {
-        let nanos = paths as f32 * self.nanos_per_path as f32
-            + vertices as f32 * self.nanos_per_vertex as f32;
-        nanos / 1_000.0
     }
 
     /// How many cached vertices fit in the geometry cache's byte bound.
@@ -680,29 +685,6 @@ mod tests {
         assert!(
             !b.exceeds_safe_vertices(b.target_path_vertices_per_frame + 1),
             "over the smooth target is a slow frame, not a black one"
-        );
-    }
-
-    #[test]
-    fn the_cost_model_is_an_upper_bound_on_the_measured_realistic_frame() {
-        let b = for_host(HostOs::MacOs);
-
-        // The realistic frame recorded on `METAL`: 600 nodes, 1,800 paths,
-        // 328,836 path vertices, **measured at 5.0 ms** of paint CPU and
-        // holding 60 fps. The model is fitted to the degraded region and
-        // overestimates a healthy frame — this pins how much, so a re-fit
-        // against new measurements is a visible change rather than a silent
-        // one.
-        const MEASURED_MICROS: f32 = 5_000.0;
-        let micros = b.predicted_paint_micros(1_800, 328_836);
-
-        assert!(
-            micros > MEASURED_MICROS,
-            "the model must never under-predict a measured frame: {micros} us"
-        );
-        assert!(
-            micros < MEASURED_MICROS * 3.0,
-            "the model overestimates by more than 3x ({micros} us); re-fit it"
         );
     }
 

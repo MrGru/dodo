@@ -50,10 +50,13 @@ use dodo_flow::{
     models::{Color, NodeIndex},
     render::{
         GridLimits, GridSettings, PaintPlan, RenderSnapshot, SceneInk, SceneOptions,
+        cache::{CacheStats, GeometryCache, ScreenAnchor},
+        lod::LodPlan,
         painter::build_path,
         plan::{PathPrimitive, PrimitiveSink, QuadPrimitive, TextPrimitive},
         registry::NodeRendererRegistry,
         scene,
+        snapshot::SnapshotCounts,
     },
     runtime::{BoxQuery, GraphWorld},
     scenes::{self, BENCH_PANE, SceneSpec},
@@ -362,6 +365,11 @@ struct SceneResult {
     resident_bytes: Option<u64>,
     entries_per_node: f64,
     oversized: usize,
+    /// §15's rung this frame ran at, and what it cost the scene.
+    lod: LodPlan,
+    counts: SnapshotCounts,
+    /// Every GPUI element the frame would have created — §16's number.
+    elements: u32,
 }
 
 fn measure_scene(spec: SceneSpec, budgets: &RenderBudgets) -> SceneResult {
@@ -450,6 +458,9 @@ fn measure_scene(spec: SceneSpec, budgets: &RenderBudgets) -> SceneResult {
         resident_bytes: resident_bytes(),
         entries_per_node: index.nodes().entry_count() as f64 / world.nodes().len().max(1) as f64,
         oversized: index.nodes().oversized_count() + index.edges().oversized_count(),
+        lod: snapshot.lod().expect("a frame was extracted"),
+        counts: snapshot.counts(),
+        elements: snapshot.element_count(),
     }
 }
 
@@ -815,6 +826,32 @@ fn main() {
             result.dropped_paths
         );
     }
+    println!("\n§15 §16  the LOD ladder and the element count, per scene");
+    println!(
+        "  {:<9} {:>10} {:>9} {:>9} {:>9} {:>9} {:>9}",
+        "scene", "edge rung", "vis. edg", "drawn", "skipped", "rich", "elements"
+    );
+    for result in &results {
+        println!(
+            "  {:<9} {:>10} {:>9} {:>9} {:>9} {:>9} {:>9}",
+            result.spec.name,
+            format!("{:?}", result.lod.edges),
+            result.visible_edges,
+            result.counts.edges,
+            result.counts.skipped_edges,
+            result.counts.rich_nodes,
+            result.elements
+        );
+    }
+    let heaviest = results
+        .iter()
+        .max_by_key(|result| result.elements)
+        .expect("there is at least one scene");
+    println!(
+        "  §16: the worst scene ({}) creates {} GPUI elements from {} document nodes",
+        heaviest.spec.name, heaviest.elements, heaviest.spec.nodes
+    );
+
     let worst = results
         .iter()
         .max_by_key(|result| result.painted_vertices)
@@ -913,4 +950,142 @@ fn main() {
         scattered.estimated_vertices as f64 * 100.0 / budgets.safe_path_vertex_ceiling as f64,
         scattered.dropped_paths
     );
+    println!(
+        "  §15 engaged: rung {:?}, {} of {} visible edges drawn, {} skipped, {} elements",
+        scattered.lod.edges,
+        scattered.counts.edges,
+        scattered.visible_edges,
+        scattered.counts.skipped_edges,
+        scattered.elements
+    );
+    println!(
+        "  path budget {} / {}   vertex budget {} / {}",
+        scattered.paths,
+        budgets.target_paths_per_frame,
+        scattered.estimated_vertices,
+        budgets.target_path_vertices_per_frame
+    );
+
+    println!("\n§23  the geometry cache");
+    measure_geometry_cache(SceneSpec::DENSE, &budgets);
+    measure_geometry_cache(SceneSpec::LARGE, &budgets);
+}
+
+/// **§23's cache during a pure pan** — the number Phase 4 asked this phase for.
+///
+/// A `Path<Pixels>` needs no window to build, but it does need GPUI's
+/// tessellator, which `render::painter::build_path` gives headlessly. So the
+/// cache can be exercised exactly as a frame would: plan, look up, translate on
+/// a hit, tessellate and insert on a miss.
+fn measure_geometry_cache(spec: SceneSpec, budgets: &RenderBudgets) {
+    let mut world = scenes::build(&spec);
+    let mut index = SpatialIndex::for_world(&world);
+    world.clear_spatial_updates();
+
+    let mut viewport = spec.viewport(BENCH_PANE);
+    let mut visible = VisibleSet::new();
+    let mut snapshot = RenderSnapshot::new();
+    let mut plan = PaintPlan::new();
+    let options = scene_options(budgets);
+    let mut cache: GeometryCache<gpui::Path<gpui::Pixels>> = GeometryCache::new(budgets);
+
+    let frames = 60;
+    let mut cold = CacheStats::default();
+    let mut warm = CacheStats::default();
+    let mut tessellations = 0u32;
+    let start = Instant::now();
+
+    for frame in 0..frames {
+        if frame > 0 {
+            viewport.pan_by(Vec2::new(6.0, 3.0));
+        }
+        world.rebuild_dirty_geometry();
+        index.sync(&world);
+        world.clear_spatial_updates();
+        index.query_visible(&world, &viewport, &mut visible);
+        extract(&world, &visible, &viewport, budgets, &mut snapshot);
+        scene::plan_scene(&mut plan, &world, &snapshot, &viewport, ink(), &options);
+
+        cache.begin_frame(ScreenAnchor::of(&viewport), false);
+        let mut sink = CachingSink {
+            cache: &mut cache,
+            tessellations: 0,
+        };
+        plan.paint_into(&mut sink);
+        tessellations += sink.tessellations;
+        cache.end_frame();
+
+        if frame == 0 {
+            cold = cache.frame_stats();
+        } else {
+            let stats = cache.frame_stats();
+            warm.translated += stats.translated;
+            warm.reused += stats.reused;
+            warm.scaled += stats.scaled;
+            warm.misses += stats.misses;
+        }
+    }
+
+    let elapsed = start.elapsed();
+    println!(
+        "  {} frames of pure pan on the {} scene ({:.1} ms total)",
+        frames,
+        spec.name,
+        millis(elapsed)
+    );
+    println!(
+        "    frame 1 (cold)                     {} lookups, {} misses",
+        cold.lookups(),
+        cold.misses
+    );
+    println!(
+        "    frames 2-{frames} (warm)                 {} lookups, hit rate {:.1}%",
+        warm.lookups(),
+        warm.hit_rate() * 100.0
+    );
+    println!(
+        "    of those hits, exact translations  {} ({} scaled, {} unchanged)",
+        warm.translated, warm.scaled, warm.reused
+    );
+    println!(
+        "    tessellations over all {frames} frames  {tessellations}   ({} without a cache)",
+        cold.lookups() * frames
+    );
+    println!(
+        "    cache held                         {:.2} MB of a {:.0} MB bound, {} entries",
+        cache.bytes() as f64 / 1e6,
+        budgets.geometry_cache_max_bytes as f64 / 1e6,
+        cache.len()
+    );
+}
+
+/// A sink that goes through §23's cache, exactly as `WindowPainter` does, but
+/// throws the path away instead of painting it.
+struct CachingSink<'a> {
+    cache: &'a mut GeometryCache<gpui::Path<gpui::Pixels>>,
+    tessellations: u32,
+}
+
+impl PrimitiveSink for CachingSink<'_> {
+    fn quad(&mut self, _quad: &QuadPrimitive) {}
+
+    fn path(&mut self, path: &PathPrimitive) -> u32 {
+        if let Some(cached) = path.key.and_then(|key| self.cache.get(&key)) {
+            return cached.vertices.len() as u32;
+        }
+        let Some(built) = build_path(&path.outline, path.paint, path.quality.flattening_tolerance)
+        else {
+            return 0;
+        };
+        self.tessellations += 1;
+        let vertices = built.vertices.len() as u32;
+        if let Some(key) = path.key {
+            self.cache.insert(key, built);
+        }
+        vertices
+    }
+
+    fn text(&mut self, _text: &TextPrimitive) -> u32 {
+        0
+    }
 }
