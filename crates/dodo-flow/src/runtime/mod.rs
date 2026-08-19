@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! Persistent document          Runtime derived state
-//! models/, serde           vs  this module, spatial/ (Phase 4), the caches
+//! models/, serde           vs  this module, spatial/, the caches
 //! ```
 //!
 //! - [`nodes`] / [`edges`] / [`handles`] — §17's SoA stores, split by what the
@@ -18,8 +18,9 @@
 //! - [`routes`] — the derived edge geometry, and the rebuild counter §19's
 //!   property test measures.
 //! - [`connection`] — §4's validation rules and the reasons a drop is refused.
-//! - [`hit`] — §29's narrow phase, and the seam Phase 4's broad phase plugs
-//!   into.
+//! - [`hit`] — §29's narrow phase, behind [`crate::spatial`]'s broad phase.
+//! - [`selection`] — §28's selection: a bitset for "is this selected?" and a
+//!   list for "what is selected?", holding compact ids and never elements.
 //! - [`world`] — [`GraphWorld`], which owns all of the above and is the one
 //!   place the propagation rule is written down.
 //!
@@ -39,6 +40,7 @@ pub mod handles;
 pub mod hit;
 pub mod nodes;
 pub mod routes;
+pub mod selection;
 pub mod world;
 
 pub use adjacency::AdjacencyIndex;
@@ -50,4 +52,5 @@ pub use handles::{HandleFlags, HandleSpec, HandleStore};
 pub use hit::{HitTolerance, PointerTarget};
 pub use nodes::{NodeCold, NodeFlags, NodeShape, NodeSpec, NodeStore};
 pub use routes::EdgeGeometryStore;
+pub use selection::{BoxQuery, BoxSelectMode, SelectionSet};
 pub use world::{GraphWorld, LoadReport};

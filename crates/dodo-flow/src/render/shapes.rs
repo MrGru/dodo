@@ -255,32 +255,11 @@ pub const SAFETY_MARGIN: f32 = 1.6;
 /// far below it.
 pub const MAX_DASHES: u32 = 4_096;
 
-/// The most segments one cubic is allowed to contribute.
-///
-/// A guard, not a tuning knob: without it a shape scaled to a huge zoom would
-/// let a single curve's estimate run away, and the estimate is what the black-
-/// window guard spends. Any real curve at any real tolerance is far below it.
-pub const MAX_CUBIC_SEGMENTS: u32 = 256;
-
-/// Segments a cubic flattens into at `tolerance`.
-///
-/// Flattening error for a cubic falls as the square of the segment count, so
-/// the count grows as the square root of (curve size / tolerance). `hull` — the
-/// control polygon's length — is the standard stand-in for curve size: it is
-/// cheap, it never underestimates the arc length, and it degrades correctly for
-/// a degenerate curve.
-///
-/// The 0.6 coefficient is fitted, not derived, and `render::painter`'s
-/// calibration test is what keeps it honest.
-pub fn cubic_segments(from: Vec2, c1: Vec2, c2: Vec2, to: Vec2, tolerance: f32) -> u32 {
-    let hull = (c1 - from).length() + (c2 - c1).length() + (to - c2).length();
-    if !hull.is_finite() || hull <= 0.0 {
-        return 1;
-    }
-
-    let segments = ((hull / tolerance.max(RenderQuality::MIN_TOLERANCE)).sqrt() * 0.6).ceil();
-    (segments as u32).clamp(1, MAX_CUBIC_SEGMENTS)
-}
+/// The cubic step count, **owned by [`crate::geometry::curve`]** since Phase 4
+/// and re-exported here because this module's estimator is one of its two
+/// callers. The other is the selection narrow phase, which flattens a route in
+/// world space; one formula, so the estimate and the geometry cannot disagree.
+pub use crate::geometry::curve::{MAX_CUBIC_SEGMENTS, cubic_segments};
 
 /// **The routing decision: is this shape cheaper as a quad than as a path?**
 ///

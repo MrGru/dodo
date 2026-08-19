@@ -32,7 +32,7 @@
 //! **This file names no UI framework.**
 
 use crate::{
-    geometry::{CIRCLE_KAPPA, Rect, Vec2},
+    geometry::{CIRCLE_KAPPA, Rect, Vec2, bounds, curve},
     models::EdgeRouting,
 };
 
@@ -256,6 +256,63 @@ impl EdgeRoute {
     /// coarse form a hit test starts from, and the overview-LOD form.
     pub fn corner_points(&self) -> impl Iterator<Item = Vec2> + '_ {
         std::iter::once(self.start).chain(self.segments.iter().map(|segment| segment.end()))
+    }
+
+    /// Walks the route as a world-space polyline at `tolerance`, calling
+    /// `point` for the start and then for every flattened vertex.
+    ///
+    /// The narrow phase for anything that asks a geometric question about an
+    /// edge — §28's box selection today, §29's edge hit test next. It allocates
+    /// nothing: the caller decides what to do with each point.
+    pub fn for_each_point(&self, tolerance: f32, mut point: impl FnMut(Vec2)) {
+        let mut cursor = self.start;
+        point(cursor);
+
+        for segment in &self.segments {
+            match *segment {
+                RouteSegment::Line(to) => {
+                    point(to);
+                    cursor = to;
+                }
+                RouteSegment::Cubic { c1, c2, to } => {
+                    curve::flatten_cubic(cursor, c1, c2, to, tolerance, &mut point);
+                    cursor = to;
+                }
+            }
+        }
+    }
+
+    /// **§28's exact test**: whether the route's *curve* passes through `rect`.
+    ///
+    /// The control hull ([`bounds`](EdgeRoute::bounds)) rejects first, because
+    /// it is one rectangle test and it is right for the overwhelming majority
+    /// of edges. Only what survives is flattened — a Bézier that bows far away
+    /// from the rectangle its hull overlaps is exactly the case a hull-only
+    /// test would select wrongly, and a rubber band that grabs edges it visibly
+    /// misses is the kind of wrongness a user reports as "selection is broken".
+    pub fn intersects_rect(&self, rect: Rect, tolerance: f32) -> bool {
+        let rect = rect.normalized();
+        if !self.bounds.intersects(rect) {
+            return false;
+        }
+
+        let mut previous: Option<Vec2> = None;
+        let mut hit = false;
+        self.for_each_point(tolerance, |point| {
+            if hit {
+                return;
+            }
+            if let Some(from) = previous
+                && bounds::segment_intersects_rect(from, point, rect)
+            {
+                hit = true;
+            }
+            previous = Some(point);
+        });
+
+        // A route with no segments at all is a point, and its start is the
+        // only thing there is to test.
+        hit || (self.segments.is_empty() && rect.contains_point(self.start))
     }
 }
 

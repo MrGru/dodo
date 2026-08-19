@@ -1,10 +1,11 @@
 //! [`Rect`] — an axis-aligned rectangle in world space.
 //!
-//! This is the type culling asks its questions in. The spatial index is a
-//! index a *correctness* precondition rather than an optimisation — 16,000 fully
-//! offscreen paths were measured still costing 6.3 ms of CPU per frame, because GPUI rejects them only after `paint_path` has copied and
-//! scaled their vertex buffers — so [`Rect::intersects`] is the predicate the
-//! whole render budget rests on, and it is written to be obviously right.
+//! This is the type culling asks its questions in, and culling is a
+//! *correctness* precondition rather than an optimisation: 16,000 fully
+//! offscreen paths were measured still costing 6.3 ms of CPU per frame, because
+//! GPUI rejects them only after `paint_path` has copied and scaled their vertex
+//! buffers. So [`Rect::intersects`] is the predicate the whole render budget
+//! rests on, and it is written to be obviously right.
 //!
 //! **Origin/size rather than min/max.** A node stores a position and a size, so
 //! origin/size is the representation that needs no conversion at the call site
@@ -172,9 +173,64 @@ impl Rect {
     }
 }
 
+/// Whether the segment `a`→`b` touches `rect`, exactly.
+///
+/// §28's box selection needs it (an edge crossing the rectangle is selected
+/// even though neither of its ends is inside it) and §29's edge hit test will
+/// need it again. Exact rather than bounds-based: the segment's own bounding box
+/// overlaps the rectangle for any diagonal that merely passes nearby, and a
+/// selection that grabbed those would feel broken in exactly the way a rubber
+/// band must not.
+///
+/// The test is the standard three-step one — endpoint inside, then the
+/// separating-axis check on the segment's normal, having already rejected on the
+/// two axis-aligned separations. `rect` is normalised first, so a rectangle
+/// dragged up and to the left behaves like one dragged down and to the right.
+pub fn segment_intersects_rect(a: Vec2, b: Vec2, rect: Rect) -> bool {
+    let rect = rect.normalized();
+    if rect.contains_point(a) || rect.contains_point(b) {
+        return true;
+    }
+
+    // Axis-aligned separation: the segment's own bounds miss the rectangle.
+    let min = a.min(b);
+    let max = a.max(b);
+    if max.x < rect.min().x || min.x > rect.max().x || max.y < rect.min().y || min.y > rect.max().y
+    {
+        return false;
+    }
+
+    // The remaining axis is the segment's normal. If all four corners fall on
+    // the same side of the infinite line through `a` and `b`, the rectangle and
+    // the segment are separated by it; otherwise, with the two axis-aligned
+    // separations already ruled out, they touch.
+    let direction = b - a;
+    let normal = Vec2::new(-direction.y, direction.x);
+    let offset = normal.x * a.x + normal.y * a.y;
+
+    let mut positive = false;
+    let mut negative = false;
+    for corner in [
+        rect.min(),
+        Vec2::new(rect.max().x, rect.min().y),
+        rect.max(),
+        Vec2::new(rect.min().x, rect.max().y),
+    ] {
+        let side = normal.x * corner.x + normal.y * corner.y - offset;
+        positive |= side > 0.0;
+        negative |= side < 0.0;
+        // A corner exactly on the line is a touch, which counts.
+        if side == 0.0 {
+            return true;
+        }
+    }
+
+    positive && negative
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Rect;
+    use super::{Rect, segment_intersects_rect};
     use crate::geometry::Vec2;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
@@ -301,5 +357,107 @@ mod tests {
             r.translated(Vec2::new(10.0, 20.0)),
             rect(11.0, 22.0, 3.0, 4.0)
         );
+    }
+
+    /// The oracle for the exact segment test: sample the segment densely and
+    /// ask whether any sample is inside. Slow and obviously right, which is
+    /// what a reference is for.
+    fn segment_touches_by_sampling(a: Vec2, b: Vec2, r: Rect) -> bool {
+        (0..=2_000).any(|step| {
+            let t = step as f32 / 2_000.0;
+            r.contains_point(a + (b - a) * t)
+        })
+    }
+
+    #[test]
+    fn a_segment_crossing_a_rectangle_is_detected_from_outside_it() {
+        let r = rect(0.0, 0.0, 100.0, 100.0);
+
+        // Straight through, both ends outside.
+        assert!(segment_intersects_rect(
+            Vec2::new(-50.0, 50.0),
+            Vec2::new(150.0, 50.0),
+            r
+        ));
+        // Diagonally through a corner.
+        assert!(segment_intersects_rect(
+            Vec2::new(-10.0, 10.0),
+            Vec2::new(10.0, -10.0),
+            r
+        ));
+        // One end inside.
+        assert!(segment_intersects_rect(
+            Vec2::new(50.0, 50.0),
+            Vec2::new(500.0, 500.0),
+            r
+        ));
+    }
+
+    #[test]
+    fn a_segment_that_only_passes_nearby_is_not_a_hit() {
+        let r = rect(0.0, 0.0, 100.0, 100.0);
+
+        // The classic false positive: a diagonal whose *bounding box* covers
+        // the rectangle entirely but which passes outside its far corner. A
+        // bounds-only test says yes; the exact test says no.
+        assert!(!segment_intersects_rect(
+            Vec2::new(-10.0, 260.0),
+            Vec2::new(260.0, -10.0),
+            r
+        ));
+        // And the same diagonal shifted in until it does clip the corner.
+        assert!(segment_intersects_rect(
+            Vec2::new(-10.0, 120.0),
+            Vec2::new(120.0, -10.0),
+            r
+        ));
+        assert!(!segment_intersects_rect(
+            Vec2::new(200.0, 0.0),
+            Vec2::new(200.0, 100.0),
+            r
+        ));
+    }
+
+    #[test]
+    fn the_segment_test_agrees_with_dense_sampling() {
+        let r = rect(-30.0, -20.0, 60.0, 40.0);
+        let mut state = 0x1234_5678u32;
+        let mut next = move || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 8) as f32 / (1 << 24) as f32 * 200.0 - 100.0
+        };
+
+        for _ in 0..2_000 {
+            let a = Vec2::new(next(), next());
+            let b = Vec2::new(next(), next());
+            if segment_intersects_rect(a, b, r) != segment_touches_by_sampling(a, b, r) {
+                // Sampling can miss a grazing crossing, so only a *false
+                // negative* from the exact test is a failure.
+                assert!(
+                    !segment_touches_by_sampling(a, b, r),
+                    "the exact test missed a crossing: {a:?} -> {b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_degenerate_segment_is_a_point_test() {
+        let r = rect(0.0, 0.0, 10.0, 10.0);
+        let inside = Vec2::new(5.0, 5.0);
+        let outside = Vec2::new(50.0, 5.0);
+
+        assert!(segment_intersects_rect(inside, inside, r));
+        assert!(!segment_intersects_rect(outside, outside, r));
+    }
+
+    #[test]
+    fn the_rectangle_is_normalized_before_it_is_tested() {
+        let backwards = Rect::new(Vec2::new(10.0, 10.0), Vec2::new(-10.0, -10.0));
+        assert!(segment_intersects_rect(
+            Vec2::new(-5.0, 5.0),
+            Vec2::new(15.0, 5.0),
+            backwards
+        ));
     }
 }

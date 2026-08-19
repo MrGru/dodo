@@ -187,6 +187,7 @@ pub mod interaction;
 pub mod models;
 pub mod render;
 pub mod runtime;
+pub mod spatial;
 pub mod views;
 
 pub use budgets::RenderBudgets;
@@ -194,7 +195,11 @@ pub use geometry::{Rect, Vec2, Viewport};
 pub use interaction::{InteractionEffect, InteractionEvent, InteractionMachine, InteractionState};
 pub use models::{ElementId, ElementKind, FlowDocument};
 pub use render::{GridSettings, GridStyle, PaintPlan, PaintStats};
-pub use runtime::{ConnectionRules, EdgeEnd, GraphWorld, NodeSpec, PointerTarget};
+pub use runtime::{
+    BoxQuery, BoxSelectMode, ConnectionRules, EdgeEnd, GraphWorld, NodeSpec, PointerTarget,
+    SelectionSet,
+};
+pub use spatial::{SpatialIndex, UniformGrid, VisibleSet};
 pub use views::FlowView;
 
 #[cfg(test)]
@@ -210,6 +215,7 @@ mod tests {
         ("geometry/mod.rs", include_str!("geometry/mod.rs")),
         ("geometry/arrow.rs", include_str!("geometry/arrow.rs")),
         ("geometry/bounds.rs", include_str!("geometry/bounds.rs")),
+        ("geometry/curve.rs", include_str!("geometry/curve.rs")),
         ("geometry/route.rs", include_str!("geometry/route.rs")),
         (
             "geometry/transform.rs",
@@ -245,7 +251,11 @@ mod tests {
         ("runtime/hit.rs", include_str!("runtime/hit.rs")),
         ("runtime/nodes.rs", include_str!("runtime/nodes.rs")),
         ("runtime/routes.rs", include_str!("runtime/routes.rs")),
+        ("runtime/selection.rs", include_str!("runtime/selection.rs")),
         ("runtime/world.rs", include_str!("runtime/world.rs")),
+        ("spatial/mod.rs", include_str!("spatial/mod.rs")),
+        ("spatial/grid.rs", include_str!("spatial/grid.rs")),
+        ("spatial/index.rs", include_str!("spatial/index.rs")),
     ];
 
     /// **The crate's central invariant, enforced rather than remembered.**

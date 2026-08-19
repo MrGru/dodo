@@ -55,9 +55,10 @@ use crate::{
         IdAllocator, Metadata, NodeIndex, handle_world_position,
     },
     runtime::{
-        AdjacencyIndex, ConnectionError, ConnectionRules, DirtyState, EdgeDirty, EdgeEnd,
-        EdgeGeometryStore, EdgeSpec, EdgeStore, HandleSpec, HandleStore, HitTolerance, NodeDirty,
-        NodeFlags, NodeSpec, NodeStore, PointerTarget,
+        AdjacencyIndex, BoxQuery, BoxSelectMode, ConnectionError, ConnectionRules, DirtyState,
+        EdgeDirty, EdgeEnd, EdgeFlags, EdgeGeometryStore, EdgeSpec, EdgeStore, HandleSpec,
+        HandleStore, HitTolerance, NodeDirty, NodeFlags, NodeSpec, NodeStore, PointerTarget,
+        SelectionSet,
     },
 };
 
@@ -95,6 +96,12 @@ pub struct GraphWorld {
     geometry: EdgeGeometryStore,
     dirty: DirtyState,
     rules: ConnectionRules,
+
+    /// §28's selection, as compact ids. Kept here rather than on the view
+    /// because the store flags (`NodeFlags::SELECTED`) are the painter's
+    /// answer and this is the command layer's, and two owners is how they
+    /// drift — [`GraphWorld::set_node_selected`] writes both or neither.
+    selection: SelectionSet,
 
     /// Document id → runtime index. Touched on load, on save and when an
     /// external reference (an undo entry, a clipboard paste) has to be resolved
@@ -306,9 +313,28 @@ impl GraphWorld {
     }
 
     /// For the consumer of an invalidation — the renderer clearing what it has
-    /// drawn, Phase 4's index draining the spatial queue.
+    /// drawn, the spatial index draining its two queues.
     pub fn dirty_mut(&mut self) -> &mut DirtyState {
         &mut self.dirty
+    }
+
+    /// Drops both spatial queues, once the index has consumed them.
+    ///
+    /// The frame order this belongs to is fixed and each step depends on the
+    /// one before it:
+    ///
+    /// ```text
+    /// rebuild_dirty_geometry()   routes become current
+    /// SpatialIndex::sync()       re-indexes from those routes
+    /// clear_spatial_updates()    the queues are spent
+    /// SpatialIndex::query_visible()
+    /// ```
+    ///
+    /// Syncing before the rebuild would index an edge at the place it used to
+    /// be, which is a missing or ghost edge one frame later — the failure mode
+    /// culling bugs always take.
+    pub fn clear_spatial_updates(&mut self) {
+        self.dirty.clear_spatial_updates();
     }
 
     pub fn rules(&self) -> ConnectionRules {
@@ -338,7 +364,8 @@ impl GraphWorld {
         // graph, and a settings change rather than an interaction.
         self.geometry.set_options(options);
         for edge in self.edges.indices() {
-            self.dirty.mark_edge(edge, EdgeDirty::GEOMETRY);
+            self.dirty
+                .mark_edge(edge, EdgeDirty::GEOMETRY | EdgeDirty::SPATIAL);
         }
     }
 
@@ -615,10 +642,145 @@ impl GraphWorld {
         }
 
         self.nodes.set_flag(node, NodeFlags::SELECTED, selected);
+        // The flag and the set are written together, here and nowhere else.
+        if selected {
+            self.selection.insert_node(node);
+        } else {
+            self.selection.remove_node(node);
+        }
         // Selection changes how a node is painted and nothing about where
         // anything is, so no edge is touched. The distinction is the whole
         // point of having flags per change rather than one "dirty" bit.
         self.dirty.mark_node(node, NodeDirty::STYLE);
+    }
+
+    pub fn set_edge_selected(&mut self, edge: EdgeIndex, selected: bool) {
+        if !self.edges.contains(edge) || self.edges.is_selected(edge) == selected {
+            return;
+        }
+
+        self.edges.set_flag(edge, EdgeFlags::SELECTED, selected);
+        if selected {
+            self.selection.insert_edge(edge);
+        } else {
+            self.selection.remove_edge(edge);
+        }
+        self.dirty.mark_edge(edge, EdgeDirty::STYLE);
+    }
+
+    // ---- selection (§28) -------------------------------------------------
+
+    /// What is selected, as compact runtime ids — never cloned elements.
+    pub fn selection(&self) -> &SelectionSet {
+        &self.selection
+    }
+
+    /// Deselects everything, touching only what was actually selected.
+    ///
+    /// Proportional to the *selection*, not to the document: the set is what
+    /// makes that possible, and it is why §28 asks for one rather than for a
+    /// scan over the flags.
+    pub fn clear_selection(&mut self) {
+        // Taken out so the stores can be written while it is read, and handed
+        // back cleared so a rubber band that replaces its selection sixty
+        // times a second reuses the same allocations (§40 rule 13).
+        let mut spent = std::mem::take(&mut self.selection);
+        for &node in spent.nodes() {
+            self.nodes.set_flag(node, NodeFlags::SELECTED, false);
+            self.dirty.mark_node(node, NodeDirty::STYLE);
+        }
+        for &edge in spent.edges() {
+            self.edges.set_flag(edge, EdgeFlags::SELECTED, false);
+            self.dirty.mark_edge(edge, EdgeDirty::STYLE);
+        }
+        spent.clear();
+        self.selection = spent;
+    }
+
+    /// Replaces the selection with at most one node — a plain click.
+    pub fn select_only(&mut self, node: Option<NodeIndex>) {
+        if let Some(node) = node
+            && self.selection.single_node() == Some(node)
+        {
+            return;
+        }
+
+        self.clear_selection();
+        if let Some(node) = node {
+            self.set_node_selected(node, true);
+        }
+    }
+
+    /// **§28's box selection, narrow phase.**
+    ///
+    /// The candidates are parameters, exactly as [`GraphWorld::hit_test`]'s
+    /// are, because the broad phase is [`crate::spatial::SpatialIndex`]'s and
+    /// this file must never be the place a scan over the document appears.
+    /// Pass an empty iterator for either kind to leave it alone.
+    ///
+    /// Returns how many elements changed state, so a caller can decide whether
+    /// the frame needs repainting without diffing anything.
+    pub fn apply_box_selection(
+        &mut self,
+        query: BoxQuery,
+        nodes: impl IntoIterator<Item = NodeIndex>,
+        edges: impl IntoIterator<Item = EdgeIndex>,
+    ) -> u32 {
+        if !query.additive {
+            self.clear_selection();
+        }
+
+        let rect = query.rect.normalized();
+        let mut changed = 0;
+
+        for node in nodes {
+            // A **locked** element is not selectable — §26's behaviour, and the
+            // same answer `views::flow` gives a press that lands on one.
+            if !self.nodes.contains(node)
+                || self.nodes.is_hidden(node)
+                || self.nodes.is_locked(node)
+                || self.selection.contains_node(node)
+            {
+                continue;
+            }
+            let bounds = self.nodes.bounds(node);
+            let inside = match query.mode {
+                BoxSelectMode::Touch => rect.intersects(bounds),
+                BoxSelectMode::Enclose => rect.contains_rect(bounds),
+            };
+            if inside {
+                self.set_node_selected(node, true);
+                changed += 1;
+            }
+        }
+
+        for edge in edges {
+            if !self.edges.contains(edge)
+                || self.edges.is_hidden(edge)
+                || self.selection.contains_edge(edge)
+            {
+                continue;
+            }
+            // A stale route is not selected rather than selected at where it
+            // used to be: the caller runs after `rebuild_dirty_geometry`, so a
+            // stale route here means the edge has no geometry at all.
+            let Some(route) = self.geometry.route(edge) else {
+                continue;
+            };
+            let inside = match query.mode {
+                BoxSelectMode::Touch => route.intersects_rect(rect, query.tolerance),
+                // The control hull, not the curve: "entirely inside" is only
+                // *stricter* if the bound is the outer one, and the hull
+                // contains the curve.
+                BoxSelectMode::Enclose => rect.contains_rect(route.bounds()),
+            };
+            if inside {
+                self.set_edge_selected(edge, true);
+                changed += 1;
+            }
+        }
+
+        changed
     }
 
     /// Hides or shows a node. **Its edges are left alone**: an edge carries its
@@ -655,7 +817,7 @@ impl GraphWorld {
         // adjacency iterator is holding.
         let (dirty, geometry) = (&mut self.dirty, &mut self.geometry);
         for edge in self.adjacency.incident_edges(node) {
-            dirty.mark_edge(edge, EdgeDirty::GEOMETRY);
+            dirty.mark_edge(edge, EdgeDirty::GEOMETRY | EdgeDirty::SPATIAL);
             geometry.invalidate(edge);
         }
     }
@@ -668,7 +830,8 @@ impl GraphWorld {
     /// without the other paints an edge hanging off a node that has already
     /// moved, so nothing sets them separately — this is the only writer.
     fn invalidate_edge_geometry(&mut self, edge: EdgeIndex) {
-        self.dirty.mark_edge(edge, EdgeDirty::GEOMETRY);
+        self.dirty
+            .mark_edge(edge, EdgeDirty::GEOMETRY | EdgeDirty::SPATIAL);
         self.geometry.invalidate(edge);
     }
 

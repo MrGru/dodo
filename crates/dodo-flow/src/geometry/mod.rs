@@ -7,9 +7,13 @@
 //!
 //! - [`vec`](mod@vec) — [`Vec2`], the two-component vector every position, size and
 //!   delta is expressed in.
-//! - [`bounds`] — [`Rect`], an axis-aligned world rectangle, and the union /
+//! - [`bounds`] — [`Rect`], an axis-aligned world rectangle, the union /
 //!   intersection / containment maths that culling and zoom-to-fit are built
-//!   from.
+//!   from, and [`bounds::segment_intersects_rect`], the exact test §28's box
+//!   selection resolves an edge with.
+//! - [`curve`] — cubic evaluation and flattening. One step-count formula, used
+//!   by the vertex estimate in `render::shapes` and by the world-space
+//!   narrow phase that asks whether a route crosses a rectangle.
 //! - [`route`] — [`EdgeRoute`], the five edge routings of §8 as derived
 //!   world-space geometry, kept strictly apart from the logical edge.
 //! - [`arrow`] — §8's endpoint decorations, allocation-free, with the dot
@@ -28,12 +32,14 @@
 
 pub mod arrow;
 pub mod bounds;
+pub mod curve;
 pub mod route;
 pub mod transform;
 pub mod vec;
 
 pub use arrow::{ArrowGeometry, ArrowPolygon};
-pub use bounds::Rect;
+pub use bounds::{Rect, segment_intersects_rect};
+pub use curve::{cubic_point, cubic_segments, flatten_cubic};
 pub use route::{Attachment, EdgeRoute, RouteOptions, RouteSegment, Side};
 pub use transform::Viewport;
 pub use vec::Vec2;
