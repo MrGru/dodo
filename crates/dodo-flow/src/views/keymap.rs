@@ -61,7 +61,18 @@ actions!(
         /// §30's undo, scoped to the canvas.
         Undo,
         /// §30's redo.
-        Redo
+        Redo,
+        /// Removes the selection. Bound to both delete keys — see
+        /// [`keys::EditAction::Delete`].
+        ///
+        /// It is also the action the palette's Delete button names in its
+        /// tooltip, which is what puts the real keystroke beside the label
+        /// without anything having to spell it: `gpui-component`'s `Tooltip`
+        /// looks the binding up from this action and the canvas's context, so a
+        /// rebind changes the hint and nothing has to be kept in step.
+        Delete,
+        /// §45's tool lock.
+        ToggleToolLock
     ]
 );
 
@@ -82,6 +93,10 @@ fn binding(row: keys::Binding) -> KeyBinding {
     match row.action {
         keys::EditAction::Undo => KeyBinding::new(row.keystroke, Undo, Some(KEY_CONTEXT)),
         keys::EditAction::Redo => KeyBinding::new(row.keystroke, Redo, Some(KEY_CONTEXT)),
+        keys::EditAction::Delete => KeyBinding::new(row.keystroke, Delete, Some(KEY_CONTEXT)),
+        keys::EditAction::ToggleToolLock => {
+            KeyBinding::new(row.keystroke, ToggleToolLock, Some(KEY_CONTEXT))
+        }
         keys::EditAction::Tool(tool) => {
             KeyBinding::new(row.keystroke, SelectTool { tool }, Some(KEY_CONTEXT))
         }

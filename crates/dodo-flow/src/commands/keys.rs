@@ -20,12 +20,12 @@
 //!
 //! # What is bound, and what is not
 //!
-//! Undo, redo, and §45's eight tools. §26's remaining list — nudge, delete,
-//! duplicate, copy/paste, zoom-to-fit, zoom-to-selection — is more rows over
-//! the same type, and each needs a command the engine can perform; the ones
-//! that exist today have no gesture asking for them yet. A row here that no
-//! code reads would be a binding that silently does nothing, which is worse
-//! than an absent one.
+//! Undo, redo, delete, the tool lock, and §45's eight tools. §26's remaining
+//! list — nudge, duplicate, copy/paste, zoom-to-fit, zoom-to-selection — is
+//! more rows over the same type, and each needs a command the engine can
+//! perform; the ones that exist today have no gesture asking for them yet. A
+//! row here that no code reads would be a binding that silently does nothing,
+//! which is worse than an absent one.
 //!
 //! # The tool letters are the same on every host, and that is a decision
 //!
@@ -62,6 +62,18 @@ use crate::interaction::CanvasTool;
 pub enum EditAction {
     Undo,
     Redo,
+    /// **Removes the selection** — [`FlowEditor::delete_selection`](crate::commands::FlowEditor::delete_selection).
+    ///
+    /// Two keystrokes on every host rather than one, because the two are the
+    /// same key to most people: `Backspace` is the key labelled *delete* on an
+    /// Apple keyboard, and `Delete` is the forward-delete every PC keyboard
+    /// has. Binding only one of them means a user whose muscle memory has the
+    /// other presses it and nothing happens.
+    Delete,
+    /// **The tool lock**: whether finishing a drawing keeps the tool or returns
+    /// to Select. Like [`EditAction::Tool`] it is not an edit — it changes what
+    /// the *next* gesture means and touches no document.
+    ToggleToolLock,
     /// §45's tool activation. **Not an edit**, despite the type's name: picking
     /// a tool changes what the next press means and touches no document. It is
     /// here because this is the binding table, and a second table for one kind
@@ -78,6 +90,8 @@ impl EditAction {
         match self {
             EditAction::Undo => "undo",
             EditAction::Redo => "redo",
+            EditAction::Delete => "delete",
+            EditAction::ToggleToolLock => "toggle-tool-lock",
             EditAction::Tool(tool) => tool.name(),
         }
     }
@@ -102,6 +116,29 @@ const MACOS: &[Binding] = &[
     Binding {
         keystroke: "cmd-shift-z",
         action: EditAction::Redo,
+    },
+];
+
+/// The rows that are the same on every host and carry no modifier: the two
+/// delete keys, and Excalidraw's own `q` for the tool lock.
+///
+/// Beside [`TOOLS`] rather than inside it because these are not tools, and
+/// apart from [`MACOS`] and [`PC`] because they follow no platform convention:
+/// `Backspace` deletes the selection in every canvas editor on every operating
+/// system, and inventing a `Cmd+Backspace` for macOS would be following a
+/// convention that does not exist.
+const UNIVERSAL: &[Binding] = &[
+    Binding {
+        keystroke: "backspace",
+        action: EditAction::Delete,
+    },
+    Binding {
+        keystroke: "delete",
+        action: EditAction::Delete,
+    },
+    Binding {
+        keystroke: "q",
+        action: EditAction::ToggleToolLock,
     },
 ];
 
@@ -175,7 +212,7 @@ pub fn for_host(host: HostOs) -> Vec<Binding> {
         HostOs::Windows | HostOs::Unix => PC,
     };
 
-    editing.iter().chain(TOOLS).copied().collect()
+    editing.iter().chain(UNIVERSAL).chain(TOOLS).copied().collect()
 }
 
 /// The bindings for the machine this was compiled for.
@@ -229,14 +266,18 @@ mod tests {
     /// derived, because the whole value of the table is that the wrong answer
     /// is visible in a diff.
     ///
-    /// Only the *editing* rows are platform-shaped; the tool letters have no
-    /// convention to follow and are excluded by name rather than by position.
+    /// Only *undo and redo* are platform-shaped. The tool letters, the two
+    /// delete keys and the lock have no convention to follow and are excluded
+    /// by name rather than by position — which is why this filter lists what it
+    /// wants instead of subtracting what it does not.
     #[test]
     fn each_host_gets_its_own_modifier() {
         let editing = |host| {
             for_host(host)
                 .into_iter()
-                .filter(|binding: &Binding| !matches!(binding.action, EditAction::Tool(_)))
+                .filter(|binding: &Binding| {
+                    matches!(binding.action, EditAction::Undo | EditAction::Redo)
+                })
                 .collect::<Vec<_>>()
         };
 
@@ -303,6 +344,56 @@ mod tests {
         assert_eq!(redos(HostOs::MacOs), 1);
         assert_eq!(redos(HostOs::Windows), 2);
         assert_eq!(redos(HostOs::Unix), 2);
+    }
+
+    /// **Both delete keys reach the same action, on every host.** The key an
+    /// Apple keyboard labels *delete* reports as `backspace`, and a user
+    /// pressing it must not find that the canvas only answers the other one.
+    #[test]
+    fn both_delete_keys_delete_on_every_host() {
+        for host in EVERY_HOST {
+            let bindings = for_host(host);
+            for keystroke in ["backspace", "delete"] {
+                assert!(
+                    bindings.iter().any(|binding| binding.keystroke == keystroke
+                        && binding.action == EditAction::Delete),
+                    "{host:?} does not delete on {keystroke}"
+                );
+            }
+        }
+    }
+
+    /// The lock is reachable from the keyboard everywhere, on the letter
+    /// Excalidraw uses.
+    #[test]
+    fn the_tool_lock_is_bound_on_every_host() {
+        for host in EVERY_HOST {
+            assert!(
+                for_host(host)
+                    .iter()
+                    .any(|binding| binding.action == EditAction::ToggleToolLock
+                        && binding.keystroke == "q"),
+                "{host:?} cannot toggle the tool lock"
+            );
+        }
+    }
+
+    /// Deleting must not need a modifier, and must not accidentally acquire
+    /// one: `Cmd+Backspace` is "delete to start of line" in every text field
+    /// and would be a different gesture wearing the same name.
+    #[test]
+    fn deleting_carries_no_modifier() {
+        for host in EVERY_HOST {
+            for binding in for_host(host) {
+                if binding.action == EditAction::Delete {
+                    assert!(
+                        !binding.keystroke.contains('-'),
+                        "{host:?} binds delete to {}, which carries a modifier",
+                        binding.keystroke
+                    );
+                }
+            }
+        }
     }
 
     #[test]

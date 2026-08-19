@@ -176,6 +176,45 @@ impl FlowEditor {
         })
     }
 
+    /// **Removes whatever is selected**, and says whether anything went.
+    ///
+    /// The whole of `Delete` and `Backspace`, and of the toolbar action beside
+    /// them, is this one method: read §28's selection, hand it to §30's
+    /// `SetPresence`, and let the one applier do the rest. It is here rather
+    /// than in the view because the selection and the history are both this
+    /// type's, and a view that assembled the command itself would be the
+    /// second place a removal could be got wrong.
+    ///
+    /// **It is written to survive the next three phases without changing.**
+    /// A selection is a set of node and edge indices and nothing else — it does
+    /// not know what kind an element is — so a text element (Phase 10) and an
+    /// image (Phase 12) are deleted by this method the day they can be
+    /// selected, with no line here to add. That is the same property that makes
+    /// [`EditCommand::SetPresence`] kind-blind, and it is the reason the
+    /// removal was not written as "delete the selected *nodes*".
+    ///
+    /// **What it does not do is spelled out, because it is easy to add by
+    /// mistake**: it does not clear the selection afterwards. Removal already
+    /// deselects each element as it goes
+    /// ([`GraphWorld::remove_node`](crate::runtime::GraphWorld::remove_node)),
+    /// and an extra clear here would deselect the elements an *undo* is about
+    /// to bring back — which is how a restored element comes back invisible to
+    /// every control that reads the selection.
+    ///
+    /// One edit and therefore one undo step, however many elements went, and
+    /// the incident edges of a removed node go with it because the applier
+    /// records the cascade rather than the request.
+    pub fn delete_selection(&mut self) -> bool {
+        let nodes = self.world.selection().nodes().to_vec();
+        let edges = self.world.selection().edges().to_vec();
+        if nodes.is_empty() && edges.is_empty() {
+            return false;
+        }
+
+        self.apply(EditCommand::remove(nodes, edges))
+            .is_ok_and(|summary| summary.changed)
+    }
+
     /// Opens a gesture: every edit until [`end_gesture`](FlowEditor::end_gesture)
     /// is one undo step. A node drag calls this on the press and closes it on
     /// the release.
@@ -419,6 +458,74 @@ mod tests {
 
         editor.load_document(crate::models::FlowDocument::new());
         assert!(!editor.can_undo() && !editor.can_redo());
+    }
+
+    /// Pressing Delete with nothing selected must be a no-op that costs no undo
+    /// press. It is the most common way the key is hit.
+    #[test]
+    fn deleting_an_empty_selection_records_nothing() {
+        let (mut editor, _) = editor_with_a_node();
+        let depth = editor.history().undo_depth();
+
+        assert!(!editor.delete_selection());
+        assert_eq!(editor.history().undo_depth(), depth);
+    }
+
+    /// **Deleting must not clear the selection**, and this is the test that
+    /// pins it. Removal deselects each element on its way out, so a clear here
+    /// would be redundant going forward and wrong coming back: the undo
+    /// restores the elements, and a selection cleared by the *delete* is not
+    /// something the undo knows to restore.
+    #[test]
+    fn deleting_removes_the_selected_nodes_and_undo_brings_them_back() {
+        let (mut editor, node) = editor_with_a_node();
+        editor.select_only(Some(node));
+
+        assert!(editor.delete_selection());
+        assert!(!editor.world().node_is_live(node));
+        assert!(
+            editor.world().selection().is_empty(),
+            "a removed element stayed in the selection set"
+        );
+
+        assert!(editor.undo());
+        assert!(editor.world().node_is_live(node));
+    }
+
+    /// Several elements go in one command and therefore in one undo press —
+    /// which is what a rubber band followed by Delete has to feel like.
+    #[test]
+    fn deleting_many_elements_is_one_undo_press() {
+        let mut editor = FlowEditor::new();
+        let added = editor
+            .apply(EditCommand::AddNodes(vec![
+                NodeDraft::new(NodeSpec::new(
+                    ElementId::NONE,
+                    ElementKind::Shape(ShapeKind::Rectangle),
+                    Vec2::new(0.0, 0.0),
+                    Vec2::new(50.0, 30.0),
+                )),
+                NodeDraft::new(NodeSpec::new(
+                    ElementId::NONE,
+                    ElementKind::Shape(ShapeKind::Ellipse),
+                    Vec2::new(100.0, 0.0),
+                    Vec2::new(50.0, 30.0),
+                )),
+            ]))
+            .unwrap()
+            .added_nodes;
+
+        for node in &added {
+            editor.set_node_selected(*node, true);
+        }
+        let depth = editor.history().undo_depth();
+
+        assert!(editor.delete_selection());
+        assert_eq!(editor.history().undo_depth(), depth + 1);
+        assert!(added.iter().all(|node| !editor.world().node_is_live(*node)));
+
+        assert!(editor.undo());
+        assert!(added.iter().all(|node| editor.world().node_is_live(*node)));
     }
 
     /// An interrupted drag leaves a gesture open. Pressing undo then must take

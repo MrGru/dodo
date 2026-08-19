@@ -122,7 +122,7 @@ use crate::{
     runtime::{BoxQuery, EdgeEnd, GraphWorld, HitTolerance, PointerTarget, SelectionSet},
     spatial::{SpatialIndex, SyncReport, VisibleSet},
     views::{
-        keymap::{Redo, SelectTool, Undo},
+        keymap::{Delete, Redo, SelectTool, ToggleToolLock, Undo},
         nodes, palette,
     },
 };
@@ -609,6 +609,54 @@ impl FlowView {
         }
     }
 
+    /// **§45's tool lock**: whether finishing a drawing keeps the tool.
+    pub fn tool_locked(&self) -> bool {
+        self.interaction.tool_locked()
+    }
+
+    /// Switches the lock. The toolbar toggle and the `q` binding both land
+    /// here, for the same reason [`FlowView::set_tool`] exists: one door, and
+    /// the interaction machine is the only place the answer is kept.
+    pub fn set_tool_locked(&mut self, locked: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // The palette is a sibling element; clicking it moves the focus off the
+        // canvas and every binding scoped to `KEY_CONTEXT` goes dead until the
+        // next press on the canvas itself. See `set_tool`.
+        self.focus_handle.clone().focus(window, cx);
+
+        let effect = self
+            .interaction
+            .handle(InteractionEvent::SetToolLock(locked));
+        if effect.needs_repaint() {
+            cx.notify();
+        }
+    }
+
+    /// **Removes whatever is selected**, through §30's one applier.
+    ///
+    /// Both delete keys and the toolbar's own action come here, and there is
+    /// nothing between this and [`FlowEditor::delete_selection`] but the focus
+    /// and the repaint — which is the whole point of the phase's state model.
+    /// A view that assembled the command would be a second removal path, and
+    /// the first thing to drift from it would be the incident-edge cascade.
+    pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.clone().focus(window, cx);
+
+        if self.editor.delete_selection() {
+            // A deleted node may have been the hovered one, and §44's controls
+            // are drawn from that field rather than from the snapshot. Left
+            // set, they would hang over a node that is no longer there until
+            // the pointer moved.
+            self.hovered = None;
+            cx.notify();
+        }
+    }
+
+    /// Whether the toolbar's Delete action would do anything — §28's selection,
+    /// asked as the question the button needs.
+    pub fn can_delete(&self) -> bool {
+        !self.editor.world().selection().is_empty()
+    }
+
     /// The hand [`RenderStyle::Sketch`] draws with (§13).
     pub fn sketch_style(&self) -> SketchStyle {
         self.editor.world().settings().sketch
@@ -622,6 +670,19 @@ impl FlowView {
         }
         self.editor.set_sketch_style(style);
         cx.notify();
+    }
+
+    /// What the palette needs to know about the canvas.
+    ///
+    /// Three cheap reads, assembled here rather than in `render`'s `div` chain
+    /// so the palette's inputs are one named thing — and so a fourth (Phase
+    /// 11's) is added in one place.
+    fn palette_state(&self) -> palette::PaletteState {
+        palette::PaletteState {
+            tool: self.interaction.tool(),
+            tool_locked: self.interaction.tool_locked(),
+            can_delete: self.can_delete(),
+        }
     }
 
     /// What [`crate::render::scene`] is given each frame.
@@ -1296,6 +1357,24 @@ impl FlowView {
         self.set_tool(action.tool, window, cx);
     }
 
+    /// `Delete` and `Backspace`, reached through the bindings registered in
+    /// [`crate::init`]. The palette's button calls
+    /// [`FlowView::delete_selection`] directly, so both routes are the same
+    /// method rather than two that have to agree.
+    fn on_delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        self.delete_selection(window, cx);
+    }
+
+    /// `q`, and the palette's toggle.
+    fn on_toggle_tool_lock(
+        &mut self,
+        _: &ToggleToolLock,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_tool_locked(!self.interaction.tool_locked(), window, cx);
+    }
+
     /// **`Esc` means two things, in order**: abandon whatever is in progress,
     /// then put the Select tool back.
     ///
@@ -1404,6 +1483,8 @@ impl Render for FlowView {
             .on_action(cx.listener(Self::on_undo))
             .on_action(cx.listener(Self::on_redo))
             .on_action(cx.listener(Self::on_select_tool))
+            .on_action(cx.listener(Self::on_delete))
+            .on_action(cx.listener(Self::on_toggle_tool_lock))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
             .child(
@@ -1438,7 +1519,7 @@ impl Render for FlowView {
                     .absolute()
                     .top(px(12.0))
                     .left(px(12.0))
-                    .child(palette::palette(cx.entity(), self.interaction.tool(), cx)),
+                    .child(palette::palette(cx.entity(), self.palette_state(), cx)),
             )
     }
 }

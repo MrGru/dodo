@@ -354,6 +354,79 @@ mod tests {
         assert_eq!(editor.to_document(), document_before);
     }
 
+    /// **Phase 9's whole delete path, at the frame level.**
+    ///
+    /// Select a connected node, press Delete, and three things must be true at
+    /// once: the node and *every one of its edges* leave the spatial index, the
+    /// whole removal is a single undo press, and the frame after that press is
+    /// the frame before the deletion. The cascade is the part worth asserting
+    /// here rather than in the applier — an edge with one end nowhere has no
+    /// geometry, so "delete the node, keep the edges" is a state that paints
+    /// wrongly rather than failing.
+    #[test]
+    fn deleting_the_selection_takes_the_incident_edges_and_undoes_in_one_press() {
+        let (mut editor, mut index, viewport) = scene_editor();
+        let before = frame(&mut editor, &mut index, &viewport);
+        let document_before = editor.to_document();
+
+        let node = visible_connected_node(&before, editor.world());
+        let degree = editor.world().incident_edges(node).count();
+        assert!(degree > 0, "the scene changed; this node has no edges");
+
+        editor.select_only(Some(node));
+        let depth = editor.history().undo_depth();
+        assert!(editor.delete_selection(), "nothing was deleted");
+
+        assert!(!editor.world().node_is_live(node));
+        assert_eq!(
+            editor.history().undo_depth(),
+            depth + 1,
+            "deleting a node and its edges must be one undo step"
+        );
+
+        let deleted = frame(&mut editor, &mut index, &viewport);
+        assert_eq!(
+            deleted.indexed_edges,
+            before.indexed_edges - degree,
+            "the deleted node's edges stayed in the spatial index"
+        );
+
+        assert!(editor.undo());
+        let after = frame(&mut editor, &mut index, &viewport);
+        assert_eq!(after, before);
+        assert_eq!(editor.to_document(), document_before);
+    }
+
+    /// A rubber band takes edges as well as nodes, so Delete has to remove
+    /// both — and an edge deleted *on its own* must not take its nodes with it.
+    #[test]
+    fn deleting_a_selected_edge_leaves_the_nodes_it_joined() {
+        let (mut editor, mut index, viewport) = scene_editor();
+        let before = frame(&mut editor, &mut index, &viewport);
+
+        let node = visible_connected_node(&before, editor.world());
+        let edge = editor
+            .world()
+            .incident_edges(node)
+            .next()
+            .expect("visible_connected_node has at least one edge");
+        let nodes_before = editor.world().nodes().live_indices().count();
+
+        editor.clear_selection();
+        editor.set_edge_selected(edge, true);
+        assert!(editor.delete_selection());
+
+        assert!(!editor.world().edge_is_live(edge));
+        assert_eq!(
+            editor.world().nodes().live_indices().count(),
+            nodes_before,
+            "deleting an edge removed a node with it"
+        );
+
+        assert!(editor.undo());
+        assert!(editor.world().edge_is_live(edge));
+    }
+
     /// Undo and redo have to be walkable in both directions any number of times
     /// without drifting — the failure this phase is guarding against does not
     /// appear on the first press.

@@ -213,6 +213,15 @@ pub enum InteractionEvent {
     /// and the file's whole argument is that state changes belong in one
     /// `match`.
     SelectTool(CanvasTool),
+    /// **The tool lock** — Excalidraw's "keep the selected tool active after
+    /// drawing", as a toggle rather than as a modifier.
+    ///
+    /// Unlike [`InteractionEvent::SelectTool`] this is accepted *while a
+    /// gesture is running*, and deliberately: it changes nothing about the
+    /// gesture in progress, only what happens when that gesture finishes. A
+    /// user who starts a rectangle and then decides they want three more must
+    /// not have to abandon the first one to say so.
+    SetToolLock(bool),
     /// `Esc`, a lost window focus, or anything else that means "stop".
     Cancel,
 }
@@ -290,7 +299,18 @@ pub enum InteractionEffect {
 
     /// **The active tool changed** (§45). Nothing about the document changed;
     /// the repaint is for the palette's active state and the canvas's cursor.
+    ///
+    /// **A tool that changed itself does not raise this**, and cannot: the
+    /// return to Select after a drawing happens *inside* the same transition
+    /// that commits the element, and this file's rule is one effect per event.
+    /// The commit already repaints, so the palette is redrawn from
+    /// [`InteractionMachine::tool`] on the next frame either way — which is the
+    /// property that makes the machine the only copy of the active tool worth
+    /// having.
     ToolChanged(CanvasTool),
+    /// The tool lock was switched. Nothing about the document changed; the
+    /// repaint is for the toggle's own state.
+    ToolLockChanged(bool),
     /// A creation drag started. The rectangle is already the one
     /// [`creation_rect`] resolved, so a painter draws exactly what will be
     /// committed.
@@ -346,6 +366,13 @@ pub struct InteractionMachine {
     /// §45's active tool. **View state, never the document's** — see
     /// [`crate::interaction::tool`] for the rule and what honouring it costs.
     tool: CanvasTool,
+    /// Whether finishing a drawing keeps the tool.
+    ///
+    /// Beside the tool rather than on the view for the same reason the tool is
+    /// here: it is read at exactly one point — the transition that commits a
+    /// creation — and a copy on the view would be a second answer to "what
+    /// happens when this drag ends?" that nothing forces to agree.
+    tool_locked: bool,
 }
 
 impl InteractionMachine {
@@ -360,6 +387,12 @@ impl InteractionMachine {
     /// **The active tool** (§45): what the next press means.
     pub fn tool(&self) -> CanvasTool {
         self.tool
+    }
+
+    /// **The tool lock**: whether finishing a drawing keeps the tool rather
+    /// than returning to [`CanvasTool::Select`].
+    pub fn tool_locked(&self) -> bool {
+        self.tool_locked
     }
 
     /// The element being drawn and the box it currently occupies, or `None`.
@@ -656,6 +689,22 @@ impl InteractionMachine {
             ) => {
                 if button == PointerButton::Left {
                     self.state = InteractionState::Idle;
+                    // **Draw, finish, and land back on Select** — Excalidraw's
+                    // default, and the reason the lock exists to switch it off.
+                    // A drawing tool is almost always wanted once: the thing a
+                    // user does next is move, resize or label what they just
+                    // drew, and every one of those is the Select tool. Staying
+                    // armed means the next press draws a second rectangle on
+                    // top of the first.
+                    //
+                    // It happens here rather than in the view because the tool
+                    // is this machine's state and there is no second copy —
+                    // whoever reads `tool()` on the next frame sees it, and a
+                    // view that forgot to reset would be a palette disagreeing
+                    // with what the next press does.
+                    if !self.tool_locked {
+                        self.tool = CanvasTool::Select;
+                    }
                     InteractionEffect::CommitCreate {
                         tool,
                         rect: creation_rect(tool, gesture),
@@ -719,6 +768,19 @@ impl InteractionMachine {
                 InteractionEffect::ToolChanged(tool)
             }
             (_, InteractionEvent::SelectTool(_)) => InteractionEffect::None,
+
+            // ---- the tool lock ----
+            //
+            // Accepted in every state — see [`InteractionEvent::SetToolLock`]
+            // — and silent when it changes nothing, so a toggle clicked twice
+            // does not repaint the canvas the second time.
+            (_, InteractionEvent::SetToolLock(locked)) => {
+                if self.tool_locked == locked {
+                    return InteractionEffect::None;
+                }
+                self.tool_locked = locked;
+                InteractionEffect::ToolLockChanged(locked)
+            }
         }
     }
 }
@@ -1611,6 +1673,147 @@ mod tests {
         // The tool survives the cancel; `Esc` back to Select is the *view's*
         // second event, not this one's business.
         assert_eq!(machine.tool(), CanvasTool::Diamond);
+    }
+
+    /// **Picking a tool arms it, with no second click.**
+    ///
+    /// The requirement reads like a behaviour to add and is really a property
+    /// to protect: one `SelectTool` and the very next press is already a
+    /// creation. An "arm the tool" step would show up here as a first press
+    /// that produced something other than `BeginCreate`.
+    #[test]
+    fn a_tool_draws_on_the_first_press_after_it_is_picked_up() {
+        for tool in CanvasTool::ALL.iter().filter(|tool| tool.creates()) {
+            let mut machine = InteractionMachine::new();
+            machine.handle(InteractionEvent::SelectTool(*tool));
+
+            let effect = machine.handle(press(
+                PointerButton::Left,
+                PointerTarget::Empty,
+                Vec2::ZERO,
+                InputModifiers::NONE,
+            ));
+            assert!(
+                matches!(effect, InteractionEffect::BeginCreate { .. }),
+                "{} needed a second press before it drew: {effect:?}",
+                tool.name()
+            );
+            assert!(machine.creation_preview().is_some());
+        }
+    }
+
+    /// **Draw, finish, land back on Select** — the Excalidraw default, and the
+    /// behaviour the lock below switches off.
+    ///
+    /// Asserted for every creating tool rather than for a rectangle, because
+    /// the rule is about creation and not about shapes: an edge tool that kept
+    /// itself while the rectangle did not would be exactly the inconsistency
+    /// this is here to prevent.
+    #[test]
+    fn finishing_a_drawing_returns_to_the_select_tool() {
+        for tool in CanvasTool::ALL.iter().filter(|tool| tool.creates()) {
+            let mut machine = InteractionMachine::new();
+            machine.handle(InteractionEvent::SelectTool(*tool));
+            machine.handle(press(
+                PointerButton::Left,
+                PointerTarget::Empty,
+                Vec2::ZERO,
+                InputModifiers::NONE,
+            ));
+            machine.handle(move_to(Vec2::splat(80.0), Vec2::splat(80.0)));
+
+            let InteractionEffect::CommitCreate { tool: drawn, .. } =
+                machine.handle(up(PointerButton::Left))
+            else {
+                panic!("{} did not commit", tool.name());
+            };
+
+            assert_eq!(drawn, *tool, "the gesture committed as another tool");
+            assert_eq!(
+                machine.tool(),
+                CanvasTool::Select,
+                "{} stayed armed after drawing",
+                tool.name()
+            );
+        }
+    }
+
+    /// **With the lock on, the tool survives the drawing** — so a user drawing
+    /// six rectangles picks the tool up once.
+    #[test]
+    fn a_locked_tool_survives_the_drawing_that_finishes() {
+        for tool in CanvasTool::ALL.iter().filter(|tool| tool.creates()) {
+            let mut machine = InteractionMachine::new();
+            assert_eq!(
+                machine.handle(InteractionEvent::SetToolLock(true)),
+                InteractionEffect::ToolLockChanged(true)
+            );
+            machine.handle(InteractionEvent::SelectTool(*tool));
+
+            // Twice, because "it stayed once" and "it stays" are different
+            // claims and only the second is the feature.
+            for _ in 0..2 {
+                machine.handle(press(
+                    PointerButton::Left,
+                    PointerTarget::Empty,
+                    Vec2::ZERO,
+                    InputModifiers::NONE,
+                ));
+                machine.handle(move_to(Vec2::splat(80.0), Vec2::splat(80.0)));
+                machine.handle(up(PointerButton::Left));
+                assert_eq!(
+                    machine.tool(),
+                    *tool,
+                    "{} was dropped despite the lock",
+                    tool.name()
+                );
+            }
+        }
+    }
+
+    /// The lock is off to begin with, is idempotent, and is accepted in the
+    /// middle of a gesture — a user who decides mid-rectangle that they want
+    /// three more must not have to abandon the first one to say so.
+    #[test]
+    fn the_lock_starts_off_and_can_be_set_during_a_gesture() {
+        let mut machine = InteractionMachine::new();
+        assert!(!machine.tool_locked());
+        assert_eq!(
+            machine.handle(InteractionEvent::SetToolLock(false)),
+            InteractionEffect::None,
+            "setting the lock to what it already is must not repaint"
+        );
+
+        machine.handle(InteractionEvent::SelectTool(CanvasTool::Rectangle));
+        machine.handle(press(
+            PointerButton::Left,
+            PointerTarget::Empty,
+            Vec2::ZERO,
+            InputModifiers::NONE,
+        ));
+        assert_eq!(
+            machine.handle(InteractionEvent::SetToolLock(true)),
+            InteractionEffect::ToolLockChanged(true),
+            "the lock must be accepted mid-gesture, unlike a tool change"
+        );
+
+        machine.handle(move_to(Vec2::splat(80.0), Vec2::splat(80.0)));
+        machine.handle(up(PointerButton::Left));
+        assert_eq!(machine.tool(), CanvasTool::Rectangle);
+    }
+
+    /// The lock is about *creation* and nothing else: it must not change what
+    /// the two navigating tools do, and it must not turn a node drag into
+    /// something that reverts the tool.
+    #[test]
+    fn the_lock_does_not_touch_a_gesture_that_creates_nothing() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::SetToolLock(true));
+        machine.handle(down_on(PointerButton::Left, PointerTarget::Node(NODE)));
+        machine.handle(up(PointerButton::Left));
+
+        assert_eq!(machine.tool(), CanvasTool::Select);
+        assert!(machine.tool_locked());
     }
 
     /// A tool change mid-gesture is ignored rather than applied, for the same

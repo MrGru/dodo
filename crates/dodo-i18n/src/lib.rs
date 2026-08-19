@@ -195,6 +195,7 @@ pub mod db_connection;
 pub mod db_query;
 pub mod docker;
 pub mod encoder_decoder;
+pub mod flow;
 pub mod input_method;
 pub mod json_formatter;
 pub mod quick_nav;
@@ -222,6 +223,7 @@ areas! {
     db_query => DbQuery,
     docker => Docker,
     encoder_decoder => EncoderDecoder,
+    flow => Flow,
     input_method => InputMethod,
     json_formatter => JsonFormatter,
     quick_nav => QuickNav,
