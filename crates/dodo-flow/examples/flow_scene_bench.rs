@@ -45,13 +45,14 @@ use std::time::{Duration, Instant};
 
 use dodo_flow::{
     budgets::{self, CACHE_BYTES_PER_VERTEX, RenderBudgets},
-    geometry::{Rect, Vec2},
+    geometry::{Rect, Vec2, Viewport},
     instrument::{Instruments, Probe},
     models::{Color, NodeIndex},
     render::{
-        GridLimits, GridSettings, PaintPlan, SceneInk, SceneOptions,
+        GridLimits, GridSettings, PaintPlan, RenderSnapshot, SceneInk, SceneOptions,
         painter::build_path,
         plan::{PathPrimitive, PrimitiveSink, QuadPrimitive, TextPrimitive},
+        registry::NodeRendererRegistry,
         scene,
     },
     runtime::{BoxQuery, GraphWorld},
@@ -127,7 +128,27 @@ fn ink() -> SceneInk {
         edge: Color::rgb(0.60, 0.62, 0.68),
         handle: Color::rgb(0.30, 0.60, 1.00),
         accent: Color::rgb(1.00, 0.62, 0.20),
+        text: Color::rgb(0.92, 0.93, 0.96),
     }
+}
+
+/// One frame's §24 extraction, at the platform's real budgets.
+fn extract(
+    world: &GraphWorld,
+    visible: &VisibleSet,
+    viewport: &Viewport,
+    budgets: &RenderBudgets,
+    into: &mut RenderSnapshot,
+) {
+    into.extract(
+        world,
+        visible,
+        viewport,
+        budgets,
+        &NodeRendererRegistry::with_generic_kinds(),
+        None,
+        Rect::new(Vec2::ZERO, viewport.size()),
+    );
 }
 
 fn scene_options(budgets: &RenderBudgets) -> SceneOptions {
@@ -381,11 +402,14 @@ fn measure_scene(spec: SceneSpec, budgets: &RenderBudgets) -> SceneResult {
         spec.name
     );
 
+    let mut snapshot = RenderSnapshot::new();
+    extract(&world, &visible, &viewport, budgets, &mut snapshot);
+
     let mut plan = PaintPlan::new();
     let stats = scene::plan_scene(
         &mut plan,
         &world,
-        &visible,
+        &snapshot,
         &viewport,
         ink(),
         &scene_options(budgets),
@@ -446,6 +470,7 @@ fn measure_pan(spec: SceneSpec, budgets: &RenderBudgets) {
 
     let mut viewport = spec.viewport(BENCH_PANE);
     let mut visible = VisibleSet::new();
+    let mut snapshot = RenderSnapshot::new();
     let mut plan = PaintPlan::new();
     let options = scene_options(budgets);
 
@@ -475,7 +500,8 @@ fn measure_pan(spec: SceneSpec, budgets: &RenderBudgets) {
         instruments.record(Probe::VisibilityQuery, timer);
 
         let timer = instruments.start();
-        scene::plan_scene(&mut plan, &world, &visible, &viewport, ink(), &options);
+        extract(&world, &visible, &viewport, budgets, &mut snapshot);
+        scene::plan_scene(&mut plan, &world, &snapshot, &viewport, ink(), &options);
         instruments.record(Probe::RenderExtract, timer);
     }
     let elapsed = start.elapsed();

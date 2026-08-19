@@ -66,14 +66,14 @@ use std::sync::OnceLock;
 use gpui::{
     App, Bounds, Context, DispatchPhase, FocusHandle, Focusable, Hitbox, HitboxBehavior,
     InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, PinchEvent, Pixels, Point, Render,
-    ScrollWheelEvent, Styled, Window, canvas, div, px,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Path, PinchEvent, Pixels, Point, Render,
+    ScrollWheelEvent, ShapedLine, Styled, Window, canvas, div, px,
 };
 use gpui_component::ActiveTheme;
 
 use crate::{
     budgets::RenderBudgets,
-    geometry::{Attachment, EdgeRoute, RouteOptions, Vec2, Viewport, route},
+    geometry::{Attachment, EdgeRoute, Rect, RouteOptions, Vec2, Viewport, route},
     instrument::{Instruments, Probe},
     interaction::{
         BoxSelection, ConnectionSource, InputModifiers, InteractionEffect, InteractionEvent,
@@ -82,10 +82,18 @@ use crate::{
     models::{Color, EdgeIndex, EdgeRouting, FlowDocument, NodeIndex, RenderQuality},
     render::{
         GridLevel, GridLimits, GridSettings, PaintPlan, PaintStats, SceneInk, SceneOptions,
-        SceneStats, WindowPainter, edges, plan::QuadPrimitive, scene,
+        SceneStats, WindowPainter,
+        cache::{CacheStats, GeometryCache, ShapedLineCache},
+        edges,
+        lod::LodPlan,
+        plan::QuadPrimitive,
+        registry::NodeRendererRegistry,
+        scene,
+        snapshot::{RenderSnapshot, SnapshotCounts},
     },
     runtime::{BoxQuery, EdgeEnd, GraphWorld, HitTolerance, PointerTarget, SelectionSet},
     spatial::{SpatialIndex, SyncReport, VisibleSet},
+    views::nodes,
 };
 
 /// The key-binding context the canvas establishes on its root, so canvas
@@ -162,6 +170,38 @@ pub struct FlowView {
     /// [`crate::instrument`] for what that costs.
     instruments: Instruments,
 
+    /// §24's extraction, and the two caches it feeds. All three are fields
+    /// rather than locals for the same reason the plan is: a pan refills them
+    /// and must not reallocate them.
+    snapshot: RenderSnapshot,
+    geometry_cache: GeometryCache<Path<Pixels>>,
+    text_cache: ShapedLineCache<ShapedLine>,
+    /// §43's registry. Held here so a launcher or an embedding app can register
+    /// its own node kinds against a mounted canvas.
+    registry: NodeRendererRegistry,
+
+    /// The node the pointer is over, or `None`. §44's other half: a hovered
+    /// node gets controls, and nothing else does.
+    hovered: Option<NodeIndex>,
+
+    /// The pane's size as of the last paint.
+    ///
+    /// **`render` runs before layout**, so this is the only size it can extract
+    /// a snapshot against. It is exact on every frame but the first and on a
+    /// resize, and `paint` requests one animation frame when it changes — see
+    /// `FlowView::paint`.
+    pane: Vec2,
+
+    /// Whether the camera zoomed since the last frame. The geometry cache needs
+    /// it to tell a live pinch (scale the cached tessellation, stay responsive)
+    /// from a settled camera (re-tessellate, be correct) — see
+    /// [`crate::render::cache`].
+    zooming: bool,
+    /// The text colour the shaped-line cache was filled at. A `ShapedLine`
+    /// bakes its colour at shape time, and dodo applies a theme change live, so
+    /// a changed ink is a cache that has to go.
+    text_ink: Option<Color>,
+
     /// Reused across frames. See the module doc: a pan must not allocate.
     plan: PaintPlan,
     last_paint: PaintStats,
@@ -207,6 +247,14 @@ impl FlowView {
             node_candidates: Vec::new(),
             edge_candidates: Vec::new(),
             instruments: Instruments::from_env(),
+            snapshot: RenderSnapshot::new(),
+            geometry_cache: GeometryCache::new(&budgets),
+            text_cache: ShapedLineCache::new(&budgets),
+            registry: NodeRendererRegistry::with_generic_kinds(),
+            hovered: None,
+            pane: Vec2::ZERO,
+            zooming: false,
+            text_ink: None,
             plan: PaintPlan::new(),
             last_paint: PaintStats::default(),
             last_grid: GridLevel::empty(),
@@ -264,6 +312,13 @@ impl FlowView {
     pub fn rebuild_spatial_index(&mut self) {
         self.spatial = SpatialIndex::for_world(&self.world);
         self.world.clear_spatial_updates();
+        // Every cached tessellation and every shaped line is filed under a
+        // runtime index, and a rebuilt world means those indices point at
+        // something else. Keeping them would paint one document's geometry for
+        // another's.
+        self.geometry_cache.clear();
+        self.text_cache.clear();
+        self.snapshot.reset();
     }
 
     pub fn viewport(&self) -> &Viewport {
@@ -340,6 +395,57 @@ impl FlowView {
         self.last_scene
     }
 
+    /// **§24's snapshot from the last frame** — what the canvas and the element
+    /// tree were both drawn from.
+    pub fn snapshot(&self) -> &RenderSnapshot {
+        &self.snapshot
+    }
+
+    /// What the last frame's snapshot decided, in counts. `rich_nodes` is §16's
+    /// number.
+    pub fn snapshot_counts(&self) -> SnapshotCounts {
+        self.snapshot.counts()
+    }
+
+    /// **Every GPUI element the last frame created** (§16). Tens on any
+    /// document, however large.
+    pub fn element_count(&self) -> u32 {
+        self.snapshot.element_count()
+    }
+
+    /// The LOD rung the last frame ran at (§15), or `None` before the first.
+    pub fn last_lod(&self) -> Option<LodPlan> {
+        self.snapshot.lod()
+    }
+
+    /// **§23's cache, from the last frame.** `hit_rate` is ~1.0 during a pure
+    /// pan and `translated` is what it did about it.
+    pub fn geometry_cache_stats(&self) -> CacheStats {
+        self.geometry_cache.frame_stats()
+    }
+
+    /// The bytes the geometry cache is holding. Never above
+    /// [`RenderBudgets::geometry_cache_max_bytes`].
+    pub fn geometry_cache_bytes(&self) -> usize {
+        self.geometry_cache.bytes()
+    }
+
+    /// The engine's own shaped-line cache (§9).
+    pub fn text_cache_stats(&self) -> CacheStats {
+        self.text_cache.stats()
+    }
+
+    /// §43's registry, so a launcher can register node kinds against a mounted
+    /// canvas.
+    pub fn registry_mut(&mut self) -> &mut NodeRendererRegistry {
+        &mut self.registry
+    }
+
+    /// The node under the pointer, or `None`.
+    pub fn hovered(&self) -> Option<NodeIndex> {
+        self.hovered
+    }
+
     /// What the last frame's spatial sync had to do. `nodes_moved` is zero for
     /// a pure pan and small for a drag; see [`SyncReport`].
     pub fn last_sync(&self) -> SyncReport {
@@ -388,6 +494,7 @@ impl FlowView {
             edge: from_hsla(theme.foreground).with_alpha(0.55),
             handle: from_hsla(theme.primary),
             accent: from_hsla(theme.selection),
+            text: from_hsla(theme.foreground),
         }
     }
 
@@ -444,27 +551,23 @@ impl FlowView {
         );
     }
 
-    fn paint(
-        &mut self,
-        bounds: Bounds<Pixels>,
-        hitbox: &Hitbox,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.viewport.set_size(Vec2::new(
-            bounds.size.width.as_f32(),
-            bounds.size.height.as_f32(),
-        ));
-        let ink = self.sync_theme(cx);
-
-        // **The frame's fixed order, and every step depends on the one before
-        // it.** Rebuild first, so routes are current; sync the index from those
-        // routes; query; plan only what came back. Syncing before the rebuild
-        // would index an edge where it used to be, and querying before the sync
-        // would return the same.
-        //
-        // An idle frame finds both queues empty and does no work at all, which
-        // is what makes §40 rule 6 hold by construction rather than by care.
+    /// **Brings the graph, the index and the snapshot up to date**, and is the
+    /// one step whose order matters.
+    ///
+    /// Rebuild first, so routes are current; sync the index from those routes;
+    /// query; extract only what came back. Syncing before the rebuild would
+    /// index an edge where it used to be, and querying before the sync would
+    /// return the same.
+    ///
+    /// An idle frame finds both queues empty and does no work at all, which is
+    /// what makes §40 rule 6 hold by construction rather than by care.
+    ///
+    /// **Called from `render`, not from paint.** GPUI builds the element tree
+    /// in `render` and paints afterwards, so a snapshot extracted during paint
+    /// would be a frame late for the elements built from it. The cost of moving
+    /// it earlier is that `render` only knows the pane size the last paint
+    /// measured — see [`FlowView::pane`].
+    fn refresh_snapshot(&mut self) {
         let timer = self.instruments.start();
         self.rebuilt_routes = self.world.rebuild_dirty_geometry();
         self.instruments.record(Probe::EdgeRoute, timer);
@@ -480,18 +583,64 @@ impl FlowView {
         self.instruments.record(Probe::VisibilityQuery, timer);
 
         let timer = self.instruments.start();
+        self.snapshot.extract(
+            &self.world,
+            &self.visible,
+            &self.viewport,
+            &self.budgets,
+            &self.registry,
+            self.hovered,
+            Rect::new(Vec2::ZERO, self.viewport.size()),
+        );
+        self.instruments.record(Probe::RenderExtract, timer);
+    }
+
+    fn paint(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        hitbox: &Hitbox,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pane = Vec2::new(bounds.size.width.as_f32(), bounds.size.height.as_f32());
+        let ink = self.sync_theme(cx);
+
+        // A `ShapedLine` bakes its colour at shape time and dodo applies a
+        // theme change live, so a changed ink is a cache that has to go. One
+        // comparison a frame, against a re-shape of every visible label the
+        // first time somebody switches theme.
+        if self.text_ink != Some(ink.text) {
+            self.text_cache.clear();
+            self.text_ink = Some(ink.text);
+        }
+
+        if self.pane != pane {
+            // **The one case `render` cannot have got right.** It extracted
+            // against the previous pane, so the snapshot is for the wrong size
+            // and the frame after this one has to redo it. A `cx.notify()` here
+            // would record the dirty view and schedule nothing —
+            // `WindowInvalidator::invalidate_view` only acts in
+            // `DrawPhase::None` — so this asks for a frame the supported way.
+            self.pane = pane;
+            self.viewport.set_size(pane);
+            self.refresh_snapshot();
+            window.request_animation_frame();
+        }
+
+        let timer = self.instruments.start();
         let options = self.scene_options();
         self.last_scene = scene::plan_scene(
             &mut self.plan,
             &self.world,
-            &self.visible,
+            &self.snapshot,
             &self.viewport,
             ink,
             &options,
         );
         // The two overlays are the view's own, and both are on screen by
         // construction — a preview follows the pointer and a rubber band is
-        // drawn where it is being dragged.
+        // drawn where it is being dragged. Neither is cached: §23 says not to
+        // cache what changes every frame.
         self.plan_connection_preview(ink);
         self.plan_selection_rect(ink);
         self.instruments.record(Probe::RenderExtract, timer);
@@ -500,9 +649,28 @@ impl FlowView {
         self.dropped_paths = self.plan.enforce_vertex_ceiling(&self.budgets);
 
         let timer = self.instruments.start();
-        let mut painter = WindowPainter::new(window, bounds);
-        self.last_paint = self.plan.paint_into(&mut painter);
+        let anchor = WindowPainter::anchor(&self.viewport, bounds);
+        let zooming = self.zooming;
+        // Split so the plan can be read while the caches are written — both are
+        // fields of `self`, and `paint_into` borrows one of each.
+        let FlowView {
+            plan,
+            geometry_cache,
+            text_cache,
+            ..
+        } = self;
+        geometry_cache.begin_frame(anchor, zooming);
+        text_cache.begin_frame();
+        let mut painter = WindowPainter::new(window, cx, bounds, geometry_cache, text_cache);
+        self.last_paint = plan.paint_into(&mut painter);
+        self.geometry_cache.end_frame();
+        self.text_cache.end_frame();
         self.instruments.record(Probe::CanvasPaint, timer);
+
+        // The gesture is over unless another zoom event arrives before the next
+        // frame, which is what makes the cache re-tessellate once a pinch
+        // settles rather than leaving the canvas with scaled strokes.
+        self.zooming = false;
 
         self.install_input(bounds, hitbox, window, cx);
     }
@@ -725,10 +893,23 @@ impl FlowView {
                 ));
 
                 view.update(cx, |this, cx| {
-                    // While Idle this is `InteractionEffect::None` and notifies
-                    // nothing, which is what keeps a hovering pointer from
-                    // driving a 60 fps repaint loop over an idle canvas.
+                    // **§44's hover half.** A hovered node gets controls, so
+                    // the canvas has to know which one — but only a *change*
+                    // repaints, which is what keeps a pointer moving across one
+                    // node from driving a 60 fps loop.
                     if this.interaction.is_idle() {
+                        let world = this
+                            .viewport
+                            .screen_to_world(this.local(event.position, bounds));
+                        let hovered = match this.target_at(world) {
+                            PointerTarget::Node(node) => Some(node),
+                            PointerTarget::Handle { node, .. } => Some(node),
+                            PointerTarget::Empty => None,
+                        };
+                        if this.hovered != hovered {
+                            this.hovered = hovered;
+                            cx.notify();
+                        }
                         return;
                     }
                     let screen = this.local(event.position, bounds);
@@ -797,6 +978,7 @@ impl FlowView {
                     if event.modifiers.platform || event.modifiers.control {
                         this.viewport
                             .zoom_by(anchor, wheel_zoom_factor(pixels.y.as_f32()));
+                        this.zooming = true;
                     } else {
                         this.viewport
                             .pan_by(Vec2::new(pixels.x.as_f32(), pixels.y.as_f32()));
@@ -830,6 +1012,7 @@ impl FlowView {
                     // would otherwise have grown one.
                     let anchor = this.local(event.position, bounds);
                     this.viewport.zoom_by(anchor, pinch_factor(event.delta));
+                    this.zooming = true;
                     cx.notify();
                 });
             });
@@ -897,6 +1080,26 @@ impl Render for FlowView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
 
+        // **The one piece of work this body does, and it is bounded by the
+        // screen.** Extraction has to happen here rather than in paint: GPUI
+        // builds the element tree in `render` and paints afterwards, so a
+        // snapshot extracted during paint would be a frame late for every
+        // element built from it.
+        //
+        // That is safe against the trap the crate doc names — this body runs
+        // whenever anything above the canvas redraws — because everything it
+        // costs is proportional to the viewport: a 2.3 µs spatial query and a
+        // walk of tens of visible elements. The heavy work stayed in paint, and
+        // the *geometry* it would rebuild is now cached (§23) rather than
+        // rebuilt per frame. What must never appear here is a copy of anything
+        // document-sized.
+        self.refresh_snapshot();
+
+        let nodes = nodes::nodes(&self.snapshot, &self.world, cx);
+        let handles = nodes::handles(&self.snapshot, cx);
+        let selection = nodes::selection_box(&self.snapshot, cx);
+        let toolbar = nodes::toolbar(&self.snapshot, cx);
+
         div()
             .id("flow-canvas")
             .key_context(KEY_CONTEXT)
@@ -920,6 +1123,16 @@ impl Render for FlowView {
                 )
                 .absolute()
                 .size_full(),
+            )
+            // **The rich half.** One layer above the canvas, absolutely
+            // positioned, holding tens of elements — never one per document
+            // node. See `views::nodes`.
+            .child(
+                nodes::layer()
+                    .children(nodes)
+                    .children(selection)
+                    .children(handles)
+                    .children(toolbar),
             )
     }
 }

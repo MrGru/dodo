@@ -36,9 +36,11 @@ use crate::{
         ArrowGeometry, EdgeRoute, RouteSegment, Vec2, Viewport,
         arrow::{self, ArrowPolygon},
     },
-    models::{ArrowMarker, Color, RenderQuality},
+    models::{ArrowMarker, Color, EdgeIndex, RenderQuality},
     render::{
         Outline, PaintPlan,
+        cache::{GeometryKey, GeometryPart},
+        lod::EdgeDetail,
         plan::{DashSpec, PathPrimitive, QuadPrimitive},
     },
 };
@@ -69,6 +71,13 @@ pub struct EdgePaint {
     pub start_marker: ArrowMarker,
     pub end_marker: ArrowMarker,
     pub quality: RenderQuality,
+    /// **The LOD rung this edge is drawn at** (§15). It decides whether the
+    /// curves survive, whether the markers do, whether a dash does, and what
+    /// tolerance the tessellation uses — see [`EdgeDetail`].
+    pub detail: EdgeDetail,
+    /// The edge's index and route version, for the geometry cache key. `None`
+    /// for a path that is not a document edge — the connection preview.
+    pub owner: Option<(EdgeIndex, u32)>,
 }
 
 impl EdgePaint {
@@ -80,7 +89,28 @@ impl EdgePaint {
             start_marker: ArrowMarker::None,
             end_marker: ArrowMarker::None,
             quality,
+            detail: EdgeDetail::Full,
+            owner: None,
         }
+    }
+
+    /// The LOD rung. See [`EdgePaint::detail`].
+    pub fn at_detail(mut self, detail: EdgeDetail) -> EdgePaint {
+        self.detail = detail;
+        self
+    }
+
+    /// The cache identity. See [`EdgePaint::owner`].
+    pub fn owned_by(mut self, edge: EdgeIndex, version: u32) -> EdgePaint {
+        self.owner = Some((edge, version));
+        self
+    }
+
+    /// The tolerance this edge is actually tessellated at, once the rung has
+    /// had its say. **This is what goes in the cache key**, so a rung change is
+    /// a miss by construction.
+    pub fn effective_quality(&self) -> RenderQuality {
+        self.detail.quality(self.quality)
     }
 
     pub fn with_markers(mut self, start: ArrowMarker, end: ArrowMarker) -> EdgePaint {
@@ -93,6 +123,38 @@ impl EdgePaint {
         self.dash = Some(dash);
         self
     }
+}
+
+/// **The route as a screen-space outline at one LOD rung** (§15).
+///
+/// The rungs below `Coarse` do not merely tessellate more loosely — they emit a
+/// *different outline*, which is the only thing that actually removes vertices.
+/// A `Polyline` keeps the route's corners and drops its curvature; a `Hairline`
+/// is the chord. See [`crate::render::lod`] for why that is mandatory rather
+/// than nice: Phase 4's scattered scene puts 61,104 edges genuinely in the
+/// viewport, and no amount of culling can bound it.
+pub fn route_outline_at(route: &EdgeRoute, viewport: &Viewport, detail: EdgeDetail) -> Outline {
+    if detail.keeps_curves() {
+        return route_outline(route, viewport);
+    }
+
+    if detail == EdgeDetail::Hairline {
+        let mut outline = Outline::with_capacity(2);
+        outline.move_to(viewport.world_to_screen(route.start()));
+        outline.line_to(viewport.world_to_screen(route.end()));
+        return outline;
+    }
+
+    let mut outline = Outline::with_capacity(route.segments().len() + 1);
+    for (index, point) in route.corner_points().enumerate() {
+        let screen = viewport.world_to_screen(point);
+        if index == 0 {
+            outline.move_to(screen);
+        } else {
+            outline.line_to(screen);
+        }
+    }
+    outline
 }
 
 /// The route as a screen-space outline, ready to tessellate.
@@ -127,10 +189,16 @@ pub fn plan_edge(plan: &mut PaintPlan, route: &EdgeRoute, paint: &EdgePaint, vie
     let width = viewport
         .world_to_screen_length(paint.width)
         .max(MIN_STROKE_PIXELS);
-    let outline = route_outline(route, viewport);
+    let outline = route_outline_at(route, viewport, paint.detail);
+    let quality = paint.effective_quality();
 
-    match paint.dash {
-        Some(dash) => plan.push_path(PathPrimitive::dashed_stroke(
+    // A dash is the expensive kind — 63x the vertices of the same line solid —
+    // so the ladder drops it at the first rung down, and this is where that is
+    // spent rather than in the caller.
+    let dash = paint.dash.filter(|_| paint.detail.keeps_dashes());
+
+    let mut path = match dash {
+        Some(dash) => PathPrimitive::dashed_stroke(
             outline,
             paint.color,
             width,
@@ -138,17 +206,24 @@ pub fn plan_edge(plan: &mut PaintPlan, route: &EdgeRoute, paint: &EdgePaint, vie
                 viewport.world_to_screen_length(dash.on),
                 viewport.world_to_screen_length(dash.off),
             ),
-            paint.quality,
-        )),
-        None => plan.push_path(PathPrimitive::stroke(
-            outline,
-            paint.color,
-            width,
-            paint.quality,
-        )),
-    }
+            quality,
+        ),
+        None => PathPrimitive::stroke(outline, paint.color, width, quality),
+    };
 
-    plan_markers(plan, route, paint, viewport, width);
+    if let Some((edge, version)) = paint.owner {
+        path = path.keyed(GeometryKey::edge(
+            edge,
+            GeometryPart::Stroke,
+            version,
+            quality,
+        ));
+    }
+    plan.push_path(path);
+
+    if paint.detail.keeps_markers() {
+        plan_markers(plan, route, paint, viewport, width);
+    }
 }
 
 /// Both endpoint decorations, in screen space.
@@ -218,11 +293,16 @@ fn marker_path(polygon: &ArrowPolygon, paint: &EdgePaint, screen_width: f32) -> 
     }
 
     if polygon.filled {
-        PathPrimitive::fill(outline, paint.color, paint.quality)
+        PathPrimitive::fill(outline, paint.color, paint.effective_quality())
     } else {
         // An open arrow head is stroked at the edge's own width, so it reads as
         // a continuation of the line rather than as a separate mark.
-        PathPrimitive::stroke(outline, paint.color, screen_width, paint.quality)
+        PathPrimitive::stroke(
+            outline,
+            paint.color,
+            screen_width,
+            paint.effective_quality(),
+        )
     }
 }
 
@@ -248,6 +328,12 @@ pub fn plan_connection_preview(
         start_marker: ArrowMarker::Dot,
         end_marker: ArrowMarker::ArrowClosed,
         quality,
+        // Always full: a preview is one path following the pointer, and it is
+        // the thing the user is looking at.
+        detail: EdgeDetail::Full,
+        // Never cached: it changes every frame by definition, which is exactly
+        // what §23 says not to cache.
+        owner: None,
     };
 
     plan_edge(plan, route, &paint, viewport);

@@ -1,9 +1,9 @@
-//! **Turning the visible set into primitives** — the one place §16's rule is
+//! **Turning the snapshot into primitives** — the one place §16's rule is
 //! spent, and the reason it can be asserted without a window.
 //!
 //! ```text
-//! GraphWorld ─> SpatialIndex::query_visible ─> VisibleSet ─> plan_scene ─> PaintPlan
-//!  100,000 nodes            broad + narrow       ~34 nodes     ~120 paths
+//! GraphWorld ─> query_visible ─> VisibleSet ─> RenderSnapshot ─> plan_scene ─> PaintPlan
+//!  100,000 nodes    2.3 µs         ~36 nodes     LOD + registry     canvas half
 //! ```
 //!
 //! # Why this is a file and not a method on the view
@@ -19,13 +19,33 @@
 //! The view keeps what is genuinely interaction: the connection preview and the
 //! rubber band, both of which are on screen by construction.
 //!
+//! # What Phase 5 changed: this plans the snapshot, not the visible set
+//!
+//! [`RenderSnapshot`] sits between, and it has already decided three things
+//! this file used to decide badly or not at all:
+//!
+//! - **which nodes are elements** rather than primitives, so this loop skips
+//!   them instead of drawing a quad under a `div`;
+//! - **which edges are drawn and at what rung**, which is the only thing that
+//!   bounds a hairball (see [`crate::render::lod`]);
+//! - **whether a label is worth shaping**, which below readable zoom is `None`
+//!   and costs nothing at all.
+//!
+//! What is left here is the translation from those decisions into primitives,
+//! plus one thing the snapshot deliberately does not carry: **colour**. A
+//! snapshot with resolved colours in it would go stale when the theme changed,
+//! and dodo applies a theme change live — so [`SceneInk`] is resolved once per
+//! frame by the view and passed down, which is also what keeps a theme lookup
+//! out of the loop over every visible shape.
+//!
 //! # Two culling phases, and why both
 //!
-//! The [`VisibleSet`] is the broad phase plus a world-space narrow phase, at
-//! cell granularity in the first and rectangle granularity in the second. This
-//! file adds nothing to it — the third rejection is
-//! [`PaintPlan::push_path`]'s, against the pane in *screen* space, and it is
-//! there rather than here so that no painter, present or future, can skip it.
+//! The [`VisibleSet`](crate::spatial::VisibleSet) is the broad phase plus a
+//! world-space narrow phase, at cell granularity in the first and rectangle
+//! granularity in the second. This file adds nothing to it — the third
+//! rejection is [`PaintPlan::push_path`]'s, against the pane in *screen* space,
+//! and it is there rather than here so that no painter, present or future, can
+//! skip it.
 //!
 //! [`PaintPlan::culled_paths`] is what that third rejection catches, and the
 //! honest expectation is **a small boundary fringe rather than zero**. Both
@@ -41,16 +61,22 @@
 //!
 //! **This file names no UI framework.**
 
+use std::sync::Arc;
+
 use crate::{
+    budgets::DetailLevel,
     geometry::{Rect, Vec2, Viewport},
     models::{Color, NodeIndex, RenderQuality},
     render::{
-        GridLevel, GridLimits, GridSettings, PaintPlan, edges, grid,
-        plan::{DashSpec, PathPrimitive, QuadPrimitive},
+        GridLevel, GridLimits, GridSettings, PaintPlan,
+        cache::{GeometryKey, GeometryPart, TextKey},
+        edges,
+        lod::HandleDetail,
+        plan::{DashSpec, PathPrimitive, QuadPrimitive, TextPrimitive},
         shapes,
+        snapshot::{CanvasNode, RenderSnapshot},
     },
     runtime::{GraphWorld, NodeShape},
-    spatial::VisibleSet,
 };
 
 /// How big a handle dot is drawn, in **screen** pixels.
@@ -73,6 +99,10 @@ pub const GRAPH_NODE_RADIUS: f32 = 6.0;
 /// screen rather than in world units, so selection stays visible at any zoom.
 pub const SELECTED_STROKE_PIXELS: f32 = 2.0;
 
+/// The inset a canvas-drawn label keeps from its node's edges, in screen
+/// pixels. Constant on screen for the same reason the handle radius is.
+pub const LABEL_PADDING_PIXELS: f32 = 6.0;
+
 /// The colours an element falls back to when its own style leaves them unset.
 ///
 /// Resolved from the active theme once per frame by the view and passed down,
@@ -89,6 +119,8 @@ pub struct SceneInk {
     /// The selection outline, the box-select rectangle and the connection
     /// preview — everything that says "you are doing something".
     pub accent: Color,
+    /// Canvas-drawn labels.
+    pub text: Color,
 }
 
 /// What the frame is being drawn with, apart from its colours.
@@ -109,29 +141,51 @@ impl SceneOptions {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct SceneStats {
     pub grid: GridLevel,
-    /// Nodes that produced at least one primitive.
+    /// Nodes that produced at least one primitive. **Excludes rich nodes** —
+    /// those are elements, and the canvas draws nothing for them.
     pub nodes: u32,
+    /// Nodes the snapshot handed to `views/` as GPUI elements (§16).
+    pub rich_nodes: u32,
     pub edges: u32,
     pub handles: u32,
+    /// Canvas-drawn labels that reached the plan. Zero below readable zoom, by
+    /// construction rather than by check — see [`crate::render::lod`].
+    pub labels: u32,
+    /// Visible edges the LOD ladder's count cap skipped. Non-zero only on a
+    /// scene culling cannot bound.
+    pub skipped_edges: u32,
     /// Visible nodes skipped because their kind has no representation yet —
     /// text, images, frames. **Not** a culling number; a not-implemented one.
     pub unsupported_nodes: u32,
 }
 
-/// **Plans one frame from the visible set.**
+impl SceneStats {
+    /// **Every visible node that was drawn**, by either half of the hybrid
+    /// renderer.
+    ///
+    /// [`nodes`](SceneStats::nodes) alone is the *canvas* half and it is
+    /// legitimately zero at full zoom, where every visible node is an element.
+    /// A caller asking "did the frame draw the nodes?" wants this; a caller
+    /// asking "what did the painter do?" wants the field.
+    pub fn drawn_nodes(&self) -> u32 {
+        self.nodes + self.rich_nodes
+    }
+}
+
+/// **Plans one frame from the snapshot.**
 ///
 /// Clears `plan` against the pane, so the clip and the extraction cannot
 /// disagree about which frame they belong to, then plans the grid, the edges
 /// and the nodes in that order — edges under nodes, and the paint order is
 /// [`PaintPlan`]'s regardless.
 ///
-/// Nothing here iterates the document. `visible` is the whole input, which is
+/// Nothing here iterates the document. `snapshot` is the whole input, which is
 /// what §40 rule 1 asks for and what makes the cost of this function
 /// proportional to the screen rather than to the file.
 pub fn plan_scene(
     plan: &mut PaintPlan,
     world: &GraphWorld,
-    visible: &VisibleSet,
+    snapshot: &RenderSnapshot,
     viewport: &Viewport,
     ink: SceneInk,
     options: &SceneOptions,
@@ -139,41 +193,50 @@ pub fn plan_scene(
     let pane = Rect::new(Vec2::ZERO, viewport.size());
     plan.clear(pane);
 
-    let quality = world.settings().render_quality;
+    let counts = snapshot.counts();
     let mut stats = SceneStats {
         grid: grid::generate(&options.grid, viewport, &options.grid_limits, plan),
+        rich_nodes: counts.rich_nodes,
+        skipped_edges: counts.skipped_edges,
+        unsupported_nodes: counts.unsupported_nodes,
         ..SceneStats::default()
     };
 
-    plan_edges(plan, world, visible, viewport, ink, quality, &mut stats);
-    plan_nodes(plan, world, visible, viewport, ink, quality, &mut stats);
+    plan_edges(plan, world, snapshot, viewport, ink, &mut stats);
+    plan_nodes(plan, world, snapshot, viewport, ink, &mut stats);
+    plan_handles(plan, world, snapshot, viewport, ink, &mut stats);
+    plan_labels(plan, world, snapshot, ink, &mut stats);
     stats
 }
 
-/// Every visible edge, from its **derived** route.
+use crate::render::grid;
+
+/// Every edge the snapshot kept, from its **derived** route at the frame's LOD
+/// rung.
 ///
 /// The routes were brought up to date once, at the top of the frame, by
 /// [`GraphWorld::rebuild_dirty_geometry`] — so this loop rebuilds nothing and a
-/// pure pan reroutes nothing (§40 rule 6). An edge whose route is stale is
-/// skipped rather than drawn from a stale one: it will be current on the frame
-/// the rebuild ran, and painting the old one would show an edge hanging off a
-/// node that has already moved.
+/// pure pan reroutes nothing (§40 rule 6).
 fn plan_edges(
     plan: &mut PaintPlan,
     world: &GraphWorld,
-    visible: &VisibleSet,
+    snapshot: &RenderSnapshot,
     viewport: &Viewport,
     ink: SceneInk,
-    quality: RenderQuality,
     stats: &mut SceneStats,
 ) {
-    for &edge in visible.edges() {
-        let Some(route) = world.route(edge) else {
+    let Some(lod) = snapshot.lod() else {
+        return;
+    };
+    let quality = world.settings().render_quality;
+
+    for planned in snapshot.edges() {
+        let Some(route) = world.route(planned.edge) else {
             continue;
         };
 
-        let style = world.edges().style(edge);
-        let color = if world.edges().is_selected(edge) {
+        let style = world.edges().style(planned.edge);
+        let color = if planned.selected {
             ink.accent
         } else {
             fade(style.stroke.color.unwrap_or(ink.edge), style.opacity)
@@ -183,7 +246,8 @@ fn plan_edges(
             color,
             width: style.stroke.width,
             // A dashed edge is the expensive kind, so it is only ever asked
-            // for when the document says so — see `render::plan::PathPaint`.
+            // for when the document says so — and the ladder drops it at the
+            // first rung down. See `render::plan::PathPaint`.
             dash: style
                 .stroke
                 .dash
@@ -192,6 +256,8 @@ fn plan_edges(
             start_marker: style.start_marker,
             end_marker: style.end_marker,
             quality,
+            detail: lod.edges,
+            owner: Some((planned.edge, planned.version)),
         };
 
         edges::plan_edge(plan, route, &paint, viewport);
@@ -199,39 +265,34 @@ fn plan_edges(
     }
 }
 
-/// Every visible node, as the cheapest primitive that can draw it, and its
-/// handles.
+/// Every canvas node, as the cheapest primitive that can draw it.
 ///
-/// The loop reads the runtime's hot arrays: a position, a size, a one-byte
-/// [`NodeShape`] and a style. It never touches
-/// [`ElementKind`](crate::models::ElementKind), which carries a `String` —
-/// that is what §17's cold/hot split is for and what §40 rule 9 asks.
+/// The loop reads the snapshot's compact rows: an index, a screen rectangle, a
+/// one-byte body and two flags. It touches
+/// [`ElementKind`](crate::models::ElementKind) — which carries a `String` — not
+/// at all; the snapshot already asked the registry whatever needed asking.
+/// That is what §17's cold/hot split is for and what §40 rule 9 asks.
 fn plan_nodes(
     plan: &mut PaintPlan,
     world: &GraphWorld,
-    visible: &VisibleSet,
+    snapshot: &RenderSnapshot,
     viewport: &Viewport,
     ink: SceneInk,
-    quality: RenderQuality,
     stats: &mut SceneStats,
 ) {
+    let Some(lod) = snapshot.lod() else {
+        return;
+    };
     let nodes = world.nodes();
+    let quality = world.settings().render_quality;
 
-    for &node in visible.nodes() {
-        let shape = nodes.shape(node);
-        if shape == NodeShape::Other {
-            // Text, images, frames and custom kinds are later phases'. A
-            // fallback rectangle here would silently draw them and hide the
-            // fact that they are not implemented.
-            stats.unsupported_nodes += 1;
-            continue;
-        }
+    for canvas in snapshot.canvas() {
+        let style = nodes.style(canvas.node);
+        let screen = canvas.screen;
 
-        let style = nodes.style(node);
-        let screen = viewport.world_rect_to_screen(nodes.bounds(node));
         // A graph node's body has a radius of its own so it reads as a node
         // rather than as a drawn rectangle; a shape uses what its style says.
-        let world_radius = if shape == NodeShape::GraphNode && style.corner_radius <= 0.0 {
+        let world_radius = if canvas.body == NodeShape::GraphNode && style.corner_radius <= 0.0 {
             GRAPH_NODE_RADIUS
         } else {
             style.corner_radius
@@ -242,22 +303,34 @@ fn plan_nodes(
         // `models::style` stores colours as `Option<Color>`: a document must
         // not carry a palette, or it would look wrong in the other theme.
         let fill = fade(style.fill.unwrap_or(ink.fill), style.opacity);
-        let selected = nodes.is_selected(node);
-        let stroke_color = if selected {
+        let stroke_color = if canvas.selected {
             ink.accent
         } else {
             fade(style.stroke.color.unwrap_or(ink.stroke), style.opacity)
         };
-        let stroke_width = viewport
-            .world_to_screen_length(style.stroke.width)
-            .max(if selected {
-                SELECTED_STROKE_PIXELS
-            } else {
-                0.0
-            });
-        let has_stroke = (!style.stroke.is_invisible() || selected) && stroke_width > 0.0;
+        let stroke_width =
+            viewport
+                .world_to_screen_length(style.stroke.width)
+                .max(if canvas.selected {
+                    SELECTED_STROKE_PIXELS
+                } else {
+                    0.0
+                });
+        // §15's "merge/simplify visual details": a node a few pixels across is
+        // a filled box, because its border is the whole box at that size and
+        // painting one costs a second primitive to draw nothing.
+        let has_stroke = canvas.detailed
+            && (!style.stroke.is_invisible() || canvas.selected)
+            && stroke_width > 0.0;
 
-        if shapes::node_prefers_quad(shape) {
+        // §15 and Phase 0 §3 correction 7: an ellipse is 337 vertices against a
+        // rectangle's 24, so below `curve_to_quad_zoom` a curved body is
+        // painted as its bounding quad rather than tessellated.
+        let as_quad = shapes::node_prefers_quad(canvas.body)
+            || (lod.degrade_curves && canvas.body != NodeShape::Diamond)
+            || !canvas.detailed;
+
+        if as_quad {
             // Phase 0's measurement, honoured: 20,000 quads hold 60 fps where
             // the same count of rectangular paths drop to 30 — and a quad
             // carries its corner radius and its border for free, so the border
@@ -267,62 +340,148 @@ fn plan_nodes(
                 quad = quad.with_border(stroke_width, stroke_color);
             }
             plan.push_quad(quad);
-        } else if let Some(outline) = shapes::outline_for_node(shape, screen, radius) {
-            plan.push_path(PathPrimitive::fill(outline.clone(), fill, quality));
+        } else if let Some(outline) = shapes::outline_for_node(canvas.body, screen, radius) {
+            plan.push_path(PathPrimitive::fill(outline.clone(), fill, quality).keyed(
+                GeometryKey::node(canvas.node, GeometryPart::Fill, canvas.version, quality),
+            ));
 
             if has_stroke {
-                plan.push_path(PathPrimitive::stroke(
-                    outline,
-                    stroke_color,
-                    stroke_width,
-                    quality,
-                ));
+                plan.push_path(
+                    PathPrimitive::stroke(outline, stroke_color, stroke_width, quality).keyed(
+                        GeometryKey::node(
+                            canvas.node,
+                            GeometryPart::Stroke,
+                            canvas.version,
+                            quality,
+                        ),
+                    ),
+                );
             }
         }
 
         stats.nodes += 1;
-        stats.handles += plan_handles(plan, world, viewport, node, ink);
     }
 }
 
-/// A node's handles, as quads.
+/// Handle dots, as quads (§4, §15).
 ///
-/// **Geometry and data in this phase, not interaction.** A handle is drawn so a
-/// connection can be aimed at it and so the routing is visible; the interactive
-/// element with its own hover state and cursor is Phase 5's, where §15's LOD
-/// decides whether a node is detailed enough to have one at all. A circle is a
-/// quad with a corner radius of half its side, so a hundred thousand of them
-/// would still be the cheap primitive.
+/// **Only the nodes that do not have interactive handle elements.** §44's rule
+/// is that controls belong to the selected, hovered or editing element and
+/// never to every inactive one — so the active node's handles are elements in
+/// `views/` and everything else's are these dots. Drawing both would draw the
+/// active node's handles twice.
+///
+/// A circle is a quad with a corner radius of half its side, so a hundred
+/// thousand of them would still be the cheap primitive.
 fn plan_handles(
     plan: &mut PaintPlan,
     world: &GraphWorld,
+    snapshot: &RenderSnapshot,
     viewport: &Viewport,
-    node: NodeIndex,
     ink: SceneInk,
-) -> u32 {
+    stats: &mut SceneStats,
+) {
+    let Some(lod) = snapshot.lod() else {
+        return;
+    };
+    if lod.handles == HandleDetail::Hidden {
+        // §15, exactly as written: do not create handles unless interaction
+        // needs them. At overview zoom a handle is smaller than a pixel.
+        return;
+    }
+
+    let elements_belong_to = snapshot
+        .interactive_handles()
+        .first()
+        .map(|handle| handle.node);
+
     let radius = HANDLE_SCREEN_RADIUS;
     let mut painted = 0;
 
-    for handle in world.nodes().handles(node) {
-        if world.handles().is_hidden(handle) {
-            // §4: hidden handles stay connectable. Only the paint is skipped —
-            // routing and hit-testing never read this flag.
+    let canvas_nodes = snapshot
+        .canvas()
+        .iter()
+        .filter(|node| node.detailed)
+        .map(|node| node.node);
+    let rich_nodes = snapshot.rich().iter().map(|node| node.node);
+
+    for node in canvas_nodes.chain(rich_nodes) {
+        if Some(node) == elements_belong_to {
             continue;
         }
 
-        let center = viewport.world_to_screen(world.handle_position(handle));
-        plan.push_quad(
-            QuadPrimitive::filled(
-                Rect::new(center - Vec2::splat(radius), Vec2::splat(radius * 2.0)),
-                ink.handle,
-            )
-            .with_corner_radius(radius)
-            .with_border(1.0, ink.fill),
-        );
-        painted += 1;
+        for handle in world.nodes().handles(node) {
+            if world.handles().is_hidden(handle) {
+                // §4: hidden handles stay connectable. Only the paint is
+                // skipped — routing and hit-testing never read this flag.
+                continue;
+            }
+
+            let center = viewport.world_to_screen(world.handle_position(handle));
+            plan.push_quad(
+                QuadPrimitive::filled(
+                    Rect::new(center - Vec2::splat(radius), Vec2::splat(radius * 2.0)),
+                    ink.handle,
+                )
+                .with_corner_radius(radius)
+                .with_border(1.0, ink.fill),
+            );
+            painted += 1;
+        }
     }
 
-    painted
+    stats.handles = painted;
+}
+
+/// Canvas-drawn labels (§9), for the nodes that are not elements.
+///
+/// A rich node's label lives inside its element, where it can be selected and
+/// edited; this is the compact representation for everything else. The font
+/// size is **already quantised** onto the LOD ladder by the snapshot — see
+/// [`crate::render::lod`] — and `None` means the label is not shaped at all,
+/// which is §15's "do not lay out rich text that cannot be read" costing
+/// exactly nothing.
+fn plan_labels(
+    plan: &mut PaintPlan,
+    world: &GraphWorld,
+    snapshot: &RenderSnapshot,
+    ink: SceneInk,
+    stats: &mut SceneStats,
+) {
+    let Some(lod) = snapshot.lod() else {
+        return;
+    };
+    if lod.detail == DetailLevel::Overview {
+        return;
+    }
+
+    for canvas in snapshot.canvas() {
+        let Some(font_size) = canvas.label_font_size else {
+            continue;
+        };
+        let Some(label) = world.nodes().cold(canvas.node).label.as_ref() else {
+            continue;
+        };
+
+        let inner = canvas.screen.inflate(-LABEL_PADDING_PIXELS);
+        if inner.size.x <= 0.0 || inner.size.y <= 0.0 {
+            continue;
+        }
+
+        plan.push_text(TextPrimitive {
+            // Vertically centred on the body, which is where a node's label
+            // belongs; the painter subtracts the line's own height.
+            origin: Vec2::new(inner.origin.x, canvas.screen.center().y - font_size * 0.5),
+            // An `Arc` clone: a refcount bump, not a `String` allocation per
+            // label per frame. See `NodeCold::label`.
+            text: Arc::clone(label),
+            font_size,
+            color: ink.text,
+            key: TextKey::new(canvas.node, canvas.version, font_size),
+            max_width: inner.size.x,
+        });
+        stats.labels += 1;
+    }
 }
 
 /// Applies an element's opacity to one of its colours.
@@ -335,6 +494,26 @@ pub fn fade(color: Color, opacity: f32) -> Color {
     color.with_alpha(color.a * opacity.clamp(0.0, 1.0))
 }
 
+/// A canvas node's on-screen rectangle, for a caller that has one row and wants
+/// its geometry without re-deriving it from the world.
+pub fn canvas_node_bounds(node: &CanvasNode) -> Rect {
+    node.screen
+}
+
+/// The node a plan's interactive handles belong to, if any. Exposed so a view
+/// and this file cannot disagree about which node is skipping its dots.
+pub fn active_handle_node(snapshot: &RenderSnapshot) -> Option<NodeIndex> {
+    snapshot
+        .interactive_handles()
+        .first()
+        .map(|handle| handle.node)
+}
+
+/// The quality a node's body is tessellated at. One place, so the plan and any
+/// cache lookup cannot disagree.
+pub fn node_quality(world: &GraphWorld) -> RenderQuality {
+    world.settings().render_quality
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,7 +522,7 @@ mod tests {
         models::{ElementKind, GraphNodeKind},
         render::GridStyle,
         runtime::{ConnectionRules, EdgeEnd},
-        spatial::SpatialIndex,
+        spatial::{SpatialIndex, VisibleSet},
     };
 
     fn ink() -> SceneInk {
@@ -353,6 +532,7 @@ mod tests {
             edge: Color::rgb(0.7, 0.7, 0.7),
             handle: Color::rgb(0.3, 0.6, 1.0),
             accent: Color::rgb(1.0, 0.6, 0.2),
+            text: Color::rgb(0.95, 0.95, 0.95),
         }
     }
 
@@ -418,13 +598,46 @@ mod tests {
         }
     }
 
+    /// A snapshot for one already-queried visible set.
+    fn snapshot_of(
+        world: &GraphWorld,
+        visible: &VisibleSet,
+        viewport: &Viewport,
+    ) -> RenderSnapshot {
+        let mut snapshot = RenderSnapshot::new();
+        snapshot.extract(
+            world,
+            visible,
+            viewport,
+            &for_backend(RenderBackend::Metal),
+            &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
+            None,
+            Rect::new(Vec2::ZERO, viewport.size()),
+        );
+        snapshot
+    }
+
+    /// One frame, end to end: query, extract, plan. The snapshot is built here
+    /// rather than passed in because these tests are about what reaches the
+    /// *plan*, and the snapshot is now part of how it gets there.
     fn frame(world: &GraphWorld, viewport: &Viewport) -> (PaintPlan, SceneStats) {
         let index = SpatialIndex::for_world(world);
-        let mut visible = VisibleSet::new();
+        let mut visible = crate::spatial::VisibleSet::new();
         index.query_visible(world, viewport, &mut visible);
 
+        let mut snapshot = RenderSnapshot::new();
+        snapshot.extract(
+            world,
+            &visible,
+            viewport,
+            &for_backend(RenderBackend::Metal),
+            &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
+            None,
+            Rect::new(Vec2::ZERO, viewport.size()),
+        );
+
         let mut plan = PaintPlan::new();
-        let stats = plan_scene(&mut plan, world, &visible, viewport, ink(), &options());
+        let stats = plan_scene(&mut plan, world, &snapshot, viewport, ink(), &options());
         (plan, stats)
     }
 
@@ -507,7 +720,7 @@ mod tests {
         let (small, small_stats) = frame(&document(50, 50), &viewport);
         let (large, large_stats) = frame(&document(200, 200), &viewport);
 
-        assert_eq!(small_stats.nodes, large_stats.nodes);
+        assert_eq!(small_stats.drawn_nodes(), large_stats.drawn_nodes());
         assert_eq!(small_stats.edges, large_stats.edges);
         assert_eq!(
             small.culled_paths(),
@@ -525,11 +738,11 @@ mod tests {
         let (_, stats) = frame(&world, &viewport);
 
         assert!(
-            stats.nodes < 100,
+            stats.drawn_nodes() < 100,
             "{} of 40,000 nodes were planned at 1:1",
-            stats.nodes
+            stats.drawn_nodes()
         );
-        assert!(stats.nodes > 0);
+        assert!(stats.drawn_nodes() > 0);
         assert!(stats.edges > 0);
     }
 
@@ -567,9 +780,9 @@ mod tests {
         let (plan, stats) = frame(&world, &viewport);
 
         assert!(
-            stats.nodes > 1_000,
+            stats.drawn_nodes() > 1_000,
             "the dense scene should make thousands visible, not {}",
-            stats.nodes
+            stats.drawn_nodes()
         );
 
         let vertices = plan.estimated_path_vertices();
@@ -597,7 +810,7 @@ mod tests {
         world.set_node_hidden(NodeIndex::new(0), false);
         let (_, without) = frame(&world, &viewport);
 
-        assert_eq!(with_hidden.nodes + 1, without.nodes);
+        assert_eq!(with_hidden.drawn_nodes() + 1, without.drawn_nodes());
     }
 
     #[test]
@@ -622,8 +835,9 @@ mod tests {
 
         let mut options = options();
         options.grid.style = GridStyle::None;
+        let snapshot = snapshot_of(&world, &visible, &viewport);
         let mut plan = PaintPlan::new();
-        plan_scene(&mut plan, &world, &visible, &viewport, ink(), &options);
+        plan_scene(&mut plan, &world, &snapshot, &viewport, ink(), &options);
 
         assert_eq!(plan.quad_count(), 0);
     }
@@ -660,8 +874,9 @@ mod tests {
             let mut visible = VisibleSet::new();
             index.query_visible(&world, &viewport, &mut visible);
 
+            let snapshot = snapshot_of(&world, &visible, &viewport);
             let mut plan = PaintPlan::new();
-            plan_scene(&mut plan, &world, &visible, &viewport, ink(), &options());
+            plan_scene(&mut plan, &world, &snapshot, &viewport, ink(), &options());
 
             // 1. Painted vertices stay under the platform ceiling, and are not
             //    merely under it — the harness records 5.5 % on the worst
@@ -749,7 +964,8 @@ mod tests {
             assert!(report.is_empty(), "frame {frame} queued a spatial update");
 
             index.query_visible(&world, &viewport, &mut visible);
-            plan_scene(&mut plan, &world, &visible, &viewport, ink(), &options());
+            let snapshot = snapshot_of(&world, &visible, &viewport);
+            plan_scene(&mut plan, &world, &snapshot, &viewport, ink(), &options());
         }
 
         assert_eq!(

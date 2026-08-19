@@ -113,11 +113,14 @@
 //! **This file names no UI framework.** Coordinates are pane-relative screen
 //! pixels as plain [`Vec2`]; the sink adds the element's origin.
 
+use std::sync::Arc;
+
 use crate::render::shapes::Outline;
 use crate::{
     budgets::RenderBudgets,
     geometry::{Rect, Vec2},
     models::{Color, RenderQuality},
+    render::cache::{GeometryKey, TextKey},
 };
 
 /// An axis-aligned rectangle with optional corner radii and a border.
@@ -249,8 +252,21 @@ pub struct PathPrimitive {
     pub paint: PathPaint,
     /// The flattening tolerance this path is tessellated at. Carried per path
     /// rather than read globally because it is part of every geometry cache key
-    /// and a later phase degrades it per element under LOD.
+    /// and the LOD ladder degrades it per element.
     pub quality: RenderQuality,
+    /// **Where the geometry cache should file this tessellation**, or `None`
+    /// for a path not worth caching.
+    ///
+    /// The key is the plan's rather than the painter's because only the planner
+    /// knows *which element* a path belongs to — by the time a painter sees an
+    /// outline it is a bag of screen coordinates, and screen coordinates change
+    /// on every pan, which is exactly the case the cache exists to serve. See
+    /// [`crate::render::cache`].
+    ///
+    /// `None` is right for the overlays: a rubber band and a connection preview
+    /// change every frame by definition, and §23 says not to cache what changes
+    /// every frame.
+    pub key: Option<GeometryKey>,
 }
 
 impl PathPrimitive {
@@ -259,7 +275,14 @@ impl PathPrimitive {
             outline,
             paint: PathPaint::Fill(color),
             quality,
+            key: None,
         }
+    }
+
+    /// Files this path in the geometry cache under `key`. See the field.
+    pub fn keyed(mut self, key: GeometryKey) -> PathPrimitive {
+        self.key = Some(key);
+        self
     }
 
     pub fn stroke(
@@ -272,6 +295,7 @@ impl PathPrimitive {
             outline,
             paint: PathPaint::Stroke { color, width },
             quality,
+            key: None,
         }
     }
 
@@ -287,6 +311,7 @@ impl PathPrimitive {
             outline,
             paint: PathPaint::DashedStroke { color, width, dash },
             quality,
+            key: None,
         }
     }
 
@@ -297,19 +322,32 @@ impl PathPrimitive {
     }
 }
 
-/// A run of text on the canvas.
+/// A run of text on the canvas (§9).
 ///
-/// **Nothing pushes one of these yet** — text elements are Phase 5's, and
-/// `ShapedLine` caching with them. The type exists now because the paint order
-/// is the contract: text is last, and a phase that arrives with labels must
-/// inherit that rather than decide it.
+/// Text is **last** in the paint order and that is the contract, not a
+/// preference: a run of paths breaks the moment another primitive kind sorts
+/// between them, and each contiguous run is a full-viewport render pass.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextPrimitive {
-    /// Pane-relative screen pixels: the text's baseline origin.
+    /// Pane-relative screen pixels: the text's top-left.
     pub origin: Vec2,
-    pub text: String,
+    /// `Arc<str>` rather than `String`: this is built per visible label per
+    /// frame, and a `String` here would be an allocation per label per frame —
+    /// 1,584 of them on Phase 4's dense scene. See
+    /// [`NodeCold::label`](crate::runtime::NodeCold::label).
+    pub text: Arc<str>,
+    /// **Already quantised onto the LOD ladder.** `font_size` is part of GPUI's
+    /// shaped-line cache key, so an unquantised size re-shapes every visible
+    /// label on every frame of a zoom (Phase 0 §1.9).
     pub font_size: f32,
     pub color: Color,
+    /// Where the shaped-line cache files this run. See
+    /// [`crate::render::cache::ShapedLineCache`].
+    pub key: TextKey,
+    /// The width the run is laid out into, in screen pixels — the node's inner
+    /// width. A run wider than this is truncated by the painter rather than
+    /// allowed to spill across its neighbours.
+    pub max_width: f32,
 }
 
 /// What one frame actually painted.
@@ -677,6 +715,8 @@ mod tests {
         TextPrimitive {
             origin: Vec2::ZERO,
             text: "abc".into(),
+            key: TextKey::new(crate::models::NodeIndex::new(0), 1, 12.0),
+            max_width: 100.0,
             font_size: 12.0,
             color: Color::WHITE,
         }
