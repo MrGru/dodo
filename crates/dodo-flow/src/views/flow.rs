@@ -106,6 +106,15 @@ use crate::{
 /// The key-binding context the canvas establishes on its root, so canvas
 /// bindings fire only while it holds focus and never leak into another tool —
 /// the same scoping every other dodo tool uses.
+///
+/// **The scoping has a precondition that is easy to miss and silent when it is
+/// missed**: GPUI dispatches a key event down the *focus* path, and
+/// `Window::dispatch_key_event` falls back to the dispatch tree's **root node**
+/// when nothing is focused. A canvas that never takes focus therefore has its
+/// context, its key handlers and its actions outside the path entirely — every
+/// binding is dead and nothing says so. [`FlowView::new`] focuses on mount and
+/// the mouse-down handler refocuses, which is what makes this constant mean
+/// anything.
 pub const KEY_CONTEXT: &str = "FlowCanvas";
 
 /// The key that turns a left-drag into a pan, alongside the middle button.
@@ -252,12 +261,18 @@ pub struct FlowView {
 }
 
 impl FlowView {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> FlowView {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> FlowView {
         // Resolved once, here, rather than read per frame: it is a compile-time
         // property of the build. Held on the view rather than reached for
         // globally so a benchmark or a test can mount a view against another
         // platform's budgets.
         let budgets = crate::budgets::current();
+
+        // **Focused on mount, and refocused on every press** — see
+        // `KEY_CONTEXT`. Without a focus the canvas's key context is not on
+        // GPUI's dispatch path at all, and every binding scoped to it is dead.
+        let focus_handle = cx.focus_handle();
+        window.focus(&focus_handle, cx);
 
         FlowView {
             editor: FlowEditor::new(),
@@ -265,7 +280,7 @@ impl FlowView {
             grid: GridSettings::default(),
             grid_limits: GridLimits::from_budgets(&budgets),
             budgets,
-            focus_handle: cx.focus_handle(),
+            focus_handle,
             interaction: InteractionMachine::new(),
             spatial: SpatialIndex::new(crate::spatial::DEFAULT_CELL_SIZE),
             visible: VisibleSet::new(),
@@ -996,6 +1011,11 @@ impl FlowView {
                 ));
 
                 view.update(cx, |this, cx| {
+                    // Takes the focus back from whatever had it, so the
+                    // canvas's bindings keep working after the pointer has been
+                    // somewhere else — a toolbar button, another pane.
+                    this.focus_handle.clone().focus(window, cx);
+
                     let interaction =
                         this.pointer_event(event.position, bounds, button, event.modifiers);
                     let effect = this.interaction.handle(interaction);

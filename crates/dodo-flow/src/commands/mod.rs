@@ -50,8 +50,12 @@ mod tests {
     use crate::{
         geometry::{Rect, RouteSegment, Vec2, Viewport},
         models::{
-            EdgeIndex, EdgeRouting, ElementId, ElementKind, ElementStyle, FlowDocument,
+            Color, EdgeIndex, EdgeRouting, ElementId, ElementKind, ElementStyle, FlowDocument,
             GraphNodeKind, NodeIndex, ShapeKind,
+        },
+        render::{
+            GridSettings, PaintPlan, SceneInk, SceneOptions, SceneStats, grid::GridLimits,
+            registry::NodeRendererRegistry, scene, snapshot::RenderSnapshot,
         },
         runtime::{BoxQuery, ConnectionRules, EdgeEnd, EdgeSpec, GraphWorld, NodeSpec},
         scenes::SceneSpec,
@@ -66,9 +70,12 @@ mod tests {
     /// restored the document while leaving a node indexed at its old place would
     /// pass a document test and paint a ghost.
     ///
-    /// So this is the frame's whole input: what the viewport query returns, where
-    /// every visible element is, and what the routes are. Two of these being equal
-    /// is two frames being identical.
+    /// So this is the frame's whole input **and its whole output**: what the
+    /// viewport query returns, where every visible element is, what the routes
+    /// are, and the [`PaintPlan`] the scene planner builds out of all of it.
+    /// The plan is every quad, path and glyph the painter would be handed, in
+    /// order — two of these being equal is two frames being pixel-identical
+    /// short of the GPU.
     #[derive(Debug, PartialEq)]
     struct Frame {
         visible_nodes: Vec<NodeIndex>,
@@ -78,6 +85,21 @@ mod tests {
         routes: Vec<(EdgeIndex, Vec2, Vec<RouteSegment>)>,
         indexed_nodes: usize,
         indexed_edges: usize,
+        plan: PaintPlan,
+        scene: SceneStats,
+    }
+
+    /// A theme's colours, fixed. The canvas is theme-driven and this test is
+    /// not about the theme.
+    fn ink() -> SceneInk {
+        SceneInk {
+            fill: Color::rgb(0.2, 0.2, 0.2),
+            stroke: Color::rgb(0.9, 0.9, 0.9),
+            edge: Color::rgb(0.7, 0.7, 0.7),
+            handle: Color::rgb(0.3, 0.6, 1.0),
+            accent: Color::rgb(1.0, 0.6, 0.2),
+            text: Color::rgb(0.95, 0.95, 0.95),
+        }
     }
 
     /// Runs the frame the way [`crate::views::FlowView`] does — rebuild stale
@@ -92,8 +114,37 @@ mod tests {
         let mut visible = VisibleSet::new();
         index.query_visible(editor.world(), viewport, &mut visible);
 
+        // The rest of the frame, exactly as `views::flow` builds it: extract
+        // §24's snapshot from the visible set, then plan the scene from the
+        // snapshot. Neither step needs a window, which is the whole reason the
+        // crate holds the UI-framework line where it does.
+        let budgets = crate::budgets::current();
+        let registry = NodeRendererRegistry::with_generic_kinds();
+        let mut snapshot = RenderSnapshot::new();
+        snapshot.extract(
+            editor.world(),
+            &visible,
+            viewport,
+            &budgets,
+            &registry,
+            None,
+            Rect::new(Vec2::ZERO, viewport.size()),
+        );
+
+        let mut plan = PaintPlan::new();
+        let scene = scene::plan_scene(
+            &mut plan,
+            editor.world(),
+            &snapshot,
+            viewport,
+            ink(),
+            &SceneOptions::new(GridSettings::default(), GridLimits::from_budgets(&budgets)),
+        );
+
         let world = editor.world();
         Frame {
+            plan,
+            scene,
             visible_nodes: visible.nodes().to_vec(),
             visible_edges: visible.edges().to_vec(),
             node_bounds: visible
@@ -145,6 +196,10 @@ mod tests {
     fn a_repaint_after_undo_is_the_frame_the_edit_never_happened() {
         let (mut editor, mut index, viewport) = scene_editor();
         let before = frame(&mut editor, &mut index, &viewport);
+        // A frame that draws nothing would pass every assertion below without
+        // meaning any of them.
+        assert!(before.plan.path_count() > 0 && before.plan.quad_count() > 0);
+        assert!(before.scene.edges > 0 && !before.visible_nodes.is_empty());
 
         // A node with edges, moved far enough to cross cells.
         let node = NodeIndex::new(3);

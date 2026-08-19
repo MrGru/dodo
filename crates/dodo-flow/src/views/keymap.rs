@@ -45,3 +45,34 @@ pub fn init(cx: &mut App) {
         keys::EditAction::Redo => KeyBinding::new(binding.keystroke, Redo, Some(KEY_CONTEXT)),
     }));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{KEY_CONTEXT, Redo, Undo};
+    use crate::commands::keys;
+    use dodo_paths::HostOs;
+    use gpui::KeyBinding;
+
+    /// **Every host's bindings, actually built.**
+    ///
+    /// `KeyBinding::new` parses the keystroke and the context predicate and
+    /// panics on either being malformed, and [`init`](super::init) only ever
+    /// builds *this* host's row — so a typo in the Windows keystroke would ship
+    /// and only be found by someone running Windows. Building all three here
+    /// costs microseconds and needs no `App`.
+    #[test]
+    fn every_host_s_bindings_parse() {
+        for host in [HostOs::MacOs, HostOs::Windows, HostOs::Unix] {
+            for binding in keys::for_host(host) {
+                let _ = match binding.action {
+                    keys::EditAction::Undo => {
+                        KeyBinding::new(binding.keystroke, Undo, Some(KEY_CONTEXT))
+                    }
+                    keys::EditAction::Redo => {
+                        KeyBinding::new(binding.keystroke, Redo, Some(KEY_CONTEXT))
+                    }
+                };
+            }
+        }
+    }
+}
