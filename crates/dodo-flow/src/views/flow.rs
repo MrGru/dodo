@@ -98,8 +98,8 @@ use crate::{
     geometry::{Attachment, EdgeRoute, Rect, RouteOptions, Vec2, Viewport, route},
     instrument::{Instruments, Probe},
     interaction::{
-        BoxSelection, InputModifiers, InteractionEffect, InteractionEvent, InteractionMachine,
-        PointerButton,
+        BoxSelection, CanvasTool, InputModifiers, InteractionEffect, InteractionEvent,
+        InteractionMachine, PointerButton,
     },
     models::{
         Color, EdgeIndex, EdgeRouting, FlowDocument, NodeIndex, RenderQuality, RenderStyle,
@@ -111,16 +111,19 @@ use crate::{
         cache::{CacheStats, GeometryCache, ShapedLineCache},
         edges,
         lod::LodPlan,
-        plan::QuadPrimitive,
+        painter::from_hsla,
+        plan::{PathPrimitive, QuadPrimitive},
         registry::NodeRendererRegistry,
         scene,
+        scene::GRAPH_NODE_RADIUS,
+        shapes,
         snapshot::{RenderSnapshot, SnapshotCounts},
     },
     runtime::{BoxQuery, EdgeEnd, GraphWorld, HitTolerance, PointerTarget, SelectionSet},
     spatial::{SpatialIndex, SyncReport, VisibleSet},
     views::{
-        keymap::{Redo, Undo},
-        nodes,
+        keymap::{Redo, SelectTool, Undo},
+        nodes, palette,
     },
 };
 
@@ -575,6 +578,37 @@ impl FlowView {
         self.set_render_style(next, cx);
     }
 
+    /// **§45's active tool**: what the next press on the canvas means.
+    pub fn tool(&self) -> CanvasTool {
+        self.interaction.tool()
+    }
+
+    /// **Picks up a tool.** The palette's click handler and the key bindings
+    /// both land here.
+    ///
+    /// It goes through the interaction machine as an event rather than setting
+    /// a field, because §45's rule is that tool activation *is* an interaction
+    /// state change — and because the machine is then the only thing that knows
+    /// which tool is active, so there is no second copy to drift.
+    ///
+    /// A tool change while a gesture is in progress is refused by the machine;
+    /// see [`InteractionEvent::SelectTool`]. `Esc` is the way out, and
+    /// [`FlowView::on_key_down`] sends the cancel first for exactly that
+    /// reason.
+    pub fn set_tool(&mut self, tool: CanvasTool, window: &mut Window, cx: &mut Context<Self>) {
+        // The palette is a sibling element, so clicking it moves the focus off
+        // the canvas and every binding scoped to `KEY_CONTEXT` would go dead
+        // until the next press on the canvas itself — the exact failure Phase 7
+        // found, arriving through a control this phase added. Taking the focus
+        // back here is the whole fix.
+        self.focus_handle.clone().focus(window, cx);
+
+        let effect = self.interaction.handle(InteractionEvent::SelectTool(tool));
+        if effect.needs_repaint() {
+            cx.notify();
+        }
+    }
+
     /// The hand [`RenderStyle::Sketch`] draws with (§13).
     pub fn sketch_style(&self) -> SketchStyle {
         self.editor.world().settings().sketch
@@ -661,6 +695,48 @@ impl FlowView {
             RenderQuality::BALANCED,
             &self.viewport,
         );
+    }
+
+    /// **The element about to be created** (§45), drawn where it will land.
+    ///
+    /// Painted through the same [`shapes::outline_for_node`] the committed
+    /// element will use, from the same rectangle
+    /// [`creation_rect`](crate::interaction::creation_rect) resolved — so the
+    /// preview is not an approximation of the result, it is the result drawn
+    /// early. A click's default-size box appears the moment the button goes
+    /// down, which is also what tells the user a click is going to place
+    /// something.
+    ///
+    /// Not cached, for the same reason the rubber band is not: §23 says not to
+    /// cache what changes every frame.
+    fn plan_creation_preview(&mut self, ink: SceneInk) {
+        let Some((tool, world)) = self.interaction.creation_preview() else {
+            return;
+        };
+        let Some(kind) = tool.element_kind() else {
+            return;
+        };
+
+        let screen = self.viewport.world_rect_to_screen(world);
+        let shape = crate::runtime::NodeShape::of(&kind);
+        let radius = self.viewport.world_to_screen_length(GRAPH_NODE_RADIUS);
+        let Some(outline) = shapes::outline_for_node(shape, screen, radius) else {
+            return;
+        };
+
+        if !shapes::is_open(shape) {
+            self.plan.push_path(PathPrimitive::fill(
+                outline.clone(),
+                ink.accent.with_alpha(0.12),
+                RenderQuality::BALANCED,
+            ));
+        }
+        self.plan.push_path(PathPrimitive::stroke(
+            outline,
+            ink.accent,
+            PREVIEW_WIDTH,
+            RenderQuality::BALANCED,
+        ));
     }
 
     /// The box-selection rectangle: **a quad**, so it adds no path batch on top
@@ -772,6 +848,7 @@ impl FlowView {
         // cache what changes every frame.
         self.plan_connection_preview(ink);
         self.plan_selection_rect(ink);
+        self.plan_creation_preview(ink);
         self.instruments.record(Probe::RenderExtract, timer);
 
         self.last_grid = self.last_scene.grid;
@@ -1213,12 +1290,42 @@ impl FlowView {
         }
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    /// §45's tool activation, reached through the binding registered in
+    /// [`crate::init`] or through the palette.
+    fn on_select_tool(&mut self, action: &SelectTool, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_tool(action.tool, window, cx);
+    }
+
+    /// **`Esc` means two things, in order**: abandon whatever is in progress,
+    /// then put the Select tool back.
+    ///
+    /// Two events rather than one, so the interaction machine keeps its
+    /// one-effect-per-event rule — and in this order, because a tool change is
+    /// refused while a gesture is running. `commands::keys` records why this
+    /// keystroke is handled raw here instead of joining the binding table.
+    ///
+    /// Both effects go through the ordinary [`FlowView::apply`], so an
+    /// abandoned creation and an abandoned drag are undone the same way they
+    /// always were.
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event.keystroke.key.as_str() {
             PAN_KEY => self.pan_key_held = true,
             "escape" => {
-                let effect = self.interaction.handle(InteractionEvent::Cancel);
-                if effect.needs_repaint() {
+                let cancelled = self.interaction.handle(InteractionEvent::Cancel);
+                let mut repaint = cancelled.needs_repaint();
+                if repaint {
+                    let report = gesture::apply_gesture(&mut self.editor, cancelled);
+                    repaint |= report.changed;
+                }
+
+                let restored = self
+                    .interaction
+                    .handle(InteractionEvent::SelectTool(CanvasTool::Select));
+                if repaint || restored.needs_repaint() {
+                    // The canvas may have lost the focus to the palette; a
+                    // keystroke that reached this handler proves it has it now,
+                    // and taking it again is free.
+                    self.focus_handle.clone().focus(window, cx);
                     cx.notify();
                 }
             }
@@ -1244,15 +1351,6 @@ fn to_pointer_button(button: MouseButton) -> Option<PointerButton> {
         MouseButton::Right => Some(PointerButton::Right),
         MouseButton::Navigate(_) => None,
     }
-}
-
-/// GPUI's colour as the crate's pure one. The inverse of
-/// [`crate::render::painter::to_hsla`], and it lives here for the same reason:
-/// `models/` may not name a UI framework, so a theme colour can only be
-/// converted on this side of the boundary.
-fn from_hsla(color: gpui::Hsla) -> Color {
-    let rgba: gpui::Rgba = color.into();
-    Color::rgba(rgba.r, rgba.g, rgba.b, rgba.a)
 }
 
 fn trace(args: std::fmt::Arguments<'_>) {
@@ -1305,6 +1403,7 @@ impl Render for FlowView {
             .text_color(cx.theme().foreground)
             .on_action(cx.listener(Self::on_undo))
             .on_action(cx.listener(Self::on_redo))
+            .on_action(cx.listener(Self::on_select_tool))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
             .child(
@@ -1329,6 +1428,17 @@ impl Render for FlowView {
                     .children(selection)
                     .children(handles)
                     .children(toolbar),
+            )
+            // **§45's palette.** Chrome rather than content, so it sits above
+            // the rich layer and is positioned against the pane rather than
+            // against the document — a control anchored in world space would
+            // pan away from the user.
+            .child(
+                div()
+                    .absolute()
+                    .top(px(12.0))
+                    .left(px(12.0))
+                    .child(palette::palette(cx.entity(), self.interaction.tool(), cx)),
             )
     }
 }

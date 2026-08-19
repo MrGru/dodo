@@ -62,7 +62,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     geometry::Vec2,
-    models::{ElementKind, GraphNodeKind, NodeIndex, ShapeKind},
+    models::{ElementKind, GraphNodeKind, LinearKind, NodeIndex, ShapeKind},
     runtime::NodeShape,
 };
 
@@ -382,8 +382,29 @@ impl NodeRendererRegistry {
                 shows_label: false,
                 ..NodeVisual::FALLBACK
             },
+            // §7's free linear elements. Not filled — an open outline has no
+            // interior — and not labelled, for the same reason a drawn shape is
+            // not: the vector loop paints it and there is no rich element.
+            ElementKind::Linear(kind) => NodeVisual {
+                body: linear_body(*kind),
+                glyph: NodeGlyph::None,
+                shows_label: false,
+                filled: false,
+                ..NodeVisual::FALLBACK
+            },
             _ => NodeVisual::FALLBACK,
         }
+    }
+}
+
+/// §7's linear kinds, projected the same way [`shape_body`] projects the drawn
+/// ones. `Elbow` is `Other` because its legs need waypoints a node rectangle
+/// cannot hold — see [`NodeShape::of`].
+fn linear_body(kind: LinearKind) -> NodeShape {
+    match kind {
+        LinearKind::Line => NodeShape::Line,
+        LinearKind::Arrow => NodeShape::Arrow,
+        LinearKind::Elbow => NodeShape::Other,
     }
 }
 

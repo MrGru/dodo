@@ -554,6 +554,7 @@ mod tests {
         ("render/snapshot.rs", include_str!("render/snapshot.rs")),
         ("interaction/mod.rs", include_str!("interaction/mod.rs")),
         ("interaction/state.rs", include_str!("interaction/state.rs")),
+        ("interaction/tool.rs", include_str!("interaction/tool.rs")),
         ("runtime/mod.rs", include_str!("runtime/mod.rs")),
         ("runtime/adjacency.rs", include_str!("runtime/adjacency.rs")),
         ("runtime/compact.rs", include_str!("runtime/compact.rs")),

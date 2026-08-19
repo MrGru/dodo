@@ -100,6 +100,15 @@ pub const GRAPH_NODE_RADIUS: f32 = 6.0;
 /// screen rather than in world units, so selection stays visible at any zoom.
 pub const SELECTED_STROKE_PIXELS: f32 = 2.0;
 
+/// The narrowest an **open** shape's stroke may be drawn, in screen pixels.
+///
+/// A closed body whose stroke is dropped still reads as itself — §15 drops it
+/// on purpose. A line whose stroke is dropped is gone, so this is the floor
+/// that keeps a hairline visible at any zoom and under any style. On screen
+/// rather than in world units for the same reason
+/// [`SELECTED_STROKE_PIXELS`] is.
+pub const MIN_OPEN_STROKE_PIXELS: f32 = 1.0;
+
 /// The inset a canvas-drawn label keeps from its node's edges, in screen
 /// pixels. Constant on screen for the same reason the handle radius is.
 pub const LABEL_PADDING_PIXELS: f32 = 6.0;
@@ -325,20 +334,27 @@ fn plan_nodes(
         } else {
             fade(style.stroke.color.unwrap_or(ink.stroke), style.opacity)
         };
-        let stroke_width =
-            viewport
-                .world_to_screen_length(style.stroke.width)
-                .max(if canvas.selected {
-                    SELECTED_STROKE_PIXELS
-                } else {
-                    0.0
-                });
+        // **An open shape is nothing but its stroke** — see
+        // [`shapes::is_open`] for the three decisions that follow from it, and
+        // why each is wrong by default.
+        let open = shapes::is_open(canvas.body);
+        let stroke_width = viewport
+            .world_to_screen_length(style.stroke.width)
+            .max(if open {
+                MIN_OPEN_STROKE_PIXELS
+            } else if canvas.selected {
+                SELECTED_STROKE_PIXELS
+            } else {
+                0.0
+            });
         // §15's "merge/simplify visual details": a node a few pixels across is
         // a filled box, because its border is the whole box at that size and
-        // painting one costs a second primitive to draw nothing.
-        let has_stroke = canvas.detailed
-            && (!style.stroke.is_invisible() || canvas.selected)
-            && stroke_width > 0.0;
+        // painting one costs a second primitive to draw nothing. A line has no
+        // box to fall back to, so it keeps its stroke at every rung.
+        let has_stroke = open
+            || (canvas.detailed
+                && (!style.stroke.is_invisible() || canvas.selected)
+                && stroke_width > 0.0);
 
         // **§13's hand, if the ladder kept it.** A node too small to be worth a
         // border is too small to be worth a wobble either, so `detailed` gates
@@ -371,9 +387,10 @@ fn plan_nodes(
         // §15 and Phase 0 §3 correction 7: an ellipse is 337 vertices against a
         // rectangle's 24, so below `curve_to_quad_zoom` a curved body is
         // painted as its bounding quad rather than tessellated.
-        let as_quad = shapes::node_prefers_quad(canvas.body)
-            || (lod.degrade_curves && canvas.body != NodeShape::Diamond)
-            || !canvas.detailed;
+        let as_quad = !open
+            && (shapes::node_prefers_quad(canvas.body)
+                || (lod.degrade_curves && canvas.body != NodeShape::Diamond)
+                || !canvas.detailed);
 
         if as_quad {
             // Phase 0's measurement, honoured: 20,000 quads hold 60 fps where
@@ -386,15 +403,17 @@ fn plan_nodes(
             }
             plan.push_quad(quad);
         } else if let Some(outline) = shapes::outline_for_node(canvas.body, screen, radius) {
-            plan.push_path(PathPrimitive::fill(outline.clone(), fill, quality).keyed(
-                GeometryKey::node(
-                    canvas.node,
-                    GeometryPart::Fill,
-                    canvas.version,
-                    quality,
-                    CLEAN,
-                ),
-            ));
+            if !open {
+                plan.push_path(PathPrimitive::fill(outline.clone(), fill, quality).keyed(
+                    GeometryKey::node(
+                        canvas.node,
+                        GeometryPart::Fill,
+                        canvas.version,
+                        quality,
+                        CLEAN,
+                    ),
+                ));
+            }
 
             if has_stroke {
                 plan.push_path(
@@ -465,6 +484,10 @@ fn plan_sketched_body(
         plan.push_quad(
             QuadPrimitive::filled(body.screen, body.fill).with_corner_radius(body.radius),
         );
+    } else if shapes::is_open(body.body) {
+        // Nothing to fill: a hand-drawn line is its strokes and no more. The
+        // caller already forced `has_stroke`, so the passes below are the whole
+        // shape.
     } else {
         let seed = sketch::element_seed(style, id, SKETCH_FILL_PART);
         plan.push_path(
@@ -851,6 +874,38 @@ mod tests {
 
         let mut plan = PaintPlan::new();
         let stats = plan_scene(&mut plan, world, &snapshot, viewport, ink(), &options());
+        (plan, stats)
+    }
+
+    /// The same frame with **no background grid**, so a test can count the
+    /// primitives one element produced. The grid is thousands of quads and
+    /// swamps any assertion about a single node.
+    fn frame_without_grid(world: &GraphWorld, viewport: &Viewport) -> (PaintPlan, SceneStats) {
+        let index = SpatialIndex::for_world(world);
+        let mut visible = crate::spatial::VisibleSet::new();
+        index.query_visible(world, viewport, &mut visible);
+
+        let mut snapshot = RenderSnapshot::new();
+        snapshot.extract(
+            world,
+            &visible,
+            viewport,
+            &for_backend(RenderBackend::Metal),
+            &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
+            None,
+            Rect::new(Vec2::ZERO, viewport.size()),
+        );
+
+        let options = SceneOptions::new(
+            GridSettings {
+                style: GridStyle::None,
+                ..GridSettings::default()
+            },
+            GridLimits::from_budgets(&for_backend(RenderBackend::Metal)),
+        );
+
+        let mut plan = PaintPlan::new();
+        let stats = plan_scene(&mut plan, world, &snapshot, viewport, ink(), &options);
         (plan, stats)
     }
 
@@ -1410,5 +1465,84 @@ mod tests {
         }
 
         fn transform(&mut self, _scale: f32, _offset: Vec2) {}
+    }
+
+    // ---- §7's free linear elements, in a real frame ----------------------
+
+    /// **A drawn line reaches the painter as one stroked path and no quad.**
+    ///
+    /// The three things that would each silently break it: a fill pass on a
+    /// zero-area outline, `has_stroke` dropping the only pass the shape has,
+    /// and the curve/detail degradation turning a diagonal into the solid box
+    /// it spans. Asserted on what a real frame plans, at three zooms, because
+    /// two of the three only happen at some of them.
+    #[test]
+    fn a_free_line_is_stroked_once_and_never_becomes_a_quad() {
+        for kind in [
+            ElementKind::Linear(crate::models::LinearKind::Line),
+            ElementKind::Linear(crate::models::LinearKind::Arrow),
+        ] {
+            for zoom in [1.0, 0.4, 0.08] {
+                let mut world = GraphWorld::new();
+                world.create_node(
+                    kind.clone(),
+                    Vec2::new(-100.0, -50.0),
+                    Vec2::new(200.0, 100.0),
+                );
+                world.rebuild_all_geometry();
+                world.clear_spatial_updates();
+
+                let viewport = Viewport::new(Vec2::ZERO, zoom, Vec2::new(1_440.0, 900.0));
+                let (plan, stats) = frame_without_grid(&world, &viewport);
+
+                assert_eq!(stats.nodes, 1, "{kind:?} at {zoom} was not planned");
+                assert_eq!(
+                    plan.quads().len(),
+                    0,
+                    "{kind:?} at {zoom} was painted as a quad"
+                );
+                assert_eq!(
+                    plan.paths().len(),
+                    1,
+                    "{kind:?} at {zoom} should be exactly one stroked path"
+                );
+                assert!(
+                    plan.paths()[0].paint.width().is_some(),
+                    "{kind:?} at {zoom} was filled rather than stroked"
+                );
+                assert!(
+                    plan.paths()[0].paint.width().unwrap() >= MIN_OPEN_STROKE_PIXELS,
+                    "{kind:?} at {zoom} was stroked below the visible floor"
+                );
+            }
+        }
+    }
+
+    /// A hand-drawn line is still only strokes: §13's fill pass has nothing to
+    /// fill, and a sketched fill of an open outline is a shape lyon invents.
+    #[test]
+    fn a_sketched_line_adds_strokes_and_no_fill() {
+        let mut world = GraphWorld::new();
+        world.create_node(
+            ElementKind::Linear(crate::models::LinearKind::Line),
+            Vec2::new(-100.0, -50.0),
+            Vec2::new(200.0, 100.0),
+        );
+        world.settings_mut().render_style = crate::models::RenderStyle::Sketch;
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(1_440.0, 900.0));
+        let (plan, stats) = frame_without_grid(&world, &viewport);
+
+        assert_eq!(stats.sketched_bodies, 1);
+        assert_eq!(plan.quads().len(), 0);
+        assert!(!plan.paths().is_empty());
+        for path in plan.paths() {
+            assert!(
+                path.paint.width().is_some(),
+                "a sketched line must be strokes only"
+            );
+        }
     }
 }

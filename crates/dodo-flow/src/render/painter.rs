@@ -110,6 +110,19 @@ fn to_bounds(rect: Rect) -> Bounds<Pixels> {
     }
 }
 
+/// GPUI's colour as the crate's pure one — the inverse of [`to_hsla`], and it
+/// lives here for the same reason: `models/` may not name a UI framework, so a
+/// theme colour can only be converted on this side of the boundary.
+///
+/// Two callers, which is why it is here rather than in either of them: the
+/// canvas resolves its ink from the theme every frame
+/// ([`FlowView`](crate::views::FlowView)), and the tool palette resolves its
+/// glyph colour the same way.
+pub fn from_hsla(color: Hsla) -> Color {
+    let rgba: Rgba = color.into();
+    Color::rgba(rgba.r, rgba.g, rgba.b, rgba.a)
+}
+
 /// Turns an [`Outline`] into a built GPUI [`Path`], at the given tolerance.
 ///
 /// Returns `None` for an outline lyon refuses or one that tessellates to

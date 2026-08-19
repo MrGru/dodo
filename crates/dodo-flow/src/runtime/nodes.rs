@@ -57,7 +57,8 @@ use std::sync::Arc;
 use crate::{
     geometry::{Rect, Vec2},
     models::{
-        ElementId, ElementKind, ElementStyle, GraphNodeKind, HandleIndex, NodeIndex, ShapeKind,
+        ElementId, ElementKind, ElementStyle, GraphNodeKind, HandleIndex, LinearKind, NodeIndex,
+        ShapeKind,
     },
     runtime::CompactList,
 };
@@ -123,6 +124,12 @@ pub enum NodeShape {
     Triangle,
     /// A React-Flow-style node body: a rounded quad with handles.
     GraphNode,
+    /// §7's free line: an **open** outline, so it is stroked and never filled,
+    /// and it is never degraded to its bounding quad — a line drawn as a solid
+    /// box is not a simplification of a line.
+    Line,
+    /// §7's free arrow: [`Line`](NodeShape::Line) with a head at the end.
+    Arrow,
     /// Text, an image, a frame, a freehand stroke, an embed, a custom kind —
     /// everything whose painter is a later phase's. Deliberately **not** drawn
     /// as a rectangle: a kind that silently paints as something else is a
@@ -142,6 +149,11 @@ impl NodeShape {
             ElementKind::Shape(ShapeKind::Ellipse) => NodeShape::Ellipse,
             ElementKind::Shape(ShapeKind::Diamond) => NodeShape::Diamond,
             ElementKind::Shape(ShapeKind::Triangle) => NodeShape::Triangle,
+            ElementKind::Linear(LinearKind::Line) => NodeShape::Line,
+            ElementKind::Linear(LinearKind::Arrow) => NodeShape::Arrow,
+            // **An elbow is not a diagonal.** Its legs need waypoints, and a
+            // node stores a rectangle; drawing it as a straight line would be
+            // a different element wearing its name.
             _ => NodeShape::Other,
         }
     }

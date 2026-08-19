@@ -15,8 +15,14 @@
 //!
 //! ```text
 //! div  ── canvas()      the painted half: grid, edges, bodies, dots, labels
-//!     └─ absolute layer the rich half: node elements, handles, toolbar
+//!     ├─ absolute layer the rich half: node elements, handles, toolbar
+//!     └─ absolute layer §45's tool palette
 //! ```
+//!
+//! [`palette`] is a third thing again: chrome rather than content. It belongs
+//! to the canvas rather than to the launcher because Phase 8's sidebar row
+//! mounts the same [`flow::FlowView`], and a palette wired into the launcher
+//! would be a control that vanished the day the tool shipped.
 //!
 //! [`nodes`] is the rich half. It draws **tens** of elements — the ones
 //! [`RenderSnapshot`](crate::render::RenderSnapshot) marked rich, plus controls
@@ -30,6 +36,7 @@
 pub mod flow;
 pub mod keymap;
 pub mod nodes;
+pub mod palette;
 
 pub use flow::FlowView;
-pub use keymap::{Redo, Undo, init};
+pub use keymap::{Redo, SelectTool, Undo, init};

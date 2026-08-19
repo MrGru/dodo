@@ -303,8 +303,95 @@ pub fn outline_for_node(shape: NodeShape, rect: Rect, corner_radius: f32) -> Opt
         NodeShape::Ellipse => ellipse(rect),
         NodeShape::Diamond => diamond(rect),
         NodeShape::Triangle => triangle(rect),
+        NodeShape::Line => line(rect),
+        NodeShape::Arrow => arrow(rect),
         NodeShape::Other => return None,
     })
+}
+
+/// **Whether a shape's outline is open** — a stroke with no interior.
+///
+/// Three separate decisions in the paint loop read this, and each of them is
+/// wrong by default for an open shape:
+///
+/// - **The fill pass is skipped.** Filling a line tessellates a zero-area
+///   region: no pixels, and the vertices are charged against the frame budget
+///   anyway.
+/// - **The stroke is not optional.** Every other body still reads as itself
+///   when its border is dropped by §15's simplification; a line drops to
+///   nothing at all, so it is always stroked and at a hairline minimum.
+/// - **It is never degraded to its bounding quad.** A diagonal painted as the
+///   solid box it spans is not a simplified line, it is a different shape —
+///   and a large one, since the box is exactly the part of the canvas the line
+///   is *not* covering.
+pub fn is_open(shape: NodeShape) -> bool {
+    matches!(shape, NodeShape::Line | NodeShape::Arrow)
+}
+
+/// **A free line (§7), as the diagonal of its bounding box**, from the
+/// top-left corner to the bottom-right.
+///
+/// A node stores an origin and a size, never a pair of endpoints, so that
+/// diagonal is the only direction a linear element can have. The consequence is
+/// recorded in [`crate::interaction::tool::creation_rect`]: an arrow dragged
+/// leftwards still points right. A genuinely free linear element needs §7's
+/// point list, which is a change to the document model rather than to this
+/// file.
+pub fn line(rect: Rect) -> Outline {
+    let rect = rect.normalized();
+    let mut outline = Outline::with_capacity(2);
+    outline.move_to(rect.min()).line_to(rect.max());
+    outline
+}
+
+/// The fraction of a linear element's own length its head occupies.
+///
+/// A proportion rather than a constant because this outline is built in screen
+/// pixels and the arrow has to read as an arrow at every zoom — a fixed 8 px
+/// head is a blob on a short arrow and invisible on a long one. The bound below
+/// stops a very long arrow growing a head the size of the diagram.
+const ARROW_HEAD_FRACTION: f32 = 0.18;
+
+/// The most screen pixels an arrow head may be.
+const MAX_ARROW_HEAD: f32 = 24.0;
+
+/// Half the angle between an arrow head's two barbs, in radians (≈ 26°).
+const ARROW_HEAD_HALF_ANGLE: f32 = 0.45;
+
+/// **A free arrow (§7)**: [`line`] with two barbs at the far end.
+///
+/// One open outline rather than a line plus a polygon, so an arrow is one path
+/// and one geometry-cache entry instead of two. The barbs are part of the
+/// stroke, which is also why the head follows the stroke width for free.
+pub fn arrow(rect: Rect) -> Outline {
+    let rect = rect.normalized();
+    let (start, tip) = (rect.min(), rect.max());
+    let along = tip - start;
+    let length = along.length();
+
+    let mut outline = Outline::with_capacity(5);
+    outline.move_to(start).line_to(tip);
+
+    if length <= f32::EPSILON {
+        return outline;
+    }
+
+    let head = (length * ARROW_HEAD_FRACTION).min(MAX_ARROW_HEAD);
+    let direction = along * (1.0 / length);
+    let (sin, cos) = ARROW_HEAD_HALF_ANGLE.sin_cos();
+
+    // The two barbs are the reversed direction rotated by ±the half angle. Both
+    // start at the tip, so the head is drawn as a `V` that the stroke joins to
+    // the shaft rather than as a separate closed polygon.
+    for sign in [1.0f32, -1.0] {
+        let barb = Vec2::new(
+            -direction.x * cos - sign * -direction.y * sin,
+            -direction.y * cos + sign * -direction.x * sin,
+        );
+        outline.move_to(tip).line_to(tip + barb * head);
+    }
+
+    outline
 }
 
 /// An axis-aligned rectangle, counter-clockwise from the top-left.
@@ -677,5 +764,108 @@ mod tests {
     fn a_custom_kind_falls_back_to_something_visible() {
         let outline = outline_for(&ShapeKind::Custom(CustomKind::new("mystery")), rect(), 0.0);
         assert_eq!(outline, rectangle(rect()));
+    }
+
+    // ---- §7's free linear elements --------------------------------------
+
+    /// A line spans its box corner to corner, and it is **open** — no `Close`,
+    /// because a closed line is a degenerate loop lyon would cap twice.
+    #[test]
+    fn a_line_is_the_open_diagonal_of_its_box() {
+        let rect = Rect::new(Vec2::new(10.0, 20.0), Vec2::new(100.0, 50.0));
+        let outline = line(rect);
+
+        assert_eq!(
+            outline.commands(),
+            &[
+                SubpathCommand::MoveTo(Vec2::new(10.0, 20.0)),
+                SubpathCommand::LineTo(Vec2::new(110.0, 70.0)),
+            ]
+        );
+        assert!(is_open(NodeShape::Line));
+    }
+
+    /// The head sits at the far end and points along the shaft. A head at the
+    /// wrong end is the classic silent geometry bug — it looks like an arrow.
+    #[test]
+    fn an_arrow_s_barbs_meet_at_its_far_corner_and_point_backwards() {
+        let rect = Rect::new(Vec2::ZERO, Vec2::new(100.0, 0.0));
+        let outline = arrow(rect);
+        let tip = Vec2::new(100.0, 0.0);
+
+        let barbs: Vec<Vec2> = outline
+            .commands()
+            .iter()
+            .skip(2)
+            .filter_map(|command| match *command {
+                SubpathCommand::LineTo(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(barbs.len(), 2, "an arrow head has two barbs");
+        for barb in barbs {
+            assert!(barb.x < tip.x, "a barb must trail the tip, not lead it");
+            assert!((barb - tip).length() > 1.0);
+        }
+        // Symmetric about the shaft.
+        assert!((outline.bounds().unwrap().center().y).abs() < 1e-4);
+    }
+
+    /// The head is a fraction of the arrow's own length, so it reads at any
+    /// zoom — and it is bounded, so a very long arrow does not grow a head the
+    /// size of the diagram.
+    #[test]
+    fn the_arrow_head_scales_with_the_arrow_and_stops_growing() {
+        let head_of = |length: f32| {
+            let outline = arrow(Rect::new(Vec2::ZERO, Vec2::new(length, 0.0)));
+            let tip = Vec2::new(length, 0.0);
+            match outline.commands()[3] {
+                SubpathCommand::LineTo(p) => (p - tip).length(),
+                other => panic!("unexpected command {other:?}"),
+            }
+        };
+
+        assert!(
+            head_of(200.0) > head_of(40.0),
+            "the head follows the length"
+        );
+        assert!(head_of(10_000.0) <= MAX_ARROW_HEAD + 1e-3);
+    }
+
+    /// A zero-length arrow is an ordinary state — it is what a click produces
+    /// before the pointer moves — and it must not divide by zero or emit a NaN.
+    #[test]
+    fn a_degenerate_arrow_is_a_point_rather_than_a_nan() {
+        let outline = arrow(Rect::new(Vec2::new(5.0, 5.0), Vec2::ZERO));
+        for command in outline.commands() {
+            if let SubpathCommand::MoveTo(p) | SubpathCommand::LineTo(p) = *command {
+                assert!(p.x.is_finite() && p.y.is_finite(), "{p:?}");
+            }
+        }
+    }
+
+    /// **The three decisions [`is_open`] guards**, stated together: an open
+    /// shape is never a quad, and every closed one still is what it was.
+    #[test]
+    fn an_open_shape_is_never_routed_to_a_quad() {
+        for shape in [NodeShape::Line, NodeShape::Arrow] {
+            assert!(is_open(shape));
+            assert!(!node_prefers_quad(shape));
+            assert!(
+                outline_for_node(shape, Rect::new(Vec2::ZERO, Vec2::splat(50.0)), 0.0).is_some()
+            );
+        }
+        for shape in [
+            NodeShape::Rectangle,
+            NodeShape::RoundedRectangle,
+            NodeShape::GraphNode,
+            NodeShape::Ellipse,
+            NodeShape::Diamond,
+            NodeShape::Triangle,
+            NodeShape::Other,
+        ] {
+            assert!(!is_open(shape), "{shape:?}");
+        }
     }
 }

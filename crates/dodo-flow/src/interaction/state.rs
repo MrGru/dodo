@@ -52,6 +52,7 @@
 
 use crate::{
     geometry::{Rect, Vec2},
+    interaction::tool::{CanvasTool, CreationGesture, creation_rect},
     models::{HandleIndex, NodeIndex},
     runtime::PointerTarget,
 };
@@ -137,6 +138,17 @@ pub enum InteractionState {
         /// can put it back exactly.
         total: Vec2,
     },
+    /// §25's `CreatingShape`: a creating tool is drawing a new element out of
+    /// its bounding box, and nothing has been added to the document yet.
+    ///
+    /// **§45's rule is enforced by this variant holding the whole gesture.**
+    /// The document hears about a creation exactly once, on the release, so
+    /// there is no draft element to clean up if the drag is abandoned and no
+    /// half-created node another gesture could reach.
+    CreatingShape {
+        tool: CanvasTool,
+        gesture: CreationGesture,
+    },
     /// §25's `Connecting`: an edge is being dragged out of a handle and has not
     /// landed yet (§8's connection preview).
     Connecting {
@@ -194,6 +206,13 @@ pub enum InteractionEvent {
         /// this; every other gesture ignores it.
         target: PointerTarget,
     },
+    /// **§45's tool activation**, from the palette or from a key binding.
+    ///
+    /// An event rather than a setter so that it goes through the same total
+    /// transition function as everything else — a tool change is a state change
+    /// and the file's whole argument is that state changes belong in one
+    /// `match`.
+    SelectTool(CanvasTool),
     /// `Esc`, a lost window focus, or anything else that means "stop".
     Cancel,
 }
@@ -268,6 +287,33 @@ pub enum InteractionEffect {
     },
     /// The connection was abandoned; stop drawing the preview.
     CancelConnect,
+
+    /// **The active tool changed** (§45). Nothing about the document changed;
+    /// the repaint is for the palette's active state and the canvas's cursor.
+    ToolChanged(CanvasTool),
+    /// A creation drag started. The rectangle is already the one
+    /// [`creation_rect`] resolved, so a painter draws exactly what will be
+    /// committed.
+    BeginCreate {
+        tool: CanvasTool,
+        rect: Rect,
+    },
+    /// The pending element's bounding box changed; repaint the preview.
+    UpdateCreate {
+        tool: CanvasTool,
+        rect: Rect,
+    },
+    /// **Create the element.** The one effect in this file that means an edit,
+    /// and [`apply_gesture`](crate::commands::gesture::apply_gesture) turns it
+    /// into §30's `AddNodes` — this file does not know a document exists.
+    CommitCreate {
+        tool: CanvasTool,
+        rect: Rect,
+    },
+    /// The creation was abandoned. **Nothing to undo**: no element was ever
+    /// added, which is the point of the tool never touching the document until
+    /// the release.
+    CancelCreate,
 }
 
 impl InteractionEffect {
@@ -281,6 +327,7 @@ impl InteractionEffect {
                 | InteractionEffect::BeginBoxSelect(_)
                 | InteractionEffect::BeginNodeDrag(_)
                 | InteractionEffect::BeginConnect(_)
+                | InteractionEffect::BeginCreate { .. }
         )
     }
 
@@ -296,6 +343,9 @@ impl InteractionEffect {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct InteractionMachine {
     state: InteractionState,
+    /// §45's active tool. **View state, never the document's** — see
+    /// [`crate::interaction::tool`] for the rule and what honouring it costs.
+    tool: CanvasTool,
 }
 
 impl InteractionMachine {
@@ -305,6 +355,23 @@ impl InteractionMachine {
 
     pub fn state(&self) -> &InteractionState {
         &self.state
+    }
+
+    /// **The active tool** (§45): what the next press means.
+    pub fn tool(&self) -> CanvasTool {
+        self.tool
+    }
+
+    /// The element being drawn and the box it currently occupies, or `None`.
+    /// The painter's only question about a creation in progress, and the same
+    /// shape [`selection_rect`](InteractionMachine::selection_rect) takes.
+    pub fn creation_preview(&self) -> Option<(CanvasTool, Rect)> {
+        match self.state {
+            InteractionState::CreatingShape { tool, gesture } => {
+                Some((tool, creation_rect(tool, gesture)))
+            }
+            _ => None,
+        }
     }
 
     pub fn is_idle(&self) -> bool {
@@ -377,12 +444,32 @@ impl InteractionMachine {
                     };
                     InteractionEffect::BeginPan
                 }
-                PointerButton::Left if pan_key_held => {
+                PointerButton::Left if pan_key_held || self.tool == CanvasTool::Hand => {
                     self.state = InteractionState::Panning {
                         button,
                         last_screen: screen,
                     };
                     InteractionEffect::BeginPan
+                }
+                // **§45's tool decides first, and what the press landed on
+                // decides only under `Select`.** A creating tool draws on top
+                // of whatever is there — an Excalidraw user drawing a rectangle
+                // over a node expects a rectangle, not a node drag — so the
+                // target is not even consulted.
+                PointerButton::Left if self.tool.creates() => {
+                    let tool = self.tool;
+                    let gesture = CreationGesture {
+                        anchor_world: world,
+                        current_world: world,
+                        anchor_screen: screen,
+                        current_screen: screen,
+                        constrain: modifiers.shift,
+                    };
+                    self.state = InteractionState::CreatingShape { tool, gesture };
+                    InteractionEffect::BeginCreate {
+                        tool,
+                        rect: creation_rect(tool, gesture),
+                    }
                 }
                 // What the press landed on decides which of the three
                 // left-button gestures this is. The order is the order of
@@ -477,6 +564,22 @@ impl InteractionMachine {
             }
 
             (
+                InteractionState::CreatingShape { tool, gesture },
+                InteractionEvent::PointerMove { screen, world },
+            ) => {
+                let gesture = CreationGesture {
+                    current_world: world,
+                    current_screen: screen,
+                    ..gesture
+                };
+                self.state = InteractionState::CreatingShape { tool, gesture };
+                InteractionEffect::UpdateCreate {
+                    tool,
+                    rect: creation_rect(tool, gesture),
+                }
+            }
+
+            (
                 InteractionState::Connecting { source, .. },
                 InteractionEvent::PointerMove { world, .. },
             ) => {
@@ -548,6 +651,21 @@ impl InteractionMachine {
             }
 
             (
+                InteractionState::CreatingShape { tool, gesture },
+                InteractionEvent::PointerUp { button, .. },
+            ) => {
+                if button == PointerButton::Left {
+                    self.state = InteractionState::Idle;
+                    InteractionEffect::CommitCreate {
+                        tool,
+                        rect: creation_rect(tool, gesture),
+                    }
+                } else {
+                    InteractionEffect::None
+                }
+            }
+
+            (
                 InteractionState::Connecting { source, .. },
                 InteractionEvent::PointerUp { button, target, .. },
             ) => {
@@ -582,6 +700,25 @@ impl InteractionMachine {
                 self.state = InteractionState::Idle;
                 InteractionEffect::CancelConnect
             }
+            (InteractionState::CreatingShape { .. }, InteractionEvent::Cancel) => {
+                self.state = InteractionState::Idle;
+                InteractionEffect::CancelCreate
+            }
+
+            // ---- picking up a tool (§45) ----
+            //
+            // **Ignored while a gesture is in progress**, for the same reason a
+            // second press is: switching tools under the user's hand would put
+            // the machine in a state nobody asked for, and a half-drawn
+            // rectangle would commit as an ellipse. `Esc` is the way out, and
+            // the view sends `Cancel` *then* `SelectTool` for exactly that —
+            // which keeps this file's one-effect-per-event rule intact instead
+            // of inventing a compound effect for one keystroke.
+            (InteractionState::Idle, InteractionEvent::SelectTool(tool)) => {
+                self.tool = tool;
+                InteractionEffect::ToolChanged(tool)
+            }
+            (_, InteractionEvent::SelectTool(_)) => InteractionEffect::None,
         }
     }
 }
@@ -1291,6 +1428,268 @@ mod tests {
             }
             machine.handle(InteractionEvent::Cancel);
             assert!(machine.is_idle(), "stuck after rotation {start}");
+        }
+    }
+
+    // ---- §45's tools ----------------------------------------------------
+
+    fn press(
+        button: PointerButton,
+        target: PointerTarget,
+        screen: Vec2,
+        modifiers: InputModifiers,
+    ) -> InteractionEvent {
+        InteractionEvent::PointerDown {
+            screen,
+            world: screen,
+            button,
+            modifiers,
+            pan_key_held: false,
+            target,
+        }
+    }
+
+    /// **The whole point of the tool**: the same press means a different
+    /// gesture depending only on what is selected in the palette, and the
+    /// document is not consulted.
+    #[test]
+    fn the_same_press_means_a_different_gesture_under_each_tool() {
+        let cases = [
+            (CanvasTool::Select, "box select"),
+            (CanvasTool::Hand, "pan"),
+            (CanvasTool::Rectangle, "create"),
+        ];
+
+        let mut seen = Vec::new();
+        for (tool, name) in cases {
+            let mut machine = InteractionMachine::new();
+            machine.handle(InteractionEvent::SelectTool(tool));
+            seen.push((
+                name,
+                machine.handle(press(
+                    PointerButton::Left,
+                    PointerTarget::Empty,
+                    Vec2::new(5.0, 5.0),
+                    InputModifiers::NONE,
+                )),
+            ));
+        }
+
+        assert!(matches!(seen[0].1, InteractionEffect::BeginBoxSelect(_)));
+        assert_eq!(seen[1].1, InteractionEffect::BeginPan);
+        assert!(matches!(seen[2].1, InteractionEffect::BeginCreate { .. }));
+    }
+
+    /// **A creating tool draws over whatever is there.** Pressing on a node
+    /// with the rectangle tool must not start a node drag — an Excalidraw user
+    /// drawing across a diagram expects a rectangle, and a tool that sometimes
+    /// moved the thing underneath would be unusable over a dense document.
+    #[test]
+    fn a_creating_tool_ignores_what_the_press_landed_on() {
+        for target in [
+            PointerTarget::Node(NODE),
+            PointerTarget::Handle {
+                node: NODE,
+                handle: HANDLE,
+            },
+            PointerTarget::Empty,
+        ] {
+            let mut machine = InteractionMachine::new();
+            machine.handle(InteractionEvent::SelectTool(CanvasTool::Ellipse));
+            let effect = machine.handle(press(
+                PointerButton::Left,
+                target,
+                Vec2::ZERO,
+                InputModifiers::NONE,
+            ));
+            assert!(
+                matches!(effect, InteractionEffect::BeginCreate { .. }),
+                "{target:?} diverted the ellipse tool"
+            );
+        }
+    }
+
+    /// The full creation gesture, and the rectangle that comes out of it: a
+    /// press, some moves, a release, one element's worth of geometry.
+    #[test]
+    fn a_press_moves_and_a_release_produce_the_dragged_rectangle() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::SelectTool(CanvasTool::Rectangle));
+
+        let begin = machine.handle(press(
+            PointerButton::Left,
+            PointerTarget::Empty,
+            Vec2::new(10.0, 10.0),
+            InputModifiers::NONE,
+        ));
+        assert!(begin.starts_a_drag(), "the pointer has to be captured");
+
+        for step in 1..=4 {
+            let at = Vec2::new(10.0 + 20.0 * step as f32, 10.0 + 10.0 * step as f32);
+            let effect = machine.handle(move_to(at, at));
+            assert!(matches!(effect, InteractionEffect::UpdateCreate { .. }));
+        }
+
+        // The preview and the commit must agree; a user who sees one rectangle
+        // and gets another has been lied to.
+        let previewed = machine.creation_preview().expect("a drag is in progress");
+        let effect = machine.handle(up(PointerButton::Left));
+
+        let InteractionEffect::CommitCreate { tool, rect } = effect else {
+            panic!("a released creation must commit, got {effect:?}");
+        };
+        assert_eq!(tool, CanvasTool::Rectangle);
+        assert_eq!((tool, rect), previewed);
+        assert_eq!(rect.origin, Vec2::new(10.0, 10.0));
+        assert_eq!(rect.size, Vec2::new(80.0, 40.0));
+        assert!(machine.is_idle());
+    }
+
+    /// A click with a creating tool places the tool's default size — the
+    /// gesture the brief names for the graph node, and the one every other
+    /// creating tool answers too.
+    #[test]
+    fn a_click_with_a_creating_tool_places_a_default_sized_element() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::SelectTool(CanvasTool::GraphNode));
+        machine.handle(press(
+            PointerButton::Left,
+            PointerTarget::Empty,
+            Vec2::new(100.0, 100.0),
+            InputModifiers::NONE,
+        ));
+
+        let InteractionEffect::CommitCreate { rect, .. } = machine.handle(up(PointerButton::Left))
+        else {
+            panic!("a click must still create");
+        };
+        assert_eq!(rect.size, CanvasTool::GraphNode.default_size());
+        assert_eq!(rect.center(), Vec2::new(100.0, 100.0));
+    }
+
+    /// Shift held at the press squares the box, and it stays squared for the
+    /// whole drag — the modifier is captured, not re-read.
+    #[test]
+    fn shift_at_the_press_constrains_the_whole_drag() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::SelectTool(CanvasTool::Ellipse));
+        machine.handle(press(
+            PointerButton::Left,
+            PointerTarget::Empty,
+            Vec2::ZERO,
+            InputModifiers::shift(),
+        ));
+        machine.handle(move_to(Vec2::new(200.0, 40.0), Vec2::new(200.0, 40.0)));
+
+        let InteractionEffect::CommitCreate { rect, .. } = machine.handle(up(PointerButton::Left))
+        else {
+            panic!("expected a commit");
+        };
+        assert_eq!(rect.size.x, rect.size.y, "shift must give a circle");
+    }
+
+    /// **An abandoned creation leaves nothing**: the tool never wrote to the
+    /// document, so there is no element to remove and no undo step to discard.
+    #[test]
+    fn cancelling_a_creation_says_so_and_returns_to_rest() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::SelectTool(CanvasTool::Diamond));
+        machine.handle(press(
+            PointerButton::Left,
+            PointerTarget::Empty,
+            Vec2::ZERO,
+            InputModifiers::NONE,
+        ));
+        machine.handle(move_to(Vec2::splat(60.0), Vec2::splat(60.0)));
+
+        assert_eq!(
+            machine.handle(InteractionEvent::Cancel),
+            InteractionEffect::CancelCreate
+        );
+        assert!(machine.is_idle());
+        assert_eq!(machine.creation_preview(), None);
+        // The tool survives the cancel; `Esc` back to Select is the *view's*
+        // second event, not this one's business.
+        assert_eq!(machine.tool(), CanvasTool::Diamond);
+    }
+
+    /// A tool change mid-gesture is ignored rather than applied, for the same
+    /// reason a second press is: switching under the user's hand would commit a
+    /// half-drawn rectangle as something else.
+    #[test]
+    fn a_tool_change_during_a_gesture_is_ignored() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::SelectTool(CanvasTool::Rectangle));
+        machine.handle(press(
+            PointerButton::Left,
+            PointerTarget::Empty,
+            Vec2::ZERO,
+            InputModifiers::NONE,
+        ));
+
+        assert_eq!(
+            machine.handle(InteractionEvent::SelectTool(CanvasTool::Ellipse)),
+            InteractionEffect::None
+        );
+        assert_eq!(machine.tool(), CanvasTool::Rectangle);
+
+        let InteractionEffect::CommitCreate { tool, .. } = machine.handle(up(PointerButton::Left))
+        else {
+            panic!("expected a commit");
+        };
+        assert_eq!(tool, CanvasTool::Rectangle, "the gesture kept its own tool");
+    }
+
+    /// **`Esc` as the view sends it**: cancel, then Select. Written here rather
+    /// than only in the view because the ordering is the contract — the second
+    /// event is refused if the first has not settled the machine.
+    #[test]
+    fn cancel_then_select_is_how_escape_gets_back_to_the_select_tool() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::SelectTool(CanvasTool::Arrow));
+        machine.handle(press(
+            PointerButton::Left,
+            PointerTarget::Empty,
+            Vec2::ZERO,
+            InputModifiers::NONE,
+        ));
+
+        machine.handle(InteractionEvent::Cancel);
+        assert_eq!(
+            machine.handle(InteractionEvent::SelectTool(CanvasTool::Select)),
+            InteractionEffect::ToolChanged(CanvasTool::Select)
+        );
+        assert_eq!(machine.tool(), CanvasTool::Select);
+        assert!(machine.is_idle());
+    }
+
+    /// §45's rule, as far as this file can see it: activating a tool produces
+    /// an effect that says only "repaint", never one that edits.
+    #[test]
+    fn activating_a_tool_produces_no_editing_effect() {
+        for tool in CanvasTool::ALL {
+            let mut machine = InteractionMachine::new();
+            assert_eq!(
+                machine.handle(InteractionEvent::SelectTool(*tool)),
+                InteractionEffect::ToolChanged(*tool)
+            );
+            assert!(machine.is_idle(), "{} left the machine busy", tool.name());
+        }
+    }
+
+    /// The middle button still pans under every tool. A creating tool that
+    /// swallowed the pan would leave a user unable to scroll while drawing.
+    #[test]
+    fn the_middle_button_still_pans_under_every_tool() {
+        for tool in CanvasTool::ALL {
+            let mut machine = InteractionMachine::new();
+            machine.handle(InteractionEvent::SelectTool(*tool));
+            assert_eq!(
+                machine.handle(down(PointerButton::Middle)),
+                InteractionEffect::BeginPan,
+                "{} swallowed the middle button",
+                tool.name()
+            );
         }
     }
 }

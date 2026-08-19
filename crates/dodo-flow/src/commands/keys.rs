@@ -20,11 +20,28 @@
 //!
 //! # What is bound, and what is not
 //!
-//! Undo and redo only. §26's full list — nudge, delete, duplicate, copy/paste,
-//! zoom-to-fit, zoom-to-selection — is a longer table over the same type, and
-//! each row needs a command the engine can perform; the ones that exist today
-//! have no gesture asking for them yet. A row here that no code reads would be
-//! a binding that silently does nothing, which is worse than an absent one.
+//! Undo, redo, and §45's eight tools. §26's remaining list — nudge, delete,
+//! duplicate, copy/paste, zoom-to-fit, zoom-to-selection — is more rows over
+//! the same type, and each needs a command the engine can perform; the ones
+//! that exist today have no gesture asking for them yet. A row here that no
+//! code reads would be a binding that silently does nothing, which is worse
+//! than an absent one.
+//!
+//! # The tool letters are the same on every host, and that is a decision
+//!
+//! Undo and redo differ per platform because the platforms differ about them.
+//! A bare letter has no platform convention to follow — `r` is the rectangle
+//! tool in Excalidraw, Figma and Sketch alike on every operating system — so
+//! [`TOOLS`] is one table shared by all three hosts rather than three identical
+//! ones. It is still reached through [`for_host`], so replacing it with a
+//! user's own preferences later is one source change and no view change.
+//!
+//! **`Esc` is deliberately not here.** The canvas already handles it as a raw
+//! key, because it means two things in sequence — abandon whatever is in
+//! progress, *then* return to the Select tool — and the interaction machine's
+//! contract is one effect per event. `views::flow`'s `on_key_down` sends the
+//! two events; a binding would have had to invent a compound action for the
+//! one keystroke that needs it.
 //!
 //! # Redo has two bindings outside macOS, on purpose
 //!
@@ -37,12 +54,21 @@
 
 use dodo_paths::HostOs;
 
+use crate::interaction::CanvasTool;
+
 /// What a binding does. One variant per command the canvas can be driven to
 /// perform from the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EditAction {
     Undo,
     Redo,
+    /// §45's tool activation. **Not an edit**, despite the type's name: picking
+    /// a tool changes what the next press means and touches no document. It is
+    /// here because this is the binding table, and a second table for one kind
+    /// of row would be a second place for a keystroke collision to hide — which
+    /// [`no_keystroke_is_bound_to_two_actions`](tests::no_keystroke_is_bound_to_two_actions)
+    /// is able to rule out precisely because there is only one.
+    Tool(CanvasTool),
 }
 
 impl EditAction {
@@ -52,6 +78,7 @@ impl EditAction {
         match self {
             EditAction::Undo => "undo",
             EditAction::Redo => "redo",
+            EditAction::Tool(tool) => tool.name(),
         }
     }
 }
@@ -78,6 +105,48 @@ const MACOS: &[Binding] = &[
     },
 ];
 
+/// §45's tools, one letter each and the same on every host — see the module
+/// doc.
+///
+/// The letters are the ones every canvas editor already uses, so a user
+/// arriving from one of them is not retrained: `v` select, `h` hand, `r`
+/// rectangle, `o` ellipse (*not* `e`, which is the eraser everywhere), `d`
+/// diamond, `a` arrow, `l` line, `n` node.
+const TOOLS: &[Binding] = &[
+    Binding {
+        keystroke: "v",
+        action: EditAction::Tool(CanvasTool::Select),
+    },
+    Binding {
+        keystroke: "h",
+        action: EditAction::Tool(CanvasTool::Hand),
+    },
+    Binding {
+        keystroke: "r",
+        action: EditAction::Tool(CanvasTool::Rectangle),
+    },
+    Binding {
+        keystroke: "d",
+        action: EditAction::Tool(CanvasTool::Diamond),
+    },
+    Binding {
+        keystroke: "o",
+        action: EditAction::Tool(CanvasTool::Ellipse),
+    },
+    Binding {
+        keystroke: "a",
+        action: EditAction::Tool(CanvasTool::Arrow),
+    },
+    Binding {
+        keystroke: "l",
+        action: EditAction::Tool(CanvasTool::Line),
+    },
+    Binding {
+        keystroke: "n",
+        action: EditAction::Tool(CanvasTool::GraphNode),
+    },
+];
+
 const PC: &[Binding] = &[
     Binding {
         keystroke: "ctrl-z",
@@ -95,23 +164,29 @@ const PC: &[Binding] = &[
 
 /// **The canvas's default bindings on a given host.** A total function, so the
 /// Windows and Linux answers are asserted from a Mac.
-pub const fn for_host(host: HostOs) -> &'static [Binding] {
-    match host {
+///
+/// Two tables joined rather than one written out three times: the editing rows
+/// follow a platform convention and the tool rows do not.
+pub fn for_host(host: HostOs) -> Vec<Binding> {
+    let editing = match host {
         HostOs::MacOs => MACOS,
         // Windows and every Linux desktop dodo targets use the same three, and
         // splitting them would be two identical tables to keep in step.
         HostOs::Windows | HostOs::Unix => PC,
-    }
+    };
+
+    editing.iter().chain(TOOLS).copied().collect()
 }
 
 /// The bindings for the machine this was compiled for.
-pub fn defaults() -> &'static [Binding] {
+pub fn defaults() -> Vec<Binding> {
     for_host(crate::budgets::current_host())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Binding, EditAction, defaults, for_host};
+    use crate::interaction::CanvasTool;
     use dodo_paths::HostOs;
 
     const EVERY_HOST: [HostOs; 3] = [HostOs::MacOs, HostOs::Windows, HostOs::Unix];
@@ -153,19 +228,64 @@ mod tests {
     /// The platform convention each host actually has. Written out rather than
     /// derived, because the whole value of the table is that the wrong answer
     /// is visible in a diff.
+    ///
+    /// Only the *editing* rows are platform-shaped; the tool letters have no
+    /// convention to follow and are excluded by name rather than by position.
     #[test]
     fn each_host_gets_its_own_modifier() {
+        let editing = |host| {
+            for_host(host)
+                .into_iter()
+                .filter(|binding: &Binding| !matches!(binding.action, EditAction::Tool(_)))
+                .collect::<Vec<_>>()
+        };
+
         assert!(
-            for_host(HostOs::MacOs)
+            editing(HostOs::MacOs)
                 .iter()
                 .all(|binding| binding.keystroke.starts_with("cmd-"))
         );
         for host in [HostOs::Windows, HostOs::Unix] {
             assert!(
-                for_host(host)
+                editing(host)
                     .iter()
                     .all(|binding| binding.keystroke.starts_with("ctrl-"))
             );
+        }
+    }
+
+    /// **Every tool is reachable from the keyboard, on every host.** A palette
+    /// entry with no binding is the sort of half-wired control §26 exists to
+    /// prevent, and it is invisible until somebody reaches for the key.
+    #[test]
+    fn every_tool_has_a_binding_on_every_host() {
+        for host in EVERY_HOST {
+            let bindings = for_host(host);
+            for tool in CanvasTool::ALL {
+                assert!(
+                    bindings
+                        .iter()
+                        .any(|binding| binding.action == EditAction::Tool(*tool)),
+                    "{host:?} cannot reach the {} tool",
+                    tool.name()
+                );
+            }
+        }
+    }
+
+    /// A tool letter must not carry a modifier: `cmd-r` is reload in half the
+    /// world's applications and `ctrl-l` is the address bar in the other half.
+    #[test]
+    fn a_tool_is_a_bare_letter() {
+        for binding in for_host(HostOs::MacOs) {
+            if matches!(binding.action, EditAction::Tool(_)) {
+                assert_eq!(
+                    binding.keystroke.len(),
+                    1,
+                    "{} is not a bare letter",
+                    binding.keystroke
+                );
+            }
         }
     }
 
@@ -175,8 +295,8 @@ mod tests {
     fn a_pc_answers_both_redo_conventions_and_macos_answers_one() {
         let redos = |host| {
             for_host(host)
-                .iter()
-                .filter(|binding: &&Binding| binding.action == EditAction::Redo)
+                .into_iter()
+                .filter(|binding: &Binding| binding.action == EditAction::Redo)
                 .count()
         };
 
