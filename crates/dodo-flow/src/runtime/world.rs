@@ -50,9 +50,9 @@ use std::collections::HashMap;
 use crate::{
     geometry::{Attachment, EdgeRoute, Rect, RouteOptions, Side, Vec2},
     models::{
-        DocumentSettings, EdgeIndex, EdgeRouting, ElementId, ElementKind, Endpoint, FlowDocument,
-        FlowEdge, FlowNode, Handle, HandleDirection, HandleId, HandleIndex, HandlePlacement,
-        IdAllocator, Metadata, NodeIndex, handle_world_position,
+        DocumentSettings, EdgeIndex, EdgeRouting, ElementId, ElementKind, ElementStyle, Endpoint,
+        FlowDocument, FlowEdge, FlowNode, Handle, HandleDirection, HandleId, HandleIndex,
+        HandlePlacement, IdAllocator, Metadata, NodeIndex, handle_world_position,
     },
     runtime::{
         AdjacencyIndex, BoxQuery, BoxSelectMode, ConnectionError, ConnectionRules, DirtyState,
@@ -223,8 +223,12 @@ impl GraphWorld {
         document.metadata = self.metadata.clone();
         document.ids = self.ids.clone();
 
+        // **Tombstones are dropped here, and this is the only compaction
+        // there is** — see `NodeStore`'s module doc. A saved document has no
+        // holes, so reopening it renumbers every slot; nothing else may,
+        // because the undo history holds slot numbers.
         document.nodes.reserve(self.nodes.len());
-        for node in self.nodes.indices() {
+        for node in self.nodes.live_indices() {
             let cold = self.nodes.cold(node);
             document.nodes.push(FlowNode {
                 id: self.nodes.id(node),
@@ -253,7 +257,7 @@ impl GraphWorld {
         }
 
         document.edges.reserve(self.edges.len());
-        for edge in self.edges.indices() {
+        for edge in self.edges.live_indices() {
             document.edges.push(FlowEdge {
                 id: self.edges.id(edge),
                 source: self.endpoint(self.edges.source(edge)),
@@ -363,7 +367,7 @@ impl GraphWorld {
         // painted. The only operation in this file that touches the whole
         // graph, and a settings change rather than an interaction.
         self.geometry.set_options(options);
-        for edge in self.edges.indices() {
+        for edge in self.edges.live_indices() {
             self.dirty
                 .mark_edge(edge, EdgeDirty::GEOMETRY | EdgeDirty::SPATIAL);
         }
@@ -371,6 +375,17 @@ impl GraphWorld {
 
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty() && self.edges.is_empty()
+    }
+
+    /// Whether this slot holds a node that has not been deleted — the question
+    /// every reader asks, and the one a caller holding an index from before a
+    /// removal must ask. See [`NodeStore::is_live`].
+    pub fn node_is_live(&self, node: NodeIndex) -> bool {
+        self.nodes.is_live(node)
+    }
+
+    pub fn edge_is_live(&self, edge: EdgeIndex) -> bool {
+        self.edges.is_live(edge)
     }
 
     pub fn node_index(&self, id: ElementId) -> Option<NodeIndex> {
@@ -391,7 +406,11 @@ impl GraphWorld {
 
     /// The world rectangle enclosing every node, or `None` when there are none.
     pub fn content_bounds(&self) -> Option<Rect> {
-        Rect::of_rects(self.nodes.indices().map(|node| self.nodes.bounds(node)))
+        Rect::of_rects(
+            self.nodes
+                .live_indices()
+                .map(|node| self.nodes.bounds(node)),
+        )
     }
 
     pub fn reserve(&mut self, nodes: usize, edges: usize) {
@@ -520,7 +539,7 @@ impl GraphWorld {
 
     /// One end's structural and directional validity.
     fn check_end(&self, end: EdgeEnd, role: HandleDirection) -> Result<(), ConnectionError> {
-        if !self.nodes.contains(end.node) {
+        if !self.nodes.is_live(end.node) {
             return Err(ConnectionError::UnknownNode(end.node));
         }
 
@@ -570,7 +589,7 @@ impl GraphWorld {
         let used = self
             .adjacency
             .incident_edges(end.node)
-            .filter(|edge| self.uses_handle(*edge, handle))
+            .filter(|edge| self.edges.is_live(*edge) && self.uses_handle(*edge, handle))
             .count() as u32;
 
         if used >= limit {
@@ -593,9 +612,16 @@ impl GraphWorld {
     /// connections in a directed graph, and treating them as one would make it
     /// impossible to draw a two-way relationship.
     pub fn existing_edge(&self, source: EdgeEnd, target: EdgeEnd) -> Option<EdgeIndex> {
-        self.adjacency
-            .outgoing(source.node)
-            .find(|edge| self.edges.source(*edge) == source && self.edges.target(*edge) == target)
+        // **A removed edge is not a duplicate.** Without this, undoing a
+        // disconnect and then reconnecting the same pair by hand would be
+        // refused by a tombstone nobody can see — the adjacency index keeps
+        // deleted edges listed, on purpose, so that restoring one costs
+        // nothing.
+        self.adjacency.outgoing(source.node).find(|edge| {
+            self.edges.is_live(*edge)
+                && self.edges.source(*edge) == source
+                && self.edges.target(*edge) == target
+        })
     }
 
     // ---- the propagation rule -------------------------------------------
@@ -634,6 +660,147 @@ impl GraphWorld {
 
         self.nodes.set_size(node, size);
         self.invalidate_geometry_of(node, NodeDirty::SIZE);
+    }
+
+    /// Replaces a node's style (§32, and §30's `UpdateStyle`).
+    ///
+    /// Marks `SPATIAL` as well as `STYLE` because
+    /// [`node_painted_bounds`](crate::spatial::node_painted_bounds) inflates by
+    /// half the stroke width — a thicker outline is a bigger painted rectangle,
+    /// and an index that did not hear about it culls the node's own edge away.
+    pub fn set_node_style(&mut self, node: NodeIndex, style: ElementStyle) {
+        if !self.nodes.contains(node) || self.nodes.style(node) == &style {
+            return;
+        }
+
+        self.nodes.set_style(node, style);
+        self.dirty
+            .mark_node(node, NodeDirty::STYLE | NodeDirty::SPATIAL);
+    }
+
+    /// Replaces an edge's style. `SPATIAL` for the same reason as
+    /// [`set_node_style`](GraphWorld::set_node_style), plus the arrow marker,
+    /// which [`edge_painted_bounds`](crate::spatial::edge_painted_bounds) also
+    /// counts. The route itself does not change, so no geometry is rebuilt.
+    pub fn set_edge_style(&mut self, edge: EdgeIndex, style: ElementStyle) {
+        if !self.edges.contains(edge) || self.edges.style(edge) == &style {
+            return;
+        }
+
+        self.edges.set_style(edge, style);
+        self.dirty
+            .mark_edge(edge, EdgeDirty::STYLE | EdgeDirty::SPATIAL);
+    }
+
+    /// Replaces a node's label (§30's `EditText`, and §9's text as far as the
+    /// engine has it: a node's caption, not a text element's body).
+    pub fn set_node_label(&mut self, node: NodeIndex, label: Option<String>) {
+        if !self.nodes.contains(node) || self.nodes.cold(node).label.as_deref() == label.as_deref()
+        {
+            return;
+        }
+
+        self.nodes.set_label(node, label);
+        self.dirty.mark_node(node, NodeDirty::TEXT);
+    }
+
+    /// Replaces an edge's label. No geometry and no spatial entry: the label is
+    /// drawn at the route's midpoint, which has not moved.
+    pub fn set_edge_label(&mut self, edge: EdgeIndex, label: Option<String>) {
+        if !self.edges.contains(edge) || self.edges.label(edge) == label.as_deref() {
+            return;
+        }
+
+        self.edges.set_label(edge, label);
+        self.dirty.mark_edge(edge, EdgeDirty::LABEL);
+    }
+
+    // ---- removal, as a tombstone (§30) -----------------------------------
+
+    /// **Removes a node and every live edge attached to it**, appending those
+    /// edges to `cascaded`. Returns whether the node itself changed state.
+    ///
+    /// The cascade is here rather than in the caller because an edge with one
+    /// end nowhere has no geometry — `from_document` already drops those as
+    /// corrupt — so "remove the node, forget the edges" is not a state this
+    /// world may reach. The caller gets the list back so that
+    /// [`restore_node`](GraphWorld::restore_node) plus
+    /// [`restore_edge`](GraphWorld::restore_edge) can put back exactly what
+    /// went, and nothing that was already gone.
+    ///
+    /// The node keeps its slot; see [`NodeStore`](crate::runtime::NodeStore)'s
+    /// module doc for why undo makes that the only workable choice.
+    pub fn remove_node(&mut self, node: NodeIndex, cascaded: &mut Vec<EdgeIndex>) -> bool {
+        if !self.nodes.is_live(node) {
+            return false;
+        }
+
+        let incident: Vec<EdgeIndex> = self
+            .adjacency
+            .incident_edges(node)
+            .filter(|edge| self.edges.is_live(*edge))
+            .collect();
+        for edge in incident {
+            if self.remove_edge(edge) {
+                cascaded.push(edge);
+            }
+        }
+
+        self.set_node_selected(node, false);
+        self.nodes.set_flag(node, NodeFlags::REMOVED, true);
+        // `SPATIAL` is what makes the index drop it: `SpatialIndex::sync` reads
+        // `is_live` and removes rather than re-places. `STYLE` is the render
+        // invalidation — nothing about the node's *position* changed.
+        self.dirty
+            .mark_node(node, NodeDirty::STYLE | NodeDirty::SPATIAL);
+        true
+    }
+
+    /// Puts a removed node back at its own index.
+    ///
+    /// **Its edges are not restored.** The history names them explicitly, which
+    /// is what keeps an edge deleted before its node deleted after the node
+    /// comes back — restoring the node's whole neighbourhood would resurrect
+    /// edges the author had already thrown away.
+    pub fn restore_node(&mut self, node: NodeIndex) -> bool {
+        if !self.nodes.contains(node) || !self.nodes.is_removed(node) {
+            return false;
+        }
+
+        self.nodes.set_flag(node, NodeFlags::REMOVED, false);
+        self.dirty
+            .mark_node(node, NodeDirty::POSITION | NodeDirty::SPATIAL);
+        true
+    }
+
+    /// Removes an edge — §30's *disconnect*, and what a node removal cascades
+    /// into. Its adjacency entries stay, so restoring it costs one bit.
+    pub fn remove_edge(&mut self, edge: EdgeIndex) -> bool {
+        if !self.edges.is_live(edge) {
+            return false;
+        }
+
+        self.set_edge_selected(edge, false);
+        self.edges.set_flag(edge, EdgeFlags::REMOVED, true);
+        // Invalidating the route is what drops it from the spatial index:
+        // `edge_painted_bounds` answers `None` without one, and `sync` removes
+        // rather than re-places. It is also what stops a stale route being
+        // painted in the frame between the edit and the next rebuild.
+        self.invalidate_edge_geometry(edge);
+        true
+    }
+
+    /// Puts a removed edge back, and queues its route for rebuild — the route
+    /// was invalidated on the way out, and the nodes it joins may have moved
+    /// since.
+    pub fn restore_edge(&mut self, edge: EdgeIndex) -> bool {
+        if !self.edges.contains(edge) || !self.edges.is_removed(edge) {
+            return false;
+        }
+
+        self.edges.set_flag(edge, EdgeFlags::REMOVED, false);
+        self.invalidate_edge_geometry(edge);
+        true
     }
 
     pub fn set_node_selected(&mut self, node: NodeIndex, selected: bool) {
@@ -736,7 +903,7 @@ impl GraphWorld {
         for node in nodes {
             // A **locked** element is not selectable — §26's behaviour, and the
             // same answer `views::flow` gives a press that lands on one.
-            if !self.nodes.contains(node)
+            if !self.nodes.is_live(node)
                 || self.nodes.is_hidden(node)
                 || self.nodes.is_locked(node)
                 || self.selection.contains_node(node)
@@ -755,7 +922,7 @@ impl GraphWorld {
         }
 
         for edge in edges {
-            if !self.edges.contains(edge)
+            if !self.edges.is_live(edge)
                 || self.edges.is_hidden(edge)
                 || self.selection.contains_edge(edge)
             {
@@ -815,8 +982,14 @@ impl GraphWorld {
         // Disjoint field borrows again, and the reason this loop is not
         // `invalidate_edge_geometry`: that method takes `&mut self`, which the
         // adjacency iterator is holding.
-        let (dirty, geometry) = (&mut self.dirty, &mut self.geometry);
+        let (dirty, geometry, edges) = (&mut self.dirty, &mut self.geometry, &self.edges);
         for edge in self.adjacency.incident_edges(node) {
+            // A tombstoned edge stays listed in the adjacency index — that is
+            // what makes restoring it free — so it is skipped here rather than
+            // rerouted for a node it no longer joins.
+            if !edges.is_live(edge) {
+                continue;
+            }
             dirty.mark_edge(edge, EdgeDirty::GEOMETRY | EdgeDirty::SPATIAL);
             geometry.invalidate(edge);
         }
@@ -856,7 +1029,9 @@ impl GraphWorld {
 
         for &edge in &queue {
             let flags = self.dirty.clear_edge(edge);
-            if flags.intersects(EdgeDirty::GEOMETRY | EdgeDirty::ENDPOINTS) {
+            if flags.intersects(EdgeDirty::GEOMETRY | EdgeDirty::ENDPOINTS)
+                && self.edges.is_live(edge)
+            {
                 self.rebuild_route(edge);
                 rebuilt += 1;
             }
@@ -869,7 +1044,7 @@ impl GraphWorld {
     /// Rebuilds every route whether or not it is stale. For a caller that has
     /// just replaced the world wholesale; never on a frame path.
     pub fn rebuild_all_geometry(&mut self) -> u32 {
-        for edge in self.edges.indices() {
+        for edge in self.edges.live_indices().collect::<Vec<_>>() {
             self.invalidate_edge_geometry(edge);
         }
         self.rebuild_dirty_geometry()
@@ -952,7 +1127,7 @@ impl GraphWorld {
         let mut best_node: Option<(NodeIndex, i32)> = None;
 
         for node in candidates {
-            if !self.nodes.contains(node) || self.nodes.is_hidden(node) {
+            if !self.nodes.is_live(node) || self.nodes.is_hidden(node) {
                 continue;
             }
 

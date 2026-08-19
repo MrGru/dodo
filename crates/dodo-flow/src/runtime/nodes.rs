@@ -22,15 +22,33 @@
 //! registry to read when it builds a rich element for the handful of nodes that
 //! get one. That is the §17 rule and §40 rule 9 meeting in one field.
 //!
-//! # Append-only, on purpose, for now
+//! # Append-only, and Phase 7's answer: a tombstone
 //!
-//! There is no `remove`. Every index in the world — an edge's endpoints, an
-//! adjacency entry, a handle's owner — is a slot number, and removing a node
+//! There is still no `remove`. Every index in the world — an edge's endpoints,
+//! an adjacency entry, a handle's owner — is a slot number, so removing a node
 //! means either a tombstone (which every iteration then has to skip) or a
 //! swap-remove (which moves another node's index out from under everything
-//! holding it). Both are real designs; both belong with the command layer
-//! (§30, Phase 7) that has to be able to *undo* a removal, because that is what
-//! decides which one is right. Adding one now would be guessing.
+//! holding it). Phase 3 left the choice to the command layer, because undo is
+//! what decides it, and **§30's history decides it in favour of the
+//! tombstone**:
+//!
+//! - An undo entry *is* a held index. A swap-remove moves some other node into
+//!   the freed slot, and every entry already on the undo stack that named that
+//!   node now names a different one. The corruption is silent and appears three
+//!   steps later — exactly the defect Phase 7 exists to make unexpressible.
+//! - Undo of a removal has to put the element back **at the same index**, so
+//!   that entries recorded either side of it stay valid. A tombstone does that
+//!   by flipping one bit; a swap-remove cannot do it at all.
+//!
+//! So [`NodeFlags::REMOVED`] is the removal, [`NodeStore::is_live`] is the
+//! question everything else asks, and the cost — a skipped slot in
+//! whole-document passes — is paid where it is cheapest.
+//!
+//! **Compaction is a document round-trip, not a background sweep.**
+//! [`GraphWorld::to_document`](crate::runtime::GraphWorld::to_document) skips
+//! tombstones and `from_document` builds a world with none, so saving and
+//! reopening compacts. Nothing else may, because anything that renumbers slots
+//! invalidates the history that made them.
 //!
 //! **This file names no UI framework.**
 
@@ -57,6 +75,12 @@ impl NodeFlags {
     pub const LOCKED: NodeFlags = NodeFlags(1 << 1);
     /// In the current selection (§28).
     pub const SELECTED: NodeFlags = NodeFlags(1 << 2);
+    /// **Deleted, as a tombstone** — see the module doc's "Append-only" note
+    /// for why removal is a flag rather than a `Vec::remove`. A removed node is
+    /// not painted, not hit-tested, not indexed and not saved, but its slot and
+    /// every index into it survive, which is what lets an undo entry recorded
+    /// before the removal still name the right element afterwards.
+    pub const REMOVED: NodeFlags = NodeFlags(1 << 3);
 
     pub const fn contains(self, other: NodeFlags) -> bool {
         self.0 & other.0 == other.0
@@ -321,6 +345,26 @@ impl NodeStore {
 
     pub fn is_selected(&self, node: NodeIndex) -> bool {
         self.flags[node.index()].contains(NodeFlags::SELECTED)
+    }
+
+    /// Whether this node has been deleted. See [`NodeFlags::REMOVED`].
+    pub fn is_removed(&self, node: NodeIndex) -> bool {
+        self.flags[node.index()].contains(NodeFlags::REMOVED)
+    }
+
+    /// **The question every reader of the document asks**: does this slot hold
+    /// a node that is really there? A slot that was never allocated and a slot
+    /// whose node was deleted answer the same way, so a caller holding a stale
+    /// index cannot tell them apart and does not have to.
+    pub fn is_live(&self, node: NodeIndex) -> bool {
+        self.contains(node) && !self.is_removed(node)
+    }
+
+    /// Every node that is really there, in insertion order. The whole-document
+    /// counterpart of [`indices`](NodeStore::indices) — save, zoom-to-fit, a
+    /// spatial rebuild — and **not** a visibility query either.
+    pub fn live_indices(&self) -> impl Iterator<Item = NodeIndex> + '_ {
+        self.indices().filter(|node| !self.is_removed(*node))
     }
 
     /// The whole hot geometry array, for a pass that wants it — a spatial

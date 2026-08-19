@@ -395,6 +395,7 @@
 // Only the files under `views/` may name a UI framework. See the crate doc for
 // what that boundary is worth; `Cargo.toml` says why each dependency is here.
 pub mod budgets;
+pub mod commands;
 pub mod geometry;
 pub mod instrument;
 pub mod interaction;
@@ -406,6 +407,7 @@ pub mod spatial;
 pub mod views;
 
 pub use budgets::RenderBudgets;
+pub use commands::{CommandHistory, EditCommand, EditError, FlowEditor, NodeDraft};
 pub use geometry::{Rect, Vec2, Viewport};
 pub use instrument::{Instruments, Probe};
 pub use interaction::{InteractionEffect, InteractionEvent, InteractionMachine, InteractionState};
@@ -430,6 +432,12 @@ mod tests {
     const PURE_FILES: &[(&str, &str)] = &[
         ("budgets.rs", include_str!("budgets.rs")),
         ("instrument.rs", include_str!("instrument.rs")),
+        ("commands/mod.rs", include_str!("commands/mod.rs")),
+        ("commands/apply.rs", include_str!("commands/apply.rs")),
+        ("commands/edit.rs", include_str!("commands/edit.rs")),
+        ("commands/editor.rs", include_str!("commands/editor.rs")),
+        ("commands/history.rs", include_str!("commands/history.rs")),
+        ("commands/keys.rs", include_str!("commands/keys.rs")),
         ("geometry/mod.rs", include_str!("geometry/mod.rs")),
         ("geometry/arrow.rs", include_str!("geometry/arrow.rs")),
         ("geometry/bounds.rs", include_str!("geometry/bounds.rs")),

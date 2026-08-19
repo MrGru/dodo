@@ -208,11 +208,11 @@ impl SpatialIndex {
         self.nodes.reserve(world.nodes().len());
         self.edges.reserve(world.edges().len());
 
-        for node in world.nodes().indices() {
+        for node in world.nodes().live_indices() {
             self.nodes
                 .insert(node.raw(), node_painted_bounds(world, node));
         }
-        for edge in world.edges().indices() {
+        for edge in world.edges().live_indices() {
             if let Some(bounds) = edge_painted_bounds(world, edge) {
                 self.edges.insert(edge.raw(), bounds);
             }
@@ -232,7 +232,10 @@ impl SpatialIndex {
 
         for &node in world.dirty().spatial_updates() {
             report.nodes_queued += 1;
-            if world.nodes().contains(node) {
+            // `is_live`, not `contains`: a removed node keeps its slot (§30's
+            // tombstone), and an index that kept placing it would keep
+            // returning it from every viewport query.
+            if world.nodes().is_live(node) {
                 if self
                     .nodes
                     .update(node.raw(), node_painted_bounds(world, node))
@@ -295,7 +298,7 @@ impl SpatialIndex {
         out.candidates += out.scratch.len() as u32;
         for &raw in &out.scratch {
             let node = NodeIndex::new(raw);
-            if world.nodes().is_hidden(node) {
+            if !world.nodes().is_live(node) || world.nodes().is_hidden(node) {
                 continue;
             }
             if node_painted_bounds(world, node).intersects(query) {
@@ -308,7 +311,7 @@ impl SpatialIndex {
         out.candidates += out.scratch.len() as u32;
         for &raw in &out.scratch {
             let edge = EdgeIndex::new(raw);
-            if world.edges().is_hidden(edge) {
+            if !world.edges().is_live(edge) || world.edges().is_hidden(edge) {
                 continue;
             }
             if edge_painted_bounds(world, edge).is_some_and(|bounds| bounds.intersects(query)) {
