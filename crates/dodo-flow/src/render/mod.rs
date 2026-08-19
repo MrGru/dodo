@@ -38,6 +38,7 @@ pub mod plan;
 pub mod registry;
 pub mod scene;
 pub mod shapes;
+pub mod snapshot;
 
 pub use cache::{
     CacheStats, CachedGeometry, GeometryCache, GeometryKey, GeometryPart, ScreenAnchor,
@@ -53,3 +54,7 @@ pub use registry::{
 };
 pub use scene::{SceneInk, SceneOptions, SceneStats, plan_scene};
 pub use shapes::Outline;
+pub use snapshot::{
+    CanvasNode, InteractiveHandle, PlannedEdge, RenderSnapshot, RichNode, SnapshotCounts,
+    SnapshotOverlay,
+};

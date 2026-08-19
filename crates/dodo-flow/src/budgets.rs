@@ -173,6 +173,10 @@ pub struct LodThresholds {
     /// "merge/simplify visual details" is about what reaches the eye rather
     /// than about the camera.
     pub min_detailed_node_px: f32,
+    /// Below this rendered width in screen pixels, a selected node gets no
+    /// toolbar (§44). A toolbar over a six-pixel node is a toolbar over
+    /// nothing, and it would be wider than the thing it belongs to.
+    pub min_toolbar_node_px: f32,
     /// Below this on-screen length in pixels, an edge is not drawn at all.
     ///
     /// A three-pixel edge is a smudge on a node's border, and it costs a whole
@@ -195,6 +199,8 @@ impl LodThresholds {
         // Two node bodies' worth of border and a label's line height do not fit
         // in less; below it the quad is the whole node.
         min_detailed_node_px: 24.0,
+        // About three icon buttons and their padding.
+        min_toolbar_node_px: 96.0,
         // Half a handle's diameter. Shorter than that and the edge is inside
         // the dots it joins.
         min_edge_screen_px: 4.0,
