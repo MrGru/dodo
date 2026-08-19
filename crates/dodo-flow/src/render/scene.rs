@@ -1251,7 +1251,10 @@ mod tests {
             .filter(|key| matches!(key.part, GeometryPart::SketchStroke(_)))
             .collect();
 
-        assert!(!sketch_keys.is_empty(), "nothing was keyed as a sketch pass");
+        assert!(
+            !sketch_keys.is_empty(),
+            "nothing was keyed as a sketch pass"
+        );
         let mut unique = sketch_keys.clone();
         unique.sort();
         unique.dedup();
@@ -1283,10 +1286,7 @@ mod tests {
         let mut tessellations = Vec::new();
         for _ in 0..3 {
             let (plan, _) = frame(&world, &view);
-            cache.begin_frame(
-                crate::render::cache::ScreenAnchor::of(&view),
-                false,
-            );
+            cache.begin_frame(crate::render::cache::ScreenAnchor::of(&view), false);
 
             let mut built = 0;
             for path in plan.paths() {
@@ -1392,7 +1392,10 @@ mod tests {
             );
             // And it must be genuinely cheaper, not merely renamed.
             let clean = frame(&document(6, 4), &view).0;
-            assert_eq!(plan.estimated_path_vertices(), clean.estimated_path_vertices());
+            assert_eq!(
+                plan.estimated_path_vertices(),
+                clean.estimated_path_vertices()
+            );
         }
     }
 
@@ -1408,5 +1411,4 @@ mod tests {
 
         fn transform(&mut self, _scale: f32, _offset: Vec2) {}
     }
-
 }

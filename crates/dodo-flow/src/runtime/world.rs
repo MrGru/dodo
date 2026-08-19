@@ -2030,7 +2030,11 @@ mod tests {
 
         world.settings_mut().render_style = crate::models::RenderStyle::Sketch;
 
-        assert_eq!(world.rebuild_dirty_geometry(), 0, "no route was invalidated");
+        assert_eq!(
+            world.rebuild_dirty_geometry(),
+            0,
+            "no route was invalidated"
+        );
         assert!(
             world.dirty().spatial_updates().is_empty(),
             "no element moved, so the index has nothing to do"
@@ -2058,5 +2062,4 @@ mod tests {
         assert_eq!(after.edges, before.edges);
         assert_ne!(after.settings.render_style, before.settings.render_style);
     }
-
 }

@@ -1189,7 +1189,10 @@ mod tests {
                 path_bodied_fraction: 0.0,
                 mean_node_screen_size: 160.0,
             };
-            if LodPlan::choose(&budgets, 1.0, load, Some(hand())).sketch.is_some() {
+            if LodPlan::choose(&budgets, 1.0, load, Some(hand()))
+                .sketch
+                .is_some()
+            {
                 fits = nodes;
             } else {
                 break;
@@ -1216,7 +1219,11 @@ mod tests {
                 sketched > clean,
                 "{rung:?}: a hand must cost more than a clean line, {sketched} vs {clean}"
             );
-            assert_eq!(rung.paths_per_edge_with(Some(hand())), 4, "two strokes, two markers");
+            assert_eq!(
+                rung.paths_per_edge_with(Some(hand())),
+                4,
+                "two strokes, two markers"
+            );
         }
     }
 
@@ -1245,12 +1252,13 @@ mod tests {
         assert!(plan.sketch.is_none() || plan.edges == EdgeDetail::Hairline);
         assert!(plan.max_edges <= budgets.target_paths_per_frame);
         assert!(
-            plan.max_edges * plan.edges.estimated_vertices_with(
-                hairball().mean_edge_screen_length,
-                RenderQuality::BALANCED,
-                plan.sketch,
-            ) <= budgets.target_path_vertices_per_frame,
+            plan.max_edges
+                * plan.edges.estimated_vertices_with(
+                    hairball().mean_edge_screen_length,
+                    RenderQuality::BALANCED,
+                    plan.sketch,
+                )
+                <= budgets.target_path_vertices_per_frame,
         );
     }
-
 }

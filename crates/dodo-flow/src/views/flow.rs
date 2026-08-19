@@ -778,6 +778,16 @@ impl FlowView {
             self.last_scene.labels,
         );
         println!(
+            "  §13  style {:?}{} — {} bodies drawn by hand",
+            self.world.settings().render_style,
+            match (self.world.settings().sketch_request(), lod.sketch) {
+                (Some(_), Some(_)) => ", hand kept",
+                (Some(_), None) => ", hand degraded to clean by the ladder",
+                _ => "",
+            },
+            self.last_scene.sketched_bodies,
+        );
+        println!(
             "  §23  geometry cache {} lookups / {} misses, {:.1} KB; text {} shaped",
             cache.lookups(),
             cache.misses,

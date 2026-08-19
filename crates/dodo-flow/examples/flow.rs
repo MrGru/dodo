@@ -45,6 +45,21 @@
 //! | `DODO_FLOW_INSTRUMENT=1` | record §39's probes; read them with `FlowView::instruments` |
 //! | `DODO_FLOW_REPORT=1` | print one line after the first painted frame: §15's rung, §16's element count, §23's cache |
 //! | `DODO_FLOW_ZOOM=z` | open at this zoom, to see the LOD ladder without touching the trackpad |
+//! | `DODO_FLOW_SKETCH=1` | open hand-drawn (§13), the same as clicking **Sketch** |
+//!
+//! # The clean/sketch toggle
+//!
+//! The two buttons at the top right switch §13's render style. **It is a
+//! renderer strategy, not a document type**: the click writes one field and
+//! asks for a repaint — no element is created, moved or rewritten, which
+//! `runtime::world`'s `switching_render_style_touches_no_element` asserts and
+//! which is what makes the switch instant on a 100,000-node document. Open with
+//! `DODO_FLOW_NODES=100000` and click between them to see it.
+//!
+//! Zoom out past 0.35 and the buttons stop making a difference: the ladder
+//! degrades sketch to clean below the zoom at which a 2 px wobble is visible.
+//! That is [`render::lod`]'s decision, and the same rung drops it on a scene
+//! with too many visible bodies to draw by hand.
 //!
 //! `DODO_FLOW_BENCH` deliberately does the thing §35 forbids — it requests an
 //! animation frame from every paint, so the canvas repaints as fast as the
@@ -64,7 +79,7 @@ use dodo_flow::{
     models::{
         ArrowMarker, Color, DashPattern, EdgeRouting, ElementId, ElementKind, Endpoint,
         FlowDocument, GraphNodeKind, Handle, HandleDirection, HandlePlacement, NodeIndex,
-        ShapeKind, StrokeStyle,
+        RenderStyle, ShapeKind, StrokeStyle,
     },
     render::registry::GenericKind,
 };
@@ -72,7 +87,10 @@ use gpui::{
     AppContext, AssetSource, Context, Entity, IntoElement, ParentElement, QuitMode, Render,
     SharedString, Styled, Window, WindowOptions, div, px, size,
 };
-use gpui_component::{ActiveTheme, Root};
+use gpui_component::{
+    ActiveTheme, Root, Sizable,
+    button::{Button, ButtonVariants},
+};
 
 struct Assets;
 
@@ -376,6 +394,30 @@ struct FlowWindow {
     timer: Option<FrameTimer>,
 }
 
+/// One half of the clean/sketch toggle.
+///
+/// The entity is captured rather than reached through `cx.listener`, because a
+/// `Button`'s click handler is handed an `&mut App` and not a `Context<Self>` —
+/// see `gpui-component-recipes`.
+fn style_button(
+    id: &'static str,
+    label: &'static str,
+    style: RenderStyle,
+    flow: Entity<FlowView>,
+    current: RenderStyle,
+) -> Button {
+    let button = Button::new(id).small().label(label);
+    let button = if current == style {
+        button.primary()
+    } else {
+        button.ghost()
+    };
+
+    button.on_click(move |_, _, cx| {
+        flow.update(cx, |view, cx| view.set_render_style(style, cx));
+    })
+}
+
 impl Render for FlowWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(timer) = self.timer.as_mut() {
@@ -387,11 +429,39 @@ impl Render for FlowWindow {
             window.request_animation_frame();
         }
 
+        let current = self.flow.read(cx).render_style();
+
         div()
             .size_full()
+            .relative()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.flow.clone())
+            .child(
+                // §13's toggle. Absolutely positioned over the canvas rather
+                // than in a bar beside it: the launcher's whole job is to show
+                // the canvas, and the canvas measures its own pane.
+                div()
+                    .absolute()
+                    .top(px(12.0))
+                    .right(px(12.0))
+                    .flex()
+                    .gap(px(6.0))
+                    .child(style_button(
+                        "flow-style-clean",
+                        "Clean",
+                        RenderStyle::Clean,
+                        self.flow.clone(),
+                        current,
+                    ))
+                    .child(style_button(
+                        "flow-style-sketch",
+                        "Sketch",
+                        RenderStyle::Sketch,
+                        self.flow.clone(),
+                        current,
+                    )),
+            )
             .children(Root::render_dialog_layer(window, cx))
     }
 }
@@ -431,6 +501,9 @@ fn main() {
                         // only by test.
                         if let Some(zoom) = env_zoom() {
                             flow.viewport_mut().zoom_around(Vec2::ZERO, zoom);
+                        }
+                        if std::env::var_os("DODO_FLOW_SKETCH").is_some() {
+                            flow.world_mut().settings_mut().render_style = RenderStyle::Sketch;
                         }
                         if benchmarking {
                             // One line before the first frame, so a run that is

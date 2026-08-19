@@ -1161,14 +1161,22 @@ fn measure_sketch_scenes(budgets: &RenderBudgets) {
                 format!(
                     "{} {}",
                     spec.name,
-                    if style == RenderStyle::Clean { "clean" } else { "sketch" }
+                    if style == RenderStyle::Clean {
+                        "clean"
+                    } else {
+                        "sketch"
+                    }
                 ),
                 result.paths,
                 result.sketched_bodies,
                 result.estimated_vertices,
                 result.painted_vertices,
                 result.tessellation_micros / 1_000.0,
-                if result.lod.sketch.is_some() { "kept" } else { "-" },
+                if result.lod.sketch.is_some() {
+                    "kept"
+                } else {
+                    "-"
+                },
                 format!("{:?}", result.lod.edges),
             );
         }
@@ -1190,7 +1198,10 @@ fn measure_sketch_limits(budgets: &RenderBudgets) {
             path_bodied_fraction: 0.0,
             mean_node_screen_size: 160.0,
         };
-        if LodPlan::choose(budgets, 1.0, load, Some(hand)).sketch.is_some() {
+        if LodPlan::choose(budgets, 1.0, load, Some(hand))
+            .sketch
+            .is_some()
+        {
             fits = nodes;
         } else {
             break;
@@ -1208,7 +1219,10 @@ fn measure_sketch_limits(budgets: &RenderBudgets) {
     let mut lowest = 0.0;
     for step in (1..=200).rev() {
         let zoom = step as f32 / 100.0;
-        if LodPlan::choose(budgets, zoom, load, Some(hand)).sketch.is_some() {
+        if LodPlan::choose(budgets, zoom, load, Some(hand))
+            .sketch
+            .is_some()
+        {
             lowest = zoom;
         }
     }
