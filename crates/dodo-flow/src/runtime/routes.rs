@@ -38,6 +38,11 @@ use crate::{
 pub struct EdgeGeometryStore {
     routes: Vec<EdgeRoute>,
     valid: Vec<bool>,
+    /// **§23's cache version, per edge.** Bumped by every rebuild, so a
+    /// tessellation cache can ask "is the geometry I flattened still the
+    /// geometry that is there?" with one integer compare instead of comparing
+    /// control points. See [`crate::render::cache`] for what reads it.
+    versions: Vec<u32>,
     options: RouteOptions,
     rebuilds: u64,
 }
@@ -76,11 +81,21 @@ impl EdgeGeometryStore {
     pub fn push_edge(&mut self) {
         self.routes.push(EdgeRoute::default());
         self.valid.push(false);
+        self.versions.push(0);
     }
 
     pub fn reserve(&mut self, additional: usize) {
         self.routes.reserve(additional);
         self.valid.reserve(additional);
+        self.versions.reserve(additional);
+    }
+
+    /// **The geometry version of one edge's route** — see the `versions` field.
+    ///
+    /// A missing edge answers 0 rather than panicking: a cache key for an edge
+    /// that does not exist should miss, not crash a frame.
+    pub fn version(&self, edge: EdgeIndex) -> u32 {
+        self.versions.get(edge.index()).copied().unwrap_or(0)
     }
 
     /// The route, or `None` if it has never been built or is stale.
@@ -127,6 +142,10 @@ impl EdgeGeometryStore {
 
         route_into(route, routing, source, target, &self.options);
         self.valid[edge.index()] = true;
+        // Wrapping rather than saturating: a version is only ever compared for
+        // equality, and a `u32` that wraps after four billion rebuilds of one
+        // edge collides with a tessellation that was evicted long before.
+        self.versions[edge.index()] = self.versions[edge.index()].wrapping_add(1);
         self.rebuilds += 1;
     }
 
@@ -260,5 +279,53 @@ mod tests {
 
         assert_eq!(store.route(past), None);
         assert_eq!(store.rebuild_count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::EdgeGeometryStore;
+    use crate::{
+        geometry::{Attachment, Side, Vec2},
+        models::{EdgeIndex, EdgeRouting},
+    };
+
+    fn store() -> EdgeGeometryStore {
+        let mut store = EdgeGeometryStore::new();
+        store.push_edge();
+        store
+    }
+
+    fn rebuild(store: &mut EdgeGeometryStore, to: f32) {
+        store.rebuild(
+            EdgeIndex::new(0),
+            EdgeRouting::Bezier,
+            Attachment::new(Vec2::ZERO, Side::Right),
+            Attachment::new(Vec2::new(to, 0.0), Side::Left),
+        );
+    }
+
+    /// §23's versioning, as the tessellation cache will read it: a rebuilt
+    /// route is a different route, and one integer says so.
+    #[test]
+    fn a_rebuild_moves_the_version_and_a_read_does_not() {
+        let mut store = store();
+        let edge = EdgeIndex::new(0);
+        assert_eq!(store.version(edge), 0);
+
+        rebuild(&mut store, 100.0);
+        let after = store.version(edge);
+        assert_ne!(after, 0);
+
+        let _ = store.route(edge);
+        assert_eq!(store.version(edge), after, "a read is not a change");
+
+        rebuild(&mut store, 200.0);
+        assert_ne!(store.version(edge), after);
+    }
+
+    #[test]
+    fn an_absent_edge_has_a_version_rather_than_a_panic() {
+        assert_eq!(store().version(EdgeIndex::new(9_999)), 0);
     }
 }

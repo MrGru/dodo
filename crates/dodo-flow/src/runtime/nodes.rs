@@ -182,6 +182,13 @@ pub struct NodeStore {
     shapes: Vec<NodeShape>,
     flags: Vec<NodeFlags>,
 
+    /// **§23's cache version, per node.** Bumped by every write that changes
+    /// what the node looks like — position, size, style, flags — so a
+    /// tessellation cache keyed on it misses exactly when the geometry it
+    /// flattened is no longer the geometry that is there. One `u32` per node
+    /// against a re-comparison of a rectangle and a whole `ElementStyle`.
+    versions: Vec<u32>,
+
     // ---- warm ----
     ids: Vec<ElementId>,
     z: Vec<i32>,
@@ -224,6 +231,7 @@ impl NodeStore {
         self.sizes.reserve(additional);
         self.shapes.reserve(additional);
         self.flags.reserve(additional);
+        self.versions.reserve(additional);
         self.ids.reserve(additional);
         self.z.reserve(additional);
         self.handles.reserve(additional);
@@ -245,6 +253,7 @@ impl NodeStore {
             flags = flags | NodeFlags::LOCKED;
         }
         self.flags.push(flags);
+        self.versions.push(0);
 
         self.ids.push(spec.id);
         self.z.push(spec.z);
@@ -278,6 +287,14 @@ impl NodeStore {
 
     pub fn shape(&self, node: NodeIndex) -> NodeShape {
         self.shapes[node.index()]
+    }
+
+    /// **The appearance version of one node** — see the `versions` field.
+    ///
+    /// A missing node answers 0 rather than panicking: a cache key for a node
+    /// that does not exist should miss, not crash a frame.
+    pub fn version(&self, node: NodeIndex) -> u32 {
+        self.versions.get(node.index()).copied().unwrap_or(0)
     }
 
     pub fn flags(&self, node: NodeIndex) -> NodeFlags {
@@ -349,17 +366,25 @@ impl NodeStore {
 
     pub fn set_position(&mut self, node: NodeIndex, position: Vec2) {
         self.positions[node.index()] = position;
+        self.touch(node);
     }
 
     pub fn set_size(&mut self, node: NodeIndex, size: Vec2) {
         self.sizes[node.index()] = size;
+        self.touch(node);
     }
 
     pub fn set_style(&mut self, node: NodeIndex, style: ElementStyle) {
         self.styles[node.index()] = style;
+        self.touch(node);
     }
 
+    /// A mutable style. **Bumps the version on the way out**, unconditionally,
+    /// because the caller may or may not write and this store cannot tell —
+    /// a spurious cache miss is a rebuilt path, a missed one is a stale
+    /// picture.
     pub fn style_mut(&mut self, node: NodeIndex) -> &mut ElementStyle {
+        self.versions[node.index()] = self.versions[node.index()].wrapping_add(1);
         &mut self.styles[node.index()]
     }
 
@@ -370,16 +395,105 @@ impl NodeStore {
         } else {
             *slot & flag.complement()
         };
+        self.touch(node);
     }
 
     pub fn set_label(&mut self, node: NodeIndex, label: Option<String>) {
         self.cold[node.index()].label = label;
+        self.touch(node);
+    }
+
+    /// Records that this node's appearance changed. See the `versions` field.
+    fn touch(&mut self, node: NodeIndex) {
+        let slot = &mut self.versions[node.index()];
+        *slot = slot.wrapping_add(1);
     }
 
     /// Records that `handle` belongs to `node`. Called by
     /// [`GraphWorld`](crate::runtime::GraphWorld), which owns the handle arena.
     pub fn attach_handle(&mut self, node: NodeIndex, handle: HandleIndex) {
         self.handles[node.index()].push(handle.raw());
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::{NodeFlags, NodeSpec, NodeStore};
+    use crate::{
+        geometry::Vec2,
+        models::{ElementId, ElementKind, ElementStyle, NodeIndex},
+    };
+
+    /// One named write, for the enumeration below.
+    type Write = (&'static str, fn(&mut NodeStore));
+
+    fn store() -> NodeStore {
+        let mut store = NodeStore::new();
+        store.push(NodeSpec::new(
+            ElementId::new(1),
+            ElementKind::default(),
+            Vec2::ZERO,
+            Vec2::new(160.0, 60.0),
+        ));
+        store
+    }
+
+    /// §23 asks for cache keys based on geometry/style versions. This is the
+    /// property a tessellation cache rests on: **every write that changes what
+    /// the node looks like moves the version**, so a key that compares equal
+    /// really does describe the same picture.
+    #[test]
+    fn every_appearance_changing_write_moves_the_version() {
+        let node = NodeIndex::new(0);
+        let writes: [Write; 6] = [
+            ("set_position", |s| {
+                s.set_position(NodeIndex::new(0), Vec2::new(5.0, 5.0))
+            }),
+            ("set_size", |s| {
+                s.set_size(NodeIndex::new(0), Vec2::new(80.0, 40.0))
+            }),
+            ("set_style", |s| {
+                s.set_style(NodeIndex::new(0), ElementStyle::default())
+            }),
+            ("style_mut", |s| {
+                s.style_mut(NodeIndex::new(0)).opacity = 0.5;
+            }),
+            ("set_flag", |s| {
+                s.set_flag(NodeIndex::new(0), NodeFlags::SELECTED, true)
+            }),
+            ("set_label", |s| {
+                s.set_label(NodeIndex::new(0), Some("x".into()))
+            }),
+        ];
+
+        for (name, write) in writes {
+            let mut store = store();
+            let before = store.version(node);
+            write(&mut store);
+            assert_ne!(store.version(node), before, "{name} left the version alone");
+        }
+    }
+
+    /// The other half: a read must not invalidate anything, or a pure pan
+    /// would miss the cache on every element it looked at.
+    #[test]
+    fn reading_a_node_leaves_its_version_alone() {
+        let store = store();
+        let node = NodeIndex::new(0);
+        let before = store.version(node);
+
+        let _ = store.bounds(node);
+        let _ = store.style(node);
+        let _ = store.shape(node);
+
+        assert_eq!(store.version(node), before);
+    }
+
+    /// A key built for a node that is not there must miss rather than panic —
+    /// a frame is not the place to discover a stale index.
+    #[test]
+    fn an_absent_node_has_a_version_rather_than_a_panic() {
+        assert_eq!(store().version(NodeIndex::new(9_999)), 0);
     }
 }
 
