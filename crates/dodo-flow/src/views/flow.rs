@@ -84,13 +84,18 @@
 
 use std::sync::OnceLock;
 
+use dodo_i18n::{flow, t};
 use gpui::{
-    App, Bounds, Context, DispatchPhase, FocusHandle, Focusable, Hitbox, HitboxBehavior,
+    App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior,
     InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Path, PinchEvent, Pixels, Point, Render,
-    ScrollWheelEvent, ShapedLine, Styled, Window, canvas, div, px,
+    ScrollWheelEvent, ShapedLine, SharedString, Styled, Window, canvas, div, px,
 };
-use gpui_component::ActiveTheme;
+use gpui::{AppContext as _, Div};
+use gpui_component::{
+    ActiveTheme,
+    input::{Input, InputState},
+};
 
 use crate::{
     budgets::RenderBudgets,
@@ -99,11 +104,11 @@ use crate::{
     instrument::{Instruments, Probe},
     interaction::{
         BoxSelection, CanvasTool, InputModifiers, InteractionEffect, InteractionEvent,
-        InteractionMachine, PointerButton,
+        InteractionMachine, PointerButton, TextTarget,
     },
     models::{
-        Color, EdgeIndex, EdgeRouting, FlowDocument, NodeIndex, RenderQuality, RenderStyle,
-        SketchStyle,
+        Color, EdgeIndex, EdgeRouting, FlowDocument, FontFamily, NodeIndex, RenderQuality,
+        RenderStyle, SketchStyle,
     },
     render::{
         GridLevel, GridLimits, GridSettings, PaintPlan, PaintStats, SceneInk, SceneOptions,
@@ -111,7 +116,7 @@ use crate::{
         cache::{CacheStats, GeometryCache, ShapedLineCache},
         edges,
         lod::LodPlan,
-        painter::from_hsla,
+        painter::{self, from_hsla},
         plan::{PathPrimitive, QuadPrimitive},
         registry::NodeRendererRegistry,
         scene,
@@ -202,6 +207,20 @@ fn reporting() -> bool {
 /// The width the connection preview is drawn at, in screen pixels.
 const PREVIEW_WIDTH: f32 = 1.5;
 
+/// The height of §9's text editor, in screen pixels.
+///
+/// A **screen** constant rather than the edited element's height, and that is
+/// deliberate: a node three pixels tall at low zoom is still a thing a user
+/// double-clicked to type in, and a three-pixel text field is not an editor.
+/// The text lands where the element's own layout puts it once the caret closes;
+/// while it is open the field is a control, and a control is measured in
+/// pixels.
+const EDIT_LINE_PIXELS: f32 = 26.0;
+
+/// The narrowest §9's text editor is drawn, in screen pixels. Same argument as
+/// [`EDIT_LINE_PIXELS`], on the other axis.
+const MIN_EDITOR_PIXELS: f32 = 120.0;
+
 /// The Flow Canvas.
 pub struct FlowView {
     /// **The world, and the only door to it** (§30). Held as a
@@ -270,6 +289,22 @@ pub struct FlowView {
     /// a changed ink is a cache that has to go.
     text_ink: Option<Color>,
 
+    /// §9's three faces, and the theme's two font names they were resolved
+    /// from. Recomputed only when those names change — see
+    /// [`FlowView::sync_fonts`], which walks every installed font.
+    fonts: Option<painter::FontSet>,
+    font_names: Option<(SharedString, SharedString)>,
+
+    /// **The text editor, when a caret is out** (§9).
+    ///
+    /// `None` most of the time, and that is the whole footprint text editing
+    /// has on an idle canvas: one `Option` and no element. What is being edited
+    /// is [`InteractionMachine`]'s — see
+    /// [`InteractionState::EditingText`](crate::interaction::InteractionState::EditingText)
+    /// — so this holds only the widget collecting the characters, which is the
+    /// half that needs a `Window` to exist.
+    editing: Option<TextEditor>,
+
     /// Reused across frames. See the module doc: a pan must not allocate.
     plan: PaintPlan,
     last_paint: PaintStats,
@@ -330,6 +365,9 @@ impl FlowView {
             zooming: false,
             reported: false,
             text_ink: None,
+            fonts: None,
+            font_names: None,
+            editing: None,
             plan: PaintPlan::new(),
             last_paint: PaintStats::default(),
             last_grid: GridLevel::empty(),
@@ -722,6 +760,62 @@ impl FlowView {
         }
     }
 
+    /// **§9's three faces, resolved against the theme and the installed
+    /// fonts.**
+    ///
+    /// Cached on the view and recomputed only when the theme's own two font
+    /// names change: resolving a family means asking the text system for the
+    /// list of every installed font, which is not a per-frame question.
+    ///
+    /// The hand-drawn face is a *preference* — dodo ships no font of its own,
+    /// see [`FontFamily::preferred_faces`](crate::models::FontFamily::preferred_faces)
+    /// — so the first candidate the machine actually has wins and the theme's
+    /// UI font is the fallback. **On a machine with none of them, choosing
+    /// Hand-drawn changes nothing on screen.** That is checked here rather than
+    /// hoped for: GPUI's `resolve_font` silently substitutes a fallback for a
+    /// name it cannot find, so a family that is simply named would draw in
+    /// something arbitrary with nothing to say so.
+    fn sync_fonts(&mut self, window: &Window, cx: &App) -> painter::FontSet {
+        let theme = cx.theme();
+        let names = (theme.font_family.clone(), theme.mono_font_family.clone());
+        if self.font_names.as_ref() == Some(&names) {
+            return self
+                .fonts
+                .clone()
+                .unwrap_or_else(|| painter::FontSet::uniform(window.text_style().font()));
+        }
+
+        let base = window.text_style().font();
+        let normal = gpui::Font {
+            family: names.0.clone(),
+            ..base.clone()
+        };
+        let code = gpui::Font {
+            family: names.1.clone(),
+            ..base.clone()
+        };
+
+        let installed = window.text_system().all_font_names();
+        let hand_drawn = FontFamily::HandDrawn
+            .preferred_faces(crate::budgets::current_host())
+            .iter()
+            .find(|face| installed.iter().any(|name| name == *face))
+            .map(|face| gpui::Font {
+                family: (*face).into(),
+                ..base.clone()
+            })
+            .unwrap_or_else(|| normal.clone());
+
+        let fonts = painter::FontSet {
+            normal,
+            hand_drawn,
+            code,
+        };
+        self.font_names = Some(names);
+        self.fonts = Some(fonts.clone());
+        fonts
+    }
+
     /// The connection being dragged out of a handle, if there is one (§8).
     ///
     /// Routed exactly like a committed edge — same router, same options — so
@@ -918,6 +1012,10 @@ impl FlowView {
         let timer = self.instruments.start();
         let anchor = WindowPainter::anchor(&self.viewport, bounds);
         let zooming = self.zooming;
+        // §9's three faces. Resolved here rather than in the painter because
+        // only this layer may name a theme, and cached on the view because
+        // resolving one walks every installed font.
+        let fonts = self.sync_fonts(window, cx);
         // Split so the plan can be read while the caches are written — both are
         // fields of `self`, and `paint_into` borrows one of each.
         let FlowView {
@@ -928,7 +1026,8 @@ impl FlowView {
         } = self;
         geometry_cache.begin_frame(anchor, zooming);
         text_cache.begin_frame();
-        let mut painter = WindowPainter::new(window, cx, bounds, geometry_cache, text_cache);
+        let mut painter =
+            WindowPainter::with_fonts(window, cx, bounds, geometry_cache, text_cache, fonts);
         self.last_paint = plan.paint_into(&mut painter);
         self.geometry_cache.end_frame();
         self.text_cache.end_frame();
@@ -1040,9 +1139,49 @@ impl FlowView {
 
     // ---- input ----------------------------------------------------------
 
+    /// **§9's text effects, reachable from two places.**
+    ///
+    /// [`FlowView::apply`] gets them from a press, and `on_key_down` gets them
+    /// from `Esc` and `Enter` — which arrive on a path that has no hitbox,
+    /// because a keystroke starts no drag. Splitting it out is what stops the
+    /// keyboard route quietly dropping them, which is what happened the first
+    /// time: `Esc` while editing produced a `CancelTextEdit` that was handed to
+    /// `apply_gesture`, which has no arm for it, and the caret stayed on screen
+    /// with nothing to say why.
+    ///
+    /// Answers whether the effect was one of the three.
+    fn apply_text_effect(
+        &mut self,
+        effect: InteractionEffect,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match effect {
+            InteractionEffect::BeginTextEdit(target) => {
+                self.begin_text_edit(target, window, cx);
+                true
+            }
+            InteractionEffect::CommitTextEdit(target) => {
+                self.commit_text_edit(target, window, cx);
+                true
+            }
+            InteractionEffect::CancelTextEdit => {
+                self.cancel_text_edit(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Applies one effect from the interaction machine, and says whether the
     /// canvas has to be repainted.
-    fn apply(&mut self, effect: InteractionEffect, hitbox: &Hitbox, window: &mut Window) -> bool {
+    fn apply(
+        &mut self,
+        effect: InteractionEffect,
+        hitbox: &Hitbox,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if effect.starts_a_drag() {
             // Keeps the drag alive once the pointer leaves the pane. Auto-
             // releases on mouse up, so there is nothing to undo.
@@ -1059,6 +1198,18 @@ impl FlowView {
             // broad phase and the narrow phase answer that (§28).
             InteractionEffect::CommitBoxSelect(selection) => {
                 return self.commit_box_selection(selection) | effect.needs_repaint();
+            }
+
+            // **§9's three text effects stay here for the same reason `PanBy`
+            // does**: what they need is a widget, and a widget needs a
+            // `Window`. `commands::gesture` deals in effects that become
+            // commands, and none of these is one — the *commit* becomes a
+            // command, through `FlowEditor::commit_text`, which is on the far
+            // side of the UI line where every other edit is.
+            InteractionEffect::BeginTextEdit(_)
+            | InteractionEffect::CommitTextEdit(_)
+            | InteractionEffect::CancelTextEdit => {
+                self.apply_text_effect(effect, window, cx);
             }
 
             // **Everything that touches the document goes through §30's
@@ -1132,18 +1283,42 @@ impl FlowView {
             .viewport
             .screen_to_world_length(HitTolerance::HANDLE_SCREEN_RADIUS);
 
+        let tolerance = HitTolerance::new(radius);
+
         let mut candidates = Vec::new();
         self.spatial.nodes_at(world, radius, &mut candidates);
 
-        match self
-            .editor
-            .world()
-            .hit_test(world, candidates, HitTolerance::new(radius))
-        {
+        let target = match self.editor.world().hit_test(world, candidates, tolerance) {
             PointerTarget::Node(node) if self.editor.world().nodes().is_locked(node) => {
                 PointerTarget::Empty
             }
             target => target,
+        };
+        if !target.is_empty() {
+            return target;
+        }
+
+        // **Edges are asked only once nothing else was hit**, which is the
+        // ranking `runtime::hit`'s doc records: an edge passing under a node is
+        // still the node when you press it. The broad phase is the index's edge
+        // grid over the tolerance-inflated point — never a scan (§40 rule 1).
+        let mut edges = Vec::new();
+        self.spatial.edge_candidates(
+            Rect::new(world, Vec2::ZERO).inflate(tolerance.edge_radius),
+            &mut edges,
+        );
+        let flatten = self
+            .viewport
+            .screen_to_world_length(1.0)
+            .max(f32::MIN_POSITIVE);
+
+        match self
+            .editor
+            .world()
+            .hit_test_edge(world, edges, tolerance, flatten)
+        {
+            Some(edge) => PointerTarget::Edge(edge),
+            None => PointerTarget::Empty,
         }
     }
 
@@ -1180,13 +1355,31 @@ impl FlowView {
                 view.update(cx, |this, cx| {
                     // Takes the focus back from whatever had it, so the
                     // canvas's bindings keep working after the pointer has been
-                    // somewhere else — a toolbar button, another pane.
-                    this.focus_handle.clone().focus(window, cx);
+                    // somewhere else — a toolbar button, another pane. **Not
+                    // while a caret is out**: the field has the focus on
+                    // purpose, and stealing it here would send every letter to
+                    // the tool palette instead of into the text.
+                    if this.editing.is_none() {
+                        this.focus_handle.clone().focus(window, cx);
+                    }
 
-                    let interaction =
-                        this.pointer_event(event.position, bounds, button, event.modifiers);
+                    // **§9's double-click**, raised instead of a press rather
+                    // than beside it — see `InteractionEvent::DoubleClick` for
+                    // why the two are separate events. The count is the
+                    // platform's, which is the only thing that knows this
+                    // machine's double-click interval.
+                    let interaction = if button == PointerButton::Left && event.click_count >= 2 {
+                        let screen = this.local(event.position, bounds);
+                        let world = this.viewport.screen_to_world(screen);
+                        InteractionEvent::DoubleClick {
+                            world,
+                            target: this.target_at(world),
+                        }
+                    } else {
+                        this.pointer_event(event.position, bounds, button, event.modifiers)
+                    };
                     let effect = this.interaction.handle(interaction);
-                    if this.apply(effect, &hitbox, window) {
+                    if this.apply(effect, &hitbox, window, cx) {
                         cx.notify();
                     }
                 });
@@ -1232,7 +1425,7 @@ impl FlowView {
                         screen,
                         world: this.viewport.screen_to_world(screen),
                     });
-                    if this.apply(effect, &hitbox, window) {
+                    if this.apply(effect, &hitbox, window, cx) {
                         cx.notify();
                     }
                 });
@@ -1259,7 +1452,7 @@ impl FlowView {
                         world,
                         target: this.target_at(world),
                     });
-                    if this.apply(effect, &hitbox, window) {
+                    if this.apply(effect, &hitbox, window, cx) {
                         cx.notify();
                     }
                 });
@@ -1386,6 +1579,26 @@ impl FlowView {
     /// abandoned creation and an abandoned drag are undone the same way they
     /// always were.
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // **While a caret is out, the canvas answers two keys and ignores the
+        // rest** (§9). It sees them at all because the text field is a
+        // descendant of this element, so a key gpui's single-line `Input`
+        // declines — `enter` and `escape` both call `cx.propagate()` — bubbles
+        // up here.
+        //
+        // The `else` branch below is the part that matters: without it, typing
+        // a space into a label would set `pan_key_held`, and the *next* press
+        // anywhere on the canvas would pan instead of doing what the tool said.
+        if self.editing.is_some() {
+            let event = match event.keystroke.key.as_str() {
+                "enter" => InteractionEvent::FinishTextEdit,
+                "escape" => InteractionEvent::Cancel,
+                _ => return,
+            };
+            let effect = self.interaction.handle(event);
+            self.apply_text_effect(effect, window, cx);
+            return;
+        }
+
         match event.keystroke.key.as_str() {
             PAN_KEY => self.pan_key_held = true,
             "escape" => {
@@ -1437,6 +1650,172 @@ fn trace(args: std::fmt::Arguments<'_>) {
     }
 }
 
+/// **The caret, while there is one** (§9).
+///
+/// A `gpui-component` [`InputState`] and the target it is editing. The target
+/// is duplicated from [`InteractionMachine`]'s state on purpose and it is the
+/// one duplication in this file: the machine is the authority on *whether* a
+/// caret is out, and this is what the commit handler reads when the machine has
+/// already returned to `Idle` — the effect carries the target precisely so the
+/// two can never be asked in the wrong order.
+struct TextEditor {
+    target: TextTarget,
+    input: Entity<InputState>,
+    /// Where the editor is drawn, in pane-relative screen pixels, as of the
+    /// frame it was opened on.
+    ///
+    /// **Recomputed every frame for an existing element** — see
+    /// [`FlowView::editor_bounds`] — so an editor over a node that is panned or
+    /// zoomed stays on it. A pending element has no world position but its own,
+    /// so it carries the world rectangle instead and is projected the same way.
+    world: Rect,
+}
+
+impl FlowView {
+    /// **Opens a caret** (§9), seeded with whatever text the target already has.
+    ///
+    /// The seeding is what makes existing text *editable* rather than merely
+    /// replaceable, which the phase brief calls out by name: an editor that
+    /// always opened blank would silently discard a label the moment anybody
+    /// double-clicked one to read it.
+    fn begin_text_edit(&mut self, target: TextTarget, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(world) = self.text_edit_bounds(target) else {
+            // The target went away between the press and here — a document
+            // swap, or an undo from another handler. Nothing to edit, and the
+            // machine is told so rather than left holding a caret.
+            self.interaction.handle(InteractionEvent::Cancel);
+            return;
+        };
+
+        let seed = self.editor.text_of(target).unwrap_or_default().to_owned();
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t(flow::Text::TextPlaceholder, cx))
+                .default_value(seed)
+        });
+        // Focus goes to the field, which takes it away from the canvas — and
+        // that is correct rather than a lapse: while a caret is out, letters
+        // must reach the text and not the tool palette. `commit_text_edit`
+        // gives it back.
+        window.focus(&input.focus_handle(cx), cx);
+
+        self.editing = Some(TextEditor {
+            target,
+            input,
+            world,
+        });
+        cx.notify();
+    }
+
+    /// **Commits what is in the editor**, through §30's one applier.
+    fn commit_text_edit(
+        &mut self,
+        target: TextTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = self.editing.take() else {
+            return;
+        };
+        let text = editor.input.read(cx).value().to_string();
+        // The effect's target wins over the editor's when they disagree, which
+        // they cannot today — both come from the same machine transition — but
+        // the effect is the one the state machine actually decided on.
+        let _ = editor.target;
+
+        let changed = self.editor.commit_text(target, &text);
+        self.after_text_edit(changed, window, cx);
+    }
+
+    /// Abandons the editor. Nothing reaches the document, including for a
+    /// pending element — which is what makes an escaped Text-tool gesture free.
+    fn cancel_text_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editing = None;
+        self.after_text_edit(false, window, cx);
+    }
+
+    /// The two things both endings do: give the canvas its focus back — or
+    /// every binding scoped to it is dead, which is Phase 7's whole lesson —
+    /// and repaint.
+    fn after_text_edit(&mut self, changed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.clone().focus(window, cx);
+        if changed {
+            // A new or resized element has to reach the spatial index before
+            // the next frame culls against it. `sync` is the per-frame call and
+            // `refresh_snapshot` runs it, so this is only the notify.
+            self.editor.rebuild_dirty_geometry();
+        }
+        cx.notify();
+    }
+
+    /// **Where an editor for `target` belongs, in world units.**
+    ///
+    /// `None` when the target no longer exists, which is the honest answer for
+    /// a node an undo took away between the double-click and the open.
+    fn text_edit_bounds(&self, target: TextTarget) -> Option<Rect> {
+        match target {
+            TextTarget::New(rect) => Some(rect.normalized()),
+            TextTarget::Node(node) => {
+                let nodes = self.editor.world().nodes();
+                (nodes.contains(node) && nodes.is_live(node)).then(|| nodes.bounds(node))
+            }
+            TextTarget::Edge(edge) => {
+                let route = self.editor.world().route(edge)?;
+                let flatten = self
+                    .viewport
+                    .screen_to_world_length(1.0)
+                    .max(f32::MIN_POSITIVE);
+                let center = route.midpoint(flatten);
+                // The editor is a box centred on the route, the same width the
+                // painter lays an edge label into — so what is typed is the
+                // width of what will be drawn.
+                let size = Vec2::new(
+                    self.viewport
+                        .screen_to_world_length(scene::EDGE_LABEL_MAX_PIXELS),
+                    self.viewport.screen_to_world_length(EDIT_LINE_PIXELS),
+                );
+                Some(Rect::new(center - size * 0.5, size))
+            }
+        }
+    }
+
+    /// The editor's element, positioned over whatever is being edited.
+    ///
+    /// Projected from world units **every frame**, which is what keeps the
+    /// field on its node while the canvas is panned or zoomed underneath it.
+    /// The height is a screen constant rather than the element's: a text field
+    /// three pixels tall is not an editor, whatever the thing it is editing
+    /// looks like at that zoom.
+    /// Returns a concrete `Div` rather than an `impl IntoElement`, and that is
+    /// not a style choice: an opaque return type captures the `&self` borrow
+    /// for as long as the element lives, and this one is built at the top of
+    /// `render` and consumed at the bottom — with every other builder reading
+    /// `self` in between.
+    fn text_editor_element(&self, cx: &App) -> Option<Div> {
+        let editing = self.editing.as_ref()?;
+        // A live element may have moved since the caret opened — an undo, a
+        // resize — so the world rectangle is re-read rather than remembered.
+        let world = self
+            .text_edit_bounds(editing.target)
+            .unwrap_or(editing.world);
+        let screen = self.viewport.world_rect_to_screen(world).normalized();
+
+        Some(
+            div()
+                .absolute()
+                .left(px(screen.origin.x))
+                .top(px(screen.origin.y))
+                .w(px(screen.size.x.max(MIN_EDITOR_PIXELS)))
+                .h(px(EDIT_LINE_PIXELS))
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(cx.theme().primary)
+                .bg(cx.theme().background)
+                .child(Input::new(&editing.input).size_full()),
+        )
+    }
+}
+
 impl Focusable for FlowView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -1464,6 +1843,10 @@ impl Render for FlowView {
         // rebuilt per frame. What must never appear here is a copy of anything
         // document-sized.
         self.refresh_snapshot();
+
+        // Built before the tree, because it reads the viewport and the world
+        // and both are `&mut self` borrows the builder below already holds.
+        let editor = self.text_editor_element(cx);
 
         let nodes = nodes::nodes(&self.snapshot, self.editor.world(), cx);
         let handles = nodes::handles(&self.snapshot, cx);
@@ -1520,6 +1903,10 @@ impl Render for FlowView {
                     .left(px(12.0))
                     .child(palette::palette(cx.entity(), self.palette_state(), cx)),
             )
+            // **§9's caret, above everything.** `children` rather than `child`
+            // so an idle canvas builds no element at all — text editing costs
+            // one `Option` when nobody is typing.
+            .children(editor)
     }
 }
 
