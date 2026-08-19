@@ -2,12 +2,14 @@
 //! graphs, Excalidraw-style drawing and a hand-drawn render mode — built
 //! directly on GPUI, with no WebView and no foreign UI framework.
 //!
-//! **This is the first slice of eight, and nothing here reaches the running app
-//! yet** — by design. The canvas is built in phases, each one buildable,
-//! testable and reviewable on its own, and the sidebar row is deliberately the
-//! last of them so nobody meets a half-built tool. "What is here after slice
-//! one" below says exactly where that leaves the crate. Until the row lands,
-//! the canvas runs through its own launcher:
+//! **Nothing here reaches the running app yet** — by design. The canvas is
+//! built in phases, each one buildable, testable and reviewable on its own, and
+//! the sidebar row (Phase 8) is deliberately held until last so nobody meets a
+//! half-built tool. It was eight phases when this file was started; the captain
+//! reviewed the running canvas after Phase 7.5 and specified a second scope, so
+//! Phases 9 to 12 — editing, text, the property panel, images — now come first
+//! and the row lands after them. The per-slice sections below are the record,
+//! in order. Until the row lands, the canvas runs through its own launcher:
 //!
 //! ```sh
 //! cargo run -p dodo-flow --example flow --locked
@@ -533,10 +535,70 @@
 //!    user reaches for whatever is behind it. [`runtime::hit`]'s module doc has
 //!    the diagnosis and the one arm that fixes it.
 //!
-//! Still to come: the sidebar row and its translated strings — **the palette's
-//! labels, tooltips and key hints among them**, which is why it carries none
-//! today. Nothing is stubbed for them here; the seams are the module
-//! boundaries.
+//! Still to come: the sidebar row. *(Its translated strings were expected to
+//! come with it — the palette's labels, tooltips and key hints among them.
+//! Phase 9 brought them forward instead, and the section below says why.)*
+//!
+//! # What the ninth slice added: editing, and the first strings
+//!
+//! The captain reviewed the running canvas and specified a second scope: make
+//! editing behave like Excalidraw. Phase 9 is the first of four and carries the
+//! foundations the other three stand on, so the deliverable is again a
+//! **shape** — one state model and one command model for selection, the active
+//! tool, keyboard actions and document mutations — rather than four
+//! independently reasonable pieces of UI.
+//!
+//! - [`FlowEditor::delete_selection`](commands::FlowEditor::delete_selection) —
+//!   `Delete`, `Backspace` and the toolbar's action are the same method, which
+//!   reads §28's selection and hands it to §30's `SetPresence`. So a removed
+//!   node takes its incident edges with it (the applier records the cascade
+//!   rather than the request), the whole removal is one undo press, and **the
+//!   method does not change when Phase 10 adds text or Phase 12 adds images**:
+//!   a selection is a set of indices and does not know what kind an element is.
+//! - [`interaction::InteractionMachine`] — the tool lock lives beside the
+//!   active tool, because the one place either is read is the transition that
+//!   commits a creation. Draw, finish and land back on Select is the default;
+//!   with the lock on the tool stays. Both are the *machine's*, so a palette
+//!   cannot disagree with what the next press will do.
+//! - [`commands::keys`] — `Delete`, `Backspace` and `q`, joined to the undo,
+//!   redo and tool rows in the same table, so every platform's answer is still
+//!   asserted from any machine and no keystroke can be bound twice without a
+//!   test saying so.
+//! - [`views::palette`] — the two actions past a divider, and **tooltips at
+//!   last**. The keystroke beside each label is not a string: it is rendered
+//!   from the binding table through `Tooltip::action`, so a rebind moves the
+//!   hint with it.
+//! - `dodo_i18n::flow` — the canvas's own catalogue, English and Vietnamese.
+//!
+//! ## Why the catalogue arrived four phases early
+//!
+//! Phase 8 is deliberately last, so writing the palette's labels, the Delete
+//! action, the lock and Phase 11's whole property panel as English placeholders
+//! would mean **touching every string twice** and four phases in which a bare
+//! literal could pass unnoticed — the exact defect
+//! `i18n_lint::view_code_draws_no_untranslated_literals` exists to catch, in
+//! the window before that guard was watching this crate. It is watching now:
+//! `views/flow.rs`, `views/palette.rs` and `views/nodes.rs` joined its
+//! `SOURCES`, which is the change that makes the decision stick rather than
+//! merely start well.
+//!
+//! ## Two things that were already true, and one that was not
+//!
+//! The brief asked for tool activation to enter drawing mode immediately, and
+//! it already did — one `SelectTool` and the next press is a creation, because
+//! Phase 7.5 put the tool in the transition function rather than in a mode
+//! flag. `a_tool_draws_on_the_first_press_after_it_is_picked_up` is that
+//! turned into a property so it cannot quietly stop being true. The same goes
+//! for the tombstone: removal has been undoable since Phase 7, and this phase
+//! only had to reach it.
+//!
+//! What was **not** already true is smaller and worth the next person's
+//! attention: `set_presence` cascades a node's edges, and nothing above it did.
+//! A view that had assembled its own removal — "delete the selected nodes" —
+//! would have produced a document whose edges point at a node that is not
+//! there, which `from_document` drops as corrupt on the next load. That is one
+//! more argument for the one-door design and it is why the delete lives on the
+//! editor rather than in the handler that has the selection to hand.
 //!
 //! # Where the budget numbers come from, and what they are not
 //!

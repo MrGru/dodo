@@ -22,12 +22,26 @@
 //!
 //! | Tool gesture | Effect |
 //! |---|---|
-//! | click a palette button, or press its letter | pick that tool up |
+//! | click a palette button, or press its letter | pick that tool up — **it is armed at once**, the next drag draws |
 //! | with a shape tool, drag on the canvas | draw the element inside the box you drag — the preview is the real shape, not an outline of it |
 //! | with a shape tool, **click** | place it at its default size, centred where you clicked |
 //! | hold shift while drawing | square the box: a square, a circle, a regular diamond, a 45° line |
-//! | `Esc` | abandon what is being drawn **and** go back to Select |
+//! | finish a drawing | **back to Select**, so the thing you just drew can be moved — Excalidraw's own default |
+//! | click the padlock, or press `q` | lock the tool: finishing a drawing keeps it, so six rectangles need one trip to the palette |
+//! | `Esc` | abandon what is being drawn **and** go back to Select, lock or no lock |
 //! | `Cmd+Z` / `Ctrl+Z` after drawing | remove it — **one press per element**, however long the drag was |
+//!
+//! ## Deleting
+//!
+//! | Gesture | Effect |
+//! |---|---|
+//! | select something, then `Delete` or `Backspace` | remove it |
+//! | click the bin in the palette | the same thing — one method, two doors |
+//! | delete a node | **its edges go with it**; an edge with one end nowhere has no geometry |
+//! | `Cmd+Z` / `Ctrl+Z` | put it all back, node, edges and selection, in one press |
+//!
+//! The bin is drawn muted when nothing is selected, and clicking it then does
+//! nothing. That is the state, not a bug.
 //!
 //! A creating tool draws over whatever is underneath, so a rectangle dragged
 //! across a node is a rectangle and not a node drag. A graph node is born with
@@ -44,15 +58,15 @@
 //! line itself, so a long diagonal is selected from its empty corners too.
 //! `render::shapes` and `runtime::hit` carry both, with the shape of the fix.
 //!
-//! The palette has **no labels and no tooltips**, so nothing on screen tells
-//! you that `r` is the rectangle. That is deliberate: every string a dodo user
-//! reads goes through `dodo-i18n`, and the canvas's translations are Phase 8's
-//! — an English label here would be one that phase then has to find and remove.
-//! The table above is the documentation until then, and these are the letters:
+//! **Hover a palette button and it tells you what it is and which key it
+//! answers to.** The label comes from `dodo_i18n::flow`, in whichever language
+//! dodo is set to; the keystroke beside it is looked up from the real binding
+//! table, so it is right by construction rather than by being kept in step.
+//! The letters, for reference:
 //!
-//! | `v` | `h` | `r` | `d` | `o` | `a` | `l` | `n` |
-//! |---|---|---|---|---|---|---|---|
-//! | select | hand | rectangle | diamond | ellipse | arrow | line | node |
+//! | `v` | `h` | `r` | `d` | `o` | `a` | `l` | `n` | `q` |
+//! |---|---|---|---|---|---|---|---|---|
+//! | select | hand | rectangle | diamond | ellipse | arrow | line | node | lock |
 //!
 //! ## Everything else, which is the Select tool's
 //!
@@ -69,6 +83,7 @@
 //! | drop it on empty canvas | cancel |
 //! | drag on empty space with the left button | rubber band — **it selects on release** |
 //! | shift + drag on empty space | add the band's contents to the selection |
+//! | `Delete` / `Backspace` | remove whatever is selected, nodes and edges alike |
 //! | `Esc` | abandon the drag — a moved node goes back exactly where it was, and the drag leaves no undo step |
 //! | `Cmd+Z` / `Ctrl+Z` | undo — **a whole drag is one press**, however many mouse moves it took |
 //! | `Cmd+Shift+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` | redo |

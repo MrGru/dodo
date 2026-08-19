@@ -212,7 +212,12 @@ pub fn for_host(host: HostOs) -> Vec<Binding> {
         HostOs::Windows | HostOs::Unix => PC,
     };
 
-    editing.iter().chain(UNIVERSAL).chain(TOOLS).copied().collect()
+    editing
+        .iter()
+        .chain(UNIVERSAL)
+        .chain(TOOLS)
+        .copied()
+        .collect()
 }
 
 /// The bindings for the machine this was compiled for.

@@ -72,9 +72,8 @@
 
 use dodo_i18n::{flow, t};
 use gpui::{
-    App, Bounds, Entity, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement,
-    Pixels, StatefulInteractiveElement, Styled, canvas, div,
-    prelude::FluentBuilder, px,
+    App, Bounds, Entity, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
+    StatefulInteractiveElement, Styled, canvas, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, tooltip::Tooltip};
 
@@ -597,7 +596,10 @@ mod tests {
     /// "Rectangle" under the diamond and read as a translation bug.
     #[test]
     fn every_tool_has_its_own_label() {
-        let labels: Vec<flow::Text> = CanvasTool::ALL.iter().map(|tool| label_for(*tool)).collect();
+        let labels: Vec<flow::Text> = CanvasTool::ALL
+            .iter()
+            .map(|tool| label_for(*tool))
+            .collect();
         for (index, label) in labels.iter().enumerate() {
             assert!(
                 !labels[index + 1..].contains(label),

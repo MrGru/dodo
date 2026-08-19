@@ -18,6 +18,12 @@
 //! not document state. `tool.rs` says what honouring that costs, and why the
 //! four kinds without painters have no button.
 //!
+//! So does **the tool lock**, and that is worth a sentence because it looks
+//! like a preference. It is read at exactly one point — the transition that
+//! commits a creation, where it decides whether the tool survives the drawing —
+//! and a copy of it on the view would be a second answer to "what happens when
+//! this drag ends?" with nothing forcing the two to agree.
+//!
 //! Zoom is deliberately **not** in the machine. It is stateless — every wheel
 //! notch and every pinch delta is a complete instruction — so modelling it as a
 //! state would add a variant that is entered and left within one event, and

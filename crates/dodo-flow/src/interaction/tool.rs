@@ -115,9 +115,11 @@ impl CanvasTool {
     ];
 
     /// A short stable name, for a test, a trace line or a widget id. **Not
-    /// user-facing** — the palette's labels are Phase 8's translation work, and
-    /// inventing an English string here would be a string that has to be found
-    /// and removed later.
+    /// user-facing, and it must stay that way** — an element id has to survive
+    /// a language change, which is exactly why `dodo-i18n-text`'s rule exempts
+    /// ids and nothing else here. The tool's *label* is
+    /// `dodo_i18n::flow::Text`, mapped in `views::palette` because this file
+    /// sits below the UI-framework line and a catalogue is a view's business.
     pub fn name(self) -> &'static str {
         match self {
             CanvasTool::Select => "select",
