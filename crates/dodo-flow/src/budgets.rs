@@ -160,6 +160,26 @@ pub struct LodThresholds {
     /// Below this rendered height in screen pixels, a label is not drawn at
     /// all — it cannot be read, and shaping it is pure cost.
     pub min_readable_font_px: f32,
+    /// The font size a node label is nominally drawn at in **world** units, so
+    /// its rendered size is this times the zoom before quantisation. Here
+    /// rather than in the renderer because it is the input to the quantisation
+    /// above, and the pair only makes sense read together.
+    pub nominal_label_size: f32,
+    /// Below this rendered side in screen pixels, a node is a plain box: no
+    /// label, no border, no handles, whatever the zoom rung says.
+    ///
+    /// Independent of zoom on purpose — a 20-unit node at zoom 1 and a
+    /// 200-unit node at zoom 0.1 are the same legibility problem, and §15's
+    /// "merge/simplify visual details" is about what reaches the eye rather
+    /// than about the camera.
+    pub min_detailed_node_px: f32,
+    /// Below this on-screen length in pixels, an edge is not drawn at all.
+    ///
+    /// A three-pixel edge is a smudge on a node's border, and it costs a whole
+    /// path — [`RenderBudgets::nanos_per_path`] of fixed CPU regardless of how
+    /// few vertices it has. This is the cheapest rung of §15's ladder and the
+    /// only one that costs literally nothing.
+    pub min_edge_screen_px: f32,
 }
 
 impl LodThresholds {
@@ -171,6 +191,13 @@ impl LodThresholds {
         curve_to_quad_zoom: 0.35,
         font_size_ladder: &[9.0, 11.0, 13.0, 16.0, 20.0, 28.0],
         min_readable_font_px: 6.0,
+        nominal_label_size: 13.0,
+        // Two node bodies' worth of border and a label's line height do not fit
+        // in less; below it the quad is the whole node.
+        min_detailed_node_px: 24.0,
+        // Half a handle's diameter. Shorter than that and the edge is inside
+        // the dots it joins.
+        min_edge_screen_px: 4.0,
     };
 
     /// Snaps a rendered font size onto the ladder. Sizes above the ladder's top
@@ -242,6 +269,26 @@ pub struct RenderBudgets {
     /// rendering *smoothly*, and they are different numbers for different
     /// reasons.
     pub target_path_vertices_per_frame: u32,
+
+    /// **The budget Phase 4's tables did not have, and the one a hairball
+    /// reaches first.**
+    ///
+    /// Vertices are not the only per-frame ceiling. `Window::paint_path`
+    /// consumes its argument, so a cached path is cloned into it, and the
+    /// vertex array is traversed four times per painted path per frame — a
+    /// *fixed* [`RenderBudgets::nanos_per_path`] whatever the path's length.
+    /// Phase 4's scattered scene put 61,104 edges genuinely in the viewport;
+    /// at 1.5 µs each that is **92 ms of CPU before a single vertex is
+    /// counted**, and it would still be 92 ms if every one of those edges were
+    /// a two-point line.
+    ///
+    /// So a level-of-detail ladder that only simplifies geometry does not bound
+    /// that frame, and [`crate::render::lod`] spends this budget alongside the
+    /// vertex one. **Derived, not measured**: half a 16.7 ms frame divided by
+    /// `nanos_per_path`, which is 5,566, rounded down to 5,000. The dense scene
+    /// paints 3,104 paths and holds its frame, which is the closest measured
+    /// point to it.
+    pub target_paths_per_frame: u32,
 
     /// Contiguous runs of paths per frame, which is a hard cost no CPU
     /// profiler shows.
@@ -400,6 +447,10 @@ const METAL: RenderBudgets = RenderBudgets {
     // budget that sits between them, and halving the flattening tolerance
     // quality roughly doubles it.
     target_path_vertices_per_frame: 350_000,
+    // Derived rather than measured — see the field's doc. Half a 16.7 ms frame
+    // at `nanos_per_path` is 5,566; 5,000 is that rounded down, and the dense
+    // scene's 3,104 paths are the nearest measured point below it.
+    target_paths_per_frame: 5_000,
     // Measured degradation sets in between 130 and 190 batches (128 holds 60
     // fps, 192 drops to 30); 64 is where the cost is still negligible, and is
     // the number the culling phase asserts against.
@@ -430,6 +481,7 @@ const fn unmeasured(backend: RenderBackend) -> RenderBudgets {
         hard_path_vertex_ceiling: METAL.hard_path_vertex_ceiling / 2,
         safe_path_vertex_ceiling: METAL.safe_path_vertex_ceiling / 2,
         target_path_vertices_per_frame: METAL.target_path_vertices_per_frame / 2,
+        target_paths_per_frame: METAL.target_paths_per_frame / 2,
         max_path_batches_per_frame: METAL.max_path_batches_per_frame / 2,
         target_quads_per_frame: METAL.target_quads_per_frame / 2,
         max_rich_elements: METAL.max_rich_elements / 2,

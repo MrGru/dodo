@@ -31,14 +31,20 @@
 
 pub mod edges;
 pub mod grid;
+pub mod lod;
 pub mod painter;
 pub mod plan;
+pub mod registry;
 pub mod scene;
 pub mod shapes;
 
 pub use edges::{EdgePaint, plan_connection_preview, plan_edge};
 pub use grid::{GridLevel, GridLimits, GridSettings, GridStyle};
+pub use lod::{EdgeDetail, HandleDetail, LodPlan, SceneLoad};
 pub use painter::WindowPainter;
 pub use plan::{PaintPlan, PaintStats, PathPaint, PathPrimitive, PrimitiveSink, QuadPrimitive};
+pub use registry::{
+    AccentRole, GenericKind, NodeGlyph, NodeRef, NodeRenderer, NodeRendererRegistry, NodeVisual,
+};
 pub use scene::{SceneInk, SceneOptions, SceneStats, plan_scene};
 pub use shapes::Outline;
