@@ -433,9 +433,13 @@
 //!    that never takes focus has its key context, its handlers and its actions
 //!    outside the path entirely — `Esc` and the space-to-pan key included.
 //!    Nothing reports it. [`views::FlowView`] now focuses on mount and refocuses
-//!    on every press. The plan's own risk entry says live input delivery here
-//!    was source-verified and never observed; this is what that cost, and the
-//!    keystrokes themselves still need a human at the keyboard to confirm.
+//!    on every press. **dodo's own `gpui-component-recipes` skill already says
+//!    this**, and says to focus in the constructor; the canvas did not, for five
+//!    phases. The transferable part is the failure mode rather than the fact — a
+//!    dead binding produces no error, no warning and no wrong behaviour, only an
+//!    absence — and it is the second thing the plan's "live input is
+//!    source-verified, never observed" risk has cost. The keystrokes themselves
+//!    still need a human at the keyboard to confirm.
 //!
 //! Still to come: the sidebar row and its translated strings. Nothing is
 //! stubbed for them here; the seams are the module boundaries.

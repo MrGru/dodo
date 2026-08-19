@@ -136,6 +136,14 @@ use crate::{
 /// binding is dead and nothing says so. [`FlowView::new`] focuses on mount and
 /// the mouse-down handler refocuses, which is what makes this constant mean
 /// anything.
+///
+/// dodo's `gpui-component-recipes` skill already states this — *"with nothing
+/// focused, the dispatch path is the window root alone"* — and says to focus in
+/// the constructor. This canvas did not, from Phase 2 until Phase 7 needed a
+/// binding that anybody would notice was missing. The lesson is about the
+/// failure mode rather than the fact: a dead binding produces no error, no
+/// warning and no wrong behaviour, only an absence, so it survives every review
+/// that is not specifically looking for it.
 pub const KEY_CONTEXT: &str = "FlowCanvas";
 
 /// The key that turns a left-drag into a pan, alongside the middle button.
