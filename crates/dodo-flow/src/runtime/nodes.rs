@@ -34,6 +34,8 @@
 //!
 //! **This file names no UI framework.**
 
+use std::sync::Arc;
+
 use crate::{
     geometry::{Rect, Vec2},
     models::{
@@ -134,7 +136,15 @@ impl NodeShape {
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeCold {
     pub kind: ElementKind,
-    pub label: Option<String>,
+    /// The node's own text.
+    ///
+    /// `Arc<str>` rather than `String` for one reason and it is a per-frame
+    /// one: a [`TextPrimitive`](crate::render::plan::TextPrimitive) carries the
+    /// text it draws, and cloning a `String` per visible label per frame is
+    /// exactly the allocation §40 rule 10 is about — 1,584 of them on Phase 4's
+    /// dense scene. An `Arc` clone is a refcount bump. The label is written
+    /// rarely and read every frame, which is the shape `Arc` is for.
+    pub label: Option<Arc<str>>,
     /// The container (§11) this node belongs to. An [`ElementId`] rather than a
     /// [`NodeIndex`] because the hierarchy index that resolves it is a later
     /// phase's, and a half-built index is worse than none.
@@ -262,7 +272,7 @@ impl NodeStore {
 
         self.cold.push(NodeCold {
             kind: spec.kind,
-            label: spec.label,
+            label: spec.label.map(Arc::from),
             parent: spec.parent,
         });
 
@@ -399,7 +409,7 @@ impl NodeStore {
     }
 
     pub fn set_label(&mut self, node: NodeIndex, label: Option<String>) {
-        self.cold[node.index()].label = label;
+        self.cold[node.index()].label = label.map(Arc::from);
         self.touch(node);
     }
 

@@ -101,14 +101,19 @@ use crate::{
 /// to cover a jitter, short enough that the working set is still the screen.
 pub const RETAIN_FRAMES: u64 = 4;
 
-/// What fraction of the byte bound an overflow eviction leaves behind.
+/// What fraction of a cache's bound an overflow eviction leaves behind.
 ///
 /// **Not 1.0, and the reason is a complexity one rather than a taste one.**
-/// Evicting exactly enough to fit would re-sort the whole entry set on every
-/// subsequent insert, turning a document that overflows the cache into an
-/// O(n² log n) frame — the opposite of what a cache is for. Dropping to 90 %
-/// means one sort buys roughly ten thousand inserts' worth of headroom, so the
-/// eviction cost is amortised to nothing and the bound still holds absolutely.
+/// Evicting exactly enough to fit means the *next* insert overflows again, so
+/// every insert past the bound re-sorts the whole entry set — O(n²·log n) over
+/// a frame that overflows, which is the opposite of what a cache is for. It is
+/// an easy mistake to make in both caches and it was made in both: the
+/// shaped-line cache's version cost 22 seconds in a test that offered it four
+/// times its capacity, which is what surfaced it.
+///
+/// Dropping to 90 % means one sort buys a tenth of the cache's capacity in
+/// headroom, so the eviction cost amortises to nothing per insert and the bound
+/// still holds absolutely.
 pub const EVICT_TO_FRACTION: f32 = 0.9;
 
 /// What part of an element a cached tessellation is.
@@ -667,9 +672,13 @@ impl<L> ShapedLineCache<L> {
             .collect();
         order.sort_unstable();
 
+        // Down to the low-water mark, not just under the cap — see
+        // `EVICT_TO_FRACTION`. Evicting exactly one entry per insert here is
+        // what made this loop quadratic.
+        let target = (self.max_entries as f32 * EVICT_TO_FRACTION) as usize;
         let mut evicted = 0;
         for (_, key) in order {
-            if self.entries.len() <= self.max_entries {
+            if self.entries.len() <= target {
                 break;
             }
             self.entries.remove(&key);
@@ -1133,6 +1142,13 @@ mod tests {
         assert_eq!(cache.get(&TextKey::new(NodeIndex::new(0), 1, 16.0)), None);
     }
 
+    /// Four times the cache's capacity, offered one label at a time, with the
+    /// bound checked on **every** insert.
+    ///
+    /// This test is also why [`EVICT_TO_FRACTION`] exists: evicting exactly one
+    /// entry per insert made it re-sort 4,096 entries 12,000 times and cost 22
+    /// seconds, which is a real per-frame pathology on any document with more
+    /// labels than the cache holds and not merely a slow test.
     #[test]
     fn the_shaped_line_cache_is_bounded_by_its_entry_cap() {
         let budgets = budgets();

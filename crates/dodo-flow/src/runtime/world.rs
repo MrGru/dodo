@@ -233,7 +233,7 @@ impl GraphWorld {
                 size: self.nodes.size(node),
                 z: self.nodes.z(node),
                 parent: cold.parent,
-                label: cold.label.clone(),
+                label: cold.label.as_deref().map(str::to_owned),
                 handles: self
                     .nodes
                     .handles(node)
