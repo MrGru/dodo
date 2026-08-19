@@ -130,9 +130,10 @@ pub enum Glyph {
 }
 
 impl Glyph {
-    /// Every glyph the palette can draw, for the tests. In palette order.
+    /// The glyphs that are not a tool's, for the tests. Every *tool's* comes
+    /// from [`CanvasTool::ALL`], so there is no second list of the eight.
     #[cfg(test)]
-    const ALL: &'static [Glyph] = &[Glyph::Trash, Glyph::Lock];
+    const ACTIONS: &'static [Glyph] = &[Glyph::Lock, Glyph::Trash];
 
     /// A short stable name, for the element id. **Not user-facing** — the
     /// labels are `dodo_i18n::flow`'s.
@@ -537,7 +538,7 @@ mod tests {
         CanvasTool::ALL
             .iter()
             .map(|tool| Glyph::Tool(*tool))
-            .chain(Glyph::ALL.iter().copied())
+            .chain(Glyph::ACTIONS.iter().copied())
             .collect()
     }
 

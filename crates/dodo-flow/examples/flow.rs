@@ -118,6 +118,16 @@
 //! | `DODO_FLOW_ZOOM=z` | open at this zoom, to see the LOD ladder without touching the trackpad |
 //! | `DODO_FLOW_SKETCH=1` | open hand-drawn (§13), the same as clicking **Sketch** |
 //!
+//! # The launcher's own two buttons are English on purpose
+//!
+//! The canvas's strings go through `dodo_i18n::flow` from Phase 9 on, and
+//! **this file's do not**. The Clean/Sketch toggle is a developer harness: it
+//! is an `examples/` target nothing a shipped build can reach, `i18n_lint`
+//! does not scan it, and giving it catalogue entries would put two strings in
+//! the app's catalogue that the app never draws — the same objection
+//! `commands::keys` makes to a binding no code reads. If the render-style
+//! toggle becomes a real control, its strings are added then, with a caller.
+//!
 //! # The clean/sketch toggle
 //!
 //! The two buttons at the top right switch §13's render style. **It is a
