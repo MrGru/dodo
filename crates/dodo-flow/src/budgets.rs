@@ -330,6 +330,20 @@ pub struct RenderBudgets {
     /// not a caution, and this is it.
     pub geometry_cache_max_bytes: usize,
 
+    /// The most shaped labels the engine's own text cache holds.
+    ///
+    /// GPUI has a line-layout cache and it is **two frames deep** — current
+    /// frame plus previous, unused keys evicted — so a label that leaves the
+    /// viewport for a single frame is re-shaped on return, at ~7–11 µs against
+    /// ~1.7 µs to paint a cached one. Phase 0 measured 5,000 cached labels
+    /// holding 60 fps at 8.7 ms and 5,000 freshly shaped ones at 18 fps, which
+    /// is why [`crate::render::cache::ShapedLineCache`] exists at all.
+    ///
+    /// 4,096 is above any plausible visible label count — the dense scene shows
+    /// 1,584 nodes — and bounded, so a document with 100,000 labels holds the
+    /// visible ones rather than all of them.
+    pub max_shaped_lines: u32,
+
     /// How far the zoom may drift from the zoom a cached tessellation was built
     /// at before it is rebuilt, as a factor either way.
     ///
@@ -458,6 +472,7 @@ const METAL: RenderBudgets = RenderBudgets {
     target_quads_per_frame: 20_000,
     max_rich_elements: 1_600,
     geometry_cache_max_bytes: 64 * 1024 * 1024,
+    max_shaped_lines: 4_096,
     retessellation_zoom_band: 2.0,
     nanos_per_path: 1_500,
     nanos_per_vertex: 32,
@@ -486,6 +501,7 @@ const fn unmeasured(backend: RenderBackend) -> RenderBudgets {
         target_quads_per_frame: METAL.target_quads_per_frame / 2,
         max_rich_elements: METAL.max_rich_elements / 2,
         geometry_cache_max_bytes: METAL.geometry_cache_max_bytes / 2,
+        max_shaped_lines: METAL.max_shaped_lines / 2,
         retessellation_zoom_band: METAL.retessellation_zoom_band,
         nanos_per_path: METAL.nanos_per_path,
         nanos_per_vertex: METAL.nanos_per_vertex,

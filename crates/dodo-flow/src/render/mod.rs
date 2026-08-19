@@ -29,6 +29,7 @@
 //! order batched by primitive kind, and painted-vertex accounting. Read its doc
 //! before adding a painter.
 
+pub mod cache;
 pub mod edges;
 pub mod grid;
 pub mod lod;
@@ -38,6 +39,10 @@ pub mod registry;
 pub mod scene;
 pub mod shapes;
 
+pub use cache::{
+    CacheStats, CachedGeometry, GeometryCache, GeometryKey, GeometryPart, ScreenAnchor,
+    ShapedLineCache, TextKey,
+};
 pub use edges::{EdgePaint, plan_connection_preview, plan_edge};
 pub use grid::{GridLevel, GridLimits, GridSettings, GridStyle};
 pub use lod::{EdgeDetail, HandleDetail, LodPlan, SceneLoad};

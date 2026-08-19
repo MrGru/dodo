@@ -299,6 +299,7 @@ mod tests {
             include_str!("models/serialization.rs"),
         ),
         ("models/style.rs", include_str!("models/style.rs")),
+        ("render/cache.rs", include_str!("render/cache.rs")),
         ("render/edges.rs", include_str!("render/edges.rs")),
         ("render/grid.rs", include_str!("render/grid.rs")),
         ("render/lod.rs", include_str!("render/lod.rs")),
