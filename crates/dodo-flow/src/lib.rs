@@ -600,6 +600,135 @@
 //! more argument for the one-door design and it is why the delete lives on the
 //! editor rather than in the handler that has the selection to hand.
 //!
+//! # What the tenth slice added: text, in the three places it lives
+//!
+//! §9. The feature is text; **the deliverable is again a vocabulary**, because
+//! Phase 11 wires a property panel to whatever is here and a panel is very hard
+//! to build against a model that has to change under it. The captain supplied
+//! reference screenshots and they fix the words: four discrete sizes, three
+//! families, three alignments, and text that carries a stroke colour, an
+//! opacity and a place in the layer order.
+//!
+//! - [`models::FontSize`] — **four steps, not a number**, and the discreteness
+//!   is load-bearing rather than a simplification. Phase 5 found `font_size` is
+//!   part of GPUI's own shaped-line cache key, so a continuously-sized label is
+//!   re-shaped on every frame of a zoom. A continuous field would have had to be
+//!   quantised *somewhere*; making the document discrete means there is no
+//!   second answer to "what size is this text?". Its world sizes are rungs of
+//!   [`budgets::LodThresholds::font_size_ladder`], so at 100 % zoom the
+//!   quantiser is the identity — a contract between two modules with nothing
+//!   else joining them, and one test holding it.
+//! - [`models::FontFamily`] and [`models::TextAlign`] beside it. Alignment is
+//!   arithmetic ([`models::TextAlign::offset`]), so it is asserted with no
+//!   window; the painter applies it from the run's *shaped* width, because
+//!   nothing earlier knows one.
+//! - [`render::lod::LodPlan::font_size_for`] — the ladder answers **per
+//!   element**, so `S` text stops being laid out at a zoom `XL` text survives.
+//! - [`runtime::NodeShape::Text`] — a body that is nothing but its glyphs, with
+//!   **no outline at all** rather than an empty one, and its own arm in
+//!   `plan_nodes`. The fall-through was not harmless: below full detail every
+//!   body is drawn as a quad, so a text element would have grown a solid box
+//!   the moment you zoomed out.
+//! - Edge labels, at the route's **arc-length** midpoint, derived every frame.
+//!   That is what makes requirement 5 fall out rather than need machinery:
+//!   §19's propagation rebuilds a route when an endpoint moves, so the label
+//!   has already moved and nothing in `render/` knows a node was dragged.
+//! - [`runtime::PointerTarget::Edge`] and an edge narrow phase, ranked below
+//!   bodies and handles. Added for exactly one gesture — labelling an edge
+//!   needs to know *which* — and `runtime::hit`'s doc had predicted the shape
+//!   of it four phases earlier.
+//! - [`interaction::TextTarget`], [`commands::FlowEditor::commit_text`] and
+//!   `text_of` — the one door, and the reason existing text is **editable**
+//!   rather than merely replaceable: an editor is seeded from `text_of`, and a
+//!   blank one silently replaces a sentence the second time anybody opens it.
+//! - Document format **version 2**, and the migration ladder's first real rung.
+//!   A version-1 `font.size` is a float where version 2 wants one of four
+//!   names, and that is the migration case `#[serde(default)]` cannot cover —
+//!   the field is present with the wrong shape, so one stale font would have
+//!   refused the whole file. Nine phases of empty machinery cost three lines to
+//!   use.
+//!
+//! ## The Text tool is the one that does not create on release
+//!
+//! Every other tool commits its element on the mouse-up. [`CanvasTool::Text`](interaction::CanvasTool::Text)
+//! opens a caret over the rectangle it drew, and the element is added when — and
+//! only when — non-empty text is committed. That is not a special case bolted
+//! on: **an empty text element is invisible**, because a text element is its
+//! glyphs. Creating one on release would leave a selectable, undoable,
+//! unpaintable thing on the canvas every time somebody pressed `Esc`, which is
+//! precisely the failure Phase 7.5 caught for Line and Arrow arriving from the
+//! other direction. The same rule runs backwards: emptying an existing text
+//! element removes it, and one undo brings both the element and its words back.
+//!
+//! ## The two things the tests found, which review would not have
+//!
+//! 1. **A moved node was re-shaping its label sixty times a second.** The
+//!    shaped-line key used [`runtime::NodeStore::version`], which bumps on
+//!    *every* write including a position — so dragging a labelled node paid
+//!    7–11 µs of shaping per frame for glyphs that had not changed a character.
+//!    [`runtime::NodeStore::text_version`] is the fix: a second, narrower
+//!    version bumped by the label, the style and a resize (which changes the
+//!    width the run wraps into) and by nothing else. Four bytes a node, 400 KB
+//!    at a hundred thousand. It was found by writing "a move must not change
+//!    the key" as an assertion and watching it fail.
+//! 2. **A one-line text element was never "detailed" enough to be drawn at
+//!    all.** [`budgets::LodThresholds::min_detailed_node_px`] is 24 px and asks
+//!    whether a *body* has room for a border and a line of label **inside** it.
+//!    A standalone text element has neither and is exactly one line tall — 22
+//!    world units by default — so it failed that gate at 100 % zoom and the
+//!    whole kind was invisible. The gate does not apply to it: its only
+//!    legibility question is whether its glyphs read, and the ladder already
+//!    answers that. A threshold written for one kind silently excluded a kind
+//!    that did not exist when it was written, which is worth remembering before
+//!    Phase 12 adds images.
+//!
+//! A third, smaller: [`commands::FlowEditor::text_of`] read *presence* rather
+//! than liveness, so a tombstoned element still handed back its words and a
+//! caret could have opened on something already deleted.
+//!
+//! ## §40 rule 7, extended to the third cache
+//!
+//! Phase 4 asserted that a pure pan rebuilds no routes and Phase 5 that it
+//! re-tessellates almost nothing. [`render::cache::TextKey`] carries the owner,
+//! the element's text version and the quantised size, and **deliberately not
+//! the position** — so `a_pure_pan_shapes_every_label_once_and_never_again`
+//! drives sixty panned frames through a real cache and counts three misses,
+//! one per label, ever.
+//!
+//! ## And the limitations a user meets, recorded where they are caused
+//!
+//! 1. **An edge cannot be selected by clicking it.** A press on one starts a
+//!    rubber band, exactly as a press on empty canvas does, so `Delete` reaches
+//!    an edge only through a band. The narrow phase — the expensive half — is
+//!    done; the gesture is not, and [`runtime::hit`]'s doc says why it should
+//!    arrive with whatever makes an edge draggable rather than before it.
+//! 2. **Text is a single line.** `shape_line` panics on a newline in a debug
+//!    build, so one is flattened to a space, and a label wider than its element
+//!    is truncated rather than wrapped. [`render::painter`] carries the three
+//!    changes that close it, which are one coherent piece of work rather than a
+//!    fix to bolt onto that call.
+//! 3. **Choosing Hand-drawn may change nothing on screen.** dodo ships no
+//!    hand-drawn face — a bundled font is a licence, a build step and half a
+//!    megabyte in every release artefact — so `views::flow` probes the text
+//!    system for the platform's candidates and falls back to the theme's UI
+//!    font. [`models::FontFamily::preferred_faces`] carries the list and the
+//!    argument. It is probed rather than merely named because GPUI's
+//!    `resolve_font` silently substitutes a fallback for a name it cannot find:
+//!    a family that is only named would draw in something arbitrary with
+//!    nothing to say so.
+//!
+//! ## What was verified by running, and what was not
+//!
+//! Everything above is asserted by `cargo test` with no window: the model, the
+//! ladder, the plan a frame hands its painter, the interaction transitions, the
+//! commands and the round trip. **The keystrokes and the caret are not.** An
+//! unattended GPUI window on macOS presents its first frame and then stops, so
+//! double-clicking a node, typing into it, re-opening it and watching a label
+//! ride a dragged edge are a human's to check — `examples/flow.rs` opens onto a
+//! text row put there for exactly that pass, and its doc lists the four things
+//! to look at. This is the third phase to hand that forward, and it is the same
+//! risk the plan named as "live input is source-verified, never observed".
+//!
 //! # Where the budget numbers come from, and what they are not
 //!
 //! [`budgets`] is the one named place for every render ceiling and LOD

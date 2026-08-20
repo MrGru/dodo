@@ -58,15 +58,43 @@
 //! line itself, so a long diagonal is selected from its empty corners too.
 //! `render::shapes` and `runtime::hit` carry both, with the shape of the fix.
 //!
+//! # §9's text, and the four things to look at
+//!
+//! The document opens with a text row below the routing showcase: the four
+//! sizes the property panel offers, each in a different family and alignment,
+//! plus a labelled edge under them. Four things are worth checking by hand,
+//! because no test in this crate can:
+//!
+//! 1. **Double-click a node, an edge and a text element, type, press `Enter`,
+//!    then double-click the same thing again.** The field must come up holding
+//!    what is there. An editor that opened blank would look identical until the
+//!    second visit, and then quietly replace a sentence with a word.
+//! 2. **Drag a labelled node.** Its own text moves with it, and the label on
+//!    every edge attached to it rides the route as the route bends.
+//! 3. **Empty a text element** — select all, delete, `Enter`. It goes, because
+//!    a text element with no glyphs is invisible; one `Cmd+Z` brings it back
+//!    with its words.
+//! 4. **Pick the Hand-drawn family.** On a machine with none of the platform's
+//!    hand-drawn faces installed it looks exactly like Normal, and that is the
+//!    honest behaviour rather than a bug — dodo ships no font of its own. See
+//!    [`FontFamily::preferred_faces`](dodo_flow::models::FontFamily::preferred_faces).
+//!
+//! **Two limitations a user meets here.** An edge cannot be selected by
+//! clicking it — a press on one starts a rubber band, exactly as a press on
+//! empty canvas does, so `Delete` reaches an edge only through a band. And the
+//! text editor is a single line: a long label is typed into one field and drawn
+//! truncated to its element's width. `runtime::hit` and `render::painter` carry
+//! both, with what each would cost to close.
+//!
 //! **Hover a palette button and it tells you what it is and which key it
 //! answers to.** The label comes from `dodo_i18n::flow`, in whichever language
 //! dodo is set to; the keystroke beside it is looked up from the real binding
 //! table, so it is right by construction rather than by being kept in step.
 //! The letters, for reference:
 //!
-//! | `v` | `h` | `r` | `d` | `o` | `a` | `l` | `n` | `q` |
-//! |---|---|---|---|---|---|---|---|---|
-//! | select | hand | rectangle | diamond | ellipse | arrow | line | node | lock |
+//! | `v` | `h` | `r` | `d` | `o` | `a` | `l` | `n` | `t` | `q` |
+//! |---|---|---|---|---|---|---|---|---|---|
+//! | select | hand | rectangle | diamond | ellipse | arrow | line | node | text | lock |
 //!
 //! ## Everything else, which is the Select tool's
 //!
@@ -83,6 +111,12 @@
 //! | drop it on empty canvas | cancel |
 //! | drag on empty space with the left button | rubber band — **it selects on release** |
 //! | shift + drag on empty space | add the band's contents to the selection |
+//! | **double-click a node** | edit its text, seeded with whatever is already there |
+//! | **double-click an edge** | edit its label — aim at the line, not at the space around it |
+//! | **double-click empty canvas** | place text under the pointer and start typing |
+//! | **`t`, then click or drag** | the same, with a box you chose |
+//! | `Enter`, or a click anywhere | commit what you typed |
+//! | `Esc` while typing | abandon it — nothing reaches the document, so nothing is undone |
 //! | `Delete` / `Backspace` | remove whatever is selected, nodes and edges alike |
 //! | `Esc` | abandon the drag — a moved node goes back exactly where it was, and the drag leaves no undo step |
 //! | `Cmd+Z` / `Ctrl+Z` | undo — **a whole drag is one press**, however many mouse moves it took |
@@ -159,8 +193,8 @@ use dodo_flow::{
     geometry::Vec2,
     models::{
         ArrowMarker, Color, DashPattern, EdgeRouting, ElementId, ElementKind, Endpoint,
-        FlowDocument, GraphNodeKind, Handle, HandleDirection, HandlePlacement, NodeIndex,
-        RenderStyle, ShapeKind, StrokeStyle,
+        FlowDocument, FontFamily, FontSize, GraphNodeKind, Handle, HandleDirection,
+        HandlePlacement, NodeIndex, RenderStyle, ShapeKind, StrokeStyle, TextAlign,
     },
     render::registry::GenericKind,
 };
@@ -288,6 +322,59 @@ fn demo_document(nodes: usize) -> FlowDocument {
     let floating = document.add_edge(Endpoint::node(floating_a), Endpoint::node(floating_b));
     if let Some(edge) = document.edges.iter_mut().find(|e| e.id == floating) {
         edge.routing = EdgeRouting::Bezier;
+        edge.style.end_marker = ArrowMarker::ArrowClosed;
+        edge.style.stroke.width = 2.0;
+    }
+
+    // ---- §9's text, in all three places it can live -----------------------
+    //
+    // **Here so the visual pass has something to open onto**, rather than
+    // something to build first. Each of the three is the thing a double-click
+    // edits: the label on a node, the label on an edge, and a standalone text
+    // element that *is* its glyphs.
+    //
+    // The four sizes are the property panel's S / M / L / XL, drawn beside each
+    // other so a change to `FontSize::world_size` is visible rather than merely
+    // compiled. `HandDrawn` falls back to the UI font on a machine with no
+    // hand-drawn face installed — see `FontFamily::preferred_faces`.
+    for (index, (size, family, align)) in [
+        (FontSize::Small, FontFamily::Normal, TextAlign::Left),
+        (FontSize::Medium, FontFamily::Code, TextAlign::Center),
+        (FontSize::Large, FontFamily::HandDrawn, TextAlign::Right),
+        (FontSize::ExtraLarge, FontFamily::Normal, TextAlign::Left),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = document.add_node(
+            ElementKind::Text,
+            Vec2::new(60.0, 1_100.0 + index as f32 * 48.0),
+            Vec2::new(360.0, size.world_size() * 1.4),
+        );
+        if let Some(node) = document.node_mut(id) {
+            node.label = Some(format!(
+                "{} · {} · {}",
+                size.name(),
+                family.name(),
+                align.name()
+            ));
+            node.style.font.size = size;
+            node.style.font.family = family;
+            node.style.font.align = align;
+        }
+    }
+
+    // An edge with a label on it. Drag either end and the label rides the route
+    // — the position is read from the route every frame rather than stored, so
+    // §19's propagation is what moves it.
+    let labelled_a = graph_node(&mut document, "from", Vec2::new(60.0, 1_320.0));
+    let labelled_b = graph_node(&mut document, "to", Vec2::new(460.0, 1_390.0));
+    let labelled = document.add_edge(
+        Endpoint::handle(labelled_a, "out"),
+        Endpoint::handle(labelled_b, "in"),
+    );
+    if let Some(edge) = document.edges.iter_mut().find(|e| e.id == labelled) {
+        edge.label = Some("double-click me".to_owned());
         edge.style.end_marker = ArrowMarker::ArrowClosed;
         edge.style.stroke.width = 2.0;
     }

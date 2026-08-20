@@ -55,7 +55,7 @@ use crate::models::FlowDocument;
 ///
 /// Version 2 is Phase 10's: text became first-class and
 /// [`FontStyle`](crate::models::FontStyle) stopped carrying a continuous
-/// `size`. See [`fonts_became_four_steps`].
+/// `size`. See `fonts_became_four_steps` below, this ladder's first rung.
 pub const CURRENT_VERSION: u32 = 2;
 
 /// One rung of the ladder: rewrites a document body written by version `from`

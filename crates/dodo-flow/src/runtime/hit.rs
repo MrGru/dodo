@@ -55,6 +55,24 @@
 //! node's *bounds* against a segment, not an edge's route — and this phase did
 //! not need it.
 //!
+//! ## The limitation a user meets: an edge cannot be *clicked*
+//!
+//! [`PointerTarget::Edge`] is resolved, and then
+//! [`InteractionMachine`](crate::interaction::InteractionMachine) treats it
+//! exactly as empty canvas: a press starts a rubber band. So **the only way to
+//! select an edge is to band over it**, and `Delete` cannot reach one any other
+//! way. Double-clicking it works, because that is a different event.
+//!
+//! That is deliberate for one phase rather than an oversight, and the reason is
+//! worth the next person's attention: making a press *select* an edge is not
+//! one arm. A press that selects has to decide what a press-and-drag on the
+//! same edge means — nothing, today, since an edge has no drag gesture — and
+//! §28's selection is a set two other things already read. The narrow phase is
+//! the expensive half and it is done; adding the gesture is
+//! `interaction::state`'s work and it should arrive with whatever makes an
+//! edge draggable, so the two are designed together rather than one being
+//! retrofitted around the other.
+//!
 //! **This file names no UI framework.**
 
 use crate::models::{EdgeIndex, HandleIndex, NodeIndex};

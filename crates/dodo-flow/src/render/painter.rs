@@ -245,7 +245,8 @@ impl<'a> WindowPainter<'a> {
     ///
     /// Kept because it is what a test or a one-off render wants, and because it
     /// is the honest baseline the cached path is measured against. The canvas
-    /// itself uses [`WindowPainter::cached`].
+    /// itself uses [`WindowPainter::with_fonts`], which also carries §9's three
+    /// faces.
     pub fn new(
         window: &'a mut Window,
         cx: &'a mut App,
@@ -401,9 +402,21 @@ impl PrimitiveSink for WindowPainter<'_> {
                     underline: None,
                     strikethrough: None,
                 };
-                // A newline would make `shape_line` panic in a debug build, and
-                // a node label is a single line by definition — so it is
-                // flattened here rather than trusted.
+                // **The limitation a user meets, at the line that causes it.**
+                // A newline would make `shape_line` panic in a debug build, so
+                // it is flattened to a space rather than trusted — which means
+                // §9's text is **one line**, however much is typed into it, and
+                // a label longer than its element's width is truncated by the
+                // wrap width below rather than wrapped onto a second line.
+                //
+                // Closing it is `shape_text` instead of `shape_line`, a
+                // `WrappedLine` in the cache instead of a `ShapedLine`, and a
+                // line-height model the vertical centring above does not have —
+                // three changes that are one coherent piece of work rather than
+                // a fix to bolt onto this call. It is deferred rather than
+                // hidden: a single-line label is what every node in the demo
+                // document has, and a user who needs two lines currently gets
+                // one long one.
                 let flattened: String = text
                     .text
                     .chars()
