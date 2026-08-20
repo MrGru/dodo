@@ -413,6 +413,88 @@ mod tests {
         }
     }
 
+    /// **The three connectors a drawing gesture can produce**, through the
+    /// whole machine and the real mapping: element-to-element,
+    /// element-to-free, and free-to-element. The view resolves each end's
+    /// target from its spatial snap before sending the press and the release —
+    /// the machine is world-free — so the targets are supplied the same way
+    /// here.
+    #[test]
+    fn a_drawn_connector_binds_whichever_ends_landed_on_an_element() {
+        let cases = [
+            (true, true, "element to element"),
+            (true, false, "element to free"),
+            (false, true, "free to element"),
+        ];
+
+        for (bind_start, bind_end, what) in cases {
+            let (mut editor, a, b) = editor_with_two_nodes();
+            let start = Vec2::new(160.0, 40.0);
+            let end = Vec2::new(400.0, 40.0);
+
+            let mut machine = InteractionMachine::new();
+            machine.handle(InteractionEvent::SelectTool(CanvasTool::Arrow));
+            machine.handle(press(
+                if bind_start {
+                    PointerTarget::Node(a)
+                } else {
+                    PointerTarget::Empty
+                },
+                start,
+            ));
+            machine.handle(InteractionEvent::PointerMove {
+                screen: end,
+                world: end,
+            });
+            let effect = machine.handle(InteractionEvent::PointerUp {
+                button: PointerButton::Left,
+                world: end,
+                target: if bind_end {
+                    PointerTarget::Node(b)
+                } else {
+                    PointerTarget::Empty
+                },
+            });
+
+            let report = apply_gesture(&mut editor, effect);
+            let arrow = report.created.expect("a connector is created");
+            let connector = editor.world().nodes().connector(arrow).unwrap();
+
+            assert_eq!(
+                connector.start.attachment.map(|it| it.element),
+                bind_start.then(|| editor.world().nodes().id(a)),
+                "{what}: start"
+            );
+            assert_eq!(
+                connector.end.attachment.map(|it| it.element),
+                bind_end.then(|| editor.world().nodes().id(b)),
+                "{what}: end"
+            );
+
+            // A bound end tracks its element; a free one stays where it was
+            // released, whatever moves around it.
+            let before = editor.world().nodes().connector(arrow).unwrap();
+            editor
+                .apply(EditCommand::move_node(a, Vec2::new(0.0, 300.0)))
+                .unwrap();
+            editor
+                .apply(EditCommand::move_node(b, Vec2::new(0.0, -300.0)))
+                .unwrap();
+            let after = editor.world().nodes().connector(arrow).unwrap();
+
+            assert_eq!(
+                after.start.point != before.start.point,
+                bind_start,
+                "{what}: the start followed the wrong rule"
+            );
+            assert_eq!(
+                after.end.point != before.end.point,
+                bind_end,
+                "{what}: the end followed the wrong rule"
+            );
+        }
+    }
+
     /// Drives one whole resize the way a person performs it, through the real
     /// machine and the real mapping.
     ///

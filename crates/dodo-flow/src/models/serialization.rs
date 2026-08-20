@@ -464,6 +464,51 @@ mod tests {
         assert_eq!(loaded, original);
     }
 
+    /// A connector's ordered endpoints and its semantic attachments are part of
+    /// the format, so they have to survive the *text*, not just an in-memory
+    /// clone — and the direction has to survive it, which is exactly what the
+    /// rectangle representation could not do.
+    #[test]
+    fn a_connector_round_trips_through_json_with_its_direction_and_bindings() {
+        let mut original = document();
+        let target = original.nodes[0].id;
+        let id = original.add_node(
+            ElementKind::Linear(LinearKind::Arrow),
+            Vec2::new(400.0, 300.0),
+            Vec2::new(-300.0, -240.0),
+        );
+        let node = original
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == id)
+            .expect("just added");
+        let mut connector = node.connector.expect("a linear element has one");
+        connector.start.attachment = Some(crate::models::ConnectorAttachment {
+            element: target,
+            anchor: Vec2::new(1.0, 0.25),
+        });
+        node.connector = Some(connector);
+
+        let json = original.to_json().expect("serializes");
+        let loaded = FlowDocument::from_json(&json).expect("loads");
+
+        assert_eq!(loaded, original);
+        let reloaded = loaded
+            .nodes
+            .iter()
+            .find(|node| node.id == id)
+            .unwrap()
+            .connector
+            .unwrap();
+        assert!(
+            reloaded.end.point.x < reloaded.start.point.x
+                && reloaded.end.point.y < reloaded.start.point.y,
+            "the arrow came back pointing the other way: {reloaded:?}"
+        );
+        assert_eq!(reloaded.start.attachment.map(|it| it.element), Some(target));
+        assert!(reloaded.end.attachment.is_none());
+    }
+
     #[test]
     fn version_three_rectangles_migrate_to_their_existing_connector_diagonal() {
         let mut old = document();
