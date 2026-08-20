@@ -36,11 +36,12 @@
 //!
 //! *"Do not create a heavy component hierarchy for every inactive element's
 //! controls. Only selected/hovered/editing objects require detailed
-//! controls."* [`handles`] and [`toolbar`] read
-//! [`RenderSnapshot::interactive_handles`] and [`RenderSnapshot::overlay`],
-//! both of which the snapshot populates for **one** node. There is no path from
-//! here to "a handle element per visible node", because the snapshot never
-//! offers one.
+//! controls."* [`handles`] reads [`RenderSnapshot::interactive_handles`], and
+//! [`selection_box`] and [`resize_grips`] read [`RenderSnapshot::overlay`]; the
+//! snapshot populates both for **one** node. Detailed property controls live in
+//! the contextual [`crate::views::properties`] panel instead of being duplicated
+//! over the node. There is no path from here to "a handle element per visible
+//! node", because the snapshot never offers one.
 
 use gpui::{
     AnyElement, App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Styled, div, px,
@@ -67,10 +68,6 @@ const ACCENT_BAR_PIXELS: f32 = 3.0;
 /// 9 px diameter, because a target you can hit slightly outside is right and
 /// one that is smaller than it looks is not.
 const HANDLE_HIT_PIXELS: f32 = 14.0;
-
-/// The toolbar's height and its gap above the node, in screen pixels.
-const TOOLBAR_HEIGHT_PIXELS: f32 = 26.0;
-const TOOLBAR_GAP_PIXELS: f32 = 8.0;
 
 /// How far outside the element the selection ring sits, in screen pixels.
 ///
@@ -288,66 +285,6 @@ fn handle(handle: &InteractiveHandle, fill: Hsla, ring: Hsla) -> AnyElement {
         .into_any_element()
 }
 
-/// **The selected node's toolbar** (§44).
-///
-/// One element, for one node, and only when the node is large enough on screen
-/// for a toolbar to mean anything — a toolbar wider than the thing it belongs
-/// to is worse than no toolbar.
-///
-/// The buttons carry **no text**, deliberately: this phase adds no
-/// user-visible strings, and every label would cost an English and a Vietnamese
-/// translation for a control whose behaviour lands in Phase 7 with the command
-/// system. They are shapes that show the toolbar exists and is positioned
-/// correctly, which is what this phase can honestly deliver.
-pub fn toolbar(snapshot: &RenderSnapshot, cx: &App) -> Option<AnyElement> {
-    let overlay = snapshot.overlay()?;
-    if !overlay.shows_toolbar {
-        return None;
-    }
-
-    let theme = cx.theme();
-    let element = div()
-        .absolute()
-        .left(px(overlay.screen.origin.x))
-        .top(px(overlay.screen.origin.y
-            - TOOLBAR_HEIGHT_PIXELS
-            - TOOLBAR_GAP_PIXELS))
-        .h(px(TOOLBAR_HEIGHT_PIXELS))
-        .flex()
-        .items_center()
-        .gap(px(4.0))
-        .px(px(6.0))
-        .rounded(px(6.0))
-        .bg(theme.popover)
-        .border(px(1.0))
-        .border_color(theme.border)
-        .children(
-            [
-                AccentRole::Neutral,
-                AccentRole::Info,
-                AccentRole::Warning,
-                AccentRole::Danger,
-            ]
-            .into_iter()
-            .enumerate()
-            .map(|(index, role)| {
-                div()
-                    .id(("flow-toolbar-swatch", index))
-                    .w(px(14.0))
-                    .h(px(14.0))
-                    .rounded(px(3.0))
-                    .bg(accent_color(role, cx))
-                    .border(px(1.0))
-                    .border_color(theme.border)
-                    .cursor_pointer()
-                    .hover(|this| this.border_color(theme.selection))
-            }),
-        )
-        .into_any_element();
-
-    Some(element)
-}
-
 /// **§12's resize grips**: one small square at each corner of the selection
 /// ring, for the one element the ring is around.
 ///
@@ -365,9 +302,9 @@ pub fn resize_grips(snapshot: &RenderSnapshot, cx: &App) -> Vec<AnyElement> {
     let Some(overlay) = snapshot.overlay() else {
         return Vec::new();
     };
-    // The same gate the toolbar uses: an element a few pixels across has no
-    // room for four grips, and drawing them would cover the thing they resize.
-    if !overlay.shows_toolbar {
+    // An element a few pixels across has no room for four grips, and drawing
+    // them would cover the thing they resize.
+    if !overlay.shows_resize_grips {
         return Vec::new();
     }
 

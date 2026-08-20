@@ -196,8 +196,8 @@ impl FlowEditor {
 
     /// **Removes whatever is selected**, and says whether anything went.
     ///
-    /// The whole of `Delete` and `Backspace`, and of the toolbar action beside
-    /// them, is this one method: read §28's selection, hand it to §30's
+    /// The whole of `Delete` and `Backspace`, and of the tool palette's Delete
+    /// action beside them, is this one method: read §28's selection, hand it to §30's
     /// `SetPresence`, and let the one applier do the rest. It is here rather
     /// than in the view because the selection and the history are both this
     /// type's, and a view that assembled the command itself would be the

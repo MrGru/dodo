@@ -57,7 +57,7 @@
 //!
 //! **Delete** and **the tool lock** sit past a divider, because they are not
 //! tools: neither changes what the next press means. They are here rather than
-//! in a second strip because a toolbar the user has to find twice is worse than
+//! in a second strip because a palette the user has to find twice is worse than
 //! one with a divider in it, and because the lock is *about* the tools — with
 //! it on, finishing a drawing keeps the tool instead of returning to Select.
 //!
@@ -370,7 +370,7 @@ fn inset(bounds: Bounds<Pixels>) -> Rect {
 /// A `Vec` because several are more than one path — eleven allocations per
 /// frame the palette is drawn, over a control that exists once. The canvas's
 /// own no-allocation rules (§40 rule 14) are about the per-element loops, not
-/// about a toolbar.
+/// about this one palette.
 fn strokes(glyph: Glyph, box_: Rect, ink: Color) -> Vec<(Outline, PathPaint)> {
     let stroke = PathPaint::Stroke {
         color: ink,

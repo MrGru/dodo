@@ -171,7 +171,7 @@
 //!    one place shift means "release" rather than "constrain" and is worth
 //!    feeling once. The grips are the four small squares on the selection ring;
 //!    they appear only for a single selection and only when the element is big
-//!    enough for a toolbar.
+//!    enough that the four grips do not cover it.
 //! 3. **Crop it.** Squash the frame with a shift-drag, then press Crop in the
 //!    panel's Actions row: the picture stops being stretched and what you see is
 //!    a window on the middle of it. Press it again and the whole picture comes

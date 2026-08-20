@@ -822,7 +822,7 @@ impl FlowView {
         self.interaction.tool_locked()
     }
 
-    /// Switches the lock. The toolbar toggle and the `q` binding both land
+    /// Switches the lock. The tool palette toggle and the `q` binding both land
     /// here, for the same reason [`FlowView::set_tool`] exists: one door, and
     /// the interaction machine is the only place the answer is kept.
     pub fn set_tool_locked(&mut self, locked: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -841,7 +841,7 @@ impl FlowView {
 
     /// **Removes whatever is selected**, through §30's one applier.
     ///
-    /// Both delete keys and the toolbar's own action come here, and there is
+    /// Both delete keys and the tool palette's Delete action come here, and there is
     /// nothing between this and [`FlowEditor::delete_selection`] but the focus
     /// and the repaint — which is the whole point of the phase's state model.
     /// A view that assembled the command would be a second removal path, and
@@ -859,7 +859,7 @@ impl FlowView {
         }
     }
 
-    /// Whether the toolbar's Delete action would do anything — §28's selection,
+    /// Whether the tool palette's Delete action would do anything — §28's selection,
     /// asked as the question the button needs.
     pub fn can_delete(&self) -> bool {
         !self.editor.world().selection().is_empty()
@@ -1520,12 +1520,19 @@ impl FlowView {
             lod.zoom, lod.detail, lod.edges, lod.label_font_size
         );
         println!(
-            "  §16  {} GPUI elements ({} rich nodes, {} handles, {} toolbar) \
-             from {} document nodes",
+            "  §16  {} GPUI elements ({} rich nodes, {} handles, {} selection rings, \
+             {} resize grips) from {} document nodes",
             self.snapshot.element_count(),
             counts.rich_nodes,
             counts.interactive_handles,
             u32::from(self.snapshot.overlay().is_some()),
+            self.snapshot.overlay().map_or(0, |overlay| {
+                if overlay.shows_resize_grips {
+                    crate::geometry::ResizeCorner::ALL.len()
+                } else {
+                    0
+                }
+            }),
             self.editor.world().nodes().len(),
         );
         println!(
@@ -1808,10 +1815,11 @@ impl FlowView {
         //
         // Asked only of the element whose grips are actually **on screen** —
         // `snapshot.overlay()` is the one the selection ring is drawn around,
-        // and only at a rung where it is drawn at all. A hit test that answered
+        // and its size gate says whether the grips fit. A hit test that answered
         // `ResizeGrip` on a frame that drew none would be an invisible control
         // stealing every press near a corner.
         if let Some(overlay) = self.snapshot.overlay()
+            && overlay.shows_resize_grips
             && let Some(corner) = self
                 .editor
                 .world()
@@ -1893,7 +1901,7 @@ impl FlowView {
                 view.update(cx, |this, cx| {
                     // Takes the focus back from whatever had it, so the
                     // canvas's bindings keep working after the pointer has been
-                    // somewhere else — a toolbar button, another pane. **Not
+                    // somewhere else — a palette button, another pane. **Not
                     // while a caret is out**: the field has the focus on
                     // purpose, and stealing it here would send every letter to
                     // the tool palette instead of into the text.
@@ -2579,7 +2587,6 @@ impl Render for FlowView {
         let handles = nodes::handles(&self.snapshot, cx);
         let grips = nodes::resize_grips(&self.snapshot, cx);
         let selection = nodes::selection_box(&self.snapshot, cx);
-        let toolbar = nodes::toolbar(&self.snapshot, cx);
 
         div()
             .id("flow-canvas")
@@ -2631,8 +2638,7 @@ impl Render for FlowView {
                     .children(nodes)
                     .children(selection)
                     .children(handles)
-                    .children(grips)
-                    .children(toolbar),
+                    .children(grips),
             )
             // **§45's palette.** Chrome rather than content, so it sits above
             // the rich layer and is positioned against the pane rather than

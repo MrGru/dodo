@@ -15,7 +15,7 @@
 //!
 //! ```text
 //! div  ── canvas()      the painted half: grid, edges, bodies, dots, labels
-//!     ├─ absolute layer the rich half: node elements, handles, toolbar
+//!     ├─ absolute layer the rich half: node elements, handles, selection ring and grips
 //!     ├─ absolute layer §45's tool palette
 //!     └─ absolute layer the contextual property panel
 //! ```

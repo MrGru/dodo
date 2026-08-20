@@ -77,7 +77,7 @@
 
 use crate::{
     budgets::{DetailLevel, RenderBudgets},
-    geometry::{Rect, Vec2, Viewport},
+    geometry::{Rect, ResizeCorner, Vec2, Viewport},
     models::{EdgeIndex, HandleIndex, NodeIndex},
     render::{
         cache::ScreenAnchor,
@@ -178,9 +178,9 @@ pub struct SnapshotOverlay {
     pub node: NodeIndex,
     /// The selected node's screen rectangle.
     pub screen: Rect,
-    /// Whether the node is large enough on screen for a toolbar to make sense.
-    /// A toolbar over a six-pixel node is a toolbar over nothing.
-    pub shows_toolbar: bool,
+    /// Whether the node is large enough on screen for four resize grips not to
+    /// cover it.
+    pub shows_resize_grips: bool,
 }
 
 /// What one extraction decided, in counts. What a benchmark prints and what
@@ -609,7 +609,7 @@ impl RenderSnapshot {
             self.overlay = Some(SnapshotOverlay {
                 node: active,
                 screen,
-                shows_toolbar: screen.size.x >= budgets.lod.min_toolbar_node_px
+                shows_resize_grips: screen.size.x >= budgets.lod.min_detailed_node_px
                     && screen.size.y >= budgets.lod.min_detailed_node_px,
             });
         }
@@ -665,14 +665,22 @@ impl RenderSnapshot {
     /// **Every GPUI element this frame will create.** §16's number, in one
     /// place, so a test can assert it without building an element tree.
     ///
-    /// Each rich node is one element, each interactive handle is one, and the
-    /// overlay is one. `views/` nests a few children inside each, which is a
-    /// constant factor and is what
+    /// Each rich node and interactive handle is one element. A selected node
+    /// adds one selection ring and, when it has room, four resize grips.
+    /// `views/` nests a few children inside each, which is a constant factor and
+    /// is what
     /// [`RenderBudgets::max_rich_elements`] was measured against — Phase 0's
     /// 1,600 were `div`s with a background, a border, a label and a hover
     /// style.
     pub fn element_count(&self) -> u32 {
-        self.counts.rich_nodes + self.counts.interactive_handles + u32::from(self.overlay.is_some())
+        let selection_controls = self.overlay.map_or(0, |overlay| {
+            1 + if overlay.shows_resize_grips {
+                ResizeCorner::ALL.len() as u32
+            } else {
+                0
+            }
+        });
+        self.counts.rich_nodes + self.counts.interactive_handles + selection_controls
     }
 
     /// Clears everything, keeping the buffers. For a document swap, where every
@@ -927,6 +935,24 @@ mod tests {
     }
 
     #[test]
+    fn a_small_selection_keeps_its_ring_but_has_no_resize_grips() {
+        let node = NodeIndex::new(0);
+        let mut world = grid_world(1, 1);
+        world.set_node_size(node, Vec2::new(12.0, 12.0));
+        world.select_only(Some(node));
+        let mut harness = Harness::from_world(world, Vec2::new(1_440.0, 900.0));
+
+        let snapshot = harness.frame(None);
+        let overlay = snapshot.overlay().expect("the selection still has a ring");
+        assert!(!overlay.shows_resize_grips);
+        assert_eq!(
+            snapshot.element_count(),
+            snapshot.counts().rich_nodes + snapshot.counts().interactive_handles + 1,
+            "a hidden grip must not remain in the element count"
+        );
+    }
+
+    #[test]
     fn hovering_a_node_gives_it_handles_without_selecting_it() {
         let mut harness = Harness::from_world(grid_world(6, 6), Vec2::new(1_440.0, 900.0));
         let hovered = NodeIndex::new(3);
@@ -936,7 +962,7 @@ mod tests {
         assert_eq!(
             snapshot.overlay(),
             None,
-            "a hover is not a selection and gets no toolbar"
+            "a hover is not a selection and gets no selection overlay"
         );
         assert!(
             snapshot

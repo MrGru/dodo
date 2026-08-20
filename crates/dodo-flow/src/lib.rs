@@ -238,7 +238,9 @@
 //!   viewport-scoped, generic over what they hold so every property is asserted
 //!   with no window.
 //! - [`views::nodes`] — the rich half: node elements, interactive handles for
-//!   the selected-or-hovered node, a selection ring and a toolbar.
+//!   the selected-or-hovered node and a selection ring. The contextual property
+//!   panel added in Phase 11 now supplies §44's detailed selection controls,
+//!   rather than duplicating them over the node.
 //!
 //! ## The numbers, beside Phase 4's
 //!
@@ -549,7 +551,7 @@
 //! independently reasonable pieces of UI.
 //!
 //! - [`FlowEditor::delete_selection`](commands::FlowEditor::delete_selection) —
-//!   `Delete`, `Backspace` and the toolbar's action are the same method, which
+//!   `Delete`, `Backspace` and the tool palette's Delete action are the same method, which
 //!   reads §28's selection and hands it to §30's `SetPresence`. So a removed
 //!   node takes its incident edges with it (the applier records the cascade
 //!   rather than the request), the whole removal is one undo press, and **the
