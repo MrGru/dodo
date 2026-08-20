@@ -771,6 +771,13 @@ impl PaintPlan {
         &self.quads
     }
 
+    /// The planned text runs. Test-only, for the same reason as
+    /// [`PaintPlan::paths`].
+    #[cfg(test)]
+    pub(crate) fn texts(&self) -> &[TextPrimitive] {
+        &self.texts
+    }
+
     /// **The planned pictures**, for the one caller that has to lay them out
     /// before they can be painted.
     ///

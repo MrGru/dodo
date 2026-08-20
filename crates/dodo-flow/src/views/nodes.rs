@@ -52,6 +52,7 @@ use crate::{
     geometry::{Rect, ResizeCorner},
     render::{
         registry::{AccentRole, NodeGlyph, NodeVisual},
+        scene::GRAPH_NODE_RADIUS,
         snapshot::{InteractiveHandle, RenderSnapshot, RichNode},
     },
     runtime::GraphWorld,
@@ -91,18 +92,10 @@ const GRIP_PIXELS: f32 = 9.0;
 /// list that is tens long — not the per-element allocation §40 rule 10 is
 /// about.
 pub fn nodes(snapshot: &RenderSnapshot, world: &GraphWorld, cx: &App) -> Vec<AnyElement> {
-    // **§13's hand, if the ladder kept one.** A `div`'s border is a rectangle
-    // and there is no hand-drawn form of it, so in sketch mode the element
-    // gives up its background and its border and the canvas paints the body
-    // underneath — see `render::scene::plan_sketched_rich_bodies`. Everything
-    // an element is *for* — focus, hover, a cursor, editable text — is
-    // unaffected, which is the whole point of the hybrid renderer.
-    let sketched = snapshot.lod().is_some_and(|lod| lod.sketch.is_some());
-
     snapshot
         .rich()
         .iter()
-        .map(|rich| node(rich, world, sketched, cx))
+        .map(|rich| node(rich, world, cx))
         .collect()
 }
 
@@ -111,20 +104,35 @@ pub fn nodes(snapshot: &RenderSnapshot, world: &GraphWorld, cx: &App) -> Vec<Any
 /// The label is read from the store **through the index** rather than carried
 /// on the snapshot, which is what keeps §24's "compact IDs rather than cloned
 /// metadata" true all the way to the element tree.
-fn node(rich: &RichNode, world: &GraphWorld, sketched: bool, cx: &App) -> AnyElement {
-    let theme = cx.theme();
+///
+/// # The element does not draw the body, and that is the fix for a real bug
+///
+/// It used to, in Clean mode: `theme.border` for the border, `theme.secondary`
+/// for the fill, one pixel wide or two when selected. None of those is the
+/// element's own [`ElementStyle`](crate::models::ElementStyle), so Phase 11's
+/// property panel wrote a stroke colour, a fill, a width, an opacity, a dash
+/// and a hatch that **nothing on screen read** — for exactly the nodes a person
+/// works with, since a rectangle at working zoom is a rich node. In Sketch mode
+/// the same edits showed, because a hand-drawn border has no `div` form and the
+/// canvas had to paint the body; the captain saw that as "properties only apply
+/// in Sketch mode".
+///
+/// So the body belongs to the canvas in both modes now
+/// ([`plan_rich_bodies`](crate::render::scene)), and this element keeps only
+/// what an element is *for*: an id, a cursor, focus, a hover the canvas paints
+/// the ring for, an accent bar, a glyph and a label. A `div` cannot express a
+/// dash, a hatch, an opacity or a hand, so having it express the two properties
+/// it *can* was never a smaller version of the same thing — it was a second
+/// renderer that quietly disagreed with the first.
+fn node(rich: &RichNode, world: &GraphWorld, cx: &App) -> AnyElement {
     let accent = accent_color(rich.visual.accent, cx);
-    let border = if rich.selected {
-        theme.selection
-    } else if rich.hovered {
-        accent
-    } else {
-        theme.border
-    };
-
     let style = world.nodes().style(rich.node);
-    let radius = style.corner_radius.max(6.0);
-    let mut body = placed(rich.screen)
+    // The clip for the accent bar and the label, not a border: the painted
+    // corner is the canvas's, from the same `corner_radius` at the frame's own
+    // zoom. A floor of `GRAPH_NODE_RADIUS` so an unstyled node's bar is not a
+    // square peg in a rounded body.
+    let radius = style.corner_radius.max(GRAPH_NODE_RADIUS);
+    let body = placed(rich.screen)
         // §47: an id is what makes hover, focus and a context menu possible at
         // all. It is derived from the runtime index, which is stable for the
         // life of the document.
@@ -132,22 +140,6 @@ fn node(rich: &RichNode, world: &GraphWorld, sketched: bool, cx: &App) -> AnyEle
         .rounded(px(radius))
         .overflow_hidden()
         .cursor_pointer();
-
-    if sketched {
-        // The hand under this element already drew the border and the fill;
-        // painting them again here would put a crisp rectangle over a wobbly
-        // one, which reads as a rendering bug rather than as a drawing.
-        return decorated(body, rich, world, accent, cx);
-    }
-
-    body = body
-        .border(px(if rich.selected { 2.0 } else { 1.0 }))
-        .border_color(border)
-        .hover(|this| this.border_color(accent));
-
-    if rich.visual.filled {
-        body = body.bg(theme.secondary);
-    }
 
     decorated(body, rich, world, accent, cx)
 }

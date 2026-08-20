@@ -33,9 +33,16 @@
 //! | [`CanvasNode`] | the painter, as a quad or a path | everything else |
 //! | skipped | nothing | a kind with no representation yet |
 //!
-//! A rich node is **excluded from the canvas list**, because its element *is*
-//! its body — that is what gives it hover, focus, a cursor and §47's standard
-//! UI behaviours, and painting a quad under it would draw it twice.
+//! A rich node is **excluded from the canvas list**, and the split is by
+//! *responsibility* rather than by who paints. The element gives the node what
+//! only an element can have — hover, focus, a cursor, §47's standard UI
+//! behaviours, an editable label — and the body underneath it is the painter's
+//! in both render styles, through
+//! [`plan_rich_bodies`](crate::render::scene). It had to be: a `div` can
+//! express a body only in the theme's terms, so an element that painted its own
+//! was a second renderer that ignored the document's stroke colour, fill,
+//! width, opacity, dash and hatch. That is why the two lists are separate here
+//! and why the *paint* is not.
 //!
 //! **A non-rectangular body never becomes an element.** A `div` cannot be a
 //! diamond or an ellipse, so a decision node stays canvas-painted and gets a
@@ -115,6 +122,12 @@ pub struct CanvasNode {
     /// The body to paint — **from the registry when it overrode one**, which is
     /// how a registered kind gets a diamond without a new taxonomy variant.
     pub body: NodeShape,
+    /// **What an unset [`ElementStyle::fill`](crate::models::ElementStyle::fill)
+    /// means for this kind** — the registry's answer, carried so the canvas
+    /// half and the rich half cannot disagree about it. A group is the case it
+    /// exists for: it is an outline that holds other nodes, and flooding it
+    /// with the theme's surface hides them.
+    pub filled: bool,
     pub version: u32,
     pub selected: bool,
     /// Whether this node is large enough on screen to be worth more than a
@@ -502,6 +515,7 @@ impl RenderSnapshot {
             node: measured.node,
             screen: measured.screen,
             body: measured.visual.body,
+            filled: measured.visual.filled,
             version: measured.version,
             selected: measured.selected,
             detailed: measured.detailed,

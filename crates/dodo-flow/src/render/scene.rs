@@ -75,7 +75,7 @@ use crate::{
         lod::{HandleDetail, LodPlan},
         plan::{DashSpec, ImagePrimitive, PathPrimitive, QuadPrimitive, TextPrimitive},
         shapes, sketch,
-        snapshot::{CanvasNode, PlannedEdge, RenderSnapshot},
+        snapshot::{CanvasNode, PlannedEdge, RenderSnapshot, RichNode},
     },
     runtime::{GraphWorld, NodeShape},
 };
@@ -355,10 +355,111 @@ fn plan_nodes(
     let quality = world.settings().render_quality;
 
     for canvas in snapshot.canvas() {
-        plan_one_node(plan, world, canvas, viewport, ink, &lod, quality, stats);
+        plan_one_node(
+            plan,
+            world,
+            NodeBody::of_canvas(canvas),
+            viewport,
+            ink,
+            &lod,
+            quality,
+            stats,
+        );
     }
 
-    plan_sketched_rich_bodies(plan, world, snapshot, viewport, ink, stats);
+    plan_rich_bodies(plan, world, snapshot, viewport, ink, stats);
+}
+
+/// **One body to paint, from whichever half of the hybrid renderer owns the
+/// element.**
+///
+/// The two halves used to disagree about what a body *is*. A canvas node was
+/// painted from its [`ElementStyle`](crate::models::ElementStyle) — its stroke
+/// colour, its fill, its width, its opacity, its hatch — and a rich node was a
+/// `div` painted from the *theme*, so Phase 11's whole property panel reached
+/// one of them and not the other. In Clean mode a rectangle at working zoom is
+/// a rich node, which is exactly the element a person selects and restyles, and
+/// nothing changed on screen. In Sketch mode the same edit worked, because a
+/// hand-drawn border has no `div` form and the canvas had to paint it — so the
+/// asymmetry read as "properties only apply in Sketch mode".
+///
+/// This type is the fix stated structurally: **there is one body painter and
+/// both halves call it.** The rich half keeps what an element is *for* — focus,
+/// hover, a cursor, a label that can be edited — and gives up the two
+/// properties a `div` can only express in the theme's terms.
+#[derive(Debug, Clone, Copy)]
+struct NodeBody {
+    node: NodeIndex,
+    /// The body to paint — from the registry when it overrode one.
+    body: NodeShape,
+    /// What an unset fill means for this kind — see [`CanvasNode::filled`].
+    filled: bool,
+    /// The geometry version, for §23's cache key.
+    version: u32,
+    screen: Rect,
+    selected: bool,
+    /// **§44's hover, and it only ever comes from the rich half.** A canvas
+    /// node has no element to hover, and the snapshot answers the question for
+    /// one node at most.
+    hovered: bool,
+    detailed: bool,
+    /// Which half of the renderer this body belongs to. It changes nothing
+    /// about the painting — see [`NodeBody::count`] for the one thing it
+    /// decides.
+    rich: bool,
+}
+
+impl NodeBody {
+    fn of_canvas(canvas: &CanvasNode) -> NodeBody {
+        NodeBody {
+            node: canvas.node,
+            body: canvas.body,
+            filled: canvas.filled,
+            version: canvas.version,
+            screen: canvas.screen,
+            selected: canvas.selected,
+            hovered: false,
+            detailed: canvas.detailed,
+            rich: false,
+        }
+    }
+
+    fn of_rich(rich: &RichNode) -> NodeBody {
+        NodeBody {
+            node: rich.node,
+            body: rich.visual.body,
+            filled: rich.visual.filled,
+            version: rich.version,
+            screen: rich.screen,
+            selected: rich.selected,
+            hovered: rich.hovered,
+            // A node is only `rich_capable` when it is already detailed — see
+            // `RenderSnapshot::extract_nodes` — so this is a restatement rather
+            // than an assumption.
+            detailed: true,
+            rich: true,
+        }
+    }
+
+    /// Whether the pointer or the selection is on this body, which is the one
+    /// question the two feedback affordances share: both draw the accent, and
+    /// both need a stroke to draw it with even when the style has none.
+    fn active(&self) -> bool {
+        self.selected || self.hovered
+    }
+
+    /// Records this body against the half it came from.
+    ///
+    /// [`SceneStats::nodes`] is the **canvas** half's count and
+    /// [`SceneStats::rich_nodes`] is the snapshot's, and
+    /// [`SceneStats::drawn_nodes`] adds them — so a rich body, which now
+    /// reaches the painter in both render styles, must not be counted here as
+    /// well or every rich node is drawn twice as far as any caller can tell.
+    fn count(&self, stats: &mut SceneStats) {
+        if !self.rich {
+            stats.nodes += 1;
+        }
+    }
 }
 
 /// One canvas node, as the cheapest primitive that **the frame's depth order
@@ -371,7 +472,7 @@ fn plan_nodes(
 fn plan_one_node(
     plan: &mut PaintPlan,
     world: &GraphWorld,
-    canvas: &CanvasNode,
+    canvas: NodeBody,
     viewport: &Viewport,
     ink: SceneInk,
     lod: &LodPlan,
@@ -394,7 +495,7 @@ fn plan_one_node(
         // over the photograph at the first rung down. `plan_image` is what
         // draws it.
         if canvas.body == NodeShape::Image {
-            plan_image(plan, world, canvas, viewport, ink, quality, stats);
+            plan_image(plan, world, &canvas, viewport, ink, quality, stats);
             return;
         }
 
@@ -413,8 +514,24 @@ fn plan_one_node(
         // `None` means "the theme decides", which is the whole reason
         // `models::style` stores colours as `Option<Color>`: a document must
         // not carry a palette, or it would look wrong in the other theme.
-        let fill = fade(style.fill.unwrap_or(ink.fill), style.opacity);
-        let stroke_color = if canvas.selected {
+        // **The document wins, and the registry says what "unset" means.**
+        // `None` is "the theme decides", which is the whole reason
+        // `models::style` stores colours as `Option<Color>` — and for a kind
+        // whose body is an outline holding other nodes, what the theme decides
+        // is *nothing*, or the group swallows its children.
+        let fill = fade(
+            style.fill.unwrap_or(if canvas.filled {
+                ink.fill
+            } else {
+                Color::TRANSPARENT
+            }),
+            style.opacity,
+        );
+        // **The accent answers both affordances.** §44's hover ring used to be
+        // the rich element's own border colour; the body is painted here for
+        // both halves now, so the feedback is painted here too — otherwise
+        // moving the pointer over a node would say nothing.
+        let stroke_color = if canvas.active() {
             ink.accent
         } else {
             fade(style.stroke.color.unwrap_or(ink.stroke), style.opacity)
@@ -427,7 +544,7 @@ fn plan_one_node(
             .world_to_screen_length(style.stroke.width)
             .max(if open {
                 MIN_OPEN_STROKE_PIXELS
-            } else if canvas.selected {
+            } else if canvas.active() {
                 SELECTED_STROKE_PIXELS
             } else {
                 0.0
@@ -438,8 +555,31 @@ fn plan_one_node(
         // box to fall back to, so it keeps its stroke at every rung.
         let has_stroke = open
             || (canvas.detailed
-                && (!style.stroke.is_invisible() || canvas.selected)
+                && (!style.stroke.is_invisible() || canvas.active())
                 && stroke_width > 0.0);
+
+        // **A body's dash** (§32's Stroke style row). It was stored, undoable,
+        // read back by the panel and painted by nothing — the same defect
+        // Phase 11 found for `fill_style`, on the row beside it, and the
+        // edge painter had had it since Phase 3.
+        //
+        // Dropped below `detailed` and while the accent is showing, both for
+        // the reason `render::edges` drops it at the first rung down: a dash
+        // costs ~63x the vertices of the same line solid, and it says nothing
+        // at a size where the border *is* the box. A selection ring that
+        // flickered dashed would also be reporting the element's style where it
+        // is supposed to be reporting the selection.
+        let dash = style
+            .stroke
+            .dash
+            .spec()
+            .filter(|_| has_stroke && canvas.detailed && !canvas.active())
+            .map(|(on, off)| {
+                DashSpec::new(
+                    viewport.world_to_screen_length(on),
+                    viewport.world_to_screen_length(off),
+                )
+            });
 
         // **§13's hand, if the ladder kept it.** A node too small to be worth a
         // border is too small to be worth a wobble either, so `detailed` gates
@@ -474,7 +614,7 @@ fn plan_one_node(
                 quality,
             )
         {
-            stats.nodes += 1;
+            canvas.count(stats);
             stats.sketched_bodies += 1;
             return;
         }
@@ -486,7 +626,7 @@ fn plan_one_node(
             && (shapes::node_prefers_quad(canvas.body)
                 || (lod.degrade_curves && canvas.body != NodeShape::Diamond)
                 || !canvas.detailed)
-            && !promotes_to_path(world, canvas, lod);
+            && !promotes_to_path(world, &canvas, lod);
 
         // **A hatched interior is a line set, not a fill** (Phase 11's Fill
         // row). The body still draws its border; what changes is that the
@@ -504,15 +644,40 @@ fn plan_one_node(
             // the same count of rectangular paths drop to 30 — and a quad
             // carries its corner radius and its border for free, so the border
             // costs no second primitive at all.
+            //
+            // **Except a dashed one**, which a quad cannot carry: the body
+            // keeps its quad *fill* and its border becomes one path beside it,
+            // the same split a sketched body already makes. One path per dashed
+            // body, and only for a body the document asked to be dashed.
             let mut quad =
                 QuadPrimitive::filled(screen, if hatched { Color::TRANSPARENT } else { fill })
                     .with_corner_radius(radius);
-            if has_stroke {
+            if has_stroke && dash.is_none() {
                 quad = quad.with_border(stroke_width, stroke_color);
             }
             plan.push_quad(quad);
             if hatched {
-                plan_hatch(plan, canvas, radius, fill, style.fill_style, quality);
+                plan_hatch(plan, &canvas, radius, fill, style.fill_style, quality);
+            }
+            if let Some(dash) = dash
+                && let Some(outline) = shapes::outline_for_node(canvas.body, screen, radius)
+            {
+                plan.push_path(
+                    PathPrimitive::dashed_stroke(
+                        outline,
+                        stroke_color,
+                        stroke_width,
+                        dash,
+                        quality,
+                    )
+                    .keyed(GeometryKey::node(
+                        canvas.node,
+                        GeometryPart::Stroke,
+                        canvas.version,
+                        quality,
+                        CLEAN,
+                    )),
+                );
             }
         } else if let Some(outline) = shapes::outline_for_node(canvas.body, screen, radius) {
             if !open && !hatched {
@@ -527,25 +692,31 @@ fn plan_one_node(
                 ));
             }
             if hatched {
-                plan_hatch(plan, canvas, radius, fill, style.fill_style, quality);
+                plan_hatch(plan, &canvas, radius, fill, style.fill_style, quality);
             }
 
             if has_stroke {
-                plan.push_path(
-                    PathPrimitive::stroke(outline, stroke_color, stroke_width, quality).keyed(
-                        GeometryKey::node(
-                            canvas.node,
-                            GeometryPart::Stroke,
-                            canvas.version,
-                            quality,
-                            CLEAN,
-                        ),
+                let stroke = match dash {
+                    Some(dash) => PathPrimitive::dashed_stroke(
+                        outline,
+                        stroke_color,
+                        stroke_width,
+                        dash,
+                        quality,
                     ),
-                );
+                    None => PathPrimitive::stroke(outline, stroke_color, stroke_width, quality),
+                };
+                plan.push_path(stroke.keyed(GeometryKey::node(
+                    canvas.node,
+                    GeometryPart::Stroke,
+                    canvas.version,
+                    quality,
+                    CLEAN,
+                )));
             }
         }
 
-        stats.nodes += 1;
+        canvas.count(stats);
     }
 }
 
@@ -575,7 +746,7 @@ fn plan_one_node(
 fn plan_image(
     plan: &mut PaintPlan,
     world: &GraphWorld,
-    canvas: &CanvasNode,
+    canvas: &NodeBody,
     viewport: &Viewport,
     ink: SceneInk,
     quality: crate::models::RenderQuality,
@@ -626,7 +797,7 @@ fn plan_image(
         );
     }
 
-    stats.nodes += 1;
+    canvas.count(stats);
 }
 
 /// **The document's hand, pressed as hard as one element asks.**
@@ -650,7 +821,7 @@ fn pressed(sketch: SketchStyle, sloppiness: Sloppiness) -> SketchStyle {
 /// other cached path does.
 fn plan_hatch(
     plan: &mut PaintPlan,
-    canvas: &CanvasNode,
+    canvas: &NodeBody,
     radius: f32,
     color: Color,
     style: crate::models::FillStyle,
@@ -755,7 +926,7 @@ fn images_belong_above_paths(world: &GraphWorld, snapshot: &RenderSnapshot) -> b
 /// be sent behind a shape's fill. There is no promotion available for it — a
 /// glyph run has no outline form — and the batching contract is worth more than
 /// the ordering.
-fn promotes_to_path(world: &GraphWorld, canvas: &CanvasNode, lod: &LodPlan) -> bool {
+fn promotes_to_path(world: &GraphWorld, canvas: &NodeBody, lod: &LodPlan) -> bool {
     world.is_layered() && canvas.detailed && !lod.degrade_curves
 }
 
@@ -815,7 +986,7 @@ fn plan_bodies(
             plan_one_node(
                 plan,
                 world,
-                &canvas[next_node],
+                NodeBody::of_canvas(&canvas[next_node]),
                 viewport,
                 ink,
                 &lod,
@@ -826,7 +997,7 @@ fn plan_bodies(
         }
     }
 
-    plan_sketched_rich_bodies(plan, world, snapshot, viewport, ink, stats);
+    plan_rich_bodies(plan, world, snapshot, viewport, ink, stats);
 }
 
 /// Everything one node body needs from either half of the renderer, so the
@@ -927,18 +1098,32 @@ const SKETCH_FILL_PART: u64 = 1;
 const SKETCH_STROKE_PART: u64 = 2;
 const SKETCH_EDGE_PART: u64 = 3;
 
-/// **The rich half's bodies, when a hand is drawing them.**
+/// **The rich half's bodies, in both render styles.**
 ///
-/// A rich node is a GPUI `div`, and a `div`'s border is a rectangle — there is
-/// no hand-drawn form of it. So in sketch mode the element drops its background
-/// and its border ([`crate::views::nodes`] reads the same flag) and the canvas
-/// paints the body underneath it, exactly as it does for every other node. The
-/// element keeps what it is for: focus, hover, a cursor, editable text.
+/// A rich node is a GPUI `div`, and a `div` can express a body only in the
+/// theme's terms: a border colour it is handed, a background it is handed, no
+/// dash, no hatch, no opacity and no hand. So the element gives the body up
+/// entirely ([`crate::views::nodes`] draws no border and no fill) and the
+/// canvas paints it here, through the same [`plan_one_node`] every other node
+/// goes through.
 ///
-/// This is the one place where a rich node reaches the painter at all, and it
-/// is bounded by [`RenderBudgets::max_rich_elements`](crate::budgets::RenderBudgets::max_rich_elements)
-/// like the rest of the rich set.
-fn plan_sketched_rich_bodies(
+/// **That "both render styles" is the whole of Phase 12.5's second bug.** This
+/// loop ran only when the ladder had kept a hand, because a hand-drawn border
+/// is the case a `div` obviously cannot do. In Clean mode the element painted
+/// its own body from `theme.border` and `theme.secondary` — so a stroke colour,
+/// a fill, a stroke width, an opacity, a dash and a hatch were all stored,
+/// undoable, read back by the panel and painted by nothing, for every
+/// rectangle at working zoom. It is Phase 11's `fill_style` again, one layer
+/// up: the model reached one renderer and not the other, and every test passed
+/// because no test asked what a rich node hands the painter.
+///
+/// It is bounded by
+/// [`RenderBudgets::max_rich_elements`](crate::budgets::RenderBudgets::max_rich_elements)
+/// like the rest of the rich set, and a rich body is always rectangular
+/// (`RenderSnapshot::extract_nodes`), so the clean path it takes is the cheap
+/// one — one quad carrying its own border and corner radius, and no path
+/// vertices at all unless the document is layered or the fill is hatched.
+fn plan_rich_bodies(
     plan: &mut PaintPlan,
     world: &GraphWorld,
     snapshot: &RenderSnapshot,
@@ -949,46 +1134,19 @@ fn plan_sketched_rich_bodies(
     let Some(lod) = snapshot.lod() else {
         return;
     };
-    let Some(sketch_style) = lod.sketch else {
-        return;
-    };
     let quality = world.settings().render_quality;
-    let nodes = world.nodes();
 
     for rich in snapshot.rich() {
-        let style = nodes.style(rich.node);
-        let world_radius = if style.corner_radius <= 0.0 {
-            GRAPH_NODE_RADIUS
-        } else {
-            style.corner_radius
-        };
-        let stroke_color = if rich.selected {
-            ink.accent
-        } else {
-            fade(style.stroke.color.unwrap_or(ink.stroke), style.opacity)
-        };
-
-        if plan_sketched_body(
+        plan_one_node(
             plan,
-            SketchedBody {
-                node: rich.node,
-                body: rich.visual.body,
-                version: rich.version,
-                screen: rich.screen,
-                radius: viewport.world_to_screen_length(world_radius),
-                fill: fade(style.fill.unwrap_or(ink.fill), style.opacity),
-                stroke_color,
-                stroke_width: viewport
-                    .world_to_screen_length(style.stroke.width)
-                    .max(SELECTED_STROKE_PIXELS),
-                has_stroke: true,
-            },
-            &sketch_style,
             world,
+            NodeBody::of_rich(rich),
+            viewport,
+            ink,
+            &lod,
             quality,
-        ) {
-            stats.sketched_bodies += 1;
-        }
+            stats,
+        );
     }
 }
 
@@ -1106,7 +1264,8 @@ fn plan_labels(
             continue;
         }
 
-        let font = &world.nodes().style(canvas.node).font;
+        let style = world.nodes().style(canvas.node);
+        let font = &style.font;
         // **Node text wraps to its host's width** (§9), which is the inner
         // rectangle above: a text element uses its whole box and every other
         // body insets by its padding, so the rule is the same sentence for both
@@ -1122,8 +1281,19 @@ fn plan_labels(
             text: Arc::clone(label),
             font_size,
             color: fade(
-                font.color.unwrap_or(ink.text),
-                world.nodes().style(canvas.node).opacity,
+                // **A text element is its glyphs, so its "stroke" is its
+                // colour.** The panel gives a text selection a Stroke row and
+                // nothing else that is a colour (`properties`' table), and it
+                // writes `stroke.color` — which no text painter read, so the
+                // one colour control a text element has did nothing. `font`
+                // still wins where anything sets it; this is what an unset one
+                // falls back to before the theme.
+                font.color
+                    .or((canvas.body == NodeShape::Text)
+                        .then_some(style.stroke.color)
+                        .flatten())
+                    .unwrap_or(ink.text),
+                style.opacity,
             ),
             key: TextKey::node(canvas.node, canvas.text_version, font_size, wrap_width),
             max_width: inner.size.x,
@@ -2933,6 +3103,248 @@ mod tests {
         // over-bright alpha.
         assert_eq!(fade(half, -1.0).a, 0.0);
         assert_eq!(fade(half, 4.0).a, 0.5);
+    }
+
+    // ---- the rich half's body, in both render styles --------------------
+
+    /// One rectangle, big enough at 100 % zoom to be a rich node, wearing a
+    /// stroke colour and a fill nothing else in the frame uses.
+    fn styled_rich_rectangle(style: crate::models::RenderStyle) -> (GraphWorld, NodeIndex) {
+        let mut world = GraphWorld::new();
+        world.settings_mut().render_style = style;
+
+        let node = world.create_node(
+            ElementKind::Shape(crate::models::ShapeKind::Rectangle),
+            Vec2::new(120.0, 120.0),
+            Vec2::new(240.0, 140.0),
+        );
+        world.set_node_style(
+            node,
+            crate::models::ElementStyle {
+                stroke: crate::models::StrokeStyle {
+                    color: Some(RICH_STROKE),
+                    width: 3.0,
+                    ..crate::models::StrokeStyle::default()
+                },
+                fill: Some(RICH_FILL),
+                ..crate::models::ElementStyle::default()
+            },
+        );
+
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+        (world, node)
+    }
+
+    /// Two colours no theme ink and no other element in these tests uses, so
+    /// finding either in the plan means the *document's* style reached the
+    /// painter and not a fallback that happened to look similar.
+    const RICH_STROKE: Color = Color::rgba(0.91, 0.13, 0.42, 1.0);
+    const RICH_FILL: Color = Color::rgba(0.07, 0.63, 0.51, 1.0);
+
+    fn plan_holds_color(plan: &PaintPlan, wanted: Color) -> bool {
+        let close = |color: Color| {
+            (color.r - wanted.r).abs() < 1e-3
+                && (color.g - wanted.g).abs() < 1e-3
+                && (color.b - wanted.b).abs() < 1e-3
+        };
+
+        plan.quads().iter().any(|quad| {
+            close(quad.background) || (quad.border_width > 0.0 && close(quad.border_color))
+        }) || plan.paths().iter().any(|path| close(path.paint.color()))
+    }
+
+    /// **A restyled node must look restyled in both render styles.**
+    ///
+    /// This is Phase 12.5's second bug, and it is Phase 11's `fill_style` one
+    /// layer up. A rectangle at working zoom is a *rich* node — a GPUI element
+    /// — and the element used to paint its own body from `theme.border` and
+    /// `theme.secondary`. So the whole property panel wrote colours that
+    /// nothing on screen read, unless the document happened to be in Sketch
+    /// mode, where a hand-drawn border has no `div` form and the canvas had to
+    /// paint the body. The captain saw that as "properties only apply in Sketch
+    /// mode".
+    ///
+    /// The test asserts **what reaches the painter**, for the reason Phase 11
+    /// recorded: a test on the model passes either way, and did.
+    #[test]
+    fn a_restyled_rich_node_reaches_the_painter_in_both_render_styles() {
+        use crate::models::RenderStyle;
+
+        for style in [RenderStyle::Clean, RenderStyle::Sketch] {
+            let (world, node) = styled_rich_rectangle(style);
+            let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+
+            // Without this the test could pass vacuously on a frame that drew
+            // the node through the canvas half, which was never broken.
+            let snapshot = extracted(&world, &viewport);
+            assert_eq!(
+                snapshot.rich().iter().map(|it| it.node).collect::<Vec<_>>(),
+                vec![node],
+                "{style:?}: this node has to be a rich element for the test to \
+                 mean anything"
+            );
+
+            let (plan, _) = frame_without_grid(&world, &viewport);
+            assert!(
+                plan_holds_color(&plan, RICH_STROKE),
+                "{style:?}: the node's own stroke colour never reached the painter"
+            );
+            assert!(
+                plan_holds_color(&plan, RICH_FILL),
+                "{style:?}: the node's own fill never reached the painter"
+            );
+        }
+    }
+
+    /// **Both halves of the renderer must agree about a body's opacity, its
+    /// hatch and its width too** — the properties a `div` could never have
+    /// expressed, which is why fixing the two it *could* would not have been a
+    /// smaller version of the same repair.
+    ///
+    /// Asserted as a hatch reaching the plan as its own cached part, exactly as
+    /// Phase 11 asserts it for a canvas node.
+    #[test]
+    fn a_hatched_rich_node_is_hatched_in_clean_mode() {
+        use crate::{
+            models::{FillStyle, RenderStyle},
+            render::cache::GeometryPart,
+        };
+
+        let (mut world, node) = styled_rich_rectangle(RenderStyle::Clean);
+        let mut style = world.nodes().style(node).clone();
+        style.fill_style = FillStyle::Hachure;
+        world.set_node_style(node, style);
+        world.rebuild_all_geometry();
+
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let (plan, _) = frame_without_grid(&world, &viewport);
+
+        assert!(
+            plan.paths()
+                .iter()
+                .filter_map(|path| path.key)
+                .any(|key| key.part == GeometryPart::Hatch),
+            "a rich node's hachure never reached the painter"
+        );
+    }
+
+    /// **A body's dash reaches the painter as a dashed stroke.**
+    ///
+    /// §32's Stroke style row is offered for a node and for an edge alike, and
+    /// only the edge painter ever read it: a node's dash was stored, undoable,
+    /// read back by the panel and painted by nothing, in *both* render styles.
+    /// Third of the four "written and not drawn" controls this crate has
+    /// shipped, and asserted the way Phase 11 learnt to assert them — on the
+    /// primitive, not on the model.
+    ///
+    /// A dashed rectangle also has to stop being a quad's border, because a
+    /// quad carries a solid one and nothing else; the fill stays a quad, so the
+    /// dash costs exactly one path.
+    #[test]
+    fn a_dashed_node_border_reaches_the_painter_dashed() {
+        use crate::{
+            models::{DashPattern, RenderStyle},
+            render::plan::PathPaint,
+        };
+
+        let (mut world, node) = styled_rich_rectangle(RenderStyle::Clean);
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+
+        let (solid, _) = frame_without_grid(&world, &viewport);
+        assert!(
+            !solid
+                .paths()
+                .iter()
+                .any(|path| matches!(path.paint, PathPaint::DashedStroke { .. })),
+            "nothing was dashed before the document asked for it"
+        );
+
+        let mut style = world.nodes().style(node).clone();
+        style.stroke.dash = DashPattern::new([8.0, 4.0]);
+        world.set_node_style(node, style);
+        world.rebuild_all_geometry();
+
+        let (dashed, _) = frame_without_grid(&world, &viewport);
+        let stroke = dashed
+            .paths()
+            .iter()
+            .find(|path| matches!(path.paint, PathPaint::DashedStroke { .. }))
+            .expect("the node's dash never reached the painter");
+
+        let PathPaint::DashedStroke { dash, color, .. } = stroke.paint else {
+            unreachable!("filtered above");
+        };
+        assert!((dash.on - 8.0).abs() < 1e-3);
+        assert!((dash.off - 4.0).abs() < 1e-3);
+        assert!(
+            (color.r - RICH_STROKE.r).abs() < 1e-3,
+            "and in its own colour"
+        );
+
+        // The body kept its quad, so the dash cost one path and no second
+        // batch of anything.
+        assert_eq!(dashed.quad_count(), solid.quad_count());
+        assert_eq!(dashed.path_count(), solid.path_count() + 1);
+    }
+
+    /// **A text element's Stroke row is its colour, and it has to reach the
+    /// glyphs.**
+    ///
+    /// The panel gives a text selection exactly one colour control
+    /// (`properties`' table gives it Stroke and no Background), the control
+    /// writes `stroke.color`, and every text painter read `font.color` — which
+    /// nothing writes. So the one thing a person can change about a text
+    /// element's appearance beyond its font did nothing at all, in both render
+    /// styles. Fourth of the same kind.
+    #[test]
+    fn a_text_element_is_drawn_in_the_colour_its_stroke_row_writes() {
+        let mut world = GraphWorld::new();
+        let node = world.create_node(
+            ElementKind::Text,
+            Vec2::new(80.0, 80.0),
+            Vec2::new(220.0, 24.0),
+        );
+        world.set_node_label(node, Some("a sentence".into()));
+
+        let mut style = world.nodes().style(node).clone();
+        style.stroke.color = Some(RICH_STROKE);
+        world.set_node_style(node, style);
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let (plan, stats) = frame_without_grid(&world, &viewport);
+
+        assert_eq!(stats.labels, 1, "the text element was not laid out at all");
+        let text = plan.texts().first().expect("one run");
+        assert!(
+            (text.color.r - RICH_STROKE.r).abs() < 1e-3
+                && (text.color.g - RICH_STROKE.g).abs() < 1e-3
+                && (text.color.b - RICH_STROKE.b).abs() < 1e-3,
+            "the glyphs were painted in {:?} rather than the colour the panel wrote",
+            text.color
+        );
+    }
+
+    /// The snapshot a frame is planned from, for the tests that need to know
+    /// which half of the renderer took a node.
+    fn extracted(world: &GraphWorld, viewport: &Viewport) -> RenderSnapshot {
+        let index = SpatialIndex::for_world(world);
+        let mut visible = crate::spatial::VisibleSet::new();
+        index.query_visible(world, viewport, &mut visible);
+
+        let mut snapshot = RenderSnapshot::new();
+        snapshot.extract(
+            world,
+            &visible,
+            viewport,
+            &for_backend(RenderBackend::Metal),
+            &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
+            None,
+            Rect::new(Vec2::ZERO, viewport.size()),
+        );
+        snapshot
     }
 
     // ---- §13: the sketch renderer ---------------------------------------

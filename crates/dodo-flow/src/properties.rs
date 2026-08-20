@@ -68,6 +68,37 @@
 //!    [`ElementKind::Image`], the table already has its column, and nothing here
 //!    invents an image property that has not been specified.
 //!
+//! # A row is not finished until a painter reads it
+//!
+//! This is the rule the panel has now broken four times, in four costumes, and
+//! it is written here because this table is where a row is *born*:
+//!
+//! 1. Phase 11 shipped `fill_style` and `sloppiness` stored, undoable, read
+//!    back by this table — and painted by nothing.
+//! 2. `stroke.dash` was the same on a **node**: §32's Stroke style row is
+//!    offered for a node and for an edge, and only `render::edges` ever read
+//!    it.
+//! 3. A **text** element's Stroke row is the only colour control it has, it
+//!    writes `stroke.color`, and every text painter read `font.color` — which
+//!    nothing writes.
+//! 4. Widest of the four: a node at working zoom is a *rich* node, a GPUI
+//!    element, and the element painted its body from the theme. Stroke colour,
+//!    fill, width, opacity, dash and hatch all reached the document and stopped
+//!    — but only in Clean mode, because a hand-drawn border has no `div` form
+//!    and forced the canvas to paint the body in Sketch. That is what "the
+//!    properties only work in sketch mode" was.
+//!
+//! Each of the four passed every test in the crate, because a test on this
+//! table and a test on the round trip both pass either way. **So the test for a
+//! new row asserts what reaches the painter** — the primitive, its colour, its
+//! cache part — and `render::scene`'s
+//! `a_restyled_rich_node_reaches_the_painter_in_both_render_styles` is the
+//! shape to copy.
+//!
+//! [`Availability`] is the honest exit when a row genuinely cannot be drawn:
+//! muted, with a tooltip that says why. Sloppiness in Clean mode is the only
+//! member.
+//!
 //! **This file names no UI framework.** The glyphs are `views::properties`'s,
 //! and the strings are `dodo_i18n::flow`'s.
 
