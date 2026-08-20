@@ -343,7 +343,8 @@ impl EditCommand {
     /// Only absolute per-element assignments answer `true`, and only when they
     /// name the same elements in the same order. A command that *creates*,
     /// *removes* or *translates* is not idempotent and must not be replaced.
-    /// [`SetNodePositions`] is deliberately excluded even though it qualifies:
+    /// [`SetNodePositions`](EditCommand::SetNodePositions) is deliberately
+    /// excluded even though it qualifies:
     /// it already has a `merge` rule, `merge` is tried first, and two rules for
     /// one variant is how they drift apart.
     pub fn supersedes(&self, next: &EditCommand) -> bool {

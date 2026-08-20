@@ -578,7 +578,7 @@ impl FlowEditor {
         })
     }
 
-    /// **Duplicates the selection**, offset by [`DUPLICATE_OFFSET`], and
+    /// **Duplicates the selection**, offset by `DUPLICATE_OFFSET`, and
     /// selects the copies.
     ///
     /// Three decisions, each of which is visible the first time somebody uses

@@ -1214,6 +1214,90 @@ mod tests {
         );
     }
 
+    /// **Select a node, an edge and a text element in turn, and watch the panel
+    /// change.**
+    ///
+    /// The launcher check the phase brief asks for, as far as it can be asked
+    /// without a window: this is the whole chain from §28's selection to the
+    /// rows the panel draws, and the only thing between it and the screen is
+    /// the drawing. `properties`'s own test asserts the *table*; this asserts
+    /// that a real selection of a real element reaches the right column of it.
+    #[test]
+    fn selecting_each_kind_in_turn_changes_the_rows_the_panel_draws() {
+        use crate::properties::{PanelSection, sections_for, selection_kinds};
+
+        let (mut editor, nodes) = panel_editor();
+        let text = editor
+            .apply(EditCommand::AddNodes(vec![NodeDraft::new({
+                let mut spec = NodeSpec::new(
+                    ElementId::NONE,
+                    ElementKind::Text,
+                    Vec2::new(0.0, 400.0),
+                    Vec2::new(180.0, 22.0),
+                );
+                spec.label = Some("a sentence".into());
+                spec
+            })]))
+            .unwrap()
+            .added_nodes[0];
+
+        let rows = |editor: &FlowEditor| sections_for(&selection_kinds(editor.world()));
+
+        // Nothing selected: no panel at all, rather than a card of labels over
+        // nothing.
+        editor.clear_selection();
+        assert!(rows(&editor).is_empty());
+
+        editor.select_only(Some(nodes[0]));
+        let node_rows = rows(&editor);
+        assert!(node_rows.contains(&PanelSection::Background));
+        assert!(node_rows.contains(&PanelSection::Fill));
+        assert!(node_rows.contains(&PanelSection::Corners));
+        assert!(!node_rows.contains(&PanelSection::ArrowType));
+
+        editor.clear_selection();
+        editor.set_edge_selected(EdgeIndex::new(0), true);
+        let edge_rows = rows(&editor);
+        assert!(edge_rows.contains(&PanelSection::ArrowType));
+        assert!(edge_rows.contains(&PanelSection::Arrowheads));
+        assert!(!edge_rows.contains(&PanelSection::Background));
+
+        editor.clear_selection();
+        editor.select_only(Some(text));
+        let text_rows = rows(&editor);
+        assert!(text_rows.contains(&PanelSection::FontFamilyRow));
+        assert!(text_rows.contains(&PanelSection::FontSizeRow));
+        assert!(text_rows.contains(&PanelSection::TextAlignRow));
+        assert!(!text_rows.contains(&PanelSection::StrokeWidth));
+
+        // The three that are on every one of them, whatever is selected.
+        for rows in [&node_rows, &edge_rows, &text_rows] {
+            for section in [
+                PanelSection::Opacity,
+                PanelSection::Layers,
+                PanelSection::Actions,
+            ] {
+                assert!(rows.contains(&section), "{section:?} is on every panel");
+            }
+        }
+    }
+
+    /// A deleted element must not keep offering its properties. It stays in the
+    /// selection set until something clears it — `delete_selection` deliberately
+    /// does not — so this is the guard that keeps the panel from editing a
+    /// tombstone.
+    #[test]
+    fn a_deleted_element_draws_no_panel() {
+        use crate::properties::{sections_for, selection_kinds};
+
+        let (mut editor, nodes) = panel_editor();
+        editor.select_only(Some(nodes[0]));
+        assert!(!sections_for(&selection_kinds(editor.world())).is_empty());
+
+        assert!(editor.delete_selection());
+        assert!(sections_for(&selection_kinds(editor.world())).is_empty());
+    }
+
     /// **What "followed" means for a link**, up to the one call that needs a
     /// platform.
     ///

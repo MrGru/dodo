@@ -60,8 +60,10 @@ pub enum LayerAction {
 }
 
 impl LayerAction {
-    /// The four, in the order the panel draws them — back, backward, forward,
-    /// front, left to right, which is the order the captain's screenshots fix.
+    /// The four, in the order the panel draws them: back, backward, forward,
+    /// front, left to right. Two pairs reading outwards from the middle, so the
+    /// two that move one step are adjacent and the two that go all the way are
+    /// on the outside.
     pub const ALL: &'static [LayerAction] = &[
         LayerAction::SendToBack,
         LayerAction::SendBackward,

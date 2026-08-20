@@ -9,10 +9,10 @@
 //!
 //! `views::palette` established this and it pays even better here: the
 //! Sloppiness buttons are a straight line handed to
-//! [`sketch::perturb`](crate::render::sketch::perturb) at each step's own
+//! [`crate::render::sketch::perturb`] at each step's own
 //! roughness, so **the button is the hand it selects** — change the generator
 //! and the three samples change with it. The Fill buttons are the real
-//! [`hatch`](crate::render::hatch) generator over a small square, for the same
+//! [`hatch`](mod@crate::render::hatch) generator over a small square, for the same
 //! reason. Neither can drift from what it does, and neither needs an asset.
 //!
 //! The rest — corners, arrows, alignment, the layer arrows, the actions — are
@@ -20,15 +20,16 @@
 //! palette's pointer and pan glyphs are, so they are crisp at any size and a
 //! test can measure them.
 //!
-//! # Selected is a light fill, and that is the reference's decision honoured in
-//! dodo's colours
+//! # Selected is a light fill, and a selected swatch is a ring
 //!
-//! The captain's screenshots fix the *state*: a selected button has a filled
-//! light-indigo background, and a selected colour swatch is **ringed** — a thin
-//! outline offset from the swatch — rather than filled behind. Both are kept.
+//! Two states, and each is chosen rather than inherited. A selected *button*
+//! takes a filled background; a selected *colour swatch* takes a thin outline
+//! offset from it and no fill at all, because a swatch's whole job is to report
+//! a colour and a highlight behind it would change the colour it reports.
+//!
 //! The colours are dodo's: `primary` at low opacity for the fill and `primary`
 //! for the ring and the glyph, so the panel reads as part of whatever theme is
-//! loaded rather than as a screenshot of another tool.
+//! loaded rather than as a picture of another tool.
 //!
 //! It is deliberately *not* the palette strip's solid `primary` fill. A tool
 //! button says "this is what the next press does" and wants to shout; a
@@ -93,9 +94,10 @@ const SWATCH_PIXELS: f32 = 26.0;
 /// its widest row and the section labels would sit under a ragged edge.
 pub const PANEL_PIXELS: f32 = 214.0;
 
-/// The tallest the panel may get before it scrolls. The reference is explicit
-/// that it is **a single scrolling column**; a node's panel is ten sections and
-/// does not fit a short window.
+/// The tallest the panel may get before it scrolls. It is **a single scrolling
+/// column** rather than a wrapped or paged one: a node's panel is ten sections
+/// and does not fit a short window, and a row that moved between columns as the
+/// window resized would be a row nobody could find twice.
 const MAX_PANEL_PIXELS: f32 = 620.0;
 
 /// The stroke width the glyphs are drawn at, in screen pixels.
@@ -123,7 +125,7 @@ const SAMPLE_HAND: SketchStyle = SketchStyle {
 /// What the panel needs to know about the canvas to draw itself.
 ///
 /// A struct rather than eight arguments, for the reason
-/// [`palette::PaletteState`](crate::views::palette::PaletteState) gives: a call
+/// [`crate::views::palette::PaletteState`] gives: a call
 /// site full of positional `bool`s is how "has a link" and "can delete" end up
 /// swapped with nothing to notice it.
 #[derive(Debug, Clone, PartialEq)]
@@ -594,9 +596,9 @@ fn choices<T>(
 
 /// The four size buttons, which are the one row whose glyph is a *letter*.
 ///
-/// Drawn as text rather than as an outline because the reference draws S, M, L
-/// and XL, and a letterform built from cubics would be a worse `S` than the
-/// theme's own font already is. The letters come from the catalogue for the
+/// The four sizes are drawn *as* the letters S, M, L and XL, and as text rather
+/// than as an outline: a letterform built from cubics would be a worse `S` than
+/// the theme's own font already is. The letters come from the catalogue for the
 /// reason its doc gives.
 fn font_size_row(current: FontSize, view: Entity<FlowView>, cx: &App) -> gpui::AnyElement {
     div()
@@ -737,10 +739,10 @@ fn prompt_name(prompt: PromptKind) -> &'static str {
 
 /// One colour swatch.
 ///
-/// **Selected is a ring, not a fill**, per the reference: a thin outline offset
-/// from the swatch, which is the only way to show "this one" on a control whose
-/// whole job is to show a colour. A filled highlight behind it would change the
-/// colour the swatch is reporting.
+/// **Selected is a ring, not a fill**: a thin outline offset from the swatch,
+/// which is the only way to show "this one" on a control whose whole job is to
+/// show a colour. A filled highlight behind it would change the colour the
+/// swatch is reporting.
 ///
 /// **Transparent is a checkerboard**, drawn as four quarters rather than left
 /// empty — an empty square is what a missing swatch looks like.
@@ -869,7 +871,7 @@ fn button(
 // ---- the glyphs -----------------------------------------------------------
 
 /// Everything the panel draws, as one enum — the same shape
-/// `views::palette::Glyph` has and for the same reason: [`strokes`] stays the
+/// `views::palette::Glyph` has and for the same reason: `strokes` stays the
 /// single place a button's picture is decided, and a test can walk every button
 /// there is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1029,9 +1031,9 @@ fn strokes(glyph: PanelGlyph, box_: Rect, ink: Color) -> Vec<(Outline, PathPaint
             )]
         }
 
-        // A corner bracket, solid on two sides and dotted on the other two —
-        // the reference's own picture, and the dots are what make it read as a
-        // corner *of something* rather than as an L.
+        // A corner bracket, solid on two sides and dotted on the other two.
+        // The dots are what make it read as a corner *of something* rather than
+        // as an L.
         PanelGlyph::Corner(step) => {
             let mut corner = Outline::with_capacity(4);
             corner.move_to(at(0.0, 0.62));
@@ -1127,8 +1129,7 @@ fn strokes(glyph: PanelGlyph, box_: Rect, ink: Color) -> Vec<(Outline, PathPaint
                 vec![(pencil, stroke(1.5))]
             }
             FontFamily::Normal => vec![(palette::text_glyph(box_), stroke(1.5))],
-            // `</>`, which is what every editor uses and what the reference
-            // draws.
+            // `</>`, which is what every editor uses for this.
             FontFamily::Code => {
                 let mut marks = Outline::with_capacity(8);
                 marks

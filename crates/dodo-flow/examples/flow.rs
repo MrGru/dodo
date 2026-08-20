@@ -98,6 +98,59 @@
 //! Phase 10 recorded beside it, an unclickable edge and single-line text, are
 //! closed.
 //!
+//! # §32's property panel, and the eight things only a person can check
+//!
+//! The window opens with a node already selected, so the panel is on screen
+//! from the first frame, under the tool palette on the left. **This is the most
+//! visual phase the canvas has had**, and an unattended GPUI window on macOS
+//! presents its first frame and then stops — so what a test can say is that the
+//! right rows are chosen, that every control writes what it claims and that the
+//! frame is planned in the right order. Whether it *reads* right is yours.
+//!
+//! 1. **Select a node, then an edge, then a text element.** The panel has to
+//!    change under you: Background, Fill and Edges for the node; Arrow type and
+//!    Arrowheads instead for the edge; Font family, size and alignment for the
+//!    text, with nothing about strokes. Opacity, Layers and Actions stay on all
+//!    three. Then select a node *and* a text element together — you should get
+//!    only the rows that mean something to both.
+//! 2. **Press a colour swatch and watch the canvas.** It must change under the
+//!    press, not on the next click somewhere. Then press the swatch past the
+//!    separator: a hex field opens holding the current value, `Enter` applies it
+//!    and `Esc` abandons it. Type nonsense into it — `#12345` — and it must
+//!    refuse rather than apply black.
+//! 3. **Hover a swatch.** The hex is in the tooltip; the transparent one is a
+//!    checkerboard rather than an empty square.
+//! 4. **Drag the opacity slider the whole way and let go, then press `Cmd+Z`
+//!    once.** One press has to put it back where it started — not sixty, and not
+//!    to somewhere in the middle of the drag.
+//! 5. **Draw a rectangle over an ellipse and use the four Layers buttons.** This
+//!    is the phase's hardest claim and the one most likely to be subtly wrong:
+//!    the two shapes are drawn by different halves of the renderer, and the
+//!    ordering is honoured by moving one of them between the halves. Watch for a
+//!    node that *changes appearance* when it goes behind something — losing its
+//!    accent bar and its hover highlight is the recorded price and is expected;
+//!    losing its label or its border is not. **A text element will not go behind
+//!    a shape's fill**, which is recorded rather than a bug.
+//! 6. **Switch to hand-drawn (`s`) and use the Sloppiness row.** Three visibly
+//!    different hands, and each element keeps its own — set two shapes to two
+//!    steps and they must stay different. Switch back to Clean and the row goes
+//!    muted with a tooltip saying why, rather than silently doing nothing.
+//! 7. **Set Fill to hachure and to cross-hatch.** The interior fills with lines
+//!    in the background colour rather than flooding, the lines stop at the
+//!    border on every shape (try the ellipse and the diamond, which is where a
+//!    scanline goes wrong), and zooming right in coarsens the hatch instead of
+//!    hanging.
+//! 8. **Duplicate, then link.** Duplicate offsets the copy and selects it, so a
+//!    second press walks it across the canvas; the Link button opens a field,
+//!    and `Cmd`/`Ctrl`-clicking the element afterwards opens the URL in your
+//!    browser. `Cmd+Z` has to undo each of these in one press.
+//!
+//! **And the one thing to check that is not a feature**: pan and zoom around
+//! with something selected. The panel is chrome and must not move with the
+//! document, and the canvas must stay as responsive as it was in Phase 10 —
+//! `DODO_FLOW_REPORT=1` prints the first frame's batch count, which should
+//! still be **1**.
+//!
 //! **Hover a palette button and it tells you what it is and which key it
 //! answers to.** The label comes from `dodo_i18n::flow`, in whichever language
 //! dodo is set to; the keystroke beside it is looked up from the real binding

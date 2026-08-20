@@ -30,7 +30,7 @@
 //!
 //! - **A vertex exactly on a sweep line must be counted once, not twice.** The
 //!   test is a half-open interval on the edge's own span (`min <= y < max`),
-//!   which is the standard fix and the reason [`spans`] does not simply compare
+//!   which is the standard fix and the reason the sweep does not simply compare
 //!   both endpoints.
 //! - **A horizontal edge in the rotated frame contributes nothing.** It has no
 //!   crossing; including it would add a pair and invert the inside/outside
@@ -72,7 +72,9 @@ pub const MAX_LINES: u32 = 64;
 pub const DEFAULT_SPACING: f32 = 8.0;
 
 /// The angle hachure runs at, as a unit direction. 45° up to the right, which
-/// is what every hand-drawn diagram tool uses and what the reference shows.
+/// is what every hand-drawn diagram tool uses — and a diagonal rather than an
+/// axis, so a hatch never runs parallel to a rectangle's own edge and vanishes
+/// into it.
 const HACHURE: Vec2 = Vec2::new(
     std::f32::consts::FRAC_1_SQRT_2,
     -std::f32::consts::FRAC_1_SQRT_2,

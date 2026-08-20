@@ -1545,6 +1545,119 @@ mod tests {
         assert!(pressed(hand, Sloppiness::Cartoonist).roughness > hand.roughness);
     }
 
+    /// **What a layered document actually costs**, as a bound rather than a
+    /// hope.
+    ///
+    /// Measured on this machine, 1440×900 at 100 % zoom, 2026-08-20:
+    ///
+    /// | | quads | paths | estimated vertices |
+    /// |---|---:|---:|---:|
+    /// | 54 detailed rectangles + one ellipse, flat | 0 | 2 | 1,158 |
+    /// | the same, one element layered | 0 | **110** | **3,804** |
+    ///
+    /// The 54 rectangles are GPUI elements while nothing is layered, so they
+    /// reach the plan not at all; layered, they are demoted out of the element
+    /// layer and promoted into the path run at two paths each. **That is the
+    /// whole price of the feature** — 108 paths against
+    /// `target_paths_per_frame`'s 3,000, and 3,804 vertices against a 2.4 M
+    /// ceiling — and it is paid only by bodies the ladder still calls
+    /// `detailed`, which is what keeps it proportional to the screen.
+    ///
+    /// **On every benchmark scene it is exactly zero**, and the two reasons are
+    /// the two conditions: the sparse scenes are entirely rich elements with
+    /// nothing canvas-drawn to demote them, and the dense scene's bodies are 18
+    /// world units tall and therefore not `detailed`, so promotion declines on
+    /// the frame that could least afford it.
+    #[test]
+    fn a_layered_frame_costs_paths_in_proportion_to_the_detailed_bodies_on_screen() {
+        use crate::models::ShapeKind;
+
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(1440.0, 900.0));
+
+        // The benchmark scenes pay nothing at all.
+        //
+        // **`large` is deliberately not in this loop**, and that is not a
+        // corner cut for the sake of a fast suite: what varies between the
+        // scenes for *this* question is only whether a body is a GPUI element
+        // and whether the ladder still calls it detailed. `small`, `medium` and
+        // `large` give the same answer to both — every visible body is rich —
+        // so the third costs 0.9 s of `build` to re-assert what the second
+        // already said. `dense` is the one that differs and it is here.
+        //
+        // **One spatial index serves both frames**, and that is not only for
+        // the sake of a fast test: a depth change marks `STYLE` and never
+        // `SPATIAL`, because nothing about where an element *is* changed. If
+        // that ever stops being true this loop culls against a stale index and
+        // the counts stop matching, which is the right way round.
+        for spec in crate::scenes::SceneSpec::ALL
+            .iter()
+            .filter(|spec| spec.name != "large")
+        {
+            let mut world = crate::scenes::build(spec);
+            world.rebuild_all_geometry();
+            world.clear_spatial_updates();
+
+            let index = SpatialIndex::for_world(&world);
+            let mut visible = VisibleSet::new();
+            index.query_visible(&world, &viewport, &mut visible);
+
+            let planned = |world: &GraphWorld, visible: &VisibleSet| {
+                let snapshot = snapshot_of(world, visible, &viewport);
+                let mut plan = PaintPlan::new();
+                let stats = plan_scene(&mut plan, world, &snapshot, &viewport, ink(), &options());
+                (stats.nodes, stats.edges)
+            };
+
+            let before = planned(&world, &visible);
+            let first = world
+                .nodes()
+                .live_indices()
+                .next()
+                .expect("a scene has nodes");
+            world.set_node_z(first, 1);
+
+            assert_eq!(
+                before,
+                planned(&world, &visible),
+                "{} changed what it plans when one element was layered",
+                spec.name
+            );
+        }
+
+        // And the case that does pay: detailed bodies with a path above them.
+        let mut world = GraphWorld::new();
+        for row in 0..6 {
+            for column in 0..9 {
+                world.create_node(
+                    ElementKind::Shape(ShapeKind::Rectangle),
+                    Vec2::new(column as f32 * 155.0, row as f32 * 145.0),
+                    Vec2::new(140.0, 130.0),
+                );
+            }
+        }
+        let top = world.create_node(
+            ElementKind::Shape(ShapeKind::Ellipse),
+            Vec2::new(200.0, 200.0),
+            Vec2::new(300.0, 300.0),
+        );
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+        world.set_node_z(top, 1);
+
+        let (plan, _) = frame_without_grid(&world, &viewport);
+        let budgets = for_backend(RenderBackend::Metal);
+        assert!(
+            plan.paths().len() <= budgets.target_paths_per_frame as usize,
+            "a layered screenful of 54 bodies planned {} paths",
+            plan.paths().len()
+        );
+        assert!(
+            plan.estimated_path_vertices() < budgets.safe_path_vertex_ceiling / 100,
+            "and {} estimated vertices",
+            plan.estimated_path_vertices()
+        );
+    }
+
     /// **A document nobody has reordered pays nothing.**
     ///
     /// The whole design rests on this: with one depth shared by everything, the

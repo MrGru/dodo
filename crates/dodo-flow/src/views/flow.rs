@@ -111,7 +111,7 @@ use crate::{
         Color, EdgeIndex, EdgeRouting, FlowDocument, FontFamily, NodeIndex, RenderQuality,
         RenderStyle, SketchStyle,
     },
-    properties::{ArrowKind, Availability, ControlState, SelectionKind},
+    properties::{ArrowKind, Availability, ControlState},
     render::{
         GridLevel, GridLimits, GridSettings, PaintPlan, PaintStats, SceneInk, SceneOptions,
         SceneStats, WindowPainter,
@@ -807,18 +807,7 @@ impl FlowView {
             return None;
         }
 
-        let kinds: Vec<SelectionKind> = nodes
-            .iter()
-            .filter(|&&node| world.node_is_live(node))
-            .map(|&node| SelectionKind::of_kind(world.nodes().kind(node)))
-            .chain(
-                edges
-                    .iter()
-                    .filter(|&&edge| world.edge_is_live(edge))
-                    .map(|_| SelectionKind::Edge),
-            )
-            .collect();
-        let sections = crate::properties::sections_for(&kinds);
+        let sections = crate::properties::sections_for(&crate::properties::selection_kinds(world));
         if sections.is_empty() {
             return None;
         }

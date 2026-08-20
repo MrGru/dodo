@@ -36,7 +36,7 @@
 /// The view sources, embedded at compile time so the test needs no working
 /// directory. These are the files that build what the user sees; pure logic
 /// modules have no text sinks and are not worth scanning.
-const SOURCES: [(&str, &str); 44] = [
+const SOURCES: [(&str, &str); 45] = [
     ("src/layout.rs", include_str!("layout.rs")),
     (
         "crates/dodo-json-formatter/src/lib.rs",
@@ -222,6 +222,14 @@ const SOURCES: [(&str, &str); 44] = [
     (
         "crates/dodo-flow/src/views/nodes.rs",
         include_str!("../crates/dodo-flow/src/views/nodes.rs"),
+    ),
+    // Phase 11's property panel, which is on its own the largest single
+    // addition of user-visible text the canvas has had — fifteen section
+    // labels and forty tooltips. Added with the file rather than after it, for
+    // the reason the comment above gives.
+    (
+        "crates/dodo-flow/src/views/properties.rs",
+        include_str!("../crates/dodo-flow/src/views/properties.rs"),
     ),
 ];
 
@@ -596,7 +604,7 @@ mod tests {
     fn the_scan_still_covers_every_source_it_did() {
         assert_eq!(
             super::SOURCES.len(),
-            44,
+            45,
             "the view scan covers fewer files than it did; add the file back, or \
              lower this count deliberately and say why"
         );

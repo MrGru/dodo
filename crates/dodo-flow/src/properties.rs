@@ -4,16 +4,41 @@
 //!
 //! # Why this is a module and not part of the view
 //!
-//! The captain's reference (`data/flow-canvas/assets/property-panel/`) is four
-//! screenshots and a table, and **the differences between the four are the
-//! specification**: a node gets Background, Fill and corner style; an edge gets
-//! Arrow type and Arrowheads instead; text gets Font family, size and alignment
-//! and nothing about strokes; an image is Edges, Opacity, Layers and Actions and
-//! nothing else. That table is a *fact about the product*, it is exactly the
-//! sort of thing that rots when it is spread across fifteen `if` statements in a
-//! render body, and it needs no window to be checked. So it is
-//! [`SelectionKind::sections`], and the test beside it is the captain's table
-//! transcribed.
+//! **The panel is contextual, and the differences between its four forms are
+//! the specification** rather than a detail of it — it is not one panel with
+//! rows greyed out:
+//!
+//! | | node | edge | text | image |
+//! |---|:--:|:--:|:--:|:--:|
+//! | Stroke | ● | ● | ● | — |
+//! | Background | ● | — | — | — |
+//! | Fill | ● | — | — | — |
+//! | Stroke width | ● | ● | — | — |
+//! | Stroke style | ● | ● | — | — |
+//! | Sloppiness | ● | ● | — | — |
+//! | Edges (corners) | ● | — | — | ● |
+//! | Arrow type | — | ● | — | — |
+//! | Arrowheads | — | ● | — | — |
+//! | Font family | — | — | ● | — |
+//! | Font size | — | — | ● | — |
+//! | Text align | — | — | ● | — |
+//! | Opacity | ● | ● | ● | ● |
+//! | Layers | ● | ● | ● | ● |
+//! | Actions | ● | ● | ● | ● |
+//!
+//! So a node gets Background, Fill and a corner style; an edge gets Arrow type
+//! and Arrowheads instead; text gets Font family, size and alignment and
+//! nothing about strokes; and an image is the minimal case — Edges, Opacity,
+//! Layers, Actions and nothing else, because none of the rest means anything to
+//! a bitmap. **Opacity, Layers and Actions are the only three rows on every
+//! form.**
+//!
+//! That table is a *fact about the product*. It is exactly the sort of thing
+//! that rots when it is spread across fifteen `if` statements in a render body,
+//! and it needs no window to be checked — so it is
+//! [`SelectionKind::sections`], and the test beside it states the table a
+//! second time and independently. Two statements of one fact is the point: a
+//! row that moves has to move twice, and a row that moves once fails.
 //!
 //! The same argument covers the control steps. "Bold" is a stroke width, "Round"
 //! is a corner radius, "Cartoonist" is a roughness multiplier, and each has to
@@ -56,9 +81,9 @@ use crate::{
 
 /// What is selected, as far as the panel is concerned.
 ///
-/// Four, from the four screenshots. Not a count and not a set — a selection
-/// holding several elements is several of these, and [`sections_for`] folds
-/// them.
+/// Four forms, one per row of the module doc's table. Not a count and not a
+/// set — a selection holding several elements is several of these, and
+/// [`sections_for`] folds them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SelectionKind {
     /// A shape or a graph node: everything with a body and a border.
@@ -105,11 +130,11 @@ impl SelectionKind {
         }
     }
 
-    /// **The captain's table, as the code that draws from it.**
+    /// **The table in the module doc, as the code that draws from it.**
     ///
-    /// In panel order, top to bottom. The test beside this transcribes the
-    /// reference table independently, so a row that moves here without moving
-    /// there is a failure rather than a redraw.
+    /// In panel order, top to bottom. The test beside this states the same
+    /// table independently, so a row that moves here without moving there is a
+    /// failure rather than a redraw.
     pub fn sections(self) -> &'static [PanelSection] {
         use PanelSection::*;
         match self {
@@ -228,8 +253,8 @@ impl PanelSection {
 ///
 /// The intersection rather than the union — see decision 1 in the module doc.
 /// Order is [`SelectionKind::Node`]'s where the two agree and each kind's own
-/// otherwise, which comes out right because the reference panels are the same
-/// table with rows removed rather than four different orders.
+/// otherwise, which comes out right because the four forms are one table with
+/// rows removed rather than four different orders.
 ///
 /// An empty selection gets nothing, and the caller draws no panel at all rather
 /// than an empty card.
@@ -243,6 +268,37 @@ pub fn sections_for(kinds: &[SelectionKind]) -> Vec<PanelSection> {
         .iter()
         .copied()
         .filter(|section| rest.iter().all(|kind| kind.sections().contains(section)))
+        .collect()
+}
+
+/// **What is selected, read off a world** — the step between §28's selection
+/// and [`sections_for`].
+///
+/// Here rather than in the view, and that is the whole point: "select an edge
+/// and the panel loses Background and gains Arrow type" is a claim about the
+/// product — it is the whole of what "contextual" means here — and a version of
+/// it that lives in a `render` body can only be checked by opening a window.
+/// This is three lines and it makes the claim a test.
+///
+/// Tombstoned elements are skipped, for the reason
+/// [`FlowEditor::link_at`](crate::commands::FlowEditor::link_at) skips them: a
+/// removed element is still in the selection set until something clears it, and
+/// a panel that offered to restyle one would be offering to edit what nobody
+/// can see.
+pub fn selection_kinds(world: &crate::runtime::GraphWorld) -> Vec<SelectionKind> {
+    let selection = world.selection();
+    selection
+        .nodes()
+        .iter()
+        .filter(|&&node| world.node_is_live(node))
+        .map(|&node| SelectionKind::of_kind(world.nodes().kind(node)))
+        .chain(
+            selection
+                .edges()
+                .iter()
+                .filter(|&&edge| world.edge_is_live(edge))
+                .map(|_| SelectionKind::Edge),
+        )
         .collect()
 }
 
@@ -345,7 +401,7 @@ impl StrokeDashStep {
     ];
 
     /// The pattern, in screen pixels — which is what
-    /// [`DashPattern`](crate::models::DashPattern) holds, and why a dotted line
+    /// [`DashPattern`] holds, and why a dotted line
     /// stays dotted rather than turning solid when you zoom out.
     pub fn pattern(self) -> DashPattern {
         match self {
@@ -465,11 +521,10 @@ impl ArrowKind {
 
 /// Which end of an edge an arrowhead toggle belongs to.
 ///
-/// **The two are toggles rather than pickers**, and the reference screenshot is
-/// what decided it: the start button is drawn muted with a struck-through mark
-/// and the end one filled with an arrow, which is a two-state control shown in
-/// both of its states. A picker over five [`ArrowMarker`]s would be a popover
-/// this panel has nowhere to put.
+/// **The two are toggles rather than pickers**, and that is the specified
+/// control: one button per end, each showing whether that end has a head. A
+/// picker over five [`ArrowMarker`]s would be a popover this panel has nowhere
+/// to put, for a choice almost nobody makes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArrowEnd {
     Start,
@@ -528,7 +583,7 @@ pub enum ElementAction {
 }
 
 impl ElementAction {
-    /// The actions a panel shows, in the order the reference draws them.
+    /// The actions a panel shows, left to right: duplicate, delete, link.
     ///
     /// **`EditPoints` and `Crop` are not here**, and their absence is the
     /// honest kind. An edge in this engine stores two endpoints and a routing,
@@ -562,12 +617,11 @@ impl ElementAction {
 
 /// The five stroke presets, left to right.
 ///
-/// Excalidraw's palette, and the reference screenshots are Excalidraw's own —
-/// the node panel's tooltip reads `#b2f2bb`, which is the third background
-/// swatch below. Matching it exactly is not imitation for its own sake: a user
-/// coming from that tool recognises the row, and the colours are already known
-/// to read on both a light and a dark canvas, which is a real constraint here
-/// because dodo has both.
+/// Excalidraw's palette, deliberately and exactly. Not imitation for its own
+/// sake: a user coming from that tool recognises the row, and these five are
+/// already known to read on both a light and a dark canvas — a real constraint
+/// here, because dodo has both and a document must not carry a palette of its
+/// own (see [`ElementStyle`]'s `Option<Color>`).
 pub const STROKE_SWATCHES: [Color; 5] = [
     Color::rgb(0.118, 0.118, 0.118), // #1e1e1e
     Color::rgb(0.878, 0.192, 0.192), // #e03131
@@ -693,12 +747,13 @@ pub fn opacity_of(percent: u8) -> f32 {
 mod tests {
     use super::*;
 
-    /// **The captain's table, transcribed from the reference README rather than
-    /// from the code above.**
+    /// **The panel's table, written out again rather than read off the code
+    /// above.**
     ///
     /// `●` where a section appears. Two independent statements of one fact, so
     /// a row that moves in one has to move in the other — which is the whole
-    /// value of writing it twice.
+    /// value of writing it twice, and the reason this test is a table and not a
+    /// loop over `sections()`.
     #[test]
     fn each_kind_gets_exactly_the_sections_the_reference_specifies() {
         use PanelSection::*;
@@ -736,15 +791,14 @@ mod tests {
             assert_eq!(
                 sections.len(),
                 table.iter().filter(|(_, columns)| columns[column]).count(),
-                "{} draws a row the reference does not list",
+                "{} draws a row the table does not list",
                 kind.name()
             );
         }
     }
 
-    /// The reference states it in bold and it is the panel's whole shape:
-    /// **Opacity, Layers and Actions are the only three sections on every
-    /// panel.**
+    /// The panel's whole shape in one line: **Opacity, Layers and Actions are
+    /// the only three sections on every form.**
     #[test]
     fn only_three_sections_are_on_every_panel() {
         let everywhere: Vec<PanelSection> = SelectionKind::ALL[0]

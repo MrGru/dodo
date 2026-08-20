@@ -159,11 +159,10 @@ impl StrokeStyle {
 
 /// **How a closed shape's interior is filled** (§32).
 ///
-/// Three answers rather than a boolean, because the captain's property-panel
-/// reference fixes the control as hachure / cross-hatch / solid and each of the
-/// three is a genuinely different picture: a solid fill is one quad or one
+/// Three answers rather than a boolean, because each is a genuinely different
+/// picture rather than a degree of one: a solid fill is one quad or one
 /// tessellated body, and the other two are *line sets* clipped to the shape —
-/// see [`render::hatch`](crate::render::hatch).
+/// see [`hatch`](mod@crate::render::hatch).
 ///
 /// **[`Solid`](FillStyle::Solid) is the default, and that is a compatibility
 /// decision rather than a taste one.** Excalidraw defaults to hachure; every
@@ -270,8 +269,8 @@ pub enum ArrowMarker {
 
 /// **Four discrete text sizes, and the reason there are four** (§9, §32).
 ///
-/// Not a number. The captain's property-panel reference fixes the control as
-/// S / M / L / XL, and that is a gift rather than a constraint: Phase 5 found
+/// Not a number. The property panel offers exactly four steps — S / M / L / XL
+/// — and that is a gift rather than a constraint: Phase 5 found
 /// that `font_size` is part of GPUI's own shaped-line cache key, so a
 /// continuously-sized label is re-shaped on **every frame of a zoom** — 7–11 µs
 /// each against 1.7 µs to paint a cached one. A continuous size field would

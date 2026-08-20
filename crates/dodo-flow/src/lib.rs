@@ -814,6 +814,159 @@
 //! an edge, seeing its ring, pressing `Delete`, and typing a sentence long
 //! enough to wrap are a human's to check.
 //!
+//! # What the eleventh slice added: the surface everything else was for
+//!
+//! §32's property panel. Ten phases built a model nobody could reach; this is
+//! the one that makes it editable, and it takes **four forms** — a node panel,
+//! an edge panel, a text panel and an image panel. **The differences between
+//! the four are the specification**, not a detail of it: it is not one panel
+//! with rows greyed out, and a node gets Background, Fill and a corner style
+//! exactly where an edge gets Arrow type and Arrowheads. [`properties`]'s
+//! module doc holds the table.
+//!
+//! - [`properties`] — the vocabulary, and **that table as data**. Which
+//!   sections each selection kind gets, what each control's steps mean in the
+//!   model, and both directions of every one of them. It names no UI framework,
+//!   so the table is checked by a test that states it a second time and
+//!   independently, rather than by opening a window.
+//! - [`views::properties`] — the drawing. Two of its rows are drawn **by the
+//!   generator that performs them**: the Sloppiness samples are a straight line
+//!   handed to [`render::sketch::perturb`] at each step's own roughness, and the
+//!   Fill samples are the real [`hatch`](mod@render::hatch) over a small square. Neither
+//!   button can drift from what it selects, and neither needs an asset — which
+//!   is `views::palette`'s trick, paying better.
+//! - [`mod@render::hatch`] — §32's hachure and cross-hatch, as a scanline clip.
+//!   **One path of many subpaths**, so a hatched fill is one tessellation, one
+//!   cache entry and no extra batch; bounded at 64 lines per direction, so a
+//!   shape zoomed to fill the display coarsens instead of costing the frame.
+//! - [`commands::layers`] — the four Layers buttons' arithmetic, as a pure
+//!   function over two [`DepthSpan`](commands::DepthSpan)s, with the four
+//!   decisions it encodes written down.
+//! - [`models::FillStyle`], [`models::Sloppiness`] and a `link` on both element
+//!   types, all serialized, all undoable. Every default is what documents
+//!   already looked like, so the format grew with no migration.
+//! - [`commands::FlowEditor`] — `restyle_selection`, `reorder_selection`,
+//!   `duplicate_selection`, `set_selection_link` and `link_at`. The panel hands
+//!   a closure over an [`ElementStyle`](models::ElementStyle) to one method,
+//!   which is why a fifteen-row panel needs no fifteen methods.
+//!
+//! ## Z-order against the batching contract, which is the interesting part
+//!
+//! [`render::plan`] emits **every quad, then every path, then every text, one
+//! contiguous run each**, and that is a correctness contract rather than a
+//! preference: each contiguous run is a full-viewport render pass, 192 of them
+//! halve the frame rate, and the whole engine is built so interleaving is not
+//! expressible. Z-order is a **per-element** ordering. The two had to be made to
+//! compose rather than one of them bent.
+//!
+//! The answer is three parts and one limitation:
+//!
+//! 1. **Depth is exact within a run**, and it is achieved by ordering the
+//!    *planning walk* rather than the paint. Edges and nodes are merged into one
+//!    depth-ordered pass, so each bucket receives a depth-sorted run — the
+//!    buckets already keep insertion order, so nothing about the contract
+//!    changes.
+//! 2. **A quad-bodied body that a depth needs above a path is promoted into the
+//!    path run.** `render::scene`'s `promotes_to_path` states the three
+//!    conditions and why each is load-bearing.
+//! 3. **A node that must sit below a canvas-drawn body leaves the element
+//!    layer**, because the rich half of §16's hybrid renderer paints above the
+//!    canvas whatever the depths say. `render::snapshot`'s `place_in_depth_order`
+//!    takes the largest safe suffix in one pass, which is the minimal set.
+//!
+//! **A document nobody has reordered pays one `bool` read per frame**, and
+//! `an_unlayered_document_plans_exactly_what_it_always_did` asserts that as an
+//! equality on what the painter is handed. [`GraphWorld::is_layered`](runtime::GraphWorld::is_layered)
+//! is a counter kept exact by the two writers that can change a depth, so
+//! undoing the only reorder puts the frame back on its fast path rather than
+//! leaving it slow for the session.
+//!
+//! The measured cost is in `render::scene`'s
+//! `a_layered_frame_costs_paths_in_proportion_to_the_detailed_bodies_on_screen`:
+//! **zero on every benchmark scene**, and 108 paths / 3,804 estimated
+//! vertices for a screenful of 54 detailed bodies — against a budget of 3,000
+//! paths and a 2.4 M vertex ceiling.
+//!
+//! ## The coalescing rule that had to be new
+//!
+//! A slider drag is one undo step, and [`commands::history`]'s existing
+//! mechanisms could not express it. `merge` folds **both** halves of a history
+//! entry with one function, and a dragged control wants the *latest* forward
+//! value and the *earliest* before-value — opposite folds of one variant, which
+//! `MoveNodes`/`SetNodePositions` escape only by being two variants. A style
+//! change's inverse genuinely *is* a style change, so that trick was not
+//! available.
+//!
+//! [`EditCommand::supersedes`](commands::EditCommand::supersedes) is the third
+//! mechanism: inside one gesture, an absolute per-element write **replaces** the
+//! forward command and leaves the inverse alone. Sixty ticks are one entry as
+//! well as one step, which matters because the stack is bounded and a gesture
+//! longer than the limit would have been truncated mid-drag.
+//!
+//! ## What the tests found, which review would not have
+//!
+//! 1. **`in_one_step` closed the caller's gesture on its way out.**
+//!    `begin_gesture` was already re-entrant; `end_gesture` was not. So the
+//!    first tick of a slider drag ended the drag and the other fifty-nine each
+//!    became an undo step of their own. Found by counting history entries.
+//! 2. **Two rows were stored, undoable, read back by the panel — and painted by
+//!    nothing.** `fill_style` and `sloppiness` reached the document and stopped
+//!    there, and every test in the crate passed. This is the third costume of
+//!    the same failure: Phase 7's dead key bindings, Phase 7.5's absent tool
+//!    palette, and now a control that writes a field no painter reads. The
+//!    tests that close it assert *what reaches the painter* — the hatch by its
+//!    [`GeometryPart`](render::cache::GeometryPart), the hand by its cache key —
+//!    because a test on the model would have passed either way.
+//! 3. **A shape with no area produced sixty-four degenerate hatch subpaths.**
+//!    A flat rectangle still has extent along the sweep's normal, so the parity
+//!    was right and every span was a point. Found by asking what an empty shape
+//!    fills with.
+//!
+//! ## And the limitations a user meets, recorded where they are caused
+//!
+//! 1. **A text element cannot be sent behind a shape's fill.** Text is a run of
+//!    its own and always the last, and there is no promotion available for it —
+//!    a glyph run has no outline form. The Layers buttons order text against
+//!    other text and against nothing else. `render::scene`'s `promotes_to_path`
+//!    carries it.
+//! 2. **A node demoted out of the element layer loses its accent bar, its glyph
+//!    and its hover feedback**, and keeps its body, its border and its label.
+//!    That is the price of an ordering the user asked for and it is paid only by
+//!    the elements the ordering reached. `render::snapshot`'s
+//!    `place_in_depth_order` carries it.
+//! 3. **Sloppiness is muted in Clean mode rather than hidden or silently
+//!    stored.** It is a real per-element property that a clean drawing cannot
+//!    show; the muted button's tooltip says so. That is `views::palette`'s own
+//!    answer for Delete-with-nothing-selected, and being consistent with dodo
+//!    beat being clever. [`properties::Availability`] carries the argument.
+//! 4. **Edit points and Crop are absent rather than stubbed.** An edge stores
+//!    two endpoints and a routing, never a point list — §7's waypoints are a
+//!    change to the document model, the same gap that makes a free arrow point
+//!    down its own diagonal — and there is no image to crop until Phase 12.
+//!    [`properties::ElementAction::for_kind`] says so where the buttons are
+//!    chosen.
+//! 5. **A mixed selection shows the leading element's values.** Two shapes with
+//!    two stroke colours have no honest single answer, so the panel shows the
+//!    first and a press writes to all of them. The alternative is a tri-state on
+//!    every control, for a case that resolves itself the moment anybody presses
+//!    anything.
+//!
+//! ## What was verified by running, and what was not
+//!
+//! Everything above is `cargo test` with no window: the table, the round trips,
+//! the depth order as the sequence the painter is handed, the coalescing as a
+//! count of history entries, the layered cost as a bound, and — through
+//! `commands::tests`' `selecting_each_kind_in_turn_changes_the_rows_the_panel_draws`
+//! — the whole chain from a real selection to the rows the panel draws. The
+//! launcher was run and presents its first frame with a selection and a panel,
+//! one path batch and nothing dropped.
+//!
+//! **What that cannot show is whether it looks right**, and this phase is more
+//! visual than any before it. `examples/flow.rs` lists the eight things only a
+//! person at the keyboard can check. This is the fourth phase to hand that
+//! forward and it is the same risk the plan named as "live input is
+//! source-verified, never observed".
+//!
 //! # Where the budget numbers come from, and what they are not
 //!
 //! [`budgets`] is the one named place for every render ceiling and LOD
