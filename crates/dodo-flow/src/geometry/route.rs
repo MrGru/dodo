@@ -423,7 +423,7 @@ impl EdgeRoute {
 /// because a route is the only thing that asks it and a distance is not a
 /// bounds question. Degenerate segments (`a == b`) answer the distance to the
 /// point, which is what a zero-length leg of a step route should give.
-fn distance_to_segment(point: Vec2, a: Vec2, b: Vec2) -> f32 {
+pub fn distance_to_segment(point: Vec2, a: Vec2, b: Vec2) -> f32 {
     let span = b - a;
     let length_squared = span.x * span.x + span.y * span.y;
     if length_squared <= f32::EPSILON {

@@ -343,16 +343,22 @@ pub fn is_open(shape: NodeShape) -> bool {
 /// **A free line (§7), as the diagonal of its bounding box**, from the
 /// top-left corner to the bottom-right.
 ///
-/// A node stores an origin and a size, never a pair of endpoints, so that
-/// diagonal is the only direction a linear element can have. The consequence is
-/// recorded in [`crate::interaction::tool::creation_rect`]: an arrow dragged
-/// leftwards still points right. A genuinely free linear element needs §7's
-/// point list, which is a change to the document model rather than to this
-/// file.
+/// The *fallback* for a linear node with no
+/// [`Connector`](crate::models::Connector) — a document written before ordered
+/// endpoints existed and not yet migrated, or a linear kind that has no
+/// straight segment. A connector answers through
+/// [`outline_for_connector`] instead, which is what makes an arrow dragged
+/// leftwards actually point left; the box's diagonal loses that fact by
+/// construction, which is why it is no longer the authority.
 pub fn line(rect: Rect) -> Outline {
     let rect = rect.normalized();
+    line_between(rect.min(), rect.max())
+}
+
+/// A straight line from the true ordered `start` to `end`.
+pub fn line_between(start: Vec2, end: Vec2) -> Outline {
     let mut outline = Outline::with_capacity(2);
-    outline.move_to(rect.min()).line_to(rect.max());
+    outline.move_to(start).line_to(end);
     outline
 }
 
@@ -377,7 +383,11 @@ const ARROW_HEAD_HALF_ANGLE: f32 = 0.45;
 /// stroke, which is also why the head follows the stroke width for free.
 pub fn arrow(rect: Rect) -> Outline {
     let rect = rect.normalized();
-    let (start, tip) = (rect.min(), rect.max());
+    arrow_between(rect.min(), rect.max())
+}
+
+/// A straight arrow whose head is always at the true ordered `end`.
+pub fn arrow_between(start: Vec2, tip: Vec2) -> Outline {
     let along = tip - start;
     let length = along.length();
 
@@ -404,6 +414,15 @@ pub fn arrow(rect: Rect) -> Outline {
     }
 
     outline
+}
+
+/// The ordered outline for a straight connector body.
+pub fn outline_for_connector(shape: NodeShape, start: Vec2, end: Vec2) -> Option<Outline> {
+    match shape {
+        NodeShape::Line => Some(line_between(start, end)),
+        NodeShape::Arrow => Some(arrow_between(start, end)),
+        _ => None,
+    }
 }
 
 /// An axis-aligned rectangle, counter-clockwise from the top-left.
@@ -782,6 +801,18 @@ mod tests {
 
     /// A line spans its box corner to corner, and it is **open** — no `Close`,
     /// because a closed line is a degenerate loop lyon would cap twice.
+    #[test]
+    fn an_arrowhead_is_built_at_the_true_ordered_end() {
+        let start = Vec2::new(80.0, 60.0);
+        let end = Vec2::new(10.0, 20.0);
+        let outline = arrow_between(start, end);
+
+        assert_eq!(outline.commands()[0], SubpathCommand::MoveTo(start));
+        assert_eq!(outline.commands()[1], SubpathCommand::LineTo(end));
+        assert_eq!(outline.commands()[2], SubpathCommand::MoveTo(end));
+        assert_eq!(outline.commands()[4], SubpathCommand::MoveTo(end));
+    }
+
     #[test]
     fn a_line_is_the_open_diagonal_of_its_box() {
         let rect = Rect::new(Vec2::new(10.0, 20.0), Vec2::new(100.0, 50.0));

@@ -178,8 +178,10 @@ pub struct SnapshotOverlay {
     pub node: NodeIndex,
     /// The selected node's screen rectangle.
     pub screen: Rect,
+    /// Exactly two ordered endpoint handles for a straight connector.
+    pub connector_endpoints: Option<[Vec2; 2]>,
     /// Whether the node is large enough on screen for four resize grips not to
-    /// cover it.
+    /// cover it. Always false for a connector.
     pub shows_resize_grips: bool,
 }
 
@@ -403,6 +405,7 @@ impl RenderSnapshot {
         for &node in visible.nodes() {
             let shape = nodes.shape(node);
             let screen = viewport.world_rect_to_screen(nodes.bounds(node));
+            let connector = nodes.connector(node);
             let detailed = lod.node_deserves_detail(screen, &thresholds);
             let selected = nodes.is_selected(node);
             let version = nodes.version(node);
@@ -457,7 +460,7 @@ impl RenderSnapshot {
             // already the answer to that.
             let laid_out = visual.shows_label
                 && nodes.cold(node).label.is_some()
-                && (detailed || visual.body == NodeShape::Text);
+                && (detailed || visual.body == NodeShape::Text || connector.is_some());
             let label_font_size = laid_out
                 .then(|| lod.font_size_for(&thresholds, nodes.style(node).font.world_size()))
                 .flatten();
@@ -606,10 +609,18 @@ impl RenderSnapshot {
         }
 
         if world.selection().single_node() == Some(active) {
+            let connector_endpoints = world.nodes().connector(active).map(|connector| {
+                [
+                    viewport.world_to_screen(connector.start.point),
+                    viewport.world_to_screen(connector.end.point),
+                ]
+            });
             self.overlay = Some(SnapshotOverlay {
                 node: active,
                 screen,
-                shows_resize_grips: screen.size.x >= budgets.lod.min_detailed_node_px
+                connector_endpoints,
+                shows_resize_grips: connector_endpoints.is_none()
+                    && screen.size.x >= budgets.lod.min_detailed_node_px
                     && screen.size.y >= budgets.lod.min_detailed_node_px,
             });
         }
@@ -674,7 +685,9 @@ impl RenderSnapshot {
     /// style.
     pub fn element_count(&self) -> u32 {
         let selection_controls = self.overlay.map_or(0, |overlay| {
-            1 + if overlay.shows_resize_grips {
+            1 + if overlay.connector_endpoints.is_some() {
+                2
+            } else if overlay.shows_resize_grips {
                 ResizeCorner::ALL.len() as u32
             } else {
                 0
@@ -716,7 +729,7 @@ mod tests {
     use crate::{
         budgets::{RenderBackend, for_backend},
         geometry::Vec2,
-        models::{ElementKind, GraphNodeKind},
+        models::{ElementKind, GraphNodeKind, LinearKind},
         models::{HandleDirection, HandlePlacement},
         render::registry::GenericKind,
         runtime::{ConnectionRules, EdgeEnd, HandleSpec},
@@ -1013,6 +1026,24 @@ mod tests {
             snapshot.counts().rich_nodes + snapshot.counts().unsupported_nodes,
             1
         );
+    }
+
+    #[test]
+    fn a_selected_connector_exposes_exactly_two_endpoint_handles() {
+        let mut world = GraphWorld::new();
+        let connector = world.create_node(
+            ElementKind::Linear(LinearKind::Arrow),
+            Vec2::new(40.0, 60.0),
+            Vec2::new(220.0, 80.0),
+        );
+        world.select_only(Some(connector));
+        let mut harness = Harness::from_world(world, Vec2::new(800.0, 600.0));
+
+        let snapshot = harness.frame(None);
+        let overlay = snapshot.overlay().expect("selection overlay");
+        assert!(overlay.connector_endpoints.is_some());
+        assert!(!overlay.shows_resize_grips);
+        assert_eq!(snapshot.element_count(), 3, "ring plus two endpoints");
     }
 
     /// §24's rule 10, checked structurally: the snapshot carries indices and

@@ -218,6 +218,27 @@ pub fn apply(world: &mut GraphWorld, command: EditCommand) -> Result<EditOutcome
             Ok(EditOutcome::from_inverse(EditCommand::ResizeNodes(before)))
         }
 
+        EditCommand::SetNodeConnectors(items) => {
+            let mut before = Vec::with_capacity(items.len());
+            for (node, connector) in items {
+                if !world.node_is_live(node) {
+                    continue;
+                }
+                let Some(was) = world.nodes().connector(node) else {
+                    continue;
+                };
+                if was == connector {
+                    continue;
+                }
+                world.set_node_connector(node, connector);
+                before.push((node, was));
+            }
+
+            Ok(EditOutcome::from_inverse(EditCommand::SetNodeConnectors(
+                before,
+            )))
+        }
+
         EditCommand::SetNodeStyles(items) => {
             let mut before = Vec::with_capacity(items.len());
             for (node, style) in items {

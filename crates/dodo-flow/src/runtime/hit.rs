@@ -83,9 +83,17 @@
 //! **This file names no UI framework.**
 
 use crate::{
-    geometry::ResizeCorner,
-    models::{EdgeIndex, HandleIndex, NodeIndex},
+    geometry::{ResizeCorner, Vec2},
+    models::{ConnectorAttachment, ConnectorEnd, EdgeIndex, HandleIndex, NodeIndex},
 };
+
+/// Snap/highlight feedback for a straight connector endpoint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConnectorSnap {
+    pub target: NodeIndex,
+    pub point: Vec2,
+    pub attachment: ConnectorAttachment,
+}
 
 /// What a press landed on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -129,6 +137,9 @@ pub enum PointerTarget {
         node: NodeIndex,
         corner: ResizeCorner,
     },
+    /// One of exactly two ordered endpoint handles on a selected straight
+    /// connector.
+    ConnectorEndpoint { node: NodeIndex, end: ConnectorEnd },
 }
 
 impl PointerTarget {
@@ -137,7 +148,8 @@ impl PointerTarget {
             PointerTarget::Empty | PointerTarget::Edge(_) => None,
             PointerTarget::Node(node) => Some(node),
             PointerTarget::Handle { node, .. } => Some(node),
-            PointerTarget::ResizeGrip { node, .. } => Some(node),
+            PointerTarget::ResizeGrip { node, .. }
+            | PointerTarget::ConnectorEndpoint { node, .. } => Some(node),
         }
     }
 
@@ -145,6 +157,13 @@ impl PointerTarget {
     pub fn resize_grip(self) -> Option<(NodeIndex, ResizeCorner)> {
         match self {
             PointerTarget::ResizeGrip { node, corner } => Some((node, corner)),
+            _ => None,
+        }
+    }
+
+    pub fn connector_endpoint(self) -> Option<(NodeIndex, ConnectorEnd)> {
+        match self {
+            PointerTarget::ConnectorEndpoint { node, end } => Some((node, end)),
             _ => None,
         }
     }

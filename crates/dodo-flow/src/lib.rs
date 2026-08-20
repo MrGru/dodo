@@ -1281,7 +1281,10 @@ pub use commands::{CommandHistory, EditCommand, EditError, FlowEditor, NodeDraft
 pub use geometry::{Rect, Vec2, Viewport};
 pub use instrument::{Instruments, Probe};
 pub use interaction::{InteractionEffect, InteractionEvent, InteractionMachine, InteractionState};
-pub use models::{ElementId, ElementKind, FlowDocument};
+pub use models::{
+    Connector, ConnectorAttachment, ConnectorEnd, ConnectorEndpoint, ElementId, ElementKind,
+    FlowDocument,
+};
 pub use properties::{PanelSection, SelectionKind};
 pub use render::{GridSettings, GridStyle, PaintPlan, PaintStats, SceneInk, SceneOptions};
 pub use runtime::{

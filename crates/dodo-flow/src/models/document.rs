@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     geometry::{Rect, Vec2},
     models::{
-        ElementKind,
+        ElementKind, LinearKind,
         ids::{ElementId, HandleId, IdAllocator},
         image::{ImageHandle, ImageResource, NodeImage},
         style::{EdgeRouting, ElementStyle, RenderQuality, RenderStyle, SketchStyle},
@@ -141,6 +141,121 @@ pub fn handle_world_position(placement: HandlePlacement, offset: f32, node_bound
     }
 }
 
+/// Which ordered end of a straight connector is being addressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConnectorEnd {
+    Start,
+    End,
+}
+
+/// A semantic attachment from a connector endpoint to another element.
+///
+/// `anchor` is normalized in the target's bounds. Keeping the target id as
+/// well as the coincident point is what makes the endpoint follow a move or a
+/// resize after save/load and undo/redo.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ConnectorAttachment {
+    pub element: ElementId,
+    pub anchor: Vec2,
+}
+
+/// One ordered endpoint of a straight connector.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ConnectorEndpoint {
+    pub point: Vec2,
+    pub attachment: Option<ConnectorAttachment>,
+}
+
+impl ConnectorEndpoint {
+    pub fn free(point: Vec2) -> ConnectorEndpoint {
+        ConnectorEndpoint {
+            point,
+            attachment: None,
+        }
+    }
+}
+
+/// The authoritative geometry of a straight line or arrow.
+///
+/// The bounding rectangle is derived and never swaps endpoint identity.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Connector {
+    pub start: ConnectorEndpoint,
+    pub end: ConnectorEndpoint,
+}
+
+impl Connector {
+    pub fn new(start: Vec2, end: Vec2) -> Connector {
+        Connector {
+            start: ConnectorEndpoint::free(start),
+            end: ConnectorEndpoint::free(end),
+        }
+    }
+
+    /// Compatibility geometry for the rectangle representation written by
+    /// document versions 1-3.
+    pub fn from_rect(position: Vec2, size: Vec2) -> Connector {
+        Connector::new(position, position + size)
+    }
+
+    pub fn endpoint(self, end: ConnectorEnd) -> ConnectorEndpoint {
+        match end {
+            ConnectorEnd::Start => self.start,
+            ConnectorEnd::End => self.end,
+        }
+    }
+
+    pub fn endpoint_mut(&mut self, end: ConnectorEnd) -> &mut ConnectorEndpoint {
+        match end {
+            ConnectorEnd::Start => &mut self.start,
+            ConnectorEnd::End => &mut self.end,
+        }
+    }
+
+    pub fn opposite(self, end: ConnectorEnd) -> ConnectorEndpoint {
+        match end {
+            ConnectorEnd::Start => self.end,
+            ConnectorEnd::End => self.start,
+        }
+    }
+
+    pub fn bounds(self) -> Rect {
+        Rect::from_corners(self.start.point, self.end.point)
+    }
+
+    /// The label anchor and the inline editor's anchor: **the true segment
+    /// midpoint**, which is a statement about the ordered endpoints rather than
+    /// about any rectangle they happen to span.
+    pub fn midpoint(self) -> Vec2 {
+        (self.start.point + self.end.point) * 0.5
+    }
+
+    /// Rebuilds the segment so its derived rectangle is exactly `bounds`,
+    /// **keeping each endpoint on the corner it already occupies**.
+    ///
+    /// This is how a whole-connector move or a rectangle-shaped resize reaches
+    /// a connector without the rectangle ever becoming the authority: the
+    /// corner each endpoint sits on is read off the current segment, so
+    /// `start` stays `start` in all eight orientations. Setting an absolute
+    /// rectangle this way is exact, which is what keeps
+    /// [`EditCommand::SetNodePositions`](crate::commands::EditCommand::SetNodePositions)
+    /// a sound inverse for a connector as well as for a node.
+    pub fn with_bounds(self, bounds: Rect) -> Connector {
+        let bounds = bounds.normalized();
+        let (min, max) = (bounds.min(), bounds.max());
+        let axis = |a: f32, b: f32, min: f32, max: f32| {
+            if a <= b { (min, max) } else { (max, min) }
+        };
+        let (start_x, end_x) = axis(self.start.point.x, self.end.point.x, min.x, max.x);
+        let (start_y, end_y) = axis(self.start.point.y, self.end.point.y, min.y, max.y);
+
+        let mut moved = self;
+        moved.start.point = Vec2::new(start_x, start_y);
+        moved.end.point = Vec2::new(end_x, end_y);
+        moved
+    }
+}
+
 /// One element of the document.
 ///
 /// Named `FlowNode` rather than `Element` because the type it most often sits
@@ -164,6 +279,9 @@ pub struct FlowNode {
     /// The node's own text. `None` is not the same as `Some("")`: an empty
     /// label still reserves its line, an absent one does not.
     pub label: Option<String>,
+    /// Ordered geometry and semantic endpoint attachments for a straight line
+    /// or arrow. `None` for every other kind.
+    pub connector: Option<Connector>,
     pub handles: Vec<Handle>,
     pub style: ElementStyle,
     /// **A hyperlink on the element** — the property panel's Link action.
@@ -203,6 +321,7 @@ impl Default for FlowNode {
             z: 0,
             parent: None,
             label: None,
+            connector: None,
             handles: Vec::new(),
             style: ElementStyle::default(),
             link: None,
@@ -215,19 +334,28 @@ impl Default for FlowNode {
 
 impl FlowNode {
     pub fn new(id: ElementId, kind: ElementKind, position: Vec2, size: Vec2) -> FlowNode {
+        let connector = matches!(
+            kind,
+            ElementKind::Linear(LinearKind::Line | LinearKind::Arrow)
+        )
+        .then(|| Connector::from_rect(position, size));
         FlowNode {
             id,
             kind,
             position,
             size,
+            connector,
             ..FlowNode::default()
         }
     }
 
     /// The node's world-space rectangle. **The culling and hit-testing unit** —
-    /// the spatial index stores exactly this.
+    /// the spatial index stores exactly this. A connector derives it from its
+    /// ordered segment; the rectangle never defines or reorders that segment.
     pub fn bounds(&self) -> Rect {
-        Rect::new(self.position, self.size)
+        self.connector
+            .map(Connector::bounds)
+            .unwrap_or_else(|| Rect::new(self.position, self.size))
     }
 
     pub fn handle(&self, id: &HandleId) -> Option<&Handle> {

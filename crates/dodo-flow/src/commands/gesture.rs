@@ -35,7 +35,7 @@
 use crate::{
     commands::{EditCommand, EditError, NodeDraft, editor::FlowEditor},
     geometry::Rect,
-    interaction::{CanvasTool, InteractionEffect},
+    interaction::{CanvasTool, ConnectorCreation, InteractionEffect},
     models::{EdgeIndex, ElementId, HandleDirection, HandlePlacement, NodeIndex},
     runtime::{EdgeEnd, EdgeSpec, HandleSpec, NodeSpec, PointerTarget},
 };
@@ -99,14 +99,27 @@ fn handles_for(tool: CanvasTool) -> Vec<HandleSpec> {
 ///
 /// The id is [`ElementId::NONE`] — the applier allocates one from the world's
 /// allocator, so nothing above the command layer has to know the id space.
-fn create(editor: &mut FlowEditor, tool: CanvasTool, rect: Rect) -> GestureReport {
+fn create(
+    editor: &mut FlowEditor,
+    tool: CanvasTool,
+    rect: Rect,
+    connector: Option<ConnectorCreation>,
+) -> GestureReport {
     let Some(kind) = tool.element_kind() else {
         return GestureReport::default();
     };
 
     let rect = rect.normalized();
-    let draft = NodeDraft::new(NodeSpec::new(ElementId::NONE, kind, rect.origin, rect.size))
-        .with_handles(handles_for(tool));
+    let mut spec = NodeSpec::new(ElementId::NONE, kind, rect.origin, rect.size);
+    if let Some(connector) = connector {
+        spec.connector = Some(editor.connector_between(
+            connector.start,
+            connector.end,
+            connector.start_target,
+            connector.end_target,
+        ));
+    }
+    let draft = NodeDraft::new(spec).with_handles(handles_for(tool));
 
     let Ok(summary) = editor.apply(EditCommand::AddNodes(vec![draft])) else {
         return GestureReport::default();
@@ -137,11 +150,16 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
         // layer down; what changed is that nothing above can call it. The whole
         // drag is one undo step because the press opened a gesture and every
         // move inside it coalesces (§30).
-        InteractionEffect::DragNodeBy { node, delta } => GestureReport::changed(
-            editor
-                .apply(EditCommand::move_node(node, delta))
-                .is_ok_and(|summary| summary.changed),
-        ),
+        InteractionEffect::DragNodeBy { node, delta } => {
+            let changed = if editor.world().nodes().connector(node).is_some() {
+                editor.translate_connector(node, delta)
+            } else {
+                editor
+                    .apply(EditCommand::move_node(node, delta))
+                    .is_ok_and(|summary| summary.changed)
+            };
+            GestureReport::changed(changed)
+        }
 
         // **A press selects, and shift extends** (Phase 10.5). Before it, this
         // arm was an unconditional `select_only` — so shift-clicking a second
@@ -210,6 +228,25 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
             GestureReport::changed(false)
         }
 
+        InteractionEffect::BeginConnectorEndpointDrag { node } => {
+            editor.begin_gesture();
+            editor.select_only(Some(node));
+            GestureReport::changed(true)
+        }
+        InteractionEffect::MoveConnectorEndpoint {
+            node,
+            end,
+            point,
+            target,
+        } => GestureReport::changed(editor.set_connector_endpoint(node, end, point, target)),
+        InteractionEffect::EndConnectorEndpointDrag { .. } => {
+            editor.end_gesture();
+            GestureReport::changed(false)
+        }
+        InteractionEffect::CancelConnectorEndpointDrag => {
+            GestureReport::changed(editor.abandon_gesture())
+        }
+
         // Abandoned exactly as a drag is, and for the same reason: the entries
         // the gesture recorded carry where the element was, and putting it back
         // by applying them in reverse leaves nothing on the stack.
@@ -253,7 +290,8 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
                 // connection is abandoned.
                 PointerTarget::Empty
                 | PointerTarget::Edge(_)
-                | PointerTarget::ResizeGrip { .. } => {
+                | PointerTarget::ResizeGrip { .. }
+                | PointerTarget::ConnectorEndpoint { .. } => {
                     return GestureReport::default();
                 }
             };
@@ -278,7 +316,11 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
         // while it was active; the element appears here, once, through the same
         // applier every other edit uses — so it undoes and redoes with no code
         // in `commands/` knowing that a palette exists.
-        InteractionEffect::CommitCreate { tool, rect } => create(editor, tool, rect),
+        InteractionEffect::CommitCreate {
+            tool,
+            rect,
+            connector,
+        } => create(editor, tool, rect, connector),
 
         // An abandoned creation has nothing to undo: the tool never wrote to
         // the document, so there is no draft element and no history entry.
@@ -328,6 +370,46 @@ mod tests {
             modifiers: InputModifiers::default(),
             pan_key_held: false,
             target,
+        }
+    }
+
+    #[test]
+    fn straight_connectors_preserve_start_and_end_in_all_eight_directions() {
+        let cases = [
+            (Vec2::new(10.0, 10.0), Vec2::new(90.0, 10.0)),
+            (Vec2::new(90.0, 10.0), Vec2::new(10.0, 10.0)),
+            (Vec2::new(10.0, 10.0), Vec2::new(10.0, 90.0)),
+            (Vec2::new(10.0, 90.0), Vec2::new(10.0, 10.0)),
+            (Vec2::new(10.0, 10.0), Vec2::new(90.0, 90.0)),
+            (Vec2::new(90.0, 90.0), Vec2::new(10.0, 10.0)),
+            (Vec2::new(10.0, 90.0), Vec2::new(90.0, 10.0)),
+            (Vec2::new(90.0, 10.0), Vec2::new(10.0, 90.0)),
+        ];
+
+        for tool in [CanvasTool::Line, CanvasTool::Arrow] {
+            for (start, end) in cases {
+                let mut editor = FlowEditor::new();
+                let mut machine = InteractionMachine::new();
+                machine.handle(InteractionEvent::SelectTool(tool));
+                machine.handle(press(PointerTarget::Empty, start));
+                machine.handle(InteractionEvent::PointerMove {
+                    screen: end,
+                    world: end,
+                });
+                let effect = machine.handle(InteractionEvent::PointerUp {
+                    button: PointerButton::Left,
+                    world: end,
+                    target: PointerTarget::Empty,
+                });
+                let report = apply_gesture(&mut editor, effect);
+                let connector = editor
+                    .world()
+                    .nodes()
+                    .connector(report.created.expect("connector created"))
+                    .unwrap();
+                assert_eq!(connector.start.point, start, "{tool:?}");
+                assert_eq!(connector.end.point, end, "{tool:?}");
+            }
         }
     }
 

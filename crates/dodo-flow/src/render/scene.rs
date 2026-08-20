@@ -243,7 +243,7 @@ pub fn plan_scene(
     plan_bodies(plan, world, snapshot, viewport, ink, &mut stats);
     plan.set_images_after_paths(images_belong_above_paths(world, snapshot));
     plan_handles(plan, world, snapshot, viewport, ink, &mut stats);
-    plan_labels(plan, world, snapshot, ink, &mut stats);
+    plan_labels(plan, world, snapshot, viewport, ink, &mut stats);
     plan_edge_labels(plan, world, snapshot, viewport, ink, &mut stats);
     stats
 }
@@ -501,6 +501,12 @@ fn plan_one_node(
 
         let style = nodes.style(canvas.node);
         let screen = canvas.screen;
+        let connector = nodes.connector(canvas.node).map(|connector| {
+            [
+                viewport.world_to_screen(connector.start.point),
+                viewport.world_to_screen(connector.end.point),
+            ]
+        });
 
         // A graph node's body has a radius of its own so it reads as a node
         // rather than as a drawn rectangle; a shape uses what its style says.
@@ -603,6 +609,7 @@ fn plan_one_node(
                     body: canvas.body,
                     version: canvas.version,
                     screen,
+                    connector,
                     radius,
                     fill,
                     stroke_color,
@@ -657,10 +664,18 @@ fn plan_one_node(
             }
             plan.push_quad(quad);
             if hatched {
-                plan_hatch(plan, &canvas, radius, fill, style.fill_style, quality);
+                plan_hatch(
+                    plan,
+                    &canvas,
+                    connector,
+                    radius,
+                    fill,
+                    style.fill_style,
+                    quality,
+                );
             }
             if let Some(dash) = dash
-                && let Some(outline) = shapes::outline_for_node(canvas.body, screen, radius)
+                && let Some(outline) = outline_for_body(&canvas, connector, radius)
             {
                 plan.push_path(
                     PathPrimitive::dashed_stroke(
@@ -679,7 +694,7 @@ fn plan_one_node(
                     )),
                 );
             }
-        } else if let Some(outline) = shapes::outline_for_node(canvas.body, screen, radius) {
+        } else if let Some(outline) = outline_for_body(&canvas, connector, radius) {
             if !open && !hatched {
                 plan.push_path(PathPrimitive::fill(outline.clone(), fill, quality).keyed(
                     GeometryKey::node(
@@ -692,7 +707,15 @@ fn plan_one_node(
                 ));
             }
             if hatched {
-                plan_hatch(plan, &canvas, radius, fill, style.fill_style, quality);
+                plan_hatch(
+                    plan,
+                    &canvas,
+                    connector,
+                    radius,
+                    fill,
+                    style.fill_style,
+                    quality,
+                );
             }
 
             if has_stroke {
@@ -819,15 +842,27 @@ fn pressed(sketch: SketchStyle, sloppiness: Sloppiness) -> SketchStyle {
 /// gives — which also means the geometry is only valid at the zoom it was built
 /// at, so the cache key carries the node's version and the same anchor every
 /// other cached path does.
+fn outline_for_body(
+    body: &NodeBody,
+    connector: Option<[Vec2; 2]>,
+    radius: f32,
+) -> Option<shapes::Outline> {
+    match connector {
+        Some([start, end]) => shapes::outline_for_connector(body.body, start, end),
+        None => shapes::outline_for_node(body.body, body.screen, radius),
+    }
+}
+
 fn plan_hatch(
     plan: &mut PaintPlan,
     canvas: &NodeBody,
+    connector: Option<[Vec2; 2]>,
     radius: f32,
     color: Color,
     style: crate::models::FillStyle,
     quality: crate::models::RenderQuality,
 ) {
-    let Some(outline) = shapes::outline_for_node(canvas.body, canvas.screen, radius) else {
+    let Some(outline) = outline_for_body(canvas, connector, radius) else {
         return;
     };
     let lines = hatch::hatch(&outline, style, hatch::DEFAULT_SPACING);
@@ -1008,6 +1043,7 @@ struct SketchedBody {
     body: NodeShape,
     version: u32,
     screen: Rect,
+    connector: Option<[Vec2; 2]>,
     radius: f32,
     fill: Color,
     stroke_color: Color,
@@ -1036,7 +1072,10 @@ fn plan_sketched_body(
     world: &GraphWorld,
     quality: crate::models::RenderQuality,
 ) -> bool {
-    let Some(outline) = shapes::outline_for_node(body.body, body.screen, body.radius) else {
+    let Some(outline) = (match body.connector {
+        Some([start, end]) => shapes::outline_for_connector(body.body, start, end),
+        None => shapes::outline_for_node(body.body, body.screen, body.radius),
+    }) else {
         return false;
     };
 
@@ -1232,6 +1271,7 @@ fn plan_labels(
     plan: &mut PaintPlan,
     world: &GraphWorld,
     snapshot: &RenderSnapshot,
+    viewport: &Viewport,
     ink: SceneInk,
     stats: &mut SceneStats,
 ) {
@@ -1255,14 +1295,29 @@ fn plan_labels(
         // own outline. The padding is the only difference between the two, and
         // it is the difference between text that starts where the user placed
         // it and text that starts six pixels in.
-        let inner = if canvas.body == NodeShape::Text {
-            canvas.screen
-        } else {
-            canvas.screen.inflate(-LABEL_PADDING_PIXELS)
+        //
+        // **A straight connector has no rectangle to lay text into.** Its
+        // bounding box is derived from the segment and collapses to a line for
+        // any axis-aligned one, so insetting it produced a negative height and
+        // the `continue` below silently dropped every label on a horizontal
+        // arrow. It gets the same treatment an edge label does: a box of its
+        // own, centred on the *actual* segment midpoint (§9), so the label sits
+        // where the caret was and where `views::flow`'s editor was drawn.
+        let inner = match world.nodes().connector(canvas.node) {
+            Some(connector) => {
+                let size = Vec2::new(EDGE_LABEL_MAX_PIXELS, font_size);
+                let center = viewport.world_to_screen(connector.midpoint());
+                Rect::new(center - size * 0.5, size)
+            }
+            None if canvas.body == NodeShape::Text => canvas.screen,
+            None => canvas.screen.inflate(-LABEL_PADDING_PIXELS),
         };
         if inner.size.x <= 0.0 || inner.size.y <= 0.0 {
             continue;
         }
+        // Everything below centres on the box the text was laid into, which is
+        // the node's own for a rectangle and the segment's for a connector.
+        let center_y = inner.center().y;
 
         let style = world.nodes().style(canvas.node);
         let font = &style.font;
@@ -1275,7 +1330,7 @@ fn plan_labels(
         plan.push_text(TextPrimitive {
             // Vertically centred on the body, which is where a node's label
             // belongs; the painter subtracts the line's own height.
-            origin: Vec2::new(inner.origin.x, canvas.screen.center().y - font_size * 0.5),
+            origin: Vec2::new(inner.origin.x, center_y - font_size * 0.5),
             // An `Arc` clone: a refcount bump, not a `String` allocation per
             // label per frame. See `NodeCold::label`.
             text: Arc::clone(label),

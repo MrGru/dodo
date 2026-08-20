@@ -302,13 +302,32 @@ pub fn resize_grips(snapshot: &RenderSnapshot, cx: &App) -> Vec<AnyElement> {
     let Some(overlay) = snapshot.overlay() else {
         return Vec::new();
     };
+    let theme = cx.theme();
+    if let Some(endpoints) = overlay.connector_endpoints {
+        return endpoints
+            .into_iter()
+            .map(|center| {
+                div()
+                    .absolute()
+                    .left(px(center.x - GRIP_PIXELS * 0.5))
+                    .top(px(center.y - GRIP_PIXELS * 0.5))
+                    .w(px(GRIP_PIXELS))
+                    .h(px(GRIP_PIXELS))
+                    .rounded(px(GRIP_PIXELS * 0.5))
+                    .bg(theme.background)
+                    .border(px(1.5))
+                    .border_color(theme.selection)
+                    .into_any_element()
+            })
+            .collect();
+    }
+
     // An element a few pixels across has no room for four grips, and drawing
     // them would cover the thing they resize.
     if !overlay.shows_resize_grips {
         return Vec::new();
     }
 
-    let theme = cx.theme();
     let ring = overlay.screen.inflate(SELECTION_RING_INSET);
 
     ResizeCorner::ALL

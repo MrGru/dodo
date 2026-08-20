@@ -52,7 +52,7 @@
 
 use crate::{
     geometry::Vec2,
-    models::{EdgeIndex, EdgeRouting, ElementStyle, NodeImage, NodeIndex},
+    models::{Connector, EdgeIndex, EdgeRouting, ElementStyle, NodeImage, NodeIndex},
     runtime::{ConnectionError, EdgeSpec, HandleSpec, NodeSpec},
 };
 
@@ -136,6 +136,11 @@ pub enum EditCommand {
 
     /// §30's `ResizeElements`, as the size each node should end up with.
     ResizeNodes(Vec<(NodeIndex, Vec2)>),
+
+    /// Ordered straight-connector geometry and semantic endpoint bindings.
+    /// Absolute so endpoint drags coalesce to the latest geometry while undo
+    /// retains the earliest one.
+    SetNodeConnectors(Vec<(NodeIndex, Connector)>),
 
     /// §30's `UpdateStyle`, for nodes.
     SetNodeStyles(Vec<(NodeIndex, ElementStyle)>),
@@ -258,6 +263,7 @@ impl EditCommand {
             EditCommand::MoveNodes { .. } => "move-nodes",
             EditCommand::SetNodePositions(_) => "place-nodes",
             EditCommand::ResizeNodes(_) => "resize-nodes",
+            EditCommand::SetNodeConnectors(_) => "connectors",
             EditCommand::SetNodeStyles(_) => "style-nodes",
             EditCommand::SetEdgeStyles(_) => "style-edges",
             EditCommand::SetEdgeRouting(_) => "route-edges",
@@ -284,6 +290,7 @@ impl EditCommand {
             }
             EditCommand::SetNodePositions(items) => items.is_empty(),
             EditCommand::ResizeNodes(items) => items.is_empty(),
+            EditCommand::SetNodeConnectors(items) => items.is_empty(),
             EditCommand::SetNodeStyles(items) => items.is_empty(),
             EditCommand::SetEdgeStyles(items) => items.is_empty(),
             EditCommand::SetEdgeRouting(items) => items.is_empty(),
@@ -369,6 +376,9 @@ impl EditCommand {
     pub fn supersedes(&self, next: &EditCommand) -> bool {
         match (self, next) {
             (EditCommand::ResizeNodes(first), EditCommand::ResizeNodes(later)) => {
+                same_keys(first, later)
+            }
+            (EditCommand::SetNodeConnectors(first), EditCommand::SetNodeConnectors(later)) => {
                 same_keys(first, later)
             }
             (EditCommand::SetNodeStyles(first), EditCommand::SetNodeStyles(later)) => {

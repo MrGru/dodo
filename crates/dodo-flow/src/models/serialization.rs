@@ -44,7 +44,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::models::FlowDocument;
+use crate::{
+    geometry::Vec2,
+    models::{Connector, ElementKind, FlowDocument, LinearKind},
+};
 
 /// The format version this build writes.
 ///
@@ -79,7 +82,7 @@ use crate::models::FlowDocument;
 /// something unrecoverable. Past that line, [`LoadError::FutureVersion`] is the
 /// whole point of the envelope — it is what turns a quiet data loss into a
 /// sentence that names both version numbers.
-pub const CURRENT_VERSION: u32 = 3;
+pub const CURRENT_VERSION: u32 = 4;
 
 /// One rung of the ladder: rewrites a document body written by version `from`
 /// into the shape version `from + 1` expects.
@@ -96,8 +99,11 @@ pub type MigrationStep = fn(&mut Value) -> Result<(), LoadError>;
 /// 1 rather than promising it: had `from_json` been `serde_json::from_str` all
 /// along, every document written before this phase would now fail to load with
 /// a type error about a float, and there would be nowhere to put the fix.
-pub const MIGRATIONS: &[(u32, MigrationStep)] =
-    &[(1, fonts_became_four_steps), (2, images_arrived)];
+pub const MIGRATIONS: &[(u32, MigrationStep)] = &[
+    (1, fonts_became_four_steps),
+    (2, images_arrived),
+    (3, connectors_gained_ordered_endpoints),
+];
 
 /// **Version 1 ▸ 2**: a font's continuous `size` became one of four steps, and
 /// its `family` stopped being a free font name.
@@ -181,6 +187,57 @@ fn migrate_font(element: &mut Value) {
 ///    decision is recorded, and it is the natural place for the next image
 ///    field's rewrite to go.
 fn images_arrived(_value: &mut Value) -> Result<(), LoadError> {
+    Ok(())
+}
+
+/// **Version 3 ▸ 4**: a straight line or arrow stopped deriving direction
+/// from its normalized rectangle and gained ordered endpoints.
+///
+/// Old files never retained the initiating drag direction, so the only safe
+/// migration is their existing visible diagonal: `position` to
+/// `position + size`. From version 4 onward the connector field is the
+/// authority and the rectangle is derived.
+fn connectors_gained_ordered_endpoints(value: &mut Value) -> Result<(), LoadError> {
+    let Some(nodes) = value.get_mut("nodes").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+
+    for node in nodes {
+        if node.get("connector").is_some() {
+            continue;
+        }
+        let Some(kind) = node
+            .get("kind")
+            .cloned()
+            .and_then(|kind| serde_json::from_value::<ElementKind>(kind).ok())
+        else {
+            continue;
+        };
+        if !matches!(
+            kind,
+            ElementKind::Linear(LinearKind::Line | LinearKind::Arrow)
+        ) {
+            continue;
+        }
+
+        let position = node
+            .get("position")
+            .cloned()
+            .and_then(|it| serde_json::from_value::<Vec2>(it).ok())
+            .unwrap_or(Vec2::ZERO);
+        let size = node
+            .get("size")
+            .cloned()
+            .and_then(|it| serde_json::from_value::<Vec2>(it).ok())
+            .unwrap_or(Vec2::new(150.0, 40.0));
+        if let Some(object) = node.as_object_mut() {
+            object.insert(
+                "connector".into(),
+                serde_json::to_value(Connector::from_rect(position, size))?,
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -372,8 +429,8 @@ mod tests {
     use crate::{
         geometry::Vec2,
         models::{
-            ElementKind, Endpoint, FlowDocument, FontFamily, FontSize, RenderQuality, RenderStyle,
-            ShapeKind, ids::ElementId,
+            ElementKind, Endpoint, FlowDocument, FontFamily, FontSize, LinearKind, RenderQuality,
+            RenderStyle, ShapeKind, ids::ElementId,
         },
     };
 
@@ -405,6 +462,33 @@ mod tests {
         let loaded = FlowDocument::from_json(&json).expect("loads");
 
         assert_eq!(loaded, original);
+    }
+
+    #[test]
+    fn version_three_rectangles_migrate_to_their_existing_connector_diagonal() {
+        let mut old = document();
+        let id = old.add_node(
+            ElementKind::Linear(LinearKind::Arrow),
+            Vec2::new(70.0, 90.0),
+            Vec2::new(160.0, 40.0),
+        );
+        let mut value: Value = serde_json::from_str(&old.to_json().unwrap()).unwrap();
+        value["version"] = json!(3);
+        value["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("connector");
+
+        let loaded = FlowDocument::from_json(&value.to_string()).unwrap();
+        let connector = loaded.node(id).unwrap().connector.unwrap();
+        assert_eq!(connector.start.point, Vec2::new(70.0, 90.0));
+        assert_eq!(connector.end.point, Vec2::new(230.0, 130.0));
+        assert!(connector.start.attachment.is_none());
+        assert!(connector.end.attachment.is_none());
     }
 
     #[test]

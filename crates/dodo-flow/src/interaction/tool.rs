@@ -315,28 +315,55 @@ impl TextTarget {
 /// 3. Otherwise it is [`Rect::from_corners`], which normalises, so dragging
 ///    up-left and down-right give the same rectangle.
 ///
-/// **Rule 3 has a consequence worth knowing about for the linear tools**: the
-/// document stores a position and a size, never a pair of endpoints, so a
-/// linear element's direction is its bounding box's diagonal and an arrow
-/// always points from the box's top-left to its bottom-right. Dragging one out
-/// leftwards produces an arrow pointing right. The preview is drawn from the
-/// same rectangle by the same outline builder, so what is committed is exactly
-/// what was shown — but a genuinely free arrow needs §7's point list, which is
-/// a model change rather than a painter one.
+/// **Rule 3 used to decide a linear element's direction, and no longer does.**
+/// A straight line or arrow now carries its own ordered endpoints — see
+/// [`connector_endpoints`], which is this function's ordered twin and obeys the
+/// same three rules — so `Rect::from_corners` normalising is only ever the
+/// *derived* bounding box. The rectangle never reorders a connector's ends.
 pub fn creation_rect(tool: CanvasTool, gesture: CreationGesture) -> Rect {
+    let (start, end) = connector_endpoints(tool, gesture);
+    Rect::from_corners(start, end)
+}
+
+/// **The ordered endpoints a creation gesture produces**: pointer-down is
+/// always `start` and pointer-up is always `end`.
+///
+/// The same three rules [`creation_rect`] states, expressed as a pair rather
+/// than as a normalised box — which is the whole point, because the box loses
+/// exactly the fact this returns. `creation_rect` is derived from it, so the
+/// preview, the committed bounds and the committed segment cannot disagree:
+///
+/// 1. A drag below [`MIN_DRAG_PIXELS`] of *screen* travel is a click, and a
+///    click places [`CanvasTool::default_size`] centred on the press. A linear
+///    tool's default height is zero, so a clicked arrow is a horizontal one
+///    pointing right rather than a dot.
+/// 2. With the constraint held, the travel is squared to the longer of its two
+///    axes, keeping the direction the pointer actually went.
+/// 3. Otherwise the end is simply where the pointer is.
+pub fn connector_endpoints(tool: CanvasTool, gesture: CreationGesture) -> (Vec2, Vec2) {
     if gesture.screen_travel() < MIN_DRAG_PIXELS {
-        let size = tool.default_size();
-        return Rect::new(gesture.anchor_world - size * 0.5, size);
+        let half = tool.default_size() * 0.5;
+        return (gesture.anchor_world - half, gesture.anchor_world + half);
     }
 
     let delta = gesture.current_world - gesture.anchor_world;
     if gesture.constrain && tool.honours_square_constraint() {
         let side = delta.x.abs().max(delta.y.abs());
         let signed = Vec2::new(side.copysign(delta.x), side.copysign(delta.y));
-        return Rect::from_corners(gesture.anchor_world, gesture.anchor_world + signed);
+        return (gesture.anchor_world, gesture.anchor_world + signed);
     }
 
-    Rect::from_corners(gesture.anchor_world, gesture.current_world)
+    (gesture.anchor_world, gesture.current_world)
+}
+
+/// Ordered endpoints and semantic snap targets committed by a straight
+/// connector creation gesture.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConnectorCreation {
+    pub start: Vec2,
+    pub end: Vec2,
+    pub start_target: Option<NodeIndex>,
+    pub end_target: Option<NodeIndex>,
 }
 
 /// A creation drag in progress: both spaces, because the two questions need

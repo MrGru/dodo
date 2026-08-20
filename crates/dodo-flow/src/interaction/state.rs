@@ -82,8 +82,11 @@
 
 use crate::{
     geometry::{Rect, ResizeCorner, Vec2, resize_from_corner},
-    interaction::tool::{CanvasTool, CreationGesture, TextTarget, creation_rect},
-    models::{EdgeIndex, HandleIndex, NodeIndex},
+    interaction::tool::{
+        CanvasTool, ConnectorCreation, CreationGesture, TextTarget, connector_endpoints,
+        creation_rect,
+    },
+    models::{Connector, ConnectorEnd, EdgeIndex, HandleIndex, NodeIndex},
     runtime::PointerTarget,
 };
 
@@ -178,6 +181,8 @@ pub enum InteractionState {
     CreatingShape {
         tool: CanvasTool,
         gesture: CreationGesture,
+        /// A semantic target under pointer-down for a straight connector.
+        start_target: Option<NodeIndex>,
     },
     /// §25's `Connecting`: an edge is being dragged out of a handle and has not
     /// landed yet (§8's connection preview).
@@ -210,6 +215,14 @@ pub enum InteractionState {
         /// The rectangle the last move produced, so the release can say whether
         /// anything actually changed.
         current: Rect,
+    },
+    /// One of a straight connector's two ordered endpoints is being moved.
+    DraggingConnectorEndpoint {
+        node: NodeIndex,
+        end: ConnectorEnd,
+        original: Connector,
+        current_world: Vec2,
+        target: Option<NodeIndex>,
     },
     /// §25's `EditingText` (§9): a caret is in something.
     ///
@@ -289,6 +302,18 @@ pub enum InteractionEvent {
         /// [`resize_keeps_aspect`](super::resize_keeps_aspect)'s answer, which
         /// folds the element's own default together with the modifier.
         keeps_aspect: bool,
+    },
+    /// One of exactly two connector endpoint handles was pressed.
+    BeginConnectorEndpointDrag {
+        node: NodeIndex,
+        end: ConnectorEnd,
+        connector: Connector,
+    },
+    /// A connector endpoint moved, with the nearest valid snap target already
+    /// resolved by the caller's spatial broad phase.
+    MoveConnectorEndpoint {
+        world: Vec2,
+        target: Option<NodeIndex>,
     },
     /// **§45's tool activation**, from the palette or from a key binding.
     ///
@@ -414,6 +439,20 @@ pub enum InteractionEffect {
         node: NodeIndex,
         changed: bool,
     },
+    BeginConnectorEndpointDrag {
+        node: NodeIndex,
+    },
+    MoveConnectorEndpoint {
+        node: NodeIndex,
+        end: ConnectorEnd,
+        point: Vec2,
+        target: Option<NodeIndex>,
+    },
+    EndConnectorEndpointDrag {
+        node: NodeIndex,
+        end: ConnectorEnd,
+    },
+    CancelConnectorEndpointDrag,
     /// The resize was abandoned; put the node back in exactly this rectangle.
     CancelResize {
         node: NodeIndex,
@@ -479,6 +518,7 @@ pub enum InteractionEffect {
     CommitCreate {
         tool: CanvasTool,
         rect: Rect,
+        connector: Option<ConnectorCreation>,
     },
     /// The creation was abandoned. **Nothing to undo**: no element was ever
     /// added, which is the point of the tool never touching the document until
@@ -522,6 +562,7 @@ impl InteractionEffect {
                 | InteractionEffect::BeginConnect(_)
                 | InteractionEffect::BeginCreate { .. }
                 | InteractionEffect::BeginResize { .. }
+                | InteractionEffect::BeginConnectorEndpointDrag { .. }
         )
     }
 
@@ -591,9 +632,50 @@ impl InteractionMachine {
     /// shape [`selection_rect`](InteractionMachine::selection_rect) takes.
     pub fn creation_preview(&self) -> Option<(CanvasTool, Rect)> {
         match self.state {
-            InteractionState::CreatingShape { tool, gesture } => {
+            InteractionState::CreatingShape { tool, gesture, .. } => {
                 Some((tool, creation_rect(tool, gesture)))
             }
+            _ => None,
+        }
+    }
+
+    /// An in-progress straight connector creation, preserving pointer-down as
+    /// start even when the derived bounds normalize in the opposite direction.
+    pub fn connector_creation(&self) -> Option<(CanvasTool, ConnectorCreation)> {
+        match self.state {
+            InteractionState::CreatingShape {
+                tool,
+                gesture,
+                start_target,
+            } if matches!(tool, CanvasTool::Line | CanvasTool::Arrow) => {
+                let (start, end) = connector_endpoints(tool, gesture);
+                Some((
+                    tool,
+                    ConnectorCreation {
+                        start,
+                        end,
+                        start_target,
+                        end_target: None,
+                    },
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// The connector endpoint currently being dragged and the opposite point
+    /// used to choose a direction-appropriate snap anchor.
+    pub fn dragging_connector_endpoint(
+        &self,
+    ) -> Option<(NodeIndex, ConnectorEnd, Vec2, Option<NodeIndex>)> {
+        match self.state {
+            InteractionState::DraggingConnectorEndpoint {
+                node,
+                end,
+                original,
+                target,
+                ..
+            } => Some((node, end, original.opposite(end).point, target)),
             _ => None,
         }
     }
@@ -689,7 +771,11 @@ impl InteractionMachine {
                         current_screen: screen,
                         constrain: modifiers.shift,
                     };
-                    self.state = InteractionState::CreatingShape { tool, gesture };
+                    self.state = InteractionState::CreatingShape {
+                        tool,
+                        gesture,
+                        start_target: target.node(),
+                    };
                     InteractionEffect::BeginCreate {
                         tool,
                         rect: creation_rect(tool, gesture),
@@ -735,7 +821,9 @@ impl InteractionMachine {
                     // a grip and then sent the press anyway, and starting a
                     // rubber band from a corner of the selection would be the
                     // worst of the available guesses.
-                    PointerTarget::ResizeGrip { .. } => InteractionEffect::None,
+                    PointerTarget::ResizeGrip { .. } | PointerTarget::ConnectorEndpoint { .. } => {
+                        InteractionEffect::None
+                    }
                     PointerTarget::Empty => {
                         self.state = InteractionState::BoxSelecting {
                             anchor_world: world,
@@ -780,6 +868,50 @@ impl InteractionMachine {
                 InteractionEffect::BeginResize { node }
             }
             (_, InteractionEvent::BeginResize { .. }) => InteractionEffect::None,
+
+            (
+                InteractionState::Idle,
+                InteractionEvent::BeginConnectorEndpointDrag {
+                    node,
+                    end,
+                    connector,
+                },
+            ) => {
+                self.state = InteractionState::DraggingConnectorEndpoint {
+                    node,
+                    end,
+                    original: connector,
+                    current_world: connector.endpoint(end).point,
+                    target: None,
+                };
+                InteractionEffect::BeginConnectorEndpointDrag { node }
+            }
+            (_, InteractionEvent::BeginConnectorEndpointDrag { .. }) => InteractionEffect::None,
+
+            (
+                InteractionState::DraggingConnectorEndpoint {
+                    node,
+                    end,
+                    original,
+                    ..
+                },
+                InteractionEvent::MoveConnectorEndpoint { world, target },
+            ) => {
+                self.state = InteractionState::DraggingConnectorEndpoint {
+                    node,
+                    end,
+                    original,
+                    current_world: world,
+                    target,
+                };
+                InteractionEffect::MoveConnectorEndpoint {
+                    node,
+                    end,
+                    point: world,
+                    target,
+                }
+            }
+            (_, InteractionEvent::MoveConnectorEndpoint { .. }) => InteractionEffect::None,
 
             (
                 InteractionState::Resizing {
@@ -869,7 +1001,8 @@ impl InteractionMachine {
                     // A double-click on a grip is two presses on a corner, and
                     // it means the resize the first one started rather than a
                     // caret on whatever is underneath.
-                    PointerTarget::ResizeGrip { node, .. } => TextTarget::Node(node),
+                    PointerTarget::ResizeGrip { node, .. }
+                    | PointerTarget::ConnectorEndpoint { node, .. } => TextTarget::Node(node),
                     // **Empty canvas creates text**, centred on the pointer,
                     // exactly as a click with the Text tool does — one rule,
                     // through `creation_rect`, so the two cannot disagree about
@@ -949,7 +1082,11 @@ impl InteractionMachine {
             }
 
             (
-                InteractionState::CreatingShape { tool, gesture },
+                InteractionState::CreatingShape {
+                    tool,
+                    gesture,
+                    start_target,
+                },
                 InteractionEvent::PointerMove { screen, world },
             ) => {
                 let gesture = CreationGesture {
@@ -957,10 +1094,39 @@ impl InteractionMachine {
                     current_screen: screen,
                     ..gesture
                 };
-                self.state = InteractionState::CreatingShape { tool, gesture };
+                self.state = InteractionState::CreatingShape {
+                    tool,
+                    gesture,
+                    start_target,
+                };
                 InteractionEffect::UpdateCreate {
                     tool,
                     rect: creation_rect(tool, gesture),
+                }
+            }
+
+            (
+                InteractionState::DraggingConnectorEndpoint {
+                    node,
+                    end,
+                    original,
+                    target,
+                    ..
+                },
+                InteractionEvent::PointerMove { world, .. },
+            ) => {
+                self.state = InteractionState::DraggingConnectorEndpoint {
+                    node,
+                    end,
+                    original,
+                    current_world: world,
+                    target,
+                };
+                InteractionEffect::MoveConnectorEndpoint {
+                    node,
+                    end,
+                    point: world,
+                    target,
                 }
             }
 
@@ -1044,8 +1210,12 @@ impl InteractionMachine {
             }
 
             (
-                InteractionState::CreatingShape { tool, gesture },
-                InteractionEvent::PointerUp { button, .. },
+                InteractionState::CreatingShape {
+                    tool,
+                    gesture,
+                    start_target,
+                },
+                InteractionEvent::PointerUp { button, target, .. },
             ) => {
                 if button == PointerButton::Left {
                     self.state = InteractionState::Idle;
@@ -1076,7 +1246,39 @@ impl InteractionMachine {
                         self.state = InteractionState::EditingText { target };
                         return InteractionEffect::BeginTextEdit(target);
                     }
-                    InteractionEffect::CommitCreate { tool, rect }
+                    // **The ordered endpoints, not the released pointer.** A
+                    // click with a linear tool has no travel and rule 1 gives
+                    // it a default-length segment; taking `world` here would
+                    // have collapsed it to a point. The view snapped its
+                    // `target` at this same end — it reads `connector_creation`
+                    // before sending the release — so the two agree.
+                    let connector =
+                        matches!(tool, CanvasTool::Line | CanvasTool::Arrow).then(|| {
+                            let (start, end) = connector_endpoints(tool, gesture);
+                            ConnectorCreation {
+                                start,
+                                end,
+                                start_target,
+                                end_target: target.node(),
+                            }
+                        });
+                    InteractionEffect::CommitCreate {
+                        tool,
+                        rect,
+                        connector,
+                    }
+                } else {
+                    InteractionEffect::None
+                }
+            }
+
+            (
+                InteractionState::DraggingConnectorEndpoint { node, end, .. },
+                InteractionEvent::PointerUp { button, .. },
+            ) => {
+                if button == PointerButton::Left {
+                    self.state = InteractionState::Idle;
+                    InteractionEffect::EndConnectorEndpointDrag { node, end }
                 } else {
                     InteractionEffect::None
                 }
@@ -1120,6 +1322,10 @@ impl InteractionMachine {
             (InteractionState::CreatingShape { .. }, InteractionEvent::Cancel) => {
                 self.state = InteractionState::Idle;
                 InteractionEffect::CancelCreate
+            }
+            (InteractionState::DraggingConnectorEndpoint { .. }, InteractionEvent::Cancel) => {
+                self.state = InteractionState::Idle;
+                InteractionEffect::CancelConnectorEndpointDrag
             }
             (InteractionState::EditingText { .. }, InteractionEvent::Cancel) => {
                 self.state = InteractionState::Idle;
@@ -2079,7 +2285,7 @@ mod tests {
         let previewed = machine.creation_preview().expect("a drag is in progress");
         let effect = machine.handle(up(PointerButton::Left));
 
-        let InteractionEffect::CommitCreate { tool, rect } = effect else {
+        let InteractionEffect::CommitCreate { tool, rect, .. } = effect else {
             panic!("a released creation must commit, got {effect:?}");
         };
         assert_eq!(tool, CanvasTool::Rectangle);

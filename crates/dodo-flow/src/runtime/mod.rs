@@ -49,7 +49,7 @@ pub use connection::{ConnectionError, ConnectionRules};
 pub use dirty::{DirtyState, EdgeDirty, NodeDirty};
 pub use edges::{EdgeEnd, EdgeFlags, EdgeSpec, EdgeStore, OptionalHandle};
 pub use handles::{HandleFlags, HandleSpec, HandleStore};
-pub use hit::{HitTolerance, PointerTarget};
+pub use hit::{ConnectorSnap, HitTolerance, PointerTarget};
 pub use nodes::{NodeCold, NodeFlags, NodeShape, NodeSpec, NodeStore};
 pub use routes::EdgeGeometryStore;
 pub use selection::{BoxQuery, BoxSelectMode, SelectionSet};

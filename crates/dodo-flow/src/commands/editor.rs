@@ -70,8 +70,9 @@ use crate::{
     geometry::{RouteOptions, Vec2},
     interaction::TextTarget,
     models::{
-        DocumentSettings, EdgeIndex, EdgeRouting, ElementId, ElementKind, ElementStyle,
-        FlowDocument, ImageCrop, ImageResource, NodeImage, NodeIndex, RenderStyle, SketchStyle,
+        Connector, ConnectorEnd, ConnectorEndpoint, DocumentSettings, EdgeIndex, EdgeRouting,
+        ElementId, ElementKind, ElementStyle, FlowDocument, ImageCrop, ImageResource, NodeImage,
+        NodeIndex, RenderStyle, SketchStyle,
     },
     properties::{CropChoice, crop_choice},
     runtime::{
@@ -355,6 +356,77 @@ impl FlowEditor {
                 summary.changed
             }
         }
+    }
+
+    /// Resolves a newly drawn straight connector, preserving pointer-down as
+    /// `start` and pointer-up as `end` while adding semantic attachments.
+    pub fn connector_between(
+        &self,
+        start: Vec2,
+        end: Vec2,
+        start_target: Option<NodeIndex>,
+        end_target: Option<NodeIndex>,
+    ) -> Connector {
+        let mut connector = Connector::new(start, end);
+        if let Some(target) = start_target
+            && let Some((attachment, point)) = self.world.connector_attachment(target, end)
+        {
+            connector.start = ConnectorEndpoint {
+                point,
+                attachment: Some(attachment),
+            };
+        }
+        if let Some(target) = end_target
+            && let Some((attachment, point)) = self.world.connector_attachment(target, start)
+        {
+            connector.end = ConnectorEndpoint {
+                point,
+                attachment: Some(attachment),
+            };
+        }
+        connector
+    }
+
+    /// Moves exactly one ordered endpoint, rebinding it when `target` is valid
+    /// and detaching it otherwise.
+    pub fn set_connector_endpoint(
+        &mut self,
+        node: NodeIndex,
+        end: ConnectorEnd,
+        point: Vec2,
+        target: Option<NodeIndex>,
+    ) -> bool {
+        let Some(mut connector) = self.world.nodes().connector(node) else {
+            return false;
+        };
+        let opposite = connector.opposite(end).point;
+        *connector.endpoint_mut(end) = target
+            .and_then(|target| self.world.connector_attachment(target, opposite))
+            .map_or_else(
+                || ConnectorEndpoint::free(point),
+                |(attachment, point)| ConnectorEndpoint {
+                    point,
+                    attachment: Some(attachment),
+                },
+            );
+
+        self.apply(EditCommand::SetNodeConnectors(vec![(node, connector)]))
+            .is_ok_and(|summary| summary.changed)
+    }
+
+    /// Body dragging for a connector: free ends translate, bound ends remain
+    /// on their semantic targets. Endpoint dragging is the ordinary edit path.
+    pub fn translate_connector(&mut self, node: NodeIndex, delta: Vec2) -> bool {
+        let Some(mut connector) = self.world.nodes().connector(node) else {
+            return false;
+        };
+        for end in [&mut connector.start, &mut connector.end] {
+            if end.attachment.is_none() {
+                end.point += delta;
+            }
+        }
+        self.apply(EditCommand::SetNodeConnectors(vec![(node, connector)]))
+            .is_ok_and(|summary| summary.changed)
     }
 
     /// **Inserts §10's picture**, centred on `center`, sized to fit `room`, and
@@ -798,6 +870,13 @@ impl FlowEditor {
                     // reason a duplicated photograph costs sixteen bytes. See
                     // [`GraphWorld::insert_image`](crate::runtime::GraphWorld::insert_image).
                     image: cold.image,
+                    connector: cold.connector.map(|mut connector| {
+                        connector.start.point += DUPLICATE_OFFSET;
+                        connector.start.attachment = None;
+                        connector.end.point += DUPLICATE_OFFSET;
+                        connector.end.attachment = None;
+                        connector
+                    }),
                     hidden: self.world.nodes().is_hidden(node),
                     locked: self.world.nodes().is_locked(node),
                 };

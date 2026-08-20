@@ -373,22 +373,25 @@ impl NodeRendererRegistry {
                 filled: false,
                 ..NodeVisual::FALLBACK
             },
-            // A drawn shape is not a rich node. It has a body and nothing else,
-            // and the vector loop is what paints it — this arm exists so the
-            // shape override is still answerable for one.
+            // A drawn shape is not a rich node: no glyph, no accent bar, the
+            // vector loop paints it. **It is still labelled**, because §9's
+            // double-click opens a caret on it and a committed label that no
+            // painter reads is text the author watched disappear — the failure
+            // this row caused before it said `true`.
             ElementKind::Shape(shape) => NodeVisual {
                 body: shape_body(shape),
                 glyph: NodeGlyph::None,
-                shows_label: false,
                 ..NodeVisual::FALLBACK
             },
             // §7's free linear elements. Not filled — an open outline has no
-            // interior — and not labelled, for the same reason a drawn shape is
-            // not: the vector loop paints it and there is no rich element.
+            // interior — and labelled for the same reason a drawn shape is: the
+            // caret opens on one, so the label has to come back out. A
+            // connector's label is laid out on its segment midpoint rather than
+            // inside a rectangle it does not have; see `render::scene`'s
+            // `plan_labels`.
             ElementKind::Linear(kind) => NodeVisual {
                 body: linear_body(*kind),
                 glyph: NodeGlyph::None,
-                shows_label: false,
                 filled: false,
                 ..NodeVisual::FALLBACK
             },

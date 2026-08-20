@@ -162,7 +162,9 @@ use crate::{
         shapes,
         snapshot::{RenderSnapshot, SnapshotCounts},
     },
-    runtime::{BoxQuery, EdgeEnd, GraphWorld, HitTolerance, PointerTarget, SelectionSet},
+    runtime::{
+        BoxQuery, ConnectorSnap, EdgeEnd, GraphWorld, HitTolerance, PointerTarget, SelectionSet,
+    },
     services::document_store::{DiskDocumentStore, DocumentStore},
     spatial::{SpatialIndex, SyncReport, VisibleSet},
     views::{
@@ -307,6 +309,9 @@ fn reporting() -> bool {
 
 /// The width the connection preview is drawn at, in screen pixels.
 const PREVIEW_WIDTH: f32 = 1.5;
+
+/// Endpoint snapping distance in screen pixels.
+const CONNECTOR_SNAP_PIXELS: f32 = 12.0;
 
 /// The height of §9's text editor, in screen pixels.
 ///
@@ -1391,7 +1396,30 @@ impl FlowView {
         let screen = self.viewport.world_rect_to_screen(world);
         let shape = crate::runtime::NodeShape::of(&kind);
         let radius = self.viewport.world_to_screen_length(GRAPH_NODE_RADIUS);
-        let Some(outline) = shapes::outline_for_node(shape, screen, radius) else {
+        let outline = if let Some((_, mut creation)) = self.interaction.connector_creation() {
+            let end_snap = self.connector_snap_at(creation.end, creation.start, None);
+            creation.end_target = end_snap.map(|snap| snap.target);
+            let connector = self.editor.connector_between(
+                creation.start,
+                creation.end,
+                creation.start_target,
+                creation.end_target,
+            );
+            if let Some(target) = creation.start_target {
+                self.plan_connector_snap_feedback(target, ink);
+            }
+            if let Some(snap) = end_snap {
+                self.plan_connector_snap_feedback(snap.target, ink);
+            }
+            shapes::outline_for_connector(
+                shape,
+                self.viewport.world_to_screen(connector.start.point),
+                self.viewport.world_to_screen(connector.end.point),
+            )
+        } else {
+            shapes::outline_for_node(shape, screen, radius)
+        };
+        let Some(outline) = outline else {
             return;
         };
 
@@ -1404,6 +1432,18 @@ impl FlowView {
         }
         self.plan.push_path(PathPrimitive::stroke(
             outline,
+            ink.accent,
+            PREVIEW_WIDTH,
+            RenderQuality::BALANCED,
+        ));
+    }
+
+    fn plan_connector_snap_feedback(&mut self, target: NodeIndex, ink: SceneInk) {
+        let screen = self
+            .viewport
+            .world_rect_to_screen(self.editor.world().nodes().bounds(target));
+        self.plan.push_path(PathPrimitive::stroke(
+            shapes::rectangle(screen.inflate(3.0)),
             ink.accent,
             PREVIEW_WIDTH,
             RenderQuality::BALANCED,
@@ -1518,6 +1558,9 @@ impl FlowView {
         self.plan_connection_preview(ink);
         self.plan_selection_rect(ink);
         self.plan_creation_preview(ink);
+        if let Some((_, _, _, Some(target))) = self.interaction.dragging_connector_endpoint() {
+            self.plan_connector_snap_feedback(target, ink);
+        }
         self.instruments.record(Probe::RenderExtract, timer);
 
         self.last_grid = self.last_scene.grid;
@@ -1847,13 +1890,33 @@ impl FlowView {
     ) -> InteractionEvent {
         let screen = self.local(position, bounds);
         let world = self.viewport.screen_to_world(screen);
-        let target = self.target_at(world);
+        let target = if matches!(
+            self.interaction.tool(),
+            CanvasTool::Line | CanvasTool::Arrow
+        ) {
+            self.connector_snap_at(world, world, None)
+                .map_or(PointerTarget::Empty, |snap| {
+                    PointerTarget::Node(snap.target)
+                })
+        } else {
+            self.target_at(world)
+        };
         let modifiers = InputModifiers {
             shift: modifiers.shift,
             control: modifiers.control,
             alt: modifiers.alt,
             command: modifiers.platform,
         };
+
+        if let Some((node, end)) = target.connector_endpoint() {
+            if let Some(connector) = self.editor.world().nodes().connector(node) {
+                return InteractionEvent::BeginConnectorEndpointDrag {
+                    node,
+                    end,
+                    connector,
+                };
+            }
+        }
 
         // **A grip press is its own event, not a press with a grip target.**
         // The resize needs the element's current rectangle and the machine is
@@ -1911,6 +1974,20 @@ impl FlowView {
         true
     }
 
+    fn connector_snap_at(
+        &self,
+        world: Vec2,
+        toward: Vec2,
+        exclude: Option<NodeIndex>,
+    ) -> Option<ConnectorSnap> {
+        let radius = self.viewport.screen_to_world_length(CONNECTOR_SNAP_PIXELS);
+        let mut candidates = Vec::new();
+        self.spatial.nodes_at(world, radius, &mut candidates);
+        self.editor
+            .world()
+            .snap_connector_endpoint(world, toward, candidates, exclude, radius)
+    }
+
     /// **What is under the pointer** — §29's two phases, both of them present.
     ///
     /// Broad phase from the spatial index, narrow phase in the world. Phase 3
@@ -1928,6 +2005,22 @@ impl FlowView {
     fn target_at(&self, world: Vec2) -> PointerTarget {
         let tolerance = HitTolerance::at_zoom(self.viewport.zoom());
         let radius = tolerance.handle_radius;
+
+        // A selected connector has exactly two endpoint handles. They replace
+        // rectangle resize corners and are hit-tested from the same snapshot
+        // that drew them.
+        if let Some(overlay) = self.snapshot.overlay()
+            && overlay.connector_endpoints.is_some()
+            && let Some(end) =
+                self.editor
+                    .world()
+                    .hit_test_connector_endpoint(world, overlay.node, tolerance)
+        {
+            return PointerTarget::ConnectorEndpoint {
+                node: overlay.node,
+                end,
+            };
+        }
 
         // **Grips are asked first**, which is the opposite end of the ranking
         // from edges and for the mirror of the reason: a grip is drawn on top
@@ -2104,10 +2197,18 @@ impl FlowView {
                         return;
                     }
                     let screen = this.local(event.position, bounds);
-                    let effect = this.interaction.handle(InteractionEvent::PointerMove {
-                        screen,
-                        world: this.viewport.screen_to_world(screen),
-                    });
+                    let world = this.viewport.screen_to_world(screen);
+                    let interaction_event = if let Some((node, _, opposite, _)) =
+                        this.interaction.dragging_connector_endpoint()
+                    {
+                        let target = this
+                            .connector_snap_at(world, opposite, Some(node))
+                            .map(|snap| snap.target);
+                        InteractionEvent::MoveConnectorEndpoint { world, target }
+                    } else {
+                        InteractionEvent::PointerMove { screen, world }
+                    };
+                    let effect = this.interaction.handle(interaction_event);
                     if this.apply(effect, &hitbox, window, cx) {
                         cx.notify();
                     }
@@ -2130,10 +2231,24 @@ impl FlowView {
                     let world = this
                         .viewport
                         .screen_to_world(this.local(event.position, bounds));
+                    // **Snapped at the connector's own end, not at the
+                    // pointer.** A click with a linear tool produces a
+                    // default-length segment whose end is not where the button
+                    // came up, and the machine commits that same end — see
+                    // `interaction::tool::connector_endpoints`.
+                    let target = if let Some((_, creation)) = this.interaction.connector_creation()
+                    {
+                        this.connector_snap_at(creation.end, creation.start, None)
+                            .map_or(PointerTarget::Empty, |snap| {
+                                PointerTarget::Node(snap.target)
+                            })
+                    } else {
+                        this.target_at(world)
+                    };
                     let effect = this.interaction.handle(InteractionEvent::PointerUp {
                         button,
                         world,
-                        target: this.target_at(world),
+                        target,
                     });
                     if this.apply(effect, &hitbox, window, cx) {
                         cx.notify();
@@ -2514,21 +2629,23 @@ impl FlowView {
         };
 
         let seed = self.editor.text_of(target).unwrap_or_default().to_owned();
+        let selection_end = seed.len();
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t(flow::Text::TextPlaceholder, cx))
                 .default_value(seed)
         });
-        // Focus goes to the field, which takes it away from the canvas — and
-        // that is correct rather than a lapse: while a caret is out, letters
-        // must reach the text and not the tool palette. `commit_text_edit`
-        // gives it back.
-        window.focus(&input.focus_handle(cx), cx);
-
         self.editing = Some(TextEditor {
             target,
-            input,
+            input: input.clone(),
             world,
+        });
+        // The real inline control owns focus before this handler returns, and
+        // existing text follows the editor convention of opening selected so
+        // typing replaces it immediately rather than requiring a second click.
+        input.update(cx, |input, cx| {
+            input.set_selected_range(0..selection_end, cx);
+            input.focus(window, cx);
         });
         cx.notify();
     }
@@ -2583,7 +2700,19 @@ impl FlowView {
             TextTarget::New(rect) => Some(rect.normalized()),
             TextTarget::Node(node) => {
                 let nodes = self.editor.world().nodes();
-                (nodes.contains(node) && nodes.is_live(node)).then(|| nodes.bounds(node))
+                if !nodes.contains(node) || !nodes.is_live(node) {
+                    return None;
+                }
+                if let Some(connector) = nodes.connector(node) {
+                    let size = Vec2::new(
+                        self.viewport
+                            .screen_to_world_length(scene::EDGE_LABEL_MAX_PIXELS),
+                        self.viewport.screen_to_world_length(EDIT_LINE_PIXELS),
+                    );
+                    Some(Rect::new(connector.midpoint() - size * 0.5, size))
+                } else {
+                    Some(nodes.bounds(node))
+                }
             }
             TextTarget::Edge(edge) => {
                 let route = self.editor.world().route(edge)?;

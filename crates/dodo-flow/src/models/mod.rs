@@ -41,8 +41,9 @@ pub mod serialization;
 pub mod style;
 
 pub use document::{
-    DocumentSettings, Endpoint, FlowDocument, FlowEdge, FlowNode, Handle, HandleDirection,
-    HandlePlacement, Metadata, handle_world_position,
+    Connector, ConnectorAttachment, ConnectorEnd, ConnectorEndpoint, DocumentSettings, Endpoint,
+    FlowDocument, FlowEdge, FlowNode, Handle, HandleDirection, HandlePlacement, Metadata,
+    handle_world_position,
 };
 pub use ids::{EdgeIndex, ElementId, HandleId, HandleIndex, IdAllocator, NodeIndex};
 pub use image::{

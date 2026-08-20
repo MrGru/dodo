@@ -37,5 +37,6 @@ pub use state::{
     InteractionMachine, InteractionState, PendingConnection, PointerButton,
 };
 pub use tool::{
-    CanvasTool, CreationGesture, MIN_DRAG_PIXELS, TextTarget, creation_rect, resize_keeps_aspect,
+    CanvasTool, ConnectorCreation, CreationGesture, MIN_DRAG_PIXELS, TextTarget,
+    connector_endpoints, creation_rect, resize_keeps_aspect,
 };

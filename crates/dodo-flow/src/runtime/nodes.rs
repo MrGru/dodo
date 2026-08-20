@@ -57,8 +57,8 @@ use std::sync::Arc;
 use crate::{
     geometry::{Rect, Vec2},
     models::{
-        ElementId, ElementKind, ElementStyle, GraphNodeKind, HandleIndex, LinearKind, NodeImage,
-        NodeIndex, ShapeKind,
+        Connector, ElementId, ElementKind, ElementStyle, GraphNodeKind, HandleIndex, LinearKind,
+        NodeImage, NodeIndex, ShapeKind,
     },
     runtime::CompactList,
 };
@@ -244,6 +244,8 @@ pub struct NodeCold {
     /// sixteen bytes per node in a hot one, on a document where almost no node
     /// is a picture.
     pub image: Option<NodeImage>,
+    /// Ordered geometry and semantic attachments for a straight line/arrow.
+    pub connector: Option<Connector>,
 }
 
 /// What a node needs to exist.
@@ -260,12 +262,19 @@ pub struct NodeSpec {
     pub link: Option<String>,
     /// §10's picture. `None` for every kind but [`ElementKind::Image`].
     pub image: Option<NodeImage>,
+    /// Ordered geometry for straight linear elements.
+    pub connector: Option<Connector>,
     pub hidden: bool,
     pub locked: bool,
 }
 
 impl NodeSpec {
     pub fn new(id: ElementId, kind: ElementKind, position: Vec2, size: Vec2) -> NodeSpec {
+        let connector = matches!(
+            kind,
+            ElementKind::Linear(LinearKind::Line | LinearKind::Arrow)
+        )
+        .then(|| Connector::from_rect(position, size));
         NodeSpec {
             id,
             kind,
@@ -277,6 +286,7 @@ impl NodeSpec {
             parent: None,
             link: None,
             image: None,
+            connector,
             hidden: false,
             locked: false,
         }
@@ -368,9 +378,13 @@ impl NodeStore {
 
     pub fn push(&mut self, spec: NodeSpec) -> NodeIndex {
         let index = NodeIndex::new(self.positions.len() as u32);
+        let bounds = spec
+            .connector
+            .map(Connector::bounds)
+            .unwrap_or_else(|| Rect::new(spec.position, spec.size));
 
-        self.positions.push(spec.position);
-        self.sizes.push(spec.size);
+        self.positions.push(bounds.origin);
+        self.sizes.push(bounds.size);
         self.shapes.push(NodeShape::of(&spec.kind));
         let mut flags = NodeFlags::NONE;
         if spec.hidden {
@@ -394,6 +408,7 @@ impl NodeStore {
             parent: spec.parent,
             link: spec.link,
             image: spec.image,
+            connector: spec.connector,
         });
 
         index
@@ -501,6 +516,10 @@ impl NodeStore {
         &self.cold[node.index()].kind
     }
 
+    pub fn connector(&self, node: NodeIndex) -> Option<Connector> {
+        self.cold[node.index()].connector
+    }
+
     /// The node's handles, in the order they were added.
     pub fn handles(&self, node: NodeIndex) -> impl ExactSizeIterator<Item = HandleIndex> + '_ {
         self.handles[node.index()]
@@ -589,6 +608,18 @@ impl NodeStore {
     /// must not re-shape when somebody crops a screenshot.
     pub fn set_image(&mut self, node: NodeIndex, image: Option<NodeImage>) {
         self.cold[node.index()].image = image;
+        self.touch(node);
+    }
+
+    /// Replaces a straight connector's ordered geometry. Its rectangle is
+    /// updated only as derived culling/selection data.
+    pub fn set_connector(&mut self, node: NodeIndex, connector: Option<Connector>) {
+        self.cold[node.index()].connector = connector;
+        if let Some(connector) = connector {
+            let bounds = connector.bounds();
+            self.positions[node.index()] = bounds.origin;
+            self.sizes[node.index()] = bounds.size;
+        }
         self.touch(node);
     }
 

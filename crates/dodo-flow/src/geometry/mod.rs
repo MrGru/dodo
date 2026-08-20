@@ -42,7 +42,7 @@ pub use bounds::{
     MIN_RESIZE_EXTENT, Rect, ResizeCorner, resize_from_corner, segment_intersects_rect,
 };
 pub use curve::{cubic_point, cubic_segments, flatten_cubic};
-pub use route::{Attachment, EdgeRoute, RouteOptions, RouteSegment, Side};
+pub use route::{Attachment, EdgeRoute, RouteOptions, RouteSegment, Side, distance_to_segment};
 pub use transform::Viewport;
 pub use vec::Vec2;
 

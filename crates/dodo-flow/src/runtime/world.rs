@@ -49,18 +49,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{
-    geometry::{Attachment, EdgeRoute, Rect, ResizeCorner, RouteOptions, Side, Vec2},
+    geometry::{
+        Attachment, EdgeRoute, Rect, ResizeCorner, RouteOptions, Side, Vec2, distance_to_segment,
+    },
     models::{
-        DocumentSettings, EdgeIndex, EdgeRouting, ElementId, ElementKind, ElementStyle, Endpoint,
-        FlowDocument, FlowEdge, FlowNode, Handle, HandleDirection, HandleId, HandleIndex,
-        HandlePlacement, IdAllocator, ImageHandle, ImageResource, Metadata, NodeImage, NodeIndex,
-        handle_world_position,
+        Connector, ConnectorAttachment, ConnectorEnd, DocumentSettings, EdgeIndex, EdgeRouting,
+        ElementId, ElementKind, ElementStyle, Endpoint, FlowDocument, FlowEdge, FlowNode, Handle,
+        HandleDirection, HandleId, HandleIndex, HandlePlacement, IdAllocator, ImageHandle,
+        ImageResource, Metadata, NodeImage, NodeIndex, handle_world_position,
     },
     runtime::{
-        AdjacencyIndex, BoxQuery, BoxSelectMode, ConnectionError, ConnectionRules, DirtyState,
-        EdgeDirty, EdgeEnd, EdgeFlags, EdgeGeometryStore, EdgeSpec, EdgeStore, HandleSpec,
-        HandleStore, HitTolerance, NodeDirty, NodeFlags, NodeSpec, NodeStore, PointerTarget,
-        SelectionSet,
+        AdjacencyIndex, BoxQuery, BoxSelectMode, ConnectionError, ConnectionRules, ConnectorSnap,
+        DirtyState, EdgeDirty, EdgeEnd, EdgeFlags, EdgeGeometryStore, EdgeSpec, EdgeStore,
+        HandleSpec, HandleStore, HitTolerance, NodeDirty, NodeFlags, NodeSpec, NodeStore,
+        PointerTarget, SelectionSet,
     },
 };
 
@@ -80,11 +82,17 @@ pub struct LoadReport {
     /// attached to the node itself — §4's whole-node connection mode is exactly
     /// the fallback this case wants, and the author's connection survives.
     pub unresolved_handles: Vec<ElementId>,
+    /// Straight connectors whose persisted attachment named a missing,
+    /// connector, or otherwise invalid target. The endpoint is kept at its
+    /// persisted point and safely detached.
+    pub unresolved_connector_attachments: Vec<ElementId>,
 }
 
 impl LoadReport {
     pub fn is_clean(&self) -> bool {
-        self.dangling_edges.is_empty() && self.unresolved_handles.is_empty()
+        self.dangling_edges.is_empty()
+            && self.unresolved_handles.is_empty()
+            && self.unresolved_connector_attachments.is_empty()
     }
 }
 
@@ -95,6 +103,9 @@ pub struct GraphWorld {
     edges: EdgeStore,
     handles: HandleStore,
     adjacency: AdjacencyIndex,
+    /// Target node -> bound straight-connector endpoints. The connector
+    /// counterpart of `adjacency`, so moving a target never scans the document.
+    connector_bindings: Vec<Vec<(NodeIndex, ConnectorEnd)>>,
     geometry: EdgeGeometryStore,
     dirty: DirtyState,
     rules: ConnectionRules,
@@ -194,6 +205,7 @@ impl GraphWorld {
                 parent: node.parent,
                 link: node.link.clone(),
                 image: node.image,
+                connector: node.connector,
                 hidden: node.hidden,
                 locked: node.locked,
             });
@@ -212,6 +224,8 @@ impl GraphWorld {
                 );
             }
         }
+
+        world.rebuild_connector_bindings(&mut report);
 
         let rules = std::mem::replace(&mut world.rules, ConnectionRules::PERMISSIVE);
 
@@ -307,6 +321,7 @@ impl GraphWorld {
                 style: self.nodes.style(node).clone(),
                 link: cold.link.clone(),
                 image: cold.image,
+                connector: cold.connector,
                 hidden: self.nodes.is_hidden(node),
                 locked: self.nodes.is_locked(node),
             });
@@ -526,6 +541,7 @@ impl GraphWorld {
     pub fn reserve(&mut self, nodes: usize, edges: usize) {
         self.nodes.reserve(nodes);
         self.adjacency.reserve(nodes);
+        self.connector_bindings.reserve(nodes);
         self.node_by_id.reserve(nodes);
         self.edges.reserve(edges);
         self.geometry.reserve(edges);
@@ -548,8 +564,11 @@ impl GraphWorld {
         let index = self.nodes.push(spec);
 
         self.adjacency.push_node();
+        self.connector_bindings.push(Vec::new());
         self.dirty.push_node();
         self.node_by_id.insert(id, index);
+        self.bind_connector(index);
+        self.refresh_connector(index);
 
         // A brand-new node has never been drawn or indexed, so it is dirty from
         // birth rather than from its first move.
@@ -746,30 +765,239 @@ impl GraphWorld {
             return;
         }
 
-        self.nodes
-            .set_position(node, self.nodes.position(node) + delta);
-        self.invalidate_geometry_of(node, NodeDirty::POSITION);
+        self.set_node_position(node, self.nodes.position(node) + delta);
     }
 
     /// Moves a node to an absolute position.
+    ///
+    /// **A connector is moved by rebuilding its ordered segment inside the new
+    /// rectangle**, never by writing the rectangle and leaving the segment
+    /// behind — see [`Connector::with_bounds`]. Endpoint identity survives, and
+    /// a bound endpoint is pulled back onto its target afterwards, because the
+    /// attachment outranks a translation nobody aimed at it.
     pub fn set_node_position(&mut self, node: NodeIndex, position: Vec2) {
         if !self.nodes.contains(node) || self.nodes.position(node) == position {
             return;
         }
 
-        self.nodes.set_position(node, position);
+        match self.nodes.connector(node) {
+            Some(connector) => {
+                let bounds = Rect::new(position, self.nodes.size(node));
+                self.nodes
+                    .set_connector(node, Some(connector.with_bounds(bounds)));
+                self.refresh_connector(node);
+            }
+            None => self.nodes.set_position(node, position),
+        }
         self.invalidate_geometry_of(node, NodeDirty::POSITION);
+        self.refresh_bound_connectors(node);
     }
 
     /// Resizes a node. Its handles are fractions of its edges, so every
     /// incident route moves with it — the same propagation as a move.
+    ///
+    /// A connector has no rectangle of its own to resize; the new extent is
+    /// pushed through [`Connector::with_bounds`] so its two ordered endpoints
+    /// land on the corners they already occupied.
     pub fn set_node_size(&mut self, node: NodeIndex, size: Vec2) {
         if !self.nodes.contains(node) || self.nodes.size(node) == size {
             return;
         }
 
-        self.nodes.set_size(node, size);
+        match self.nodes.connector(node) {
+            Some(connector) => {
+                let bounds = Rect::new(self.nodes.position(node), size);
+                self.nodes
+                    .set_connector(node, Some(connector.with_bounds(bounds)));
+                self.refresh_connector(node);
+            }
+            None => self.nodes.set_size(node, size),
+        }
         self.invalidate_geometry_of(node, NodeDirty::SIZE);
+        self.refresh_bound_connectors(node);
+    }
+
+    /// Replaces a straight connector's ordered geometry and endpoint bindings.
+    /// The opposite endpoint is untouched unless it is present in `connector`
+    /// with a different value; callers editing one end build that value from
+    /// the current connector.
+    pub fn set_node_connector(&mut self, node: NodeIndex, connector: Connector) {
+        if !self.nodes.contains(node) || self.nodes.connector(node) == Some(connector) {
+            return;
+        }
+
+        self.unbind_connector(node);
+        self.nodes.set_connector(node, Some(connector));
+        self.bind_connector(node);
+        self.refresh_connector(node);
+        self.invalidate_geometry_of(node, NodeDirty::SIZE);
+    }
+
+    /// Builds the persisted attachment and its resolved point on `target`'s
+    /// direction-appropriate edge.
+    pub fn connector_attachment(
+        &self,
+        target: NodeIndex,
+        toward: Vec2,
+    ) -> Option<(ConnectorAttachment, Vec2)> {
+        if !self.valid_connector_target(target, None) {
+            return None;
+        }
+
+        let bounds = self.nodes.bounds(target).normalized();
+        let side = Side::facing(bounds, toward);
+        let point = floating_point(bounds, side, toward);
+        let anchor = Vec2::new(
+            if bounds.width() > f32::EPSILON {
+                (point.x - bounds.origin.x) / bounds.width()
+            } else {
+                0.5
+            },
+            if bounds.height() > f32::EPSILON {
+                (point.y - bounds.origin.y) / bounds.height()
+            } else {
+                0.5
+            },
+        );
+        Some((
+            ConnectorAttachment {
+                element: self.nodes.id(target),
+                anchor,
+            },
+            point,
+        ))
+    }
+
+    fn valid_connector_target(&self, target: NodeIndex, connector: Option<NodeIndex>) -> bool {
+        self.nodes.is_live(target)
+            && connector != Some(target)
+            && !matches!(self.nodes.kind(target), ElementKind::Linear(_))
+    }
+
+    fn attachment_point(&self, attachment: ConnectorAttachment) -> Option<Vec2> {
+        let target = self.node_index(attachment.element)?;
+        if !self.valid_connector_target(target, None) {
+            return None;
+        }
+        let bounds = self.nodes.bounds(target).normalized();
+        let anchor = Vec2::new(
+            attachment.anchor.x.clamp(0.0, 1.0),
+            attachment.anchor.y.clamp(0.0, 1.0),
+        );
+        Some(bounds.origin + Vec2::new(bounds.width() * anchor.x, bounds.height() * anchor.y))
+    }
+
+    fn bind_connector(&mut self, connector: NodeIndex) {
+        let Some(geometry) = self.nodes.connector(connector) else {
+            return;
+        };
+        for end in [ConnectorEnd::Start, ConnectorEnd::End] {
+            let Some(attachment) = geometry.endpoint(end).attachment else {
+                continue;
+            };
+            let Some(target) = self.node_index(attachment.element) else {
+                continue;
+            };
+            if self.valid_connector_target(target, Some(connector)) {
+                self.connector_bindings[target.index()].push((connector, end));
+            }
+        }
+    }
+
+    fn unbind_connector(&mut self, connector: NodeIndex) {
+        let Some(geometry) = self.nodes.connector(connector) else {
+            return;
+        };
+        for end in [ConnectorEnd::Start, ConnectorEnd::End] {
+            let Some(attachment) = geometry.endpoint(end).attachment else {
+                continue;
+            };
+            let Some(target) = self.node_index(attachment.element) else {
+                continue;
+            };
+            if let Some(bindings) = self.connector_bindings.get_mut(target.index()) {
+                bindings.retain(|binding| *binding != (connector, end));
+            }
+        }
+    }
+
+    fn refresh_connector(&mut self, connector: NodeIndex) {
+        let Some(mut geometry) = self.nodes.connector(connector) else {
+            return;
+        };
+        let mut changed = false;
+        for end in [ConnectorEnd::Start, ConnectorEnd::End] {
+            let Some(attachment) = geometry.endpoint(end).attachment else {
+                continue;
+            };
+            let Some(point) = self.attachment_point(attachment) else {
+                continue;
+            };
+            let endpoint = geometry.endpoint_mut(end);
+            changed |= endpoint.point != point;
+            endpoint.point = point;
+        }
+        if changed {
+            self.nodes.set_connector(connector, Some(geometry));
+        }
+    }
+
+    fn refresh_bound_connectors(&mut self, target: NodeIndex) {
+        let Some(bindings) = self.connector_bindings.get(target.index()).cloned() else {
+            return;
+        };
+        for (connector, _) in bindings {
+            if !self.nodes.is_live(connector) {
+                continue;
+            }
+            let before = self.nodes.connector(connector);
+            self.refresh_connector(connector);
+            if self.nodes.connector(connector) != before {
+                self.invalidate_geometry_of(connector, NodeDirty::POSITION);
+            }
+        }
+    }
+
+    fn rebuild_connector_bindings(&mut self, report: &mut LoadReport) {
+        for bindings in &mut self.connector_bindings {
+            bindings.clear();
+        }
+
+        for connector in self.nodes.live_indices().collect::<Vec<_>>() {
+            let Some(mut geometry) = self.nodes.connector(connector) else {
+                continue;
+            };
+            let mut changed = false;
+            for end in [ConnectorEnd::Start, ConnectorEnd::End] {
+                let endpoint = geometry.endpoint_mut(end);
+                let Some(attachment) = endpoint.attachment else {
+                    continue;
+                };
+                let Some(target) = self.node_index(attachment.element) else {
+                    endpoint.attachment = None;
+                    changed = true;
+                    report
+                        .unresolved_connector_attachments
+                        .push(self.nodes.id(connector));
+                    continue;
+                };
+                if !self.valid_connector_target(target, Some(connector)) {
+                    endpoint.attachment = None;
+                    changed = true;
+                    report
+                        .unresolved_connector_attachments
+                        .push(self.nodes.id(connector));
+                    continue;
+                }
+                if let Some(point) = self.attachment_point(attachment) {
+                    endpoint.point = point;
+                }
+                self.connector_bindings[target.index()].push((connector, end));
+            }
+            if changed || self.nodes.connector(connector) != Some(geometry) {
+                self.nodes.set_connector(connector, Some(geometry));
+            }
+        }
     }
 
     /// Replaces a node's style (§32, and §30's `UpdateStyle`).
@@ -1339,7 +1567,14 @@ impl GraphWorld {
                 }
             }
 
-            if self.nodes.bounds(node).contains_point(point) {
+            let hits_body = self.nodes.connector(node).map_or_else(
+                || self.nodes.bounds(node).contains_point(point),
+                |connector| {
+                    distance_to_segment(point, connector.start.point, connector.end.point)
+                        <= tolerance.edge_radius
+                },
+            );
+            if hits_body {
                 let z = self.nodes.z(node);
                 if best_node.is_none_or(|(best, best_z)| (z, node.raw()) >= (best_z, best.raw())) {
                     best_node = Some((node, z));
@@ -1352,6 +1587,79 @@ impl GraphWorld {
             (None, Some((node, _))) => PointerTarget::Node(node),
             (None, None) => PointerTarget::Empty,
         }
+    }
+
+    /// Which of a selected straight connector's two ordered endpoints is under
+    /// the pointer. Exactly two candidates; rectangle corners never enter.
+    pub fn hit_test_connector_endpoint(
+        &self,
+        point: Vec2,
+        node: NodeIndex,
+        tolerance: HitTolerance,
+    ) -> Option<ConnectorEnd> {
+        if !self.node_is_live(node) || self.nodes.is_hidden(node) || self.nodes.is_locked(node) {
+            return None;
+        }
+        let connector = self.nodes.connector(node)?;
+        let radius_squared = tolerance.grip_radius * tolerance.grip_radius;
+        [ConnectorEnd::Start, ConnectorEnd::End]
+            .into_iter()
+            .map(|end| {
+                (
+                    end,
+                    (connector.endpoint(end).point - point).length_squared(),
+                )
+            })
+            .filter(|(_, distance)| *distance <= radius_squared)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(end, _)| end)
+    }
+
+    /// The nearest valid non-connector target within `radius` of an endpoint,
+    /// with the direction-appropriate persisted anchor and resolved point.
+    pub fn snap_connector_endpoint(
+        &self,
+        point: Vec2,
+        toward: Vec2,
+        candidates: impl IntoIterator<Item = NodeIndex>,
+        exclude: Option<NodeIndex>,
+        radius: f32,
+    ) -> Option<ConnectorSnap> {
+        let mut best: Option<(ConnectorSnap, f32, i32)> = None;
+        for target in candidates {
+            if !self.valid_connector_target(target, exclude) || self.nodes.is_hidden(target) {
+                continue;
+            }
+            let bounds = self.nodes.bounds(target).normalized();
+            let min = bounds.min();
+            let max = bounds.max();
+            let closest = Vec2::new(point.x.clamp(min.x, max.x), point.y.clamp(min.y, max.y));
+            let distance = (closest - point).length_squared();
+            if distance > radius * radius {
+                continue;
+            }
+            let Some((attachment, snapped)) = self.connector_attachment(target, toward) else {
+                continue;
+            };
+            let snap = ConnectorSnap {
+                target,
+                point: snapped,
+                attachment,
+            };
+            let z = self.nodes.z(target);
+            let replace = match best.as_ref() {
+                None => true,
+                Some((current, best_distance, best_z)) => {
+                    distance < *best_distance
+                        || (distance == *best_distance
+                            && (z, target.raw()) > (*best_z, current.target.raw()))
+                }
+            };
+            if replace {
+                best = Some((snap, distance, z));
+            }
+        }
+        best.map(|(snap, _, _)| snap)
     }
 
     /// **§29's narrow phase for a resize grip** (Phase 12): which corner of
@@ -1480,14 +1788,154 @@ mod tests {
     use crate::{
         geometry::{Side, Vec2},
         models::{
-            EdgeRouting, ElementId, ElementKind, Endpoint, FlowDocument, GraphNodeKind, Handle,
-            HandleDirection, HandleId, HandlePlacement, NodeIndex, ShapeKind,
+            Connector, ConnectorAttachment, ConnectorEnd, ConnectorEndpoint, EdgeRouting,
+            ElementId, ElementKind, Endpoint, FlowDocument, GraphNodeKind, Handle, HandleDirection,
+            HandleId, HandlePlacement, LinearKind, NodeIndex, ShapeKind,
         },
         runtime::{
             BoxQuery, BoxSelectMode, ConnectionError, ConnectionRules, EdgeEnd, HandleSpec,
-            HitTolerance, NodeDirty, NodeFlags, PointerTarget,
+            HitTolerance, NodeDirty, NodeFlags, NodeSpec, PointerTarget,
         },
     };
+
+    fn bound_connector_world() -> (GraphWorld, NodeIndex, NodeIndex, NodeIndex) {
+        let mut world = GraphWorld::new();
+        let a = world.create_node(
+            ElementKind::Shape(ShapeKind::Rectangle),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(100.0, 100.0),
+        );
+        let b = world.create_node(
+            ElementKind::Shape(ShapeKind::Rectangle),
+            Vec2::new(300.0, 0.0),
+            Vec2::new(100.0, 100.0),
+        );
+        let (start_attachment, start) = world
+            .connector_attachment(a, world.nodes().bounds(b).center())
+            .unwrap();
+        let (end_attachment, end) = world
+            .connector_attachment(b, world.nodes().bounds(a).center())
+            .unwrap();
+        let mut connector = Connector::new(start, end);
+        connector.start.attachment = Some(start_attachment);
+        connector.end.attachment = Some(end_attachment);
+        let id = world.next_id();
+        let mut spec = NodeSpec::new(
+            id,
+            ElementKind::Linear(LinearKind::Arrow),
+            connector.bounds().origin,
+            connector.bounds().size,
+        );
+        spec.connector = Some(connector);
+        let line = world.add_node(spec);
+        (world, a, b, line)
+    }
+
+    #[test]
+    fn a_bound_connector_follows_both_elements_moving_and_resizing() {
+        let (mut world, a, b, line) = bound_connector_world();
+        let before = world.nodes().connector(line).unwrap();
+
+        world.move_node(a, Vec2::new(40.0, 30.0));
+        let moved = world.nodes().connector(line).unwrap();
+        assert_eq!(
+            moved.start.point,
+            before.start.point + Vec2::new(40.0, 30.0)
+        );
+        assert_eq!(moved.end, before.end, "moving A changed B's endpoint");
+
+        world.set_node_size(b, Vec2::new(100.0, 200.0));
+        let resized = world.nodes().connector(line).unwrap();
+        assert_eq!(
+            resized.start, moved.start,
+            "resizing B changed A's endpoint"
+        );
+        assert_eq!(resized.end.point, Vec2::new(300.0, 100.0));
+    }
+
+    #[test]
+    fn a_connector_is_hit_only_near_its_actual_segment() {
+        let (world, _, _, line) = bound_connector_world();
+        let connector = world.nodes().connector(line).unwrap();
+        let midpoint = connector.midpoint();
+        let tolerance = HitTolerance::new(9.0);
+
+        assert_eq!(
+            world.hit_test(midpoint, [line], tolerance),
+            PointerTarget::Node(line)
+        );
+        assert_eq!(
+            world.hit_test(
+                Vec2::new(
+                    connector.bounds().origin.x,
+                    connector.bounds().max().y + 30.0
+                ),
+                [line],
+                tolerance,
+            ),
+            PointerTarget::Empty
+        );
+    }
+
+    #[test]
+    fn connector_snap_chooses_directional_edges_and_reports_feedback() {
+        let mut world = GraphWorld::new();
+        let target = world.create_node(
+            ElementKind::Shape(ShapeKind::Rectangle),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(100.0, 80.0),
+        );
+        let cases = [
+            (Vec2::new(300.0, 140.0), Vec2::new(1.0, 0.5)),
+            (Vec2::new(0.0, 140.0), Vec2::new(0.0, 0.5)),
+            (Vec2::new(150.0, 0.0), Vec2::new(0.5, 0.0)),
+            (Vec2::new(150.0, 300.0), Vec2::new(0.5, 1.0)),
+        ];
+        for (toward, expected_anchor) in cases {
+            let (attachment, _) = world.connector_attachment(target, toward).unwrap();
+            assert_eq!(attachment.anchor, expected_anchor);
+        }
+
+        let snap = world
+            .snap_connector_endpoint(
+                Vec2::new(205.0, 140.0),
+                Vec2::new(300.0, 140.0),
+                [target],
+                None,
+                12.0,
+            )
+            .expect("nearby target snaps");
+        assert_eq!(snap.target, target);
+        assert_eq!(snap.point, Vec2::new(200.0, 140.0));
+        assert_eq!(snap.attachment.anchor, Vec2::new(1.0, 0.5));
+    }
+
+    #[test]
+    fn unresolved_connector_attachments_detach_without_moving_the_endpoint() {
+        let mut document = FlowDocument::new();
+        let mut node = crate::models::FlowNode::new(
+            document.next_id(),
+            ElementKind::Linear(LinearKind::Line),
+            Vec2::ZERO,
+            Vec2::new(80.0, 20.0),
+        );
+        let mut connector = node.connector.unwrap();
+        connector.start = ConnectorEndpoint {
+            point: Vec2::new(7.0, 9.0),
+            attachment: Some(ConnectorAttachment {
+                element: ElementId::new(999),
+                anchor: Vec2::new(1.0, 0.5),
+            }),
+        };
+        node.connector = Some(connector);
+        document.nodes.push(node);
+
+        let (world, report) = GraphWorld::from_document(&document);
+        let loaded = world.nodes().connector(NodeIndex::new(0)).unwrap();
+        assert_eq!(loaded.start.point, Vec2::new(7.0, 9.0));
+        assert!(loaded.start.attachment.is_none());
+        assert_eq!(report.unresolved_connector_attachments.len(), 1);
+    }
 
     /// **§10's rule, as a count**: the bytes exist once however many elements
     /// name them, and the document written back holds one copy.
