@@ -649,6 +649,11 @@ impl Layout {
                     .database
                     .update(cx, |view, cx| view.accept_uri(&parsed, cx));
             }
+            Route::Mermaid(source) => {
+                self.panes
+                    .mermaid
+                    .update(cx, |view, cx| view.open_tab(source, window, cx));
+            }
         }
         cx.notify();
     }

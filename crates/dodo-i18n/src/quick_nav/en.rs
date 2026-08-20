@@ -11,6 +11,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::JwtPattern => "JWT pattern".into(),
         Text::JsonPattern => "JSON pattern".into(),
         Text::Base64Pattern => "Base64 pattern".into(),
+        Text::MermaidPattern => "Mermaid pattern".into(),
         Text::PatternInvalid(detail) => {
             format!("This pattern is not valid, so the built-in one is being used: {detail}").into()
         }

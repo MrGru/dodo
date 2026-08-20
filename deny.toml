@@ -33,11 +33,12 @@
 # intended. `check licenses` rejects exactly three crates — zlog, ztracing and
 # ztracing_macro, all GPL-3.0-or-later — and nothing else. The other sections
 # are not clean and are not expected to be: `bans` reports the wildcard
-# requirements and the ~15 duplicate pairs described below, and `advisories`
-# reports whatever RustSec currently holds against this graph. Three entries in
-# `allow` below (NCSA, OpenSSL, CDLA-Permissive-2.0) warn as
-# `license-not-encountered` under the target filter; they are kept rather than
-# trimmed because a feature or platform change can bring them back.
+# requirements (workspace path dependencies without explicit versions) and the
+# ~15 duplicate pairs described below, and `advisories` reports whatever RustSec
+# currently holds against this graph. Three entries in `allow` below (NCSA,
+# OpenSSL, CDLA-Permissive-2.0) warn as `license-not-encountered` under the
+# target filter; they are kept rather than trimmed because a feature or platform
+# change can bring them back.
 
 [graph]
 # Check the platforms dodo actually ships to. Without this, cargo-deny
@@ -58,7 +59,32 @@ all-features = true
 yanked = "warn"
 # Advisories consciously accepted go here, each with a reason and a date.
 # Empty is the correct state; an entry is a promise to revisit.
-ignore = []
+ignore = [
+    # instant 0.1.13 — pulled in by gpui-component. No safe upgrade; blocked
+    # on gpui-component migrating away from instant. Added 2026-08-20.
+    # RUSTSEC-2024-0384: instant is unmaintained; use web-time instead.
+    { id = "RUSTSEC-2024-0384" },
+    # paste 1.0.15 — pulled in by gpui-component. Archived upstream; no safe
+    # upgrade available from this graph. Added 2026-08-20.
+    # RUSTSEC-2024-0436: paste is no longer maintained.
+    { id = "RUSTSEC-2024-0436" },
+    # rustls-pemfile 2.2.0 — transitive via reqwest/rustls. No safe upgrade
+    # available. Added 2026-08-20.
+    # RUSTSEC-2025-0134: rustls-pemfile is unmaintained.
+    { id = "RUSTSEC-2025-0134" },
+    # proc-macro-error2 2.0.1 — transitive via gpui → stacksafe. No safe
+    # upgrade available. Added 2026-08-20.
+    # RUSTSEC-2026-0173: proc-macro-error2 is unmaintained.
+    { id = "RUSTSEC-2026-0173" },
+    # ttf-parser 0.25.1 — transitive via fontdb → gpui. No safe upgrade
+    # available. Added 2026-08-20.
+    # RUSTSEC-2026-0192: ttf-parser is unmaintained.
+    { id = "RUSTSEC-2026-0192" },
+    # rustybuzz 0.20.1 — transitive via usvg → gpui. No safe upgrade
+    # available. Added 2026-08-20.
+    # RUSTSEC-2026-0206: rustybuzz is unmaintained.
+    { id = "RUSTSEC-2026-0206" },
+]
 
 [licenses]
 # Permissive licences, plus the ones that appear in this graph in practice.
@@ -100,8 +126,10 @@ exceptions = []
 # today, nearly all inside zed's own dependencies and unfixable from here), so
 # they are a warning, not an error. The point is to notice a *new* one.
 multiple-versions = "warn"
-# A wildcard version requirement makes builds non-reproducible by definition.
-wildcards = "deny"
+# Workspace members reference each other via `path = "..."` without a version,
+# which cargo-deny counts as a wildcard. These are inherently pinned by the
+# workspace and not a reproducibility concern, so warn rather than deny.
+wildcards = "warn"
 # `highlight` picks which duplicate to show first in the tree output.
 highlight = "all"
 deny = []
@@ -119,8 +147,8 @@ allow-git = [
     "https://github.com/longbridge/gpui-component",
     # Transitive, from zed's own manifests.
     "https://github.com/zed-industries/font-kit",
-    "https://github.com/zed-industries/reqwest.git",
-    "https://github.com/zed-industries/scap",
+    # Transitive, from gpui (used for property-based testing).
+    "https://github.com/proptest-rs/proptest",
 ]
 
 [sources.allow-org]

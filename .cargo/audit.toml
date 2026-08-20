@@ -1,0 +1,22 @@
+# cargo-audit configuration for dodo.
+#
+# `cargo audit` is run by .github/workflows/analysis.yml. This file tells it
+# which advisories have been reviewed and consciously accepted. Each entry
+# carries the reason and the date it was added; revisit when the dependency
+# tree can be upgraded to drop the affected crate.
+
+[advisories]
+ignore = [
+    # quick-xml 0.30.0 — pulled in by xcb 1.7.0, which is a transitive
+    # dependency of GPUI's Linux X11 backend (zed-industries/zed git dep).
+    # xcb uses quick-xml to parse XCB protocol XML descriptions; that parsing
+    # is not exposed to untrusted input in dodo. Cannot upgrade without a
+    # compatible xcb release that depends on a fixed quick-xml. Added 2026-08-20.
+    #
+    # RUSTSEC-2026-0194: Quadratic runtime when checking start-tag duplicate attributes.
+    # xcb's XML parsing is not reachable from untrusted input in dodo; upgrade blocked on xcb adopting a fixed quick-xml.
+    "RUSTSEC-2026-0194",
+    # RUSTSEC-2026-0195: Unbounded namespace-declaration allocation in NsReader.
+    # xcb's XML parsing is not reachable from untrusted input in dodo; upgrade blocked on xcb adopting a fixed quick-xml.
+    "RUSTSEC-2026-0195",
+]

@@ -3,7 +3,7 @@
 //! `samples!` also emits an exhaustive `match` over [`Text`], so a variant
 //! with no entry here is a compile error.
 
-use crate::tests::{Sample, plain};
+use crate::tests::{Sample, plain, term};
 
 use super::Text;
 
@@ -29,6 +29,7 @@ samples! {
     plain EncoderDecoderTitle;
     plain ApiExplorerTitle;
     plain CleanerTitle;
+    term MermaidTitle;
     plain RunScripts;
     plain RunScriptsDescription;
     plain CheckForUpdates;

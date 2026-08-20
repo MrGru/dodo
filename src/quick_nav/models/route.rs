@@ -41,6 +41,10 @@ pub enum Route {
     /// describes. The `id` inside the profile is a placeholder — see
     /// [`Detector::PLACEHOLDER_ID`](super::detect::Detector::PLACEHOLDER_ID).
     Database(Box<ParsedUri>),
+    /// The Mermaid workspace, in a new tab holding this source — already
+    /// confirmed to render, since [`Detector::Mermaid`](super::detect::Detector::Mermaid)
+    /// only produces this after a real `mermaid-rs-renderer` render succeeded.
+    Mermaid(String),
 }
 
 impl Route {
@@ -59,6 +63,7 @@ impl Route {
             Route::Base64 { .. } => Detector::Base64,
             Route::Curl(_) => Detector::Curl,
             Route::Database(_) => Detector::DatabaseUri,
+            Route::Mermaid(_) => Detector::Mermaid,
         }
     }
 }
