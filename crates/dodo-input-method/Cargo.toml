@@ -3,7 +3,7 @@ name = "dodo-input-method"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "dodo's end of the native input methods: the settings it writes for them, the installers, the two dodo-lifetime-only fallbacks and the tool's pane."
+description = "dodo's Event Tap and Keyboard Hook input methods, their settings, and the tool pane."
 
 # Every dependency below is one the module already had while it was
 # `src/input_method/`; nothing was added by the move and nothing was left
@@ -11,14 +11,9 @@ description = "dodo's end of the native input methods: the settings it writes fo
 # manifest — which is what lets the pure two thirds of this crate type-check on
 # every target while only macOS builds AppKit and only Windows builds Win32.
 [dependencies]
-# The engine's shared vocabulary: `LanguageId`, `ActiveLanguages` and the
-# Vietnamese configuration types. No keystroke is processed here except through
-# the two explicitly-selected fallbacks, which drive this same engine.
+# The engine's shared vocabulary and Vietnamese rules. Event Tap and Keyboard
+# Hook both drive this same engine directly.
 dodo-ime-core = { path = "../dodo-ime-core" }
-# The contract with the native hosts: the identifiers each platform looks them
-# up by, the two single-writer JSON files, and the notification names. dodo
-# links this and **not** `dodo-ime-macos` or `dodo-ime-windows`.
-dodo-ime-ipc = { path = "../dodo-ime-ipc" }
 # Every string the Input method pane and its status banner show. The `gpui`
 # feature brings `t()` and the active-language global with it.
 dodo-i18n = { path = "../dodo-i18n", features = ["gpui"] }
@@ -39,14 +34,11 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 # **Neither adds a crate to the graph**: `gpui` already depends on both.
 futures-channel = "0.3"
 futures-util = "0.3.33"
+# `input-method.json`; the engine itself deliberately remains serde-free.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
-# AppKit, CoreFoundation, CoreGraphics and the Objective-C runtime, for the
-# Event Tap backend, the distributed notification and the Text Input Sources
-# installer. These are the same lines the root manifest carried for
-# `src/input_method/`, feature for feature; the features are additive across a
-# graph, so listing only what these three services call is the whole cost, and
-# none of the packages is new — `gpui_macos` and `objc2-app-kit` already pull
-# every one of them in at these versions.
+# AppKit, CoreFoundation, CoreGraphics and the Objective-C runtime for Event Tap.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 # `addObserverForName:object:queue:usingBlock:`, the one form of the workspace
@@ -56,40 +48,24 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     # `NSBeep`, the Event Tap's language-switch beep. AppKit declares it among
     # the graphics functions rather than beside anything sound-shaped.
     "NSGraphics",
-    "NSApplication",
-    "NSResponder",
     # The frontmost-application cache the browser-rewrite table is keyed by.
     "NSRunningApplication",
     "NSWorkspace",
 ] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = [
-    "NSArray",
-    "NSData",
     "NSDictionary",
-    "NSError",
-    "NSFileManager",
     "NSNotification",
     "NSOperation",
     "NSString",
-    "NSURL",
     "block2",
 ] }
-# `dispatch_sync` on the main queue, for the Text Input Sources calls in
-# `services::installer` and nothing else: two concurrent
-# `TISCreateInputSourceList` calls abort the process — measured, with the crash
-# frames, in `services::tis`.
-dispatch2 = "0.3.1"
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
-    "CFArray",
     "CFBase",
     "CFDictionary",
     "CFMachPort",
-    "CFNumber",
-    "CFNotificationCenter",
     "CFRunLoop",
     "CFString",
-    "CFURL",
 ] }
 objc2-core-graphics = { version = "=0.3.2", default-features = false, features = [
     "CGEvent",
@@ -98,8 +74,7 @@ objc2-core-graphics = { version = "=0.3.2", default-features = false, features =
     "CGRemoteOperation",
 ] }
 
-# The Keyboard Hook fallback, the TSF registration probe and the named event
-# the TSF DLL signals dodo with. Prefer adding a feature here over
+# The Keyboard Hook. Prefer adding a feature here over
 # hand-declaring an `extern "system"` signature — this host cannot compile the
 # Windows target, so the signatures need to come from something the Windows
 # compiler will check.
@@ -109,8 +84,6 @@ windows-sys = { version = "0.61", features = [
     # `MessageBeep`, which Windows declares beside the debugging APIs rather
     # than beside the message-box constants it takes.
     "Win32_System_Diagnostics_Debug",
-    "Win32_System_Registry",
-    "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }

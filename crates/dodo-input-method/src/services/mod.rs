@@ -1,22 +1,8 @@
-//! Everything that touches the outside world: the two files, the notification,
-//! Text Input Sources, `ditto` and `pkill`.
-//!
-//! The containment rule the rest of dodo follows applies here too — [`tis`] is
-//! the only place in the whole binary that names a Carbon function, and
-//! [`notify`] the only one that posts a distributed notification. [`installer`]
-//! is the driver, and it reaches the outside world only through its own
-//! [`InstallOps`](installer::InstallOps) trait, which is what makes the sequence
-//! testable without a Mac.
+//! Filesystem persistence and the two platform key listeners.
 
+pub mod document;
 #[cfg(target_os = "macos")]
 pub mod event_tap;
-pub mod installer;
 #[cfg(target_os = "windows")]
 pub mod keyboard_hook;
-pub mod notify;
 pub mod store;
-#[cfg(target_os = "windows")]
-pub mod windows;
-
-#[cfg(target_os = "macos")]
-pub mod tis;

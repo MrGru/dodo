@@ -12,16 +12,9 @@
 //! already have.
 //!
 //! The file this guards is `input-method.json`
-//! ([`services::store`](crate::services::store)), which is the one file dodo
-//! *writes* for the native hosts to read — so a `data_dir()` that disagreed
-//! with the binary's would leave every engine setting and the selected
-//! keyboard language in a directory no bundle ever looks in, and the input
-//! method would silently keep typing with `DEFAULT_CONFIG`.
-//!
-//! `dodo_ime_ipc::paths` duplicates the macOS and Windows rules for the
-//! *hosts*, which cannot link `dodo-paths` — `dodo-paths` already carries the
-//! test that keeps those two in step, and this module changes nothing about
-//! it.
+//! ([`services::store`](crate::services::store)). A disagreement with the
+//! binary would make every engine setting and selected language appear lost on
+//! the next launch.
 
 use std::path::PathBuf;
 

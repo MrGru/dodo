@@ -7,9 +7,8 @@
 //!
 //! # It owns the language switch while it runs
 //!
-//! Nothing else can. The InputMethodKit bundle is passing everything through
-//! while this backend is selected, so the shortcut has to be answered here or
-//! it is answered nowhere — which is exactly what used to happen. The tap
+//! The tap owns the shortcut, so it stays attached in every language and can
+//! always switch back to Vietnamese. It
 //! therefore stays attached in *every* language, watches for the shortcut
 //! first, and only then asks whether the key should reach the Vietnamese
 //! engine. `models::live_switch` is the whole of that rule; this file adds the
@@ -37,7 +36,6 @@ use std::rc::Rc;
 
 use block2::RcBlock;
 use dodo_ime_core::{Key, KeyEvent, LanguageId, Modifiers};
-use dodo_ime_ipc::settings::SettingsDocument;
 use futures_channel::mpsc::UnboundedSender;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
@@ -62,6 +60,7 @@ use crate::models::event_tap::{
     is_synthetic_event, synthetic_event_tag,
 };
 use crate::models::live_switch::LiveSwitch;
+use crate::models::settings::SettingsDocument;
 
 const DELETE_KEY_CODE: u16 = 0x33;
 /// `kVK_LeftArrow`, the other half of the Chromium-family workaround.
@@ -893,8 +892,7 @@ fn tag_event(event: &CGEvent, tag: i64) {
     CGEvent::set_integer_value_field(Some(event), CGEventField::EventSourceUserData, tag);
 }
 
-/// The same macOS normalisation the native host uses, kept local because dodo
-/// must not link the InputMethodKit bundle just to obtain a key adapter.
+/// macOS modifier flags normalized into the engine vocabulary.
 /// The four command modifiers, out of a CoreGraphics flag mask.
 fn modifiers(flags: CGEventFlags) -> Modifiers {
     const SHIFT: u64 = 1 << 17;
@@ -929,8 +927,7 @@ fn key_event(text: Option<char>, key_code: u16, flags: CGEventFlags) -> KeyEvent
         0x31 => Key::Space,
         0x33 => Key::Backspace,
         0x35 => Key::Escape,
-        // The eight modifier key codes, as `crates/dodo-ime-macos/src/keymap.rs`
-        // names them. They reach this table only through a `FlagsChanged`
+        // The eight macOS modifier key codes. They reach this table only through a `FlagsChanged`
         // event, and their sole reading is a modifier-only language switch.
         0x36 | 0x37 | 0x38 | 0x3a | 0x3b | 0x3c | 0x3d | 0x3e => Key::Modifier,
         0x75 => Key::Delete,
@@ -995,10 +992,10 @@ mod tests {
         tag_event,
     };
     use crate::models::browser_rewrite::SELECTION_COMMIT_CHARACTER;
-    use dodo_ime_core::{ActiveLanguages, Key, KeyEvent, LanguageId, Modifiers, VietnameseConfig};
-    use dodo_ime_ipc::settings::{
+    use crate::models::settings::{
         LanguageSwitch, SettingsDocument, Shortcut, ShortcutKey, ShortcutModifiers,
     };
+    use dodo_ime_core::{ActiveLanguages, Key, KeyEvent, LanguageId, Modifiers, VietnameseConfig};
     use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGEventType};
 
     /// A tap state with no channel reader, which is all the composition tests

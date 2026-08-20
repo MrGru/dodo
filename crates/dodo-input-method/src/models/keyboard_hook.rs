@@ -8,14 +8,13 @@
 )]
 //!
 //! The OS callback contains no reliable password-field signal, so the service
-//! processes only a selected Vietnamese backend with a fully known key-down.
+//! processes only Vietnamese input with a fully known key-down.
 //! Repeats, injected input, shortcuts, and uncertain events pass through; only
 //! a key-up paired with a consumed physical key-down is consumed.
 
 use std::collections::HashSet;
 
 use dodo_ime_core::{Key, KeyEvent, Modifiers};
-use dodo_ime_ipc::settings::Backend;
 
 use crate::models::direct_output::OutputPlan;
 use crate::models::event_tap::DirectComposer;
@@ -27,22 +26,6 @@ pub enum KeyboardHookStatus {
     Inactive,
     Running,
     Failed,
-}
-
-/// Whether the hook may own transformation at all.
-///
-/// Not a function of the selected language, for the reason
-/// `models::event_tap::desired_status` gives: the hook owns the language-switch
-/// shortcut while it runs, so stopping it in English would make the shortcut
-/// one-way.
-pub fn desired_status(backend: Backend, start_succeeded: bool) -> KeyboardHookStatus {
-    if backend != Backend::KeyboardHook {
-        KeyboardHookStatus::Inactive
-    } else if start_succeeded {
-        KeyboardHookStatus::Running
-    } else {
-        KeyboardHookStatus::Failed
-    }
 }
 
 /// The callback facts relevant to safety, without Windows handles.
@@ -184,7 +167,7 @@ pub mod vk {
 /// `ToUnicodeEx` handed that array obligingly returns the *unshifted*
 /// character, so no capital letter could reach the Vietnamese engine and every
 /// rewritten syllable came back lowercase. And [`Modifiers`] read from the same
-/// array is always empty, so [`Shortcut::matches`](dodo_ime_ipc::settings::Shortcut::matches)
+/// array is always empty, so [`Shortcut::matches`](crate::models::settings::Shortcut::matches)
 /// — which compares modifiers exactly and refuses a shortcut with no command
 /// modifier — could never fire the language switch.
 ///
@@ -319,10 +302,8 @@ pub fn physical_modifiers(physical: PhysicalKeys) -> Modifiers {
 ///
 /// `GetKeyState(VK_CAPITAL)` answers per thread for the same reason
 /// [`PhysicalKeys`] gives, so its toggle bit goes stale in the background too.
-/// The hook does see every physical press of the key, so it takes one snapshot
-/// while dodo is still the foreground application — the user has just chosen
-/// this backend in dodo's own window — and flips it from then on. Windows
-/// toggles the lock on key **down**.
+/// The hook sees every physical press and tracks the toggle from its startup
+/// snapshot. Windows toggles the lock on key **down**.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CapsLock(bool);
 
@@ -366,12 +347,8 @@ pub fn modifiers(control: bool, alt: bool, shift: bool, windows: bool) -> Modifi
 
 /// One Windows virtual key in the shared vocabulary.
 ///
-/// It mirrors `dodo_ime_windows::keymap::key_event`, deliberately: dodo does not
-/// link the TSF DLL, so the two tables are separate code, and a shortcut that
-/// worked under Native TSF and not under the hook would be the exact class of
-/// bug this round is fixing. This copy lives in `models/` rather than beside the
-/// hook so it is unit-tested from every host, including the Mac this is written
-/// on.
+/// This lives in `models/` rather than beside the hook so the Windows key
+/// vocabulary is unit-tested from every host, including macOS.
 pub fn key_event(vkey: u32, text: Option<char>, modifiers: Modifiers) -> KeyEvent {
     let identity = match vkey {
         0x08 => Some(Key::Backspace),
@@ -426,17 +403,17 @@ pub fn handling(event: HookEvent) -> Handling {
 #[cfg(test)]
 mod tests {
     use super::{
-        CapsLock, Handling, HookEvent, KeyboardHookStatus, PhysicalKeys, SuppressedKeyUps,
-        TargetIdentity, adopt_after_send, desired_status, handling, input_event_count, key_event,
-        layout_state, modifiers, physical_modifiers, target_changed, vk, with_key_down,
+        CapsLock, Handling, HookEvent, PhysicalKeys, SuppressedKeyUps, TargetIdentity,
+        adopt_after_send, handling, input_event_count, key_event, layout_state, modifiers,
+        physical_modifiers, target_changed, vk, with_key_down,
     };
     use crate::models::direct_output::OutputPlan;
     use crate::models::event_tap::DirectComposer;
     use crate::models::live_switch::LiveSwitch;
-    use dodo_ime_core::{ActiveLanguages, Key, KeyEvent, LanguageId, Modifiers, VietnameseConfig};
-    use dodo_ime_ipc::settings::{
-        Backend, LanguageSwitch, SettingsDocument, Shortcut, ShortcutKey, ShortcutModifiers,
+    use crate::models::settings::{
+        LanguageSwitch, SettingsDocument, Shortcut, ShortcutKey, ShortcutModifiers,
     };
+    use dodo_ime_core::{ActiveLanguages, Key, KeyEvent, LanguageId, Modifiers, VietnameseConfig};
 
     /// Held Shift, and nothing else.
     fn shift_held() -> PhysicalKeys {
@@ -448,26 +425,6 @@ mod tests {
 
     fn down(state: &[u8; 256], key: u32) -> bool {
         state[key as usize] & 0x80 != 0
-    }
-
-    #[test]
-    fn keyboard_hook_is_the_only_windows_fallback_owner() {
-        assert_eq!(
-            desired_status(Backend::Native, true),
-            KeyboardHookStatus::Inactive
-        );
-        assert_eq!(
-            desired_status(Backend::EventTap, true),
-            KeyboardHookStatus::Inactive
-        );
-        assert_eq!(
-            desired_status(Backend::KeyboardHook, true),
-            KeyboardHookStatus::Running
-        );
-        assert_eq!(
-            desired_status(Backend::KeyboardHook, false),
-            KeyboardHookStatus::Failed
-        );
     }
 
     /// Windows' Alt is the engine's `alt` and either Windows key is its `meta`,

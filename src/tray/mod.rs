@@ -14,7 +14,7 @@
 //! to make it look like the original design.
 //!
 //! The selected keyboard language is the same [`dodo_ime_core::LanguageId`]
-//! the native input method reads from `input-method.json`. dodo's interface
+//! the in-process listener reads from `input-method.json`. dodo's interface
 //! language remains a separate display preference.
 //!
 //! # Why this is `src/tray/` and not `src/platform/tray/`

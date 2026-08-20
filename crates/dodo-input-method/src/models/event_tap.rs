@@ -12,7 +12,6 @@ use dodo_ime_core::{
     EngineAction, Key, KeyEvent, LanguageEngine as _, OutputMode, VietnameseConfig,
     VietnameseEngine,
 };
-use dodo_ime_ipc::settings::Backend;
 
 pub use crate::models::direct_output::OutputPlan;
 
@@ -25,11 +24,9 @@ const SYNTHETIC_TAG_NAMESPACE: u32 = 0xd0d0_e7a0;
 /// What the pane can honestly say about Event Tap.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EventTapStatus {
-    /// Event Tap is not the selected Vietnamese backend.
+    /// Event Tap has not started yet.
     #[default]
     Inactive,
-    /// A live native bundle has not yet adopted the Event Tap selection.
-    WaitingForNative,
     /// macOS has not granted Accessibility permission to dodo.
     NeedsAccessibility,
     /// The tap is attached to dodo's main run loop.
@@ -46,20 +43,11 @@ pub enum EventTapStatus {
 /// one direction and look broken in the other. It keeps observing keys in every
 /// language and stops only *transforming* them; `models::live_switch` is where
 /// that distinction lives.
-pub fn desired_status(
-    backend: Backend,
-    native_is_live: bool,
-    settings_applied: bool,
-    accessibility_trusted: bool,
-) -> EventTapStatus {
-    if backend != Backend::EventTap {
-        EventTapStatus::Inactive
-    } else if native_is_live && !settings_applied {
-        EventTapStatus::WaitingForNative
-    } else if !accessibility_trusted {
-        EventTapStatus::NeedsAccessibility
-    } else {
+pub fn desired_status(accessibility_trusted: bool) -> EventTapStatus {
+    if accessibility_trusted {
         EventTapStatus::Running
+    } else {
+        EventTapStatus::NeedsAccessibility
     }
 }
 
@@ -506,7 +494,6 @@ mod tests {
         Key, KeyEvent, LanguageEngine as _, Modifiers, OutputMode, VietnameseConfig,
         VietnameseEngine,
     };
-    use dodo_ime_ipc::settings::Backend;
 
     fn composer() -> DirectComposer {
         DirectComposer::new(VietnameseConfig::default())
@@ -585,38 +572,13 @@ mod tests {
         plan.delete_before * 2 + usize::from(plan.insert.is_some()) * 2
     }
 
-    /// The selection is the only thing that decides ownership. A tap that also
-    /// stopped on the selected language could not switch back out of English.
-    #[test]
-    fn only_the_selected_backend_can_own_transformation() {
-        assert_eq!(
-            desired_status(Backend::Native, false, false, true),
-            EventTapStatus::Inactive
-        );
-        assert_eq!(
-            desired_status(Backend::KeyboardHook, false, false, true),
-            EventTapStatus::Inactive
-        );
-        assert_eq!(
-            desired_status(Backend::EventTap, false, false, true),
-            EventTapStatus::Running
-        );
-        assert_eq!(
-            desired_status(Backend::EventTap, true, false, true),
-            EventTapStatus::WaitingForNative
-        );
-    }
-
     #[test]
     fn accessibility_request_is_once_and_a_returning_user_can_start_the_tap() {
-        let untrusted = desired_status(Backend::EventTap, false, false, false);
+        let untrusted = desired_status(false);
         assert_eq!(untrusted, EventTapStatus::NeedsAccessibility);
         assert!(super::should_request_accessibility(untrusted, false));
         assert!(!super::should_request_accessibility(untrusted, true));
-        assert_eq!(
-            desired_status(Backend::EventTap, false, false, true),
-            EventTapStatus::Running
-        );
+        assert_eq!(desired_status(true), EventTapStatus::Running);
     }
 
     #[test]

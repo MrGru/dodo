@@ -74,7 +74,7 @@ fn every_area_contributes_its_samples() {
     let samples = Str::samples();
     assert_eq!(
         samples.len(),
-        1008,
+        976,
         "the number of localized strings changed; update this count deliberately \
          so a whole area silently dropping out of `areas!` cannot pass"
     );

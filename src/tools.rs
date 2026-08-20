@@ -48,8 +48,8 @@
 //!
 //! # One tool is platform-conditional
 //!
-//! The Input method installs a native host bundle, so off macOS and Windows
-//! there is no row for it rather than a row whose only button could not work.
+//! The Input method uses Event Tap on macOS and Keyboard Hook on Windows, so
+//! there is no row on platforms with neither implementation.
 //! **Its enum variant still exists everywhere**, and that is deliberate: two of
 //! the four release targets cannot be compiled from the machine this is
 //! developed on, so a shape where a whole tool's title, icon, code and
@@ -369,10 +369,8 @@ tools! {
         pastes: [DatabaseUri],
     }
 
-    /// Last, which is also where its settings page sat. It is the one tool most
-    /// people will open once, install from, and never come back to — and the
-    /// one that exists only where a native host does. Linux stays hidden until
-    /// it has its own host rather than showing a dead install row.
+    /// Last, which is also where its settings page sat. Linux stays hidden
+    /// until it has an implementation.
     InputMethod {
         code: "input-method",
         title: shell::Text::InputMethod,
@@ -545,9 +543,8 @@ mod tests {
         Features::resolve(None, &View::codes())
     }
 
-    /// Whether this build ships the Input method — one spelling of the `cfg`,
-    /// so a test reads as a claim about the platform rather than repeating it.
-    const NATIVE_INPUT_METHOD_HOST: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+    /// Whether this build ships an Input method implementation.
+    const INPUT_METHOD_HOST: bool = cfg!(any(target_os = "macos", target_os = "windows"));
 
     /// **The compatibility surface, pinned.**
     ///
@@ -595,7 +592,7 @@ mod tests {
             "docker",
             "database",
         ];
-        if NATIVE_INPUT_METHOD_HOST {
+        if INPUT_METHOD_HOST {
             expected.push("input-method");
         }
         assert_eq!(codes, expected);
@@ -651,10 +648,7 @@ mod tests {
         // group of children — an icon-collapsed sidebar renders no children at
         // all, which is what made Docker's four pages unreachable.
         assert_eq!(View::DECLARED.len(), 7);
-        assert_eq!(
-            View::ALL.len(),
-            if NATIVE_INPUT_METHOD_HOST { 7 } else { 6 }
-        );
+        assert_eq!(View::ALL.len(), if INPUT_METHOD_HOST { 7 } else { 6 });
         assert_eq!(AVAILABLE, View::ALL.len());
     }
 
@@ -663,23 +657,14 @@ mod tests {
     /// still knows the Input method's variant, code, title and icon, and still
     /// refuses to list it.
     #[test]
-    fn the_input_method_is_a_native_host_tool_only() {
+    fn the_input_method_is_available_where_dodo_has_an_implementation() {
         assert!(View::JsonFormatter.available());
-        assert_eq!(View::InputMethod.available(), NATIVE_INPUT_METHOD_HOST);
+        assert_eq!(View::InputMethod.available(), INPUT_METHOD_HOST);
 
         assert_eq!(View::InputMethod.code(), "input-method");
-        assert_eq!(
-            View::ALL.contains(&View::InputMethod),
-            NATIVE_INPUT_METHOD_HOST,
-        );
-        assert_eq!(
-            View::codes().contains(&"input-method"),
-            NATIVE_INPUT_METHOD_HOST,
-        );
-        assert_eq!(
-            View::lookup("input-method").is_some(),
-            NATIVE_INPUT_METHOD_HOST,
-        );
+        assert_eq!(View::ALL.contains(&View::InputMethod), INPUT_METHOD_HOST,);
+        assert_eq!(View::codes().contains(&"input-method"), INPUT_METHOD_HOST,);
+        assert_eq!(View::lookup("input-method").is_some(), INPUT_METHOD_HOST,);
     }
 
     /// Registered exactly once. `View::ALL` is what `Features::resolve` places a
@@ -953,7 +938,7 @@ mod tests {
         let features = Features::resolve(workspace.tools.as_deref(), &View::codes());
 
         let mut expected: Vec<(&str, bool)> = vec![("docker", true), ("database", true)];
-        if NATIVE_INPUT_METHOD_HOST {
+        if INPUT_METHOD_HOST {
             // Beside its default neighbour, not at an absolute index: the list
             // it is joining is the user's order, and index 6 of that means
             // nothing.
@@ -982,7 +967,7 @@ mod tests {
         // …and the sidebar draws the four they left on, in their order.
         let visible: Vec<View> = features.visible().filter_map(View::lookup).collect();
         let mut wanted = vec![View::Docker, View::Database];
-        if NATIVE_INPUT_METHOD_HOST {
+        if INPUT_METHOD_HOST {
             wanted.push(View::InputMethod);
         }
         wanted.extend([View::JsonFormatter, View::EncoderDecoder]);
@@ -1023,7 +1008,7 @@ mod tests {
         let features = Features::resolve(document.workspace.tools.as_deref(), &View::codes());
 
         let mut expected = vec!["api-explorer", "database"];
-        if NATIVE_INPUT_METHOD_HOST {
+        if INPUT_METHOD_HOST {
             expected.push("input-method");
         }
         expected.extend(["json-formatter", "docker", "encoder-decoder", "cleaner"]);

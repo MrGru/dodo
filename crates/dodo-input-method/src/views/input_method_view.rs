@@ -1,10 +1,4 @@
-//! The Input method tool: install dodo's input method, and tell it how to type.
-//!
-//! This is the whole surface. It was a Settings page until the captain asked on
-//! 2026-08-09 for it to be a feature instead, and **nothing was left behind** —
-//! the install button and the four engine settings are here and nowhere else, so
-//! there is no control a user can reach from two places and no second answer to
-//! "where do I set my input scheme".
+//! The Input method tool: language switching and Vietnamese-engine settings.
 //!
 //! # It holds no *setting*, on purpose
 //!
@@ -29,17 +23,9 @@
 //! [`InputMethod`] every frame, and the recorded combination goes straight to
 //! [`InputMethod::set_language_switch`] without being kept here first.
 //!
-//! # Backend ownership stays outside this view
-//!
-//! Native Input Method is still launched by macOS and keeps typing after dodo
-//! closes. Event Tap is dodo-owned, Accessibility-gated, and active only while
-//! selected. Every control writes `input-method.json`; [`crate`]
-//! is where exclusive ownership and lifecycle are decided. This file only reads
-//! that global and assembles the native status sentence.
-
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::button::Button;
 use gpui_component::radio::RadioGroup;
 use gpui_component::switch::Switch;
 use gpui_component::{
@@ -47,17 +33,12 @@ use gpui_component::{
 };
 
 use dodo_ime_core::LanguageId;
-use dodo_ime_ipc::settings::{Backend, Scheme, Shortcut, ShortcutKey, ShortcutModifiers, Tone};
 
 use crate::InputMethod;
-#[cfg(target_os = "macos")]
-use crate::Install;
 use crate::i18n::{Str, input_method, t, tray};
 use crate::models::event_tap::EventTapStatus;
 use crate::models::keyboard_hook::KeyboardHookStatus;
-#[cfg(target_os = "macos")]
-use crate::models::status::status_message;
-use crate::models::windows::{WindowsInstall, WindowsInstallFailure, WindowsInstallOutcome};
+use crate::models::settings::{Scheme, Shortcut, ShortcutKey, ShortcutModifiers, Tone};
 
 /// The key context the recorder claims **while it is capturing**, and gpui
 /// components' own name for a focused text field.
@@ -114,87 +95,8 @@ impl InputMethodView {
         }
     }
 
-    /// The radio group's two rows: Native, plus whichever no-install fallback
-    /// this platform has. A `cfg!` rather than two `#[cfg]` definitions, so
-    /// **both** arms typecheck wherever this file is compiled — a mistake in
-    /// the Windows arm is otherwise invisible from a Mac, which is exactly how
-    /// the platform-gated labels broke a build the day before this moved.
-    const BACKENDS: [Backend; 2] = if cfg!(target_os = "windows") {
-        [Backend::Native, Backend::KeyboardHook]
-    } else {
-        [Backend::Native, Backend::EventTap]
-    };
-
-    /// Install, or reinstall, or nothing while one is running.
-    #[cfg(target_os = "macos")]
-    fn install_button(cx: &App) -> Button {
-        let running = InputMethod::install_state(cx) == Install::Running;
-        let label = if InputMethod::is_installed(cx) {
-            input_method::Text::Reinstall
-        } else {
-            input_method::Text::Install
-        };
-
-        Button::new("install-input-method")
-            .primary()
-            .label(t(label, cx))
-            .disabled(running)
-            // Everything the press does is asynchronous — the copy, the four Text
-            // Input Sources calls and the `pkill` all run on the background
-            // executor — so this closure only starts it. See
-            // `InputMethod::install`.
-            .on_click(|_, _, cx| InputMethod::install(cx))
-    }
-
-    /// The status line and the button that changes it, in one card.
-    ///
-    /// **One card, not a "Status" row and an "Install" row.** There is one thing
-    /// to say and one thing to do about it, and splitting them would be two rows
-    /// that are each half an answer.
-    #[cfg(target_os = "macos")]
-    fn status_card(cx: &App) -> impl IntoElement {
-        // `describes_a_live_process` is the one part that cannot move into the
-        // pure status model: it is `kill(pid, 0)`, a syscall.
-        let status = InputMethod::status(cx);
-        let running = status
-            .as_ref()
-            .filter(|status| status.describes_a_live_process())
-            .map(|status| status.bundle_version.clone());
-        let status_line = status_message(
-            &InputMethod::install_state(cx),
-            InputMethod::is_installed(cx),
-            InputMethod::settings_applied(cx),
-            running.as_deref(),
-        );
-
-        h_flex()
-            .items_center()
-            .gap_3()
-            .p_3()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .child(div().font_bold().child(t(input_method::Text::Status, cx)))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t(status_line, cx)),
-                    ),
-            )
-            .child(div().flex_shrink_0().child(Self::install_button(cx)))
-    }
-
     /// Shown only when there is something wrong with `input-method.json` — the
-    /// same treatment quick navigation's storage row and the session's get. A
-    /// refused settings file here usually means the installed bundle and this
-    /// dodo are different versions, which is why the message says to reinstall
-    /// rather than "update".
+    /// same treatment quick navigation's storage row and the session's get.
     fn storage_problem(problem: Str, cx: &App) -> impl IntoElement {
         v_flex()
             .gap_1()
@@ -245,38 +147,6 @@ impl InputMethodView {
         description.into()
     }
 
-    fn backend_label(backend: Backend) -> Str {
-        let label = match backend {
-            Backend::Native => {
-                if cfg!(target_os = "windows") {
-                    input_method::Text::NativeTsf
-                } else {
-                    input_method::Text::Native
-                }
-            }
-            Backend::EventTap => input_method::Text::EventTap,
-            Backend::KeyboardHook => input_method::Text::KeyboardHook,
-        };
-        label.into()
-    }
-
-    /// The two real transformation hosts. The radio reads the global on every
-    /// render, so asynchronous settings loading cannot leave it stale.
-    fn backend_choice(cx: &App) -> impl IntoElement {
-        let selected = Self::BACKENDS
-            .iter()
-            .position(|backend| *backend == InputMethod::backend(cx));
-
-        RadioGroup::horizontal("input-method-backend")
-            .children(Self::BACKENDS.map(|backend| t(Self::backend_label(backend), cx)))
-            .selected_index(selected)
-            .on_click(|ix: &usize, _, cx| {
-                if let Some(backend) = Self::BACKENDS.get(*ix).copied() {
-                    InputMethod::set_backend(backend, cx);
-                }
-            })
-    }
-
     #[allow(
         dead_code,
         reason = "kept portable so every target type-checks each platform's label conversion"
@@ -284,7 +154,6 @@ impl InputMethodView {
     fn event_tap_status_line(status: EventTapStatus) -> Str {
         let label = match status {
             EventTapStatus::Inactive => input_method::Text::EventTapInactive,
-            EventTapStatus::WaitingForNative => input_method::Text::EventTapWaitingForNative,
             EventTapStatus::NeedsAccessibility => input_method::Text::EventTapNeedsAccessibility,
             EventTapStatus::Running => input_method::Text::EventTapRunning,
             EventTapStatus::Failed => input_method::Text::EventTapFailed,
@@ -292,8 +161,7 @@ impl InputMethodView {
         label.into()
     }
 
-    /// Event Tap has no install action: macOS owns both the request and the
-    /// Accessibility grant, which dodo reports but never changes.
+    /// macOS owns the Accessibility grant; dodo only reports its state.
     #[cfg(target_os = "macos")]
     fn event_tap_status_card(cx: &App) -> impl IntoElement {
         h_flex()
@@ -321,100 +189,6 @@ impl InputMethodView {
                                 Self::event_tap_status_line(InputMethod::event_tap_status(cx)),
                                 cx,
                             )),
-                    ),
-            )
-    }
-
-    #[allow(
-        dead_code,
-        reason = "kept portable so every target type-checks each platform's label conversion"
-    )]
-    fn windows_tsf_status_line(state: WindowsInstall, installed: bool) -> Str {
-        let label = match state {
-            WindowsInstall::Installing => input_method::Text::Installing,
-            WindowsInstall::Uninstalling => input_method::Text::Uninstalling,
-            WindowsInstall::Done(WindowsInstallOutcome::Ready) => {
-                input_method::Text::WindowsTsfInstalled
-            }
-            WindowsInstall::Done(WindowsInstallOutcome::Removed) => {
-                input_method::Text::WindowsTsfRemoved
-            }
-            WindowsInstall::Done(WindowsInstallOutcome::Failed(
-                WindowsInstallFailure::NoSourceDll,
-            )) => input_method::Text::WindowsTsfNoDll,
-            WindowsInstall::Done(WindowsInstallOutcome::Failed(WindowsInstallFailure::Copy {
-                detail,
-            })) => input_method::Text::CopyFailed(detail),
-            WindowsInstall::Done(WindowsInstallOutcome::Failed(
-                WindowsInstallFailure::Register { detail },
-            )) => input_method::Text::WindowsTsfRegisterFailed(detail),
-            WindowsInstall::Done(WindowsInstallOutcome::Failed(
-                WindowsInstallFailure::Unregister { detail },
-            )) => input_method::Text::WindowsTsfUnregisterFailed(detail),
-            WindowsInstall::Idle if installed => input_method::Text::WindowsTsfInstalled,
-            WindowsInstall::Idle => input_method::Text::WindowsTsfNotInstalled,
-        };
-        label.into()
-    }
-
-    #[cfg(target_os = "windows")]
-    fn windows_tsf_status_card(cx: &App) -> impl IntoElement {
-        let running = matches!(
-            InputMethod::windows_install_state(cx),
-            WindowsInstall::Installing | WindowsInstall::Uninstalling
-        );
-        let install_label = if InputMethod::is_installed(cx) {
-            input_method::Text::Reinstall
-        } else {
-            input_method::Text::Install
-        };
-        h_flex()
-            .items_center()
-            .gap_3()
-            .p_3()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .child(
-                        div()
-                            .font_bold()
-                            .child(t(input_method::Text::WindowsTsfStatus, cx)),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t(
-                                Self::windows_tsf_status_line(
-                                    InputMethod::windows_install_state(cx),
-                                    InputMethod::is_installed(cx),
-                                ),
-                                cx,
-                            )),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .flex_shrink_0()
-                    .child(
-                        Button::new("install-windows-tsf")
-                            .primary()
-                            .label(t(install_label, cx))
-                            .disabled(running)
-                            .on_click(|_, _, cx| InputMethod::install(cx)),
-                    )
-                    .child(
-                        Button::new("uninstall-windows-tsf")
-                            .ghost()
-                            .label(t(input_method::Text::Uninstall, cx))
-                            .disabled(running || !InputMethod::is_installed(cx))
-                            .on_click(|_, _, cx| InputMethod::uninstall(cx)),
                     ),
             )
     }
@@ -542,7 +316,7 @@ impl InputMethodView {
                             ),
                     ),
             )
-            .when_some(self.recorder_hint(cx), |this, hint| {
+            .when_some(self.recorder_hint(), |this, hint| {
                 this.child(
                     div()
                         .text_sm()
@@ -553,25 +327,9 @@ impl InputMethodView {
     }
 
     /// What the row has to say beneath the field, if anything.
-    ///
-    /// The macOS caveat is not a nicety. `recognizedEvents:` in the
-    /// InputMethodKit bundle is `NSEventMaskKeyDown` alone, so a bare modifier
-    /// press never reaches it and a modifier-only shortcut is simply never
-    /// delivered — the recorder would otherwise show a setting that does
-    /// nothing, which is the exact failure this round exists to end.
-    fn recorder_hint(&self, cx: &App) -> Option<Str> {
-        if self.unsupported_key {
-            return Some(input_method::Text::ShortcutUnsupportedKey.into());
-        }
-        #[cfg(target_os = "macos")]
-        if InputMethod::backend(cx) == Backend::Native
-            && InputMethod::language_switch(cx).shortcut.key == ShortcutKey::Modifiers
-        {
-            return Some(input_method::Text::ShortcutNeedsEventTap.into());
-        }
-        #[cfg(not(target_os = "macos"))]
-        let _ = cx;
-        None
+    fn recorder_hint(&self) -> Option<Str> {
+        self.unsupported_key
+            .then(|| input_method::Text::ShortcutUnsupportedKey.into())
     }
 
     fn start_recording(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -769,14 +527,7 @@ impl InputMethodView {
             })
     }
 
-    /// The Event Tap's browser workaround, and the one row that appears only
-    /// under a fallback backend.
-    ///
-    /// It is drawn beside the Event Tap status card rather than with the four
-    /// engine settings below, because it is not one: Native composes through a
-    /// marked-text client and has no Backspace rewrite for a browser selection
-    /// to land in the middle of, so a switch offered there would control
-    /// nothing.
+    /// The Event Tap's browser-address-bar workaround.
     #[cfg(target_os = "macos")]
     fn browser_fix_switch(cx: &App) -> Switch {
         Switch::new("input-method-browser-address-bar-fix")
@@ -824,13 +575,9 @@ fn recorded_modifiers(modifiers: &Modifiers) -> ShortcutModifiers {
     }
 }
 
-/// The shortcut key a gpui keystroke names, or `None` for one no input-method
-/// host could recognise again.
-///
-/// A printing key is deliberately absent; `dodo_ime_ipc::settings::ShortcutKey`
-/// carries the reason. Everything here is a name gpui produces for a key that
-/// types nothing, so the refusal is about the host contract and not about this
-/// table being short.
+/// The shortcut key a gpui keystroke names, or `None` for one the platform
+/// listeners cannot recognise again. Printing keys are deliberately absent
+/// because keyboard layouts change what they produce.
 fn recordable_key(key: &str) -> Option<ShortcutKey> {
     Some(match key {
         "space" => ShortcutKey::Space,
@@ -925,9 +672,8 @@ fn shortcut_key_label(key: ShortcutKey) -> Option<Str> {
     })
 }
 
-/// The page's root, empty. This is the longest tool page dodo has — every row
-/// below is conditional on the platform, the selected backend or a storage
-/// problem, and the tallest combination does not fit the smallest window — so
+/// The page's root, empty. This is the longest tool page dodo has — platform
+/// status, language and engine rows do not fit the smallest window — so
 /// it is the one page whose height has to be its **own**, not the pane's.
 ///
 /// It is `w_full` and deliberately not `size_full`: a height of 100% is a
@@ -941,56 +687,36 @@ fn page_root() -> Div {
 
 impl Render for InputMethodView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = page_root()
-            .gap_4()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t(Self::description(), cx)),
-            )
-            .child(Self::row(
-                input_method::Text::Backend.into(),
-                input_method::Text::BackendDescription.into(),
-                Self::backend_choice(cx),
-                cx,
-            ));
+        let root = page_root().gap_4().child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(t(Self::description(), cx)),
+        );
         #[cfg(target_os = "macos")]
-        let root = root
-            .when(InputMethod::backend(cx) == Backend::Native, |this| {
-                this.child(Self::status_card(cx))
-            })
-            .when(InputMethod::backend(cx) == Backend::EventTap, |this| {
-                this.child(Self::event_tap_status_card(cx)).child(Self::row(
-                    input_method::Text::BrowserFix.into(),
-                    input_method::Text::BrowserFixDescription.into(),
-                    Self::browser_fix_switch(cx),
-                    cx,
-                ))
-            });
-        let root = root
-            .child(Self::row(
-                input_method::Text::ActiveLanguages.into(),
-                input_method::Text::ActiveLanguagesDescription.into(),
-                Self::active_languages_choice(cx),
-                cx,
-            ))
-            .child(Self::row(
-                tray::Text::KeyboardInput.into(),
-                input_method::Text::LanguageDescription.into(),
-                Self::language_choice(cx),
-                cx,
-            ))
-            .child(self.language_switch_row(cx));
+        let root = root.child(Self::event_tap_status_card(cx)).child(Self::row(
+            input_method::Text::BrowserFix.into(),
+            input_method::Text::BrowserFixDescription.into(),
+            Self::browser_fix_switch(cx),
+            cx,
+        ));
         #[cfg(target_os = "windows")]
-        let root = root
-            .when(InputMethod::backend(cx) == Backend::Native, |this| {
-                this.child(Self::windows_tsf_status_card(cx))
-            })
-            .when(InputMethod::backend(cx) == Backend::KeyboardHook, |this| {
-                this.child(Self::keyboard_hook_status_card(cx))
-            });
-        root.when_some(InputMethod::store_error(cx), |this, problem| {
+        let root = root.child(Self::keyboard_hook_status_card(cx));
+
+        root.child(Self::row(
+            input_method::Text::ActiveLanguages.into(),
+            input_method::Text::ActiveLanguagesDescription.into(),
+            Self::active_languages_choice(cx),
+            cx,
+        ))
+        .child(Self::row(
+            tray::Text::KeyboardInput.into(),
+            input_method::Text::LanguageDescription.into(),
+            Self::language_choice(cx),
+            cx,
+        ))
+        .child(self.language_switch_row(cx))
+        .when_some(InputMethod::store_error(cx), |this, problem| {
             this.child(Self::storage_problem(problem, cx))
         })
         .child(
@@ -1029,7 +755,7 @@ mod tests {
     use super::{
         RECORDER_CONTEXT, page_root, recordable_key, recorded_modifiers, shortcut_key_label,
     };
-    use dodo_ime_ipc::settings::{Shortcut, ShortcutKey, ShortcutModifiers};
+    use crate::models::settings::{Shortcut, ShortcutKey, ShortcutModifiers};
     use gpui::{KeyBindingContextPredicate, KeyContext, Length, Modifiers, Styled as _, relative};
 
     /// The captain's report: at a small window the last settings on this page

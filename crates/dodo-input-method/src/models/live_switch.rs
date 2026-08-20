@@ -22,7 +22,8 @@
 //! sooner than a round trip through the disk could deliver it.
 
 use dodo_ime_core::{ActiveLanguages, KeyEvent, LanguageId};
-use dodo_ime_ipc::settings::{LanguageSwitch, SettingsDocument};
+
+use crate::models::settings::{LanguageSwitch, SettingsDocument};
 
 /// What one keystroke did to the selected language.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,7 +90,8 @@ impl LiveSwitch {
 mod tests {
     use super::{Cycled, LiveSwitch};
     use dodo_ime_core::{ActiveLanguages, KeyEvent, LanguageId, Modifiers};
-    use dodo_ime_ipc::settings::{
+
+    use crate::models::settings::{
         LanguageSwitch, SettingsDocument, Shortcut, ShortcutKey, ShortcutModifiers,
     };
 

@@ -1,7 +1,4 @@
 //! One sample per [`Text`] variant, for the language tests.
-//!
-//! `samples!` also emits an exhaustive `match` over [`Text`], so a variant
-//! with no entry here is a compile error.
 
 use crate::tests::{DETAIL, NUMBER, NUMBER_TEXT, Sample, plain, term, with};
 
@@ -9,24 +6,20 @@ use super::Text;
 
 samples! {
     plain Description;
-    plain Install;
-    plain Reinstall;
-    plain Installing;
-    plain Installed;
-    with InstalledNotActive(NUMBER as i32) [NUMBER_TEXT];
-    plain NoBundle;
-    with CopyFailed(DETAIL.into()) [DETAIL];
-    with InvalidSignature(DETAIL.into()) [DETAIL];
-    with NeverAppeared(NUMBER as u32) [NUMBER_TEXT];
-    plain Status;
-    plain NotInstalled;
-    with Running(DETAIL.into()) [DETAIL];
-    plain InstalledIdle;
-    plain SettingsPending;
+    plain WindowsDescription;
     plain StorageProblem;
     with StoreError(DETAIL.into()) [DETAIL];
     plain StoreMissingVersion;
-    with StoreUnsupportedVersion { found: NUMBER as u64, supported: 7 } [NUMBER_TEXT, "7"];
+    with StoreUnsupportedVersion { found: NUMBER as u64, supported: 8 } [NUMBER_TEXT, "8"];
+    plain EventTapStatus;
+    plain EventTapInactive;
+    plain EventTapNeedsAccessibility;
+    plain EventTapRunning;
+    plain EventTapFailed;
+    plain KeyboardHookStatus;
+    plain KeyboardHookInactive;
+    plain KeyboardHookRunning;
+    plain KeyboardHookFailed;
     plain Scheme;
     plain SchemeDescription;
     term Telex;
@@ -39,33 +32,6 @@ samples! {
     plain SpellCheckDescription;
     plain BracketShortcuts;
     plain BracketShortcutsDescription;
-    plain Backend;
-    plain BackendDescription;
-    plain Native;
-    plain EventTap;
-    plain EventTapStatus;
-    plain EventTapInactive;
-    plain EventTapWaitingForNative;
-    plain EventTapNeedsAccessibility;
-    plain EventTapRunning;
-    plain EventTapFailed;
-    plain WindowsDescription;
-    plain WindowsLanguageDescription;
-    plain NativeTsf;
-    plain WindowsTsfStatus;
-    plain WindowsTsfNotInstalled;
-    plain WindowsTsfInstalled;
-    plain WindowsTsfRemoved;
-    plain WindowsTsfNoDll;
-    with WindowsTsfRegisterFailed(DETAIL.into()) [DETAIL];
-    with WindowsTsfUnregisterFailed(DETAIL.into()) [DETAIL];
-    term KeyboardHook;
-    plain KeyboardHookStatus;
-    plain KeyboardHookInactive;
-    plain KeyboardHookRunning;
-    plain KeyboardHookFailed;
-    plain Uninstall;
-    plain Uninstalling;
     plain ActiveLanguages;
     plain ActiveLanguagesDescription;
     plain LanguageDescription;
@@ -78,7 +44,6 @@ samples! {
     plain ShortcutEscape;
     plain ShortcutRecording;
     plain ShortcutUnsupportedKey;
-    plain ShortcutNeedsEventTap;
     plain ShortcutBackspace;
     plain ShortcutDelete;
     plain ShortcutHome;

@@ -33,8 +33,8 @@
 # `cargo test` / `cargo clippy --all-targets` at the root covers each crate's own
 # tests. **Adding a crate means adding it here in the same commit**; without it
 # cargo defaults to the root package alone and the new crate's tests silently
-# stop running. Each native host's platform bindings are target-gated, so another
-# platform's check builds only its pure half.
+# stop running. Platform bindings are target-gated, so another platform's
+# check builds only the pure half.
 #
 # `exclude` names `tools/update-manifest` again at the workspace level: without
 # it, building that crate through `--manifest-path` fails with "current package
@@ -181,14 +181,12 @@ dodo-database = { path = "crates/dodo-database" }
 # `lib.rs` for the seam, and its `build_info` module for the one thing a
 # library crate cannot be handed.
 dodo-updater = { path = "crates/dodo-updater" }
-# dodo's input-method engine, kept out of this crate so the three OS hosts can
-# link it without linking everything below. dodo names its configuration types
-# in the Input method settings page and nothing else; the engine itself only ever
-# runs inside a host process. See `crates/dodo-ime-core/src/lib.rs`.
+# The input-method engine and shared language vocabulary. The feature crate's
+# Event Tap and Keyboard Hook drive the engine; the tray uses the language IDs.
+# See `crates/dodo-ime-core/src/lib.rs`.
 dodo-ime-core = { path = "crates/dodo-ime-core" }
-# dodo's end of the native input methods, whole — the settings it writes for
-# them, the two installers, the two dodo-lifetime-only fallbacks and the tool's
-# pane. The binary names four items: `layout.rs`'s `InputMethod`, `tools.rs`'s
+# dodo's Input method feature, whole — Event Tap, Keyboard Hook, persisted
+# settings and the tool pane. The binary names four items: `layout.rs`'s `InputMethod`, `tools.rs`'s
 # `views::InputMethodView`, and `main.rs`'s `init` / `load`. `main.rs` aliases
 # the crate back to `crate::input_method`, and also hands it
 # `tray::set_active_languages` — the one edge that pointed back into this
@@ -196,13 +194,6 @@ dodo-ime-core = { path = "crates/dodo-ime-core" }
 # keeps its own copies of the ones `src/window_icon.rs`, `src/tray` and the
 # Cleaner still name. See that crate's `lib.rs` for the seam.
 dodo-input-method = { path = "crates/dodo-input-method" }
-# The contract with the macOS input-method bundle: the identifiers macOS looks it
-# up by, the two JSON files the two processes exchange, the notification between
-# them. dodo links this and **not** `dodo-ime-macos` — linking the host would
-# drag InputMethodKit into a UI application for four string constants, and the
-# host must never link gpui. `src/input_method/` is the only module that names
-# it. See that crate's docs for why the schema cannot live in either process.
-dodo-ime-ipc = { path = "crates/dodo-ime-ipc" }
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
 # `tree-sitter` (JSON), `tree-sitter-html` and `tree-sitter-yaml` are what make
@@ -290,85 +281,12 @@ futures-channel = "0.3"
 # hand-written one, especially for a call nobody here can run in CI.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-# The Event Tap's `NSWorkspaceDidActivateApplicationNotification` observer, and
-# nothing else. `addObserverForName:object:queue:usingBlock:` is the one form of
-# that call which needs no Objective-C class of dodo's own — the alternative
-# takes a selector, which means `define_class!` for a single cached string.
-# **Not a new package**: `objc2-app-kit` already depends on this exact version.
-block2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSApplication",
     "NSImage",
     "NSResponder",
-    # Cleaner's Finder integration and future permission/settings deep links.
-    "NSWorkspace",
-    # Cleaner's Xcode Junk scanner (Phase 11): a read-only check for whether
-    # Xcode is currently running, via `NSRunningApplication::
-    # runningApplicationsWithBundleIdentifier`. Adds nothing new to the
-    # graph — this feature's own requirements (`bitflags`,
-    # `objc2-foundation/{NSArray,NSDate,NSString,NSURL}`) are already pulled
-    # in by the `NSApplication` feature above.
-    "NSRunningApplication",
 ] }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = [
-    "NSArray",
-    # The Event Tap's frontmost-application cache: `NSNotificationCenter`, the
-    # `userInfo` dictionary a workspace activation carries, and the
-    # `NSOperationQueue` parameter of the block form (always `nil` here, but the
-    # type has to exist). `block2` switches on the block form itself. All four
-    # are already enabled transitively by `objc2-app-kit/NSWorkspace`; they are
-    # named here so a change over there cannot quietly take them away.
-    "NSDictionary",
-    "NSNotification",
-    "NSOperation",
-    "block2",
-    "NSData",
-    "NSError",
-    "NSFileManager",
-    "NSString",
-    "NSURL",
-] }
-
-# Carbon's Text Input Sources API takes and returns CoreFoundation types, and the
-# input-method installer in `src/input_method/services/tis.rs` is the only place
-# in dodo that calls it. The four `TIS…` functions themselves are hand-declared
-# there — they live in HIToolbox, which objc2 generates no crate for — but every
-# type they take comes from here, so the only unchecked part of that boundary is
-# four signatures. Also the distributed notification that tells the installed
-# bundle its settings changed (`CFNotificationCenter`), which is preferred over
-# `NSDistributedNotificationCenter` because its observer is a plain function
-# pointer rather than a selector or a block.
-#
-# **Not a new package**: `objc2-app-kit` above already depends on it, so this adds
-# nothing to `Cargo.lock` beyond the five type modules these features switch on.
-# `dispatch_sync` on the main queue, for the Text Input Sources calls in
-# `src/input_method/services/installer.rs` and nothing else. Two concurrent
-# `TISCreateInputSourceList` calls abort the process — measured, with the crash
-# frames, in `src/input_method/services/tis.rs` — and AppKit makes its own TIS
-# calls on the main thread, so the only way to serialise against those is to join
-# them. **Not a new package**: `gpui_macos` already depends on this exact version.
-dispatch2 = "0.3.1"
-objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
-    "std",
-    "CFArray",
-    "CFBase",
-    "CFDictionary",
-    "CFMachPort",
-    "CFNumber",
-    "CFRunLoop",
-    "CFNotificationCenter",
-    "CFString",
-    "CFURL",
-] }
-# The Event Tap backend's checked CoreGraphics bindings. This package already
-# enters through AppKit at this exact version; these narrow features merely make
-# the event/tap/run-loop API available to dodo's macOS-only service.
-objc2-core-graphics = { version = "=0.3.2", default-features = false, features = [
-    "CGEvent",
-    "CGEventSource",
-    "CGEventTypes",
-    "CGRemoteOperation",
-] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["NSData"] }
 
 # Cleaner's Universal Binaries scanner (Phase 14, analysis-only): reads a
 # Mach-O executable's fat-header architecture list without executing it or
@@ -416,9 +334,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Console",
     # `MessageBeep`, which Windows declares here rather than beside the message
-    # box constants it takes. The Keyboard Hook fallback needs it so its
-    # language switch sounds the same as the Native TSF one, which already calls
-    # it through the `windows` crate in `crates/dodo-ime-windows`.
+    # box constants it takes. Keyboard Hook uses the system sound for the
+    # language-switch beep.
     "Win32_System_Diagnostics_Debug",
     # Cleaner AI Apps uses a read-only process snapshot for conservative
     # running-app detection; this adds no new package to the graph.

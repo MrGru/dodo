@@ -67,11 +67,8 @@ mod i18n_lint;
 // alias is what keeps all four lines reading `crate::input_method::…`. There
 // is no `src/input_method/` any more.
 //
-// The *engine* is deliberately not there either — it is the `dodo-ime-core`
-// crate, because the macOS/Windows/Linux hosts that drive it load into other
-// processes and must link it without linking gpui — and neither is a host,
-// which dodo does not link at all. What that crate links is `dodo-ime-ipc`,
-// the contract between the two processes.
+// The engine remains `dodo-ime-core`: both platform listeners drive it through
+// the feature crate while the tray shares its language vocabulary.
 use dodo_input_method as input_method;
 // The JSON formatter is a feature crate whose only consumer is the tool table.
 use dodo_json_formatter as json_formatter;
@@ -108,8 +105,7 @@ mod paths {
         /// fact is exactly the shape that drifts silently — a Cleaner scanning
         /// as if it were on Windows would hide half the categories — so this is
         /// the test that keeps them one answer. It is the same guard
-        /// `dodo-paths` already keeps against `dodo-ime-ipc`'s own copy of the
-        /// macOS rule.
+        /// the feature crates keep against their own platform seams.
         #[test]
         fn the_cleaner_crate_resolves_the_same_host_as_this_binary() {
             assert_eq!(super::current(), dodo_cleaner::paths::current());
@@ -139,12 +135,8 @@ mod paths {
             assert_eq!(super::data_dir(), dodo_database::paths::data_dir());
         }
 
-        /// `dodo_input_method::paths` is the sixth and last copy of the same
-        /// seam, and it guards the one file dodo writes for *another process*
-        /// to read: a `data_dir()` that did not match the binary's would put
-        /// `input-method.json` where no native host looks, so every engine
-        /// setting and the selected keyboard language would be silently
-        /// ignored and the bundle would type with `DEFAULT_CONFIG`.
+        /// `dodo_input_method::paths` is another copy of the same seam. A
+        /// disagreement would make `input-method.json` appear lost on restart.
         #[test]
         fn the_input_method_crate_resolves_the_same_host_as_this_binary() {
             assert_eq!(super::current(), dodo_input_method::paths::current());
@@ -317,11 +309,8 @@ fn main() {
         // `session.json`. It reads nothing here — the read is awaited below,
         // because the window cannot be opened until its geometry is known.
         session::init(cx);
-        // Installs the input-method global. It reads `input-method.json` below.
-        // Native hosts are launched independently by macOS/Windows; dodo-owned
-        // Event Tap and Keyboard Hook start only after their stored selection
-        // has been reconciled. Same post-`gpui_component::init` position as the
-        // rest.
+        // Installs the input-method global. It reads `input-method.json` below,
+        // then starts Event Tap on macOS or Keyboard Hook on Windows.
         // The tray is the one thing that wants to hear about a language
         // change, and it lives here rather than in the crate — `src/tray`
         // already reads the input method, so the notification is what had to
@@ -334,7 +323,7 @@ fn main() {
         init_close_window_binding(cx);
         // Read this while the OS launch arguments are still the only startup
         // signal. It is captured into the foreground task below, which avoids
-        // any dependency on the selected input-method backend.
+        // any dependency on the active input language.
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         let startup_launch = tray::startup::launched_at_login();
         // Dock icon for a directly-run macOS binary; a no-op inside a .app and
@@ -359,11 +348,7 @@ fn main() {
             // unreadable one leaves every default exactly as it was before
             // session restoration existed.
             session::load(cx).await;
-            // The input method's settings and whatever the bundle last said about
-            // itself. Awaited here rather than spawned and forgotten so that the
-            // Settings dialog cannot be opened before the answer arrives — but
-            // unlike `session.json` nothing on screen depends on it, so a slow
-            // read costs the window nothing.
+            // Input-method settings are loaded before its platform listener starts.
             input_method::load(cx).await;
 
             cx.update(|cx| {

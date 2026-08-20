@@ -1,6 +1,6 @@
 //! Windows' `WH_KEYBOARD_LL` fallback for the Vietnamese engine.
 //!
-//! It is installed only while dodo owns the Keyboard Hook backend. The callback
+//! It is installed while dodo is running. The callback
 //! is intentionally smaller than the policy around it: injected, repeated,
 //! shortcut, secure-desktop-uncertain, and untranslatable input all go unchanged
 //! to the next hook. A key-up is consumed only when its physical down was. It
@@ -8,9 +8,7 @@
 //!
 //! # It owns the language switch while it runs
 //!
-//! The TSF DLL re-reads the settings before every key and passes through while
-//! this backend is selected, so the shortcut has to be answered here or nowhere
-//! — which is what used to happen. The hook therefore stays installed in *every*
+//! The hook owns the shortcut, so it stays installed in *every*
 //! language, matches the shortcut before anything else, and only then asks
 //! whether the key should reach the Vietnamese engine.
 //! `models::live_switch` is that rule and `models::keyboard_hook::key_event` is
@@ -30,15 +28,13 @@
 //!
 //! The shortcut is also answered **before** anything asks where text would go.
 //! A window with no focused control is still a window the user may switch
-//! language in, and while this backend runs the switch is answered here or
-//! nowhere.
+//! language in, and the switch is answered before any focus check.
 
 use std::collections::HashSet;
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use dodo_ime_core::{Key, LanguageId};
-use dodo_ime_ipc::settings::SettingsDocument;
 use futures_channel::mpsc::UnboundedSender;
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
@@ -61,6 +57,7 @@ use crate::models::keyboard_hook::{
     layout_state, physical_modifiers, target_changed, vk, with_key_down,
 };
 use crate::models::live_switch::LiveSwitch;
+use crate::models::settings::SettingsDocument;
 
 const SYNTHETIC_EVENT_TAG: usize = 0x444f_444f_5748_4f4f;
 
@@ -72,7 +69,7 @@ pub enum StartError {
 }
 
 /// A live global hook. Dropping it always unregisters before callback state can
-/// be freed, so backend shutdown cannot leave a key observer behind.
+/// be freed, so shutdown cannot leave a key observer behind.
 pub struct KeyboardHook {
     keyboard_hook: HHOOK,
     mouse_hook: HHOOK,
@@ -111,9 +108,7 @@ impl KeyboardHook {
             pressed: HashSet::new(),
             suppressed_key_ups: SuppressedKeyUps::default(),
             target: None,
-            // Taken while dodo is still the foreground application — the user
-            // has just chosen this backend in dodo's own window — which is the
-            // one moment this thread's answer is current.
+            // Taken during startup while dodo still owns the foreground.
             caps: CapsLock::new((unsafe { GetKeyState(VK_CAPITAL as i32) }) & 1 != 0),
             status: KeyboardHookStatus::Running,
         }));
@@ -261,8 +256,7 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         state.composer.reset();
         let _ = state.language_changes.unbounded_send(cycled.language);
         if cycled.beep {
-            // The same call the Native TSF host makes, so the two backends
-            // sound identical. `MB_OK` is the system default sound.
+            // `MB_OK` is the system default sound.
             unsafe { MessageBeep(MB_OK) };
         }
         // A modifier-only shortcut must still reach applications, or every one
