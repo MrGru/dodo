@@ -33,11 +33,12 @@
 # intended. `check licenses` rejects exactly three crates — zlog, ztracing and
 # ztracing_macro, all GPL-3.0-or-later — and nothing else. The other sections
 # are not clean and are not expected to be: `bans` reports the wildcard
-# requirements and the ~15 duplicate pairs described below, and `advisories`
-# reports whatever RustSec currently holds against this graph. Three entries in
-# `allow` below (NCSA, OpenSSL, CDLA-Permissive-2.0) warn as
-# `license-not-encountered` under the target filter; they are kept rather than
-# trimmed because a feature or platform change can bring them back.
+# requirements (workspace path dependencies without explicit versions) and the
+# ~15 duplicate pairs described below, and `advisories` reports whatever RustSec
+# currently holds against this graph. Three entries in `allow` below (NCSA,
+# OpenSSL, CDLA-Permissive-2.0) warn as `license-not-encountered` under the
+# target filter; they are kept rather than trimmed because a feature or platform
+# change can bring them back.
 
 [graph]
 # Check the platforms dodo actually ships to. Without this, cargo-deny
@@ -125,8 +126,10 @@ exceptions = []
 # today, nearly all inside zed's own dependencies and unfixable from here), so
 # they are a warning, not an error. The point is to notice a *new* one.
 multiple-versions = "warn"
-# A wildcard version requirement makes builds non-reproducible by definition.
-wildcards = "deny"
+# Workspace members reference each other via `path = "..."` without a version,
+# which cargo-deny counts as a wildcard. These are inherently pinned by the
+# workspace and not a reproducibility concern, so warn rather than deny.
+wildcards = "warn"
 # `highlight` picks which duplicate to show first in the tree output.
 highlight = "all"
 deny = []
@@ -144,8 +147,6 @@ allow-git = [
     "https://github.com/longbridge/gpui-component",
     # Transitive, from zed's own manifests.
     "https://github.com/zed-industries/font-kit",
-    "https://github.com/zed-industries/reqwest.git",
-    "https://github.com/zed-industries/scap",
     # Transitive, from gpui (used for property-based testing).
     "https://github.com/proptest-rs/proptest",
 ]
