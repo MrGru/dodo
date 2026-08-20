@@ -58,7 +58,16 @@ all-features = true
 yanked = "warn"
 # Advisories consciously accepted go here, each with a reason and a date.
 # Empty is the correct state; an entry is a promise to revisit.
-ignore = []
+ignore = [
+    # quick-xml 0.30.0 — pulled in by xcb 1.7.0 (GPUI's Linux X11 backend).
+    # xcb uses quick-xml for parsing XCB protocol XML descriptions; that input
+    # is not user-controlled in dodo. Upgrade blocked on xcb adopting a fixed
+    # quick-xml. Added 2026-08-20.
+    # RUSTSEC-2026-0194: Quadratic runtime on duplicate start-tag attributes.
+    { id = "RUSTSEC-2026-0194" },
+    # RUSTSEC-2026-0195: Unbounded namespace allocation in NsReader.
+    { id = "RUSTSEC-2026-0195" },
+]
 
 [licenses]
 # Permissive licences, plus the ones that appear in this graph in practice.
