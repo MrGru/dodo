@@ -67,6 +67,11 @@ samples! {
     plain LayerBringForward;
     plain LayerBringToFront;
     plain ActionDuplicate;
+    plain ActionInsertImage;
+    plain ActionCropToFrame;
+    plain ActionCropWhole;
+    plain CropNeedsFrame;
+    plain ImageNotReadable;
     plain ActionLink;
     plain LinkPlaceholder;
     plain ColorPlaceholder;

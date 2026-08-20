@@ -29,6 +29,14 @@
 //! is decided by [`crate::properties`], which is pure and tested with no window,
 //! and this directory draws whatever that answers.
 //!
+//! [`images`] is a fourth thing, and the odd one: §10's pictures are canvas
+//! content that has to be an *element*, because a sprite's opacity is only
+//! reachable from the element tree. They are built and laid out during the
+//! canvas's prepaint and painted by the canvas's own painter, at the point in
+//! the paint order the image run occupies — so they keep their place among the
+//! bodies rather than floating above everything the way the rich half does.
+//! That file's doc has the whole argument.
+//!
 //! [`nodes`] is the rich half. It draws **tens** of elements — the ones
 //! [`RenderSnapshot`](crate::render::RenderSnapshot) marked rich, plus controls
 //! for the one node being worked on — and it can never draw more, because the
@@ -39,6 +47,7 @@
 //! it does not take them.
 
 pub mod flow;
+pub mod images;
 pub mod keymap;
 pub mod nodes;
 pub mod palette;

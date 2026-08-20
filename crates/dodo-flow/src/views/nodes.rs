@@ -49,7 +49,7 @@ use gpui::{
 use gpui_component::ActiveTheme;
 
 use crate::{
-    geometry::Rect,
+    geometry::{Rect, ResizeCorner},
     render::{
         registry::{AccentRole, NodeGlyph, NodeVisual},
         snapshot::{InteractiveHandle, RenderSnapshot, RichNode},
@@ -70,6 +70,19 @@ const HANDLE_HIT_PIXELS: f32 = 14.0;
 /// The toolbar's height and its gap above the node, in screen pixels.
 const TOOLBAR_HEIGHT_PIXELS: f32 = 26.0;
 const TOOLBAR_GAP_PIXELS: f32 = 8.0;
+
+/// How far outside the element the selection ring sits, in screen pixels.
+///
+/// A named constant rather than a literal because §12's grips are placed on the
+/// same rectangle: a ring and a set of grips that disagreed by three pixels
+/// would put the handles a user aims at off the box they can see.
+const SELECTION_RING_INSET: f32 = 3.0;
+
+/// One resize grip's side, in screen pixels. Smaller than a connection handle's
+/// target, because a corner is aimed at deliberately — and matched to
+/// [`HitTolerance::GRIP_SCREEN_RADIUS`](crate::runtime::HitTolerance::GRIP_SCREEN_RADIUS),
+/// which is what decides whether a press on one lands.
+const GRIP_PIXELS: f32 = 9.0;
 
 /// **Every rich node's element, for one frame.**
 ///
@@ -343,11 +356,57 @@ pub fn toolbar(snapshot: &RenderSnapshot, cx: &App) -> Option<AnyElement> {
     Some(element)
 }
 
+/// **§12's resize grips**: one small square at each corner of the selection
+/// ring, for the one element the ring is around.
+///
+/// Drawn from the same [`SnapshotOverlay`](crate::render::snapshot::SnapshotOverlay)
+/// the ring is, which is what keeps the *drawn* grips and the *hit-tested* ones
+/// the same set — `views::flow`'s `target_at` asks the world for a grip only on
+/// `snapshot.overlay()`'s node, so a frame that draws none can never resolve
+/// one. Two lists built from two sources would be an invisible control stealing
+/// presses, which is this crate's most-repeated failure in a new costume.
+///
+/// They are **not** hit-tested by GPUI: like every other canvas control, the
+/// press is resolved against the world in one place. These are pixels with a
+/// cursor on them.
+pub fn resize_grips(snapshot: &RenderSnapshot, cx: &App) -> Vec<AnyElement> {
+    let Some(overlay) = snapshot.overlay() else {
+        return Vec::new();
+    };
+    // The same gate the toolbar uses: an element a few pixels across has no
+    // room for four grips, and drawing them would cover the thing they resize.
+    if !overlay.shows_toolbar {
+        return Vec::new();
+    }
+
+    let theme = cx.theme();
+    let ring = overlay.screen.inflate(SELECTION_RING_INSET);
+
+    ResizeCorner::ALL
+        .iter()
+        .copied()
+        .map(|corner| {
+            let center = corner.of(ring);
+            div()
+                .absolute()
+                .left(px(center.x - GRIP_PIXELS * 0.5))
+                .top(px(center.y - GRIP_PIXELS * 0.5))
+                .w(px(GRIP_PIXELS))
+                .h(px(GRIP_PIXELS))
+                .rounded(px(2.0))
+                .bg(theme.background)
+                .border(px(1.5))
+                .border_color(theme.selection)
+                .into_any_element()
+        })
+        .collect()
+}
+
 /// §44's bounding box for the selected element: a ring outside the node, so it
 /// reads as a selection rather than as a thicker border.
 pub fn selection_box(snapshot: &RenderSnapshot, cx: &App) -> Option<AnyElement> {
     let overlay = snapshot.overlay()?;
-    let ring = overlay.screen.inflate(3.0);
+    let ring = overlay.screen.inflate(SELECTION_RING_INSET);
 
     Some(
         placed(ring)

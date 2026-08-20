@@ -731,10 +731,18 @@ impl PaintPlan {
         &self.quads
     }
 
-    /// The planned images. Test-only, for the same reason as
-    /// [`PaintPlan::paths`].
-    #[cfg(test)]
-    pub(crate) fn images(&self) -> &[ImagePrimitive] {
+    /// **The planned pictures**, for the one caller that has to lay them out
+    /// before they can be painted.
+    ///
+    /// The exception to this file's rule that primitives leave a plan only
+    /// through [`paint_into`](PaintPlan::paint_into), and it is narrow on
+    /// purpose: an [`ImagePrimitive`] is a rectangle and a handle, not
+    /// something that can be painted, and GPUI will only lay an element out in
+    /// the *prepaint* phase — a frame earlier than the sink runs. So
+    /// `views::images` reads this during prepaint and the painter still emits
+    /// them in the contract's order. Handing back a slice cannot reorder
+    /// anything, which is the property that mattered.
+    pub fn planned_images(&self) -> &[ImagePrimitive] {
         &self.images
     }
 

@@ -36,7 +36,7 @@
 /// The view sources, embedded at compile time so the test needs no working
 /// directory. These are the files that build what the user sees; pure logic
 /// modules have no text sinks and are not worth scanning.
-const SOURCES: [(&str, &str); 45] = [
+const SOURCES: [(&str, &str); 46] = [
     ("src/layout.rs", include_str!("layout.rs")),
     (
         "crates/dodo-json-formatter/src/lib.rs",
@@ -230,6 +230,15 @@ const SOURCES: [(&str, &str); 45] = [
     (
         "crates/dodo-flow/src/views/properties.rs",
         include_str!("../crates/dodo-flow/src/views/properties.rs"),
+    ),
+    // Phase 12's pictures. It draws no text of its own today — a picture that
+    // cannot be decoded is a muted frame rather than a message — and it is
+    // scanned anyway, for the reason the two comments above give: a guard added
+    // when a file first needs one is a guard that was absent while it was being
+    // written.
+    (
+        "crates/dodo-flow/src/views/images.rs",
+        include_str!("../crates/dodo-flow/src/views/images.rs"),
     ),
 ];
 

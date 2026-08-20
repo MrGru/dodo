@@ -105,7 +105,7 @@ use crate::{
     instrument::{Instruments, Probe},
     interaction::{
         BoxSelection, CanvasTool, InputModifiers, InteractionEffect, InteractionEvent,
-        InteractionMachine, PointerButton, TextTarget,
+        InteractionMachine, PointerButton, TextTarget, resize_keeps_aspect,
     },
     models::{
         Color, EdgeIndex, EdgeRouting, FlowDocument, FontFamily, NodeIndex, RenderQuality,
@@ -118,7 +118,7 @@ use crate::{
         cache::{CacheStats, GeometryCache},
         edges,
         lod::LodPlan,
-        painter::{self, TextCache, from_hsla},
+        painter::{self, PictureElement, TextCache, from_hsla},
         plan::{PathPrimitive, QuadPrimitive},
         registry::NodeRendererRegistry,
         scene,
@@ -129,6 +129,7 @@ use crate::{
     runtime::{BoxQuery, EdgeEnd, GraphWorld, HitTolerance, PointerTarget, SelectionSet},
     spatial::{SpatialIndex, SyncReport, VisibleSet},
     views::{
+        images::{self, ImageCache},
         keymap::{Delete, Redo, SelectTool, ToggleToolLock, Undo},
         nodes, palette, properties,
     },
@@ -262,6 +263,9 @@ pub struct FlowView {
     snapshot: RenderSnapshot,
     geometry_cache: GeometryCache<Path<Pixels>>,
     text_cache: TextCache,
+    /// **§10's decoded pictures**, byte-bounded and keyed by handle — one entry
+    /// per distinct picture, never per element. See [`views::images`](crate::views::images).
+    image_cache: ImageCache,
     /// §43's registry. Held here so a launcher or an embedding app can register
     /// its own node kinds against a mounted canvas.
     registry: NodeRendererRegistry,
@@ -389,6 +393,7 @@ impl FlowView {
             snapshot: RenderSnapshot::new(),
             geometry_cache: GeometryCache::new(&budgets),
             text_cache: TextCache::new(&budgets),
+            image_cache: ImageCache::new(),
             registry: NodeRendererRegistry::with_generic_kinds(),
             hovered: None,
             pane: Vec2::ZERO,
@@ -1235,6 +1240,7 @@ impl FlowView {
         &mut self,
         bounds: Bounds<Pixels>,
         hitbox: &Hitbox,
+        pictures: &mut [PictureElement],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1303,7 +1309,8 @@ impl FlowView {
         geometry_cache.begin_frame(anchor, zooming);
         text_cache.begin_frame();
         let mut painter =
-            WindowPainter::with_fonts(window, cx, bounds, geometry_cache, text_cache, fonts);
+            WindowPainter::with_fonts(window, cx, bounds, geometry_cache, text_cache, fonts)
+                .with_pictures(pictures);
         self.last_paint = plan.paint_into(&mut painter);
         self.geometry_cache.end_frame();
         self.text_cache.end_frame();
@@ -1320,6 +1327,37 @@ impl FlowView {
         }
 
         self.install_input(bounds, hitbox, window, cx);
+    }
+
+    /// **§10's pictures, laid out for this frame.**
+    ///
+    /// Runs in the canvas's prepaint, which is where it has to run: an element
+    /// may be prepainted in that phase and in no other, and a picture is an
+    /// element because that is the only way GPUI lets a sprite carry an opacity
+    /// — `views::images`'s doc has the whole argument.
+    ///
+    /// It reads §24's snapshot, which `render` refreshed a phase earlier, so
+    /// the rectangles here are the ones the plan will use. It writes only the
+    /// decode cache, and it asks for no repaint: a `cx.notify()` from prepaint
+    /// records a dirty view and schedules nothing (see the module doc).
+    fn prepaint_pictures(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<PictureElement> {
+        if self.snapshot.canvas().is_empty() {
+            return Vec::new();
+        }
+
+        let origin = Vec2::new(bounds.origin.x.as_f32(), bounds.origin.y.as_f32());
+        let FlowView {
+            snapshot,
+            editor,
+            image_cache,
+            ..
+        } = self;
+        images::prepaint(snapshot, editor.world(), image_cache, origin, window, cx)
     }
 
     /// One line describing what the hybrid renderer decided on this frame.
@@ -1525,18 +1563,38 @@ impl FlowView {
     ) -> InteractionEvent {
         let screen = self.local(position, bounds);
         let world = self.viewport.screen_to_world(screen);
+        let target = self.target_at(world);
+        let modifiers = InputModifiers {
+            shift: modifiers.shift,
+            control: modifiers.control,
+            alt: modifiers.alt,
+            command: modifiers.platform,
+        };
+
+        // **A grip press is its own event, not a press with a grip target.**
+        // The resize needs the element's current rectangle and the machine is
+        // deliberately world-free, so what it cannot look up is handed to it —
+        // the same rule that makes `PointerDown` carry a resolved target. See
+        // [`InteractionEvent::BeginResize`].
+        if let Some((node, corner)) = target.resize_grip() {
+            return InteractionEvent::BeginResize {
+                node,
+                corner,
+                frame: self.editor.world().nodes().bounds(node),
+                keeps_aspect: resize_keeps_aspect(
+                    self.editor.world().nodes().shape(node),
+                    modifiers.shift,
+                ),
+            };
+        }
+
         InteractionEvent::PointerDown {
             screen,
             world,
             button,
-            modifiers: InputModifiers {
-                shift: modifiers.shift,
-                control: modifiers.control,
-                alt: modifiers.alt,
-                command: modifiers.platform,
-            },
+            modifiers,
             pan_key_held: self.pan_key_held,
-            target: self.target_at(world),
+            target,
         }
     }
 
@@ -1586,6 +1644,28 @@ impl FlowView {
     fn target_at(&self, world: Vec2) -> PointerTarget {
         let tolerance = HitTolerance::at_zoom(self.viewport.zoom());
         let radius = tolerance.handle_radius;
+
+        // **Grips are asked first**, which is the opposite end of the ranking
+        // from edges and for the mirror of the reason: a grip is drawn on top
+        // of everything and is the smallest target on the canvas, so a press
+        // inside one means the resize rather than the drag underneath it.
+        //
+        // Asked only of the element whose grips are actually **on screen** —
+        // `snapshot.overlay()` is the one the selection ring is drawn around,
+        // and only at a rung where it is drawn at all. A hit test that answered
+        // `ResizeGrip` on a frame that drew none would be an invisible control
+        // stealing every press near a corner.
+        if let Some(overlay) = self.snapshot.overlay()
+            && let Some(corner) = self
+                .editor
+                .world()
+                .hit_test_grip(world, overlay.node, tolerance)
+        {
+            return PointerTarget::ResizeGrip {
+                node: overlay.node,
+                corner,
+            };
+        }
 
         let mut candidates = Vec::new();
         self.spatial.nodes_at(world, radius, &mut candidates);
@@ -2161,6 +2241,9 @@ impl Render for FlowView {
     /// something happens in the paint closure instead.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        // A second handle for the prepaint closure: the two closures are moved
+        // separately into the `canvas`, so one entity cannot serve both.
+        let prepainted = cx.entity();
 
         // **The one piece of work this body does, and it is bounded by the
         // screen.** Extraction has to happen here rather than in paint: GPUI
@@ -2199,6 +2282,7 @@ impl Render for FlowView {
 
         let nodes = nodes::nodes(&self.snapshot, self.editor.world(), cx);
         let handles = nodes::handles(&self.snapshot, cx);
+        let grips = nodes::resize_grips(&self.snapshot, cx);
         let selection = nodes::selection_box(&self.snapshot, cx);
         let toolbar = nodes::toolbar(&self.snapshot, cx);
 
@@ -2220,12 +2304,24 @@ impl Render for FlowView {
             .on_key_up(cx.listener(Self::on_key_up))
             .child(
                 canvas(
-                    // Prepaint: the hitbox every mouse listener gates on. It
+                    // Prepaint: the hitbox every mouse listener gates on — it
                     // has to exist before paint, because paint is where the
-                    // listeners are registered and they capture it.
-                    |bounds, window, _cx| window.insert_hitbox(bounds, HitboxBehavior::Normal),
-                    move |bounds, hitbox, window, cx| {
-                        view.update(cx, |this, cx| this.paint(bounds, &hitbox, window, cx));
+                    // listeners are registered and they capture it — and §10's
+                    // pictures, which have to be *laid out* here for the same
+                    // structural reason: GPUI allows an element to be
+                    // prepainted in this phase and in no other. They are
+                    // painted in the paint closure below, at the point in the
+                    // paint order the image run occupies.
+                    move |bounds, window, cx| {
+                        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+                        let pictures = prepainted
+                            .update(cx, |this, cx| this.prepaint_pictures(bounds, window, cx));
+                        (hitbox, pictures)
+                    },
+                    move |bounds, (hitbox, mut pictures), window, cx| {
+                        view.update(cx, |this, cx| {
+                            this.paint(bounds, &hitbox, &mut pictures, window, cx)
+                        });
                     },
                 )
                 .absolute()
@@ -2239,6 +2335,7 @@ impl Render for FlowView {
                     .children(nodes)
                     .children(selection)
                     .children(handles)
+                    .children(grips)
                     .children(toolbar),
             )
             // **§45's palette.** Chrome rather than content, so it sits above

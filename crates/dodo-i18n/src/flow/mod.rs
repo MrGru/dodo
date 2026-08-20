@@ -140,6 +140,21 @@ pub enum Text {
 
     // Actions. `Delete` is Phase 9's and is reused rather than duplicated.
     ActionDuplicate,
+    /// **Inserts §10's picture** — an action beside the tools rather than a
+    /// tool, because it opens a file picker instead of changing what the next
+    /// press means. See `dodo_flow::views::palette`.
+    ActionInsertImage,
+    /// The Crop button, when the frame is a different shape from the picture in
+    /// it: the press trims the picture to the frame.
+    ActionCropToFrame,
+    /// The same button when the picture is already cropped to its frame: the
+    /// press shows the whole of it again.
+    ActionCropWhole,
+    /// Why the Crop button is muted: there is nothing to crop to yet, and the
+    /// gesture that makes something is a shift-drag on a corner.
+    CropNeedsFrame,
+    /// The picker chose a file no decoder here would take.
+    ImageNotReadable,
     /// Opens the link editor.
     ActionLink,
     /// The link editor's placeholder.
