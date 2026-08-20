@@ -3,9 +3,8 @@
 dodo's own input method, as pure logic: a normalized `KeyEvent` / `EngineAction` vocabulary
 (`src/core/`) plus a Vietnamese engine speaking Telex and VNI (`src/languages/vietnamese/`).
 
-Read `src/lib.rs` first — it owns why this is a crate rather than a module (the OS hosts are
-separate processes; macOS launches its own `.app`, Windows and Linux load into other people's
-applications, and none of them may link gpui), the no-typing-history rule, the pass-the-key-through
+Read `src/lib.rs` first — it owns why this is a crate rather than a module (the engine stays
+independent of gpui and platform input APIs), the no-typing-history rule, the pass-the-key-through
 rule, and the `--example telex` runner. `src/languages/vietnamese/mod.rs` and `syllable.rs` own the
 Vietnamese rules themselves and are unusually complete; read them rather than a paraphrase.
 
@@ -18,8 +17,9 @@ job is the one thing `Cargo.toml` cannot do: **a dependency is one line and noth
 allow-list turns adding one — *including a sibling workspace crate* — into a failing test, and
 `the_scan_covers_every_file` proves the check reads every file.
 
-When something outside is needed, **pass the value in at the boundary**. That is why the IPC schema
-lives in `dodo-ime-ipc` and not here: this lint forbids `serde::` by test.
+When something outside is needed, **pass the value in at the boundary**. That is why persistence
+and platform input listeners live in `dodo-input-method`: this lint forbids `serde::` and `gpui::`
+by test.
 
 The module-wide `#![allow(dead_code)]` this code carried as `src/input_method/` is gone — not
 because it was wired up, but because everything is `pub` in a library and therefore reachable.
@@ -65,9 +65,8 @@ adding hand-written key sequences somewhere else.
 
 ## `LanguageId` is the shared keyboard-language identity
 
-It is what dodo's menu bar, the Input method pane and every native host mean by "which language",
-and it is persisted through `input-method.json`. English and Japanese pass keys through until their
-native engines exist. `ActiveLanguages` defaults to English/Vietnamese and is the one menu and cycle
-set; `LanguageSwitch` persists its key, modifiers and optional beep beside it. dodo remains the only
-writer of that file — see `crates/dodo-input-method/AGENTS.md` for its end, and
-`docs/macos-input-method.md` §8 for the contract.
+It is what dodo's menu bar and Input method pane mean by "which language", and it is persisted
+through `input-method.json`. English and Japanese pass keys through until their engines exist.
+`ActiveLanguages` defaults to English/Vietnamese and is the one menu and cycle set;
+`LanguageSwitch` persists its key, modifiers and optional beep beside it. See
+`crates/dodo-input-method/AGENTS.md` for the persistence contract.

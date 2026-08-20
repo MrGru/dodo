@@ -1,9 +1,8 @@
 //! A pretend host, so a key sequence can be replayed without dodo running.
 //!
 //! An engine only ever returns [`EngineAction`]s; something has to perform them
-//! before there is any text to assert on. On macOS that something is
-//! InputMethodKit, on Windows a TSF sink — and in a test it is [`Host`], which
-//! is forty lines and keeps a `String`.
+//! before there is any text to assert on. Production input listeners do that;
+//! in a test it is [`Host`], which is forty lines and keeps a `String`.
 //!
 //! That makes [`type_keys`] the developer-facing simulate path this round owes:
 //!

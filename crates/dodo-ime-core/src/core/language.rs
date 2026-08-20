@@ -1,13 +1,13 @@
 //! The language selected for keyboard input.
 //!
 //! [`LanguageId`] is the one stable identity shared by dodo's menu bar and its
-//! native input method. It is deliberately plain Rust so the engine remains
-//! independent of either UI or IPC.
+//! Input method. It is deliberately plain Rust so the engine remains independent
+//! of the UI and persisted settings.
 
 /// A keyboard input language dodo knows about.
 ///
 /// Only Vietnamese has an engine today. English and Japanese still name real
-/// selections: the native host passes their keys through until their engines
+/// selections: the input listener passes their keys through until their engines
 /// exist.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum LanguageId {

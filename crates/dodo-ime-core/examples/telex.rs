@@ -13,9 +13,9 @@
 //! # What it shows that the tests cannot
 //!
 //! The engine never touches text. It answers each keystroke with a list of
-//! [`EngineAction`]s and something else performs them — InputMethodKit on
-//! macOS, a TSF sink on Windows, forty lines of `Host` below here. So the
-//! interesting thing to watch is not the final string, it is the split between
+//! [`EngineAction`]s and something else performs them — dodo's input listener
+//! in production, forty lines of `Host` below here. So the interesting thing to
+//! watch is not the final string, it is the split between
 //! **committed** text (the document really has it) and the **composition**
 //! (provisional, redrawn on every key, gone if the user hits Escape). That
 //! distinction is the whole design and it is invisible in an assertion that
@@ -40,8 +40,8 @@
 //! Every string here is a bare literal on purpose. `i18n::Str` governs text a
 //! *dodo user* reads; this is a developer tool that is compiled only when
 //! someone asks for it (`examples/`, never a `[[bin]]`), it ships in no binary,
-//! and it must not link dodo at all — the engine is a crate precisely so the
-//! OS hosts can link it without gpui. Please do not "fix" these into `Str`.
+//! and it must not link dodo at all — the engine is a crate precisely to keep
+//! it independent of gpui. Please do not "fix" these into `Str`.
 
 use dodo_ime_core::core::truncate_graphemes;
 use dodo_ime_core::{
@@ -52,8 +52,8 @@ use std::io::{BufRead, Write};
 
 // ---------------------------------------------------------------- the host
 
-/// A document the engine can type into: exactly what an OS host is, minus the
-/// operating system.
+/// A document the engine can type into: the production listener's text model,
+/// minus the operating system.
 ///
 /// This duplicates `dodo_ime_core::testing::Host` — deliberately, because that
 /// one is `#[cfg(test)]` and an example is not a test build, so it is not

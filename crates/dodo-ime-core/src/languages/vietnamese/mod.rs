@@ -140,15 +140,15 @@ impl InputScheme {
 ///
 /// [`OutputMode::Composition`] is what a real input method does: the text is
 /// *marked*, the application knows it is provisional, and nothing lands in the
-/// document until the syllable is finished. Every OS host a later round adds
-/// will use it.
+/// document until the syllable is finished. A listener with a marked-text
+/// channel can use it.
 ///
 /// [`OutputMode::Direct`] types for real and rewrites what it typed as the
 /// syllable evolves. It is worse in every way that matters — the application
 /// sees each intermediate state, undo history fills with them, and an
 /// application that reorders keystrokes can corrupt the result. It exists
-/// because some hosts have no marked-text channel at all, and typing the right
-/// characters clumsily beats refusing to type them.
+/// because global input listeners have no marked-text channel, and typing the
+/// right characters clumsily beats refusing to type them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum OutputMode {
     /// Marked text: `SetComposition` while composing, `CommitComposition` at

@@ -3,12 +3,9 @@
 //!
 //! # Why this exists
 //!
-//! Three native hosts are coming — a macOS InputMethodKit `.app`, a Windows TSF
-//! DLL, an IBus engine — and every one of them is a *separate process* loaded
-//! into somebody else's application. They must link this engine; they must not
-//! link gpui, or `rust-embed`, or bollard, or dodo's settings. An input method
-//! that dragged a UI framework into every text field on the machine would be
-//! unacceptable even if it worked.
+//! Platform listeners and settings live in `dodo-input-method`; this crate keeps
+//! the transformation engine independent of them. It must not link gpui,
+//! `rust-embed`, bollard or dodo's settings.
 //!
 //! **That boundary is now a real crate boundary, not an aspirational one.** This
 //! code was `src/input_method/` for one round, compiled into the `dodo` binary,
@@ -28,9 +25,9 @@
 //!   makes on purpose rather than a change that slips through review. The rule
 //!   holds for any crate, including ones nobody thought to forbid by name —
 //!   [`ALLOWED_ROOTS`] is an allow-list, not a block-list.
-//! - **Sideways is the workspace's shape, not cargo's.** `crates/` will hold the
-//!   hosts, and the engine must never depend on one of *them* either. `dodo::`
-//!   and any future sibling are caught by the same allow-list.
+//! - **Sideways is the workspace's shape, not cargo's.** The engine must never
+//!   depend on a sibling feature crate either. `dodo::` and any future sibling
+//!   are caught by the same allow-list.
 //!
 //! [`tests::the_scan_covers_every_file`] is the third: it proves the check
 //! actually reads every file, which no manifest can.
@@ -107,8 +104,8 @@ const SOURCES: [(&str, &str); 18] = [
 /// Two files qualify, and both are entirely `#[cfg(test)]`: the word corpus and
 /// the engine's behaviour tables. Every other file's tests *are* scanned — a
 /// test module is still code in the crate, and an import it drags in is one a
-/// `dev-dependency` would have to carry, which the OS hosts would then have to
-/// keep out of their own builds.
+/// `dev-dependency` would have to carry and the engine would have to keep out of
+/// production builds.
 const TEST_ONLY: [&str; 2] = [
     "languages/vietnamese/corpus.rs",
     "languages/vietnamese/tests.rs",
@@ -207,8 +204,8 @@ mod tests {
     /// A failure here means this crate has grown a dependency — on a sibling in
     /// the workspace, or on a crate somebody just added to `Cargo.toml`. The fix
     /// is never to widen `ALLOWED_ROOTS`: pass the value in from the caller
-    /// instead, at the boundary where the OS host or the settings layer already
-    /// is.
+    /// instead, at the boundary where the input listener or settings layer
+    /// already is.
     #[test]
     fn the_engine_depends_on_nothing_but_std() {
         let findings = findings();
@@ -289,7 +286,7 @@ mod tests {
             // Sideways: a sibling crate in the workspace, which `Cargo.toml`
             // would happily accept as one added line.
             "use dodo::i18n::Str;",
-            "use dodo_ime_macos::Host;",
+            "use dodo_input_method::InputMethodView;",
             "use serde::Serialize;",
             "use regex::Regex;",
             "use std::collections::HashMap;\nextern crate alloc;",

@@ -1,17 +1,15 @@
-//! What an engine asks its host to do about a keystroke.
+//! What an engine asks its input listener to do about a keystroke.
 //!
 //! An engine changes nothing itself. It returns a list of these, in order, and
-//! the host performs them against whatever it has — a marked-text range on
-//! macOS, a TSF composition on Windows, a preedit string on IBus, or, in the
-//! tests, a `String`.
+//! the listener performs them against its text model or, in tests, a `String`.
 //!
 //! # Two ways to put text on screen, and why both exist
 //!
 //! A real input method shows a *composition*: underlined text the application
 //! knows is provisional. That is [`EngineAction::SetComposition`] and
-//! [`EngineAction::CommitComposition`], and it is what every OS host will use.
+//! [`EngineAction::CommitComposition`].
 //!
-//! But some places cannot show marked text at all — a host with no TSF sink, a
+//! But some places cannot show marked text at all — a global input listener, a
 //! terminal, an application that rejects the protocol. There the only honest
 //! move is to type the text for real and rewrite it as the syllable evolves,
 //! which is [`EngineAction::ReplaceBeforeCursor`] and

@@ -1469,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn shortcuts_and_non_text_keys_keep_the_native_hosts_meaning() {
+    fn shortcuts_and_non_text_keys_keep_their_platform_meaning() {
         let shortcut = key_event(Some('s'), 0x01, objc2_core_graphics::CGEventFlags(1 << 20));
         assert_eq!(shortcut.text, Some('s'));
         assert_eq!(shortcut.typed(), None);

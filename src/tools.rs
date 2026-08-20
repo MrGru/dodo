@@ -981,7 +981,7 @@ mod tests {
     /// is the tool that opens.
     ///
     /// Written with the Input method in the middle deliberately: on a build
-    /// without a native host that entry is *dropped* rather than moved, and the
+    /// without an Input method implementation that entry is *dropped* rather than moved, and the
     /// six around it keep their order and their positions relative to each
     /// other.
     #[test]

@@ -63,7 +63,7 @@ Change it only in its own reviewed commit, and pass `--locked` otherwise.
 │   ├── dodo-dialog-slot/     # The one-dialog-at-a-time slot
 │   ├── dodo-{api-explorer,cleaner,database,docker,input-method,updater}/  # Feature crates
 │   ├── dodo-{json-formatter,encoder-decoder}/   # Single-file feature crates
-│   └── dodo-ime-{core,ipc,macos,windows}/       # Engine, contract, and the two native hosts
+│   └── dodo-ime-core/                           # Pure input-method engine
 ├── src/
 │   ├── main.rs         # Entry point: GPUI init, --version/--build-info, the window
 │   ├── app.rs          # DodoApp: top-level view holding the Layout

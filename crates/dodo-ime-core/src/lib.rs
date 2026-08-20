@@ -3,44 +3,36 @@
 //!
 //! This crate ships the part that has nothing to do with any operating system:
 //! a normalized key/action vocabulary ([`core`]) and one language engine
-//! ([`languages::vietnamese`]) that speaks it. Later rounds add settings, tray
-//! wiring, per-application language memory, abbreviations, and three native
-//! hosts — a macOS InputMethodKit bundle, a Windows TSF DLL, an IBus engine on
-//! Linux. **Nothing here touches the OS, the UI, the tray or settings**, and
-//! [`purity_lint`] is a test that keeps it that way.
+//! ([`languages::vietnamese`]) that speaks it. Platform listeners, settings and
+//! UI live in `dodo-input-method`. **Nothing here touches the OS, the UI, the
+//! tray or settings**, and [`purity_lint`] is a test that keeps it that way.
 //!
 //! # Why this is a crate and not a module of dodo
 //!
-//! It was a module — `src/input_method/` — for exactly one round. The macOS
-//! investigation settled that the input method has to be a **separate `.app`
-//! bundle** that macOS launches, and Windows and Linux load their hosts into
-//! *other people's processes*. All three link this code; none of them may link
-//! gpui, tree-sitter, bollard or reqwest. A module of the `dodo` binary crate
-//! cannot be linked by anything, so the boundary that `purity_lint` had been
-//! asserting on paper is now the crate graph. dodo depends on this crate; this
-//! crate depends on `unicode-normalization` and nothing else.
+//! The crate boundary keeps keystroke transformation independent of gpui,
+//! platform input APIs and the rest of dodo. `dodo-input-method` depends on this
+//! crate; this crate depends on `unicode-normalization` and nothing else.
 //!
 //! # The shape of it
 //!
 //! ```text
-//!   OS keystroke ──normalize──▶ KeyEvent ──▶ LanguageEngine ──▶ EngineAction
-//!   (NSEvent, WM_KEYDOWN,                    (per language)      (what the
-//!    IBus keysym)                                                 host does)
+//!   platform keystroke ──normalize──▶ KeyEvent ──▶ LanguageEngine ──▶ EngineAction
+//!                                             (per language)      (what the
+//!                                                                  listener does)
 //! ```
 //!
-//! A host normalizes; an engine decides; the host performs. The engine never
-//! learns which host it is under, and the host never learns any Vietnamese.
+//! A listener normalizes; an engine decides; the listener performs. The engine
+//! never learns which listener it is under, and the listener never learns any Vietnamese.
 //! Following one keystroke from [`core::KeyEvent`] to a [`core::EngineAction`]
 //! is two hops and no indirection: [`languages::vietnamese::InputScheme`] is a
 //! plain enum, not a trait object, and the only trait in the module is
 //! [`core::LanguageEngine`] — which exists because Korean, Japanese and Chinese
 //! are a genuine future substitution at that seam, and nothing else is.
 //!
-//! # Typing at it, today, with nothing installed
+//! # Typing at it from a terminal
 //!
-//! No OS host exists yet, so nothing on the machine can route a keystroke here.
-//! `examples/telex.rs` is the way in — it performs the actions the engine
-//! returns against a `String`, which is all an OS host really does:
+//! `examples/telex.rs` performs the actions the engine returns against a
+//! `String`, which is all an input listener does:
 //!
 //! ```text
 //! cargo run -p dodo-ime-core --example telex                    # interactive
@@ -84,7 +76,7 @@
 pub mod core;
 pub mod languages;
 
-/// Guards the rule that makes the OS hosts linkable; test-only.
+/// Guards the engine's dependency boundary; test-only.
 #[cfg(test)]
 mod purity_lint;
 
@@ -92,8 +84,7 @@ mod purity_lint;
 #[cfg(test)]
 mod testing;
 
-// The crate's public face, for the tray/settings wiring and the OS hosts that
-// later rounds add.
+// The crate's public face, for the Input method's settings and listeners.
 pub use self::core::{
     ActiveLanguages, Candidate, CandidateList, Composition, EngineAction, EngineResult, Key,
     KeyEvent, LanguageEngine, LanguageId, Modifiers,

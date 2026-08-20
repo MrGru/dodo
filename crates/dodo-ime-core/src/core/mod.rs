@@ -1,13 +1,13 @@
-//! The vocabulary every language engine and every OS host shares.
+//! The vocabulary every language engine and platform input listener shares.
 //!
 //! Four small data types and one trait. A keystroke arrives as a [`KeyEvent`],
 //! an engine answers with an [`EngineResult`] carrying [`EngineAction`]s, and
 //! whatever is mid-composition is a [`Composition`] with, for the conversion
 //! languages, a [`CandidateList`] beside it.
 //!
-//! Nothing here knows about Vietnamese, and nothing here knows about AppKit,
-//! TSF or IBus. That is the whole point of the layer: it is the only thing a
-//! macOS input-method bundle and a Windows DLL would both link against.
+//! Nothing here knows about Vietnamese or any platform input API. That is the
+//! whole point of the layer: listeners normalize platform events into this
+//! shared vocabulary.
 
 pub mod action;
 pub mod candidate;
@@ -18,9 +18,8 @@ pub mod language;
 
 pub use self::action::EngineAction;
 pub use self::candidate::{Candidate, CandidateList};
-// `truncate_graphemes` is what a host needs to perform `DeleteBackward` and
-// `ReplaceBeforeCursor`; only the test host does today. Remove this the round a
-// real OS host lands.
+// Direct-output listeners use `truncate_graphemes` to perform
+// `DeleteBackward` and `ReplaceBeforeCursor`.
 #[allow(unused_imports)]
 pub use self::composition::{Composition, grapheme_count, grapheme_prefix, truncate_graphemes};
 pub use self::engine::{EngineResult, LanguageEngine};

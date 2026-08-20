@@ -2,15 +2,15 @@
 //!
 //! [`LanguageEngine`] is a trait because Korean, Japanese and Chinese are a
 //! real substitution at this seam: each is a genuinely different algorithm
-//! behind an identical host protocol, and a host must be able to hold whichever
-//! one the user selected without knowing which. Nothing *else* in
+//! behind an identical engine protocol, and a listener must be able to hold
+//! whichever one the user selected without knowing which. Nothing *else* in
 //! this crate is a trait — the Telex/VNI split inside Vietnamese is an
 //! enum, because those two share a state machine rather than replacing one.
 //!
 //! # Can this API carry Korean, Japanese and Chinese?
 //!
 //! Checked on paper before the API was frozen, because discovering the answer
-//! is "no" once three OS hosts link against it is a rewrite. Round 1 implements
+//! is "no" after multiple listeners depend on it is a rewrite. Round 1 implements
 //! **none** of these and adds no dictionary; this is a design proof, not a plan
 //! of work.
 //!

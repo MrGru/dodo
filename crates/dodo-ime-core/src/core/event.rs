@@ -1,10 +1,8 @@
 //! One keystroke, with every platform's spelling of it already erased.
 //!
-//! This is the type each future OS host normalizes *into*: an `NSEvent` on
-//! macOS, a `WM_KEYDOWN` plus its `ToUnicode` result on Windows, an IBus keysym
-//! on Linux. None of those names appears here or ever will — a [`KeyEvent`] is
-//! three fields of plain data, so an engine can be driven from a unit test as
-//! easily as from a window server.
+//! This is the type each platform input listener normalizes *into*. A
+//! [`KeyEvent`] is three fields of plain data, so an engine can be driven from a
+//! unit test as easily as from a global keyboard listener.
 //!
 //! # Why identity *and* character, rather than one or the other
 //!
@@ -15,7 +13,7 @@
 //!   right arrow. Composition editing, candidate navigation and word boundaries
 //!   are all decided from this, and none of them cares what the key would type.
 //! - [`KeyEvent::text`] is what the key would **type** under the user's own
-//!   keyboard layout, after the host has applied it. Telex reads `w`; VNI reads
+//!   keyboard layout, after the listener has applied it. Telex reads `w`; VNI reads
 //!   `7`; a Dvorak user's physical key positions are irrelevant to both. Asking
 //!   for a scan code here would silently break every non-QWERTY layout.
 //!
