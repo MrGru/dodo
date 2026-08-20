@@ -15,9 +15,65 @@
 //!
 //! # What you can do in the window
 //!
+//! **Start at the palette, top left.** It is §45's tool strip and it decides
+//! what a left press means; the eight buttons are Select, Hand, Rectangle,
+//! Diamond, Ellipse, Arrow, Line and Graph node, in that order, each drawn as
+//! the shape it creates. The active one is filled.
+//!
+//! | Tool gesture | Effect |
+//! |---|---|
+//! | click a palette button, or press its letter | pick that tool up — **it is armed at once**, the next drag draws |
+//! | with a shape tool, drag on the canvas | draw the element inside the box you drag — the preview is the real shape, not an outline of it |
+//! | with a shape tool, **click** | place it at its default size, centred where you clicked |
+//! | hold shift while drawing | square the box: a square, a circle, a regular diamond, a 45° line |
+//! | finish a drawing | **back to Select**, so the thing you just drew can be moved — Excalidraw's own default |
+//! | click the padlock, or press `q` | lock the tool: finishing a drawing keeps it, so six rectangles need one trip to the palette |
+//! | `Esc` | abandon what is being drawn **and** go back to Select, lock or no lock |
+//! | `Cmd+Z` / `Ctrl+Z` after drawing | remove it — **one press per element**, however long the drag was |
+//!
+//! ## Deleting
+//!
 //! | Gesture | Effect |
 //! |---|---|
-//! | drag with the middle button, or hold space and drag | pan |
+//! | select something, then `Delete` or `Backspace` | remove it |
+//! | click the bin in the palette | the same thing — one method, two doors |
+//! | delete a node | **its edges go with it**; an edge with one end nowhere has no geometry |
+//! | `Cmd+Z` / `Ctrl+Z` | put it all back, node, edges and selection, in one press |
+//!
+//! The bin is drawn muted when nothing is selected, and clicking it then does
+//! nothing. That is the state, not a bug.
+//!
+//! A creating tool draws over whatever is underneath, so a rectangle dragged
+//! across a node is a rectangle and not a node drag. A graph node is born with
+//! a source handle on its right and a target on its left, so it can be
+//! connected the moment it exists; a drawn shape gets neither, because §4
+//! refuses an edge to one anyway.
+//!
+//! **Two things about the Arrow and Line tools are worth knowing before you
+//! wonder whether they are broken.** An arrow always points from the top-left
+//! of the box you drew to its bottom-right — a node stores an origin and a
+//! size and not a pair of endpoints, so the diagonal is the only direction it
+//! can have, and drawing one leftwards still gives you an arrow pointing right.
+//! And a linear element is grabbed by its whole bounding box rather than by the
+//! line itself, so a long diagonal is selected from its empty corners too.
+//! `render::shapes` and `runtime::hit` carry both, with the shape of the fix.
+//!
+//! **Hover a palette button and it tells you what it is and which key it
+//! answers to.** The label comes from `dodo_i18n::flow`, in whichever language
+//! dodo is set to; the keystroke beside it is looked up from the real binding
+//! table, so it is right by construction rather than by being kept in step.
+//! The letters, for reference:
+//!
+//! | `v` | `h` | `r` | `d` | `o` | `a` | `l` | `n` | `q` |
+//! |---|---|---|---|---|---|---|---|---|
+//! | select | hand | rectangle | diamond | ellipse | arrow | line | node | lock |
+//!
+//! ## Everything else, which is the Select tool's
+//!
+//! | Gesture | Effect |
+//! |---|---|
+//! | drag with the middle button, or hold space and drag | pan, under any tool |
+//! | pick up the Hand tool, or press `h` | pan with the left button too |
 //! | two-finger trackpad swipe | pan |
 //! | trackpad pinch | zoom, anchored at the pointer |
 //! | Cmd or Ctrl + scroll wheel | zoom, anchored at the pointer |
@@ -25,8 +81,24 @@
 //! | drag out of a handle dot | a connection preview follows the pointer |
 //! | drop it on a handle or a node body | connect, if §4's rules allow it |
 //! | drop it on empty canvas | cancel |
-//! | drag on empty space with the left button | selection rectangle |
-//! | `Esc` | abandon the drag — a moved node goes back exactly where it was |
+//! | drag on empty space with the left button | rubber band — **it selects on release** |
+//! | shift + drag on empty space | add the band's contents to the selection |
+//! | `Delete` / `Backspace` | remove whatever is selected, nodes and edges alike |
+//! | `Esc` | abandon the drag — a moved node goes back exactly where it was, and the drag leaves no undo step |
+//! | `Cmd+Z` / `Ctrl+Z` | undo — **a whole drag is one press**, however many mouse moves it took |
+//! | `Cmd+Shift+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` | redo |
+//!
+//! Every gesture above needing the Select tool is what `v` or `Esc` gets you
+//! back to. The keys are `commands::keys`'s table rather than constants in a
+//! handler (§26), so they are the same on every platform and the whole table is
+//! asserted from any machine.
+//!
+//! **If a key does nothing, suspect focus first.** GPUI dispatches a key event
+//! down the focus path and every canvas binding is scoped to
+//! `FlowView::KEY_CONTEXT`, so a canvas that does not hold the focus has all of
+//! them silently dead — that was true from Phase 2 to Phase 7 and nothing
+//! reported it. Clicking the canvas, or any palette button, takes the focus
+//! back.
 //!
 //! A connection is refused silently on the canvas: an input handle will not
 //! take a second edge past its limit, a source will not connect to a source,
@@ -41,6 +113,34 @@
 //! | `DODO_FLOW_NODES=n` | how many nodes the connected field holds (default 400) |
 //! | `DODO_FLOW_BENCH=1` | drive continuous frames and print frame timings |
 //! | `DODO_FLOW_TRACE_INPUT=1` | print every mouse, scroll and pinch event received |
+//! | `DODO_FLOW_INSTRUMENT=1` | record §39's probes; read them with `FlowView::instruments` |
+//! | `DODO_FLOW_REPORT=1` | print one line after the first painted frame: §15's rung, §16's element count, §23's cache |
+//! | `DODO_FLOW_ZOOM=z` | open at this zoom, to see the LOD ladder without touching the trackpad |
+//! | `DODO_FLOW_SKETCH=1` | open hand-drawn (§13), the same as clicking **Sketch** |
+//!
+//! # The launcher's own two buttons are English on purpose
+//!
+//! The canvas's strings go through `dodo_i18n::flow` from Phase 9 on, and
+//! **this file's do not**. The Clean/Sketch toggle is a developer harness: it
+//! is an `examples/` target nothing a shipped build can reach, `i18n_lint`
+//! does not scan it, and giving it catalogue entries would put two strings in
+//! the app's catalogue that the app never draws — the same objection
+//! `commands::keys` makes to a binding no code reads. If the render-style
+//! toggle becomes a real control, its strings are added then, with a caller.
+//!
+//! # The clean/sketch toggle
+//!
+//! The two buttons at the top right switch §13's render style. **It is a
+//! renderer strategy, not a document type**: the click writes one field and
+//! asks for a repaint — no element is created, moved or rewritten, which
+//! `runtime::world`'s `switching_render_style_touches_no_element` asserts and
+//! which is what makes the switch instant on a 100,000-node document. Open with
+//! `DODO_FLOW_NODES=100000` and click between them to see it.
+//!
+//! Zoom out past 0.35 and the buttons stop making a difference: the ladder
+//! degrades sketch to clean below the zoom at which a 2 px wobble is visible.
+//! That is [`render::lod`]'s decision, and the same rung drops it on a scene
+//! with too many visible bodies to draw by hand.
 //!
 //! `DODO_FLOW_BENCH` deliberately does the thing §35 forbids — it requests an
 //! animation frame from every paint, so the canvas repaints as fast as the
@@ -59,15 +159,19 @@ use dodo_flow::{
     geometry::Vec2,
     models::{
         ArrowMarker, Color, DashPattern, EdgeRouting, ElementId, ElementKind, Endpoint,
-        FlowDocument, GraphNodeKind, Handle, HandleDirection, HandlePlacement, ShapeKind,
-        StrokeStyle,
+        FlowDocument, GraphNodeKind, Handle, HandleDirection, HandlePlacement, NodeIndex,
+        RenderStyle, ShapeKind, StrokeStyle,
     },
+    render::registry::GenericKind,
 };
 use gpui::{
     AppContext, AssetSource, Context, Entity, IntoElement, ParentElement, QuitMode, Render,
     SharedString, Styled, Window, WindowOptions, div, px, size,
 };
-use gpui_component::{ActiveTheme, Root};
+use gpui_component::{
+    ActiveTheme, Root, Sizable,
+    button::{Button, ButtonVariants},
+};
 
 struct Assets;
 
@@ -86,6 +190,12 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         gpui_component_assets::Assets.list(path)
     }
+}
+
+fn env_zoom() -> Option<f32> {
+    std::env::var("DODO_FLOW_ZOOM")
+        .ok()
+        .and_then(|value| value.parse().ok())
 }
 
 fn env_count(name: &str, default: usize) -> usize {
@@ -211,6 +321,29 @@ fn demo_document(nodes: usize) -> FlowDocument {
         }
     }
 
+    // ---- §43's registry: one node per generic kind ------------------------
+    //
+    // Six kinds, and three of them — Process, Decision, Note — have no
+    // `ElementKind` variant at all. They reach the registry by name, through
+    // the same public path a third party would register against, which is what
+    // makes this row a demonstration rather than a decoration. The decision
+    // node comes out a diamond, and a diamond is painted on the canvas rather
+    // than made an element, because a `div` cannot be one.
+    for (index, kind) in GenericKind::ALL.iter().enumerate() {
+        let id = document.add_node(
+            kind.element_kind(),
+            Vec2::new(60.0 + index as f32 * 190.0, 980.0),
+            Vec2::new(170.0, 60.0),
+        );
+        if let Some(node) = document.node_mut(id) {
+            node.label = Some(kind.id().trim_start_matches("dodo.flow.").to_owned());
+            node.handles = vec![
+                Handle::new("out", HandlePlacement::Right, HandleDirection::Source),
+                Handle::new("in", HandlePlacement::Left, HandleDirection::Target),
+            ];
+        }
+    }
+
     // ---- the field: connected graph nodes, laid out on a grid ------------
     //
     // Every node is wired to the one after it and to the one a row below, so
@@ -302,25 +435,35 @@ impl FrameTimer {
         let worst = *self.samples.last().expect("just sorted a non-empty vec");
         let stats = view.last_paint_stats();
         let grid = view.last_grid_level();
+        let visible = view.visible();
 
         println!(
             "frame {:>6} | median {:>6.2} ms ({:>5.1} fps) | p95 {:>6.2} ms | worst {:>6.2} ms \
-             | quads {:>6} paths {:>5} vertices {:>8} | grid level {} spacing {:.0}px \
-             | rerouted {} | dropped {}",
+             | visible {:>5}n/{:>5}e of {}n/{}e | quads {:>6} paths {:>5} vertices {:>8} \
+             | batches {} | grid {} @{:.0}px | rerouted {} | culled {} | dropped {} | selected {}",
             self.frames,
             median.as_secs_f64() * 1000.0,
             1.0 / median.as_secs_f64(),
             p95.as_secs_f64() * 1000.0,
             worst.as_secs_f64() * 1000.0,
+            // §16's rule, live: these two must stay a screenful however large
+            // the document behind them is.
+            visible.node_count(),
+            visible.edge_count(),
+            view.world().nodes().len(),
+            view.world().edges().len(),
             stats.quads,
             stats.paths,
             stats.path_vertices,
+            stats.path_batches,
             grid.level,
             grid.screen_spacing,
             // §19's number, live: zero while panning or idle, and the dragged
             // node's degree while a node is being dragged.
             view.rebuilt_routes(),
+            stats.culled_paths,
             view.dropped_paths(),
+            view.selection().len(),
         );
 
         self.samples.clear();
@@ -330,6 +473,30 @@ impl FrameTimer {
 struct FlowWindow {
     flow: Entity<FlowView>,
     timer: Option<FrameTimer>,
+}
+
+/// One half of the clean/sketch toggle.
+///
+/// The entity is captured rather than reached through `cx.listener`, because a
+/// `Button`'s click handler is handed an `&mut App` and not a `Context<Self>` —
+/// see `gpui-component-recipes`.
+fn style_button(
+    id: &'static str,
+    label: &'static str,
+    style: RenderStyle,
+    flow: Entity<FlowView>,
+    current: RenderStyle,
+) -> Button {
+    let button = Button::new(id).small().label(label);
+    let button = if current == style {
+        button.primary()
+    } else {
+        button.ghost()
+    };
+
+    button.on_click(move |_, _, cx| {
+        flow.update(cx, |view, cx| view.set_render_style(style, cx));
+    })
 }
 
 impl Render for FlowWindow {
@@ -343,11 +510,39 @@ impl Render for FlowWindow {
             window.request_animation_frame();
         }
 
+        let current = self.flow.read(cx).render_style();
+
         div()
             .size_full()
+            .relative()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.flow.clone())
+            .child(
+                // §13's toggle. Absolutely positioned over the canvas rather
+                // than in a bar beside it: the launcher's whole job is to show
+                // the canvas, and the canvas measures its own pane.
+                div()
+                    .absolute()
+                    .top(px(12.0))
+                    .right(px(12.0))
+                    .flex()
+                    .gap(px(6.0))
+                    .child(style_button(
+                        "flow-style-clean",
+                        "Clean",
+                        RenderStyle::Clean,
+                        self.flow.clone(),
+                        current,
+                    ))
+                    .child(style_button(
+                        "flow-style-sketch",
+                        "Sketch",
+                        RenderStyle::Sketch,
+                        self.flow.clone(),
+                        current,
+                    )),
+            )
             .children(Root::render_dialog_layer(window, cx))
     }
 }
@@ -361,6 +556,10 @@ fn main() {
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx| {
             gpui_component::init(cx);
+            // §26's bindings, from `commands::keys`'s table. After
+            // `gpui_component::init`, so the canvas's context wins the tie with
+            // the component library's own.
+            dodo_flow::init(cx);
             cx.activate(true);
 
             let options = WindowOptions {
@@ -373,6 +572,38 @@ fn main() {
                     let flow = cx.new(|cx| {
                         let mut flow = FlowView::new(window, cx);
                         flow.set_document(demo_document(nodes));
+
+                        // **The acceptance check, made visible on the first
+                        // frame.** §44's controls belong to the selected
+                        // element, so a launcher that selects nothing shows
+                        // none of them — and the whole point of opening this
+                        // window is to look at them.
+                        flow.editor_mut().select_only(Some(NodeIndex::new(0)));
+
+                        // §15 without a trackpad: `DODO_FLOW_ZOOM=0.4` opens in
+                        // the compact rung and `0.1` in the overview one, which
+                        // is how the ladder gets checked by eye rather than
+                        // only by test.
+                        if let Some(zoom) = env_zoom() {
+                            flow.viewport_mut().zoom_around(Vec2::ZERO, zoom);
+                        }
+                        if std::env::var_os("DODO_FLOW_SKETCH").is_some() {
+                            flow.editor_mut().set_render_style(RenderStyle::Sketch);
+                        }
+                        if benchmarking {
+                            // One line before the first frame, so a run that is
+                            // only watched for a second still says what it
+                            // built and what the spatial index made of it.
+                            println!(
+                                "scene: {} nodes, {} edges — index over {} node cells, \
+                                 {} edge cells, {:.2} MB",
+                                flow.world().nodes().len(),
+                                flow.world().edges().len(),
+                                flow.spatial().nodes().entry_count(),
+                                flow.spatial().edges().entry_count(),
+                                flow.spatial().memory_bytes() as f64 / 1e6,
+                            );
+                        }
                         flow
                     });
                     FlowWindow {

@@ -60,36 +60,93 @@
 //! about how mouse, scroll and pinch arrive was read from GPUI's source rather
 //! than observed. The trace is how that gets checked on a real machine, and it
 //! costs one atomic load per event when it is off.
+//!
+//! **Keyboard input has a precondition the mouse does not**: it goes down the
+//! *focus* path. See [`KEY_CONTEXT`] — a canvas that never takes focus has
+//! every one of its bindings silently dead, which is what Phase 2's `Esc` and
+//! space-to-pan turned out to be. This view focuses on mount and refocuses on
+//! every press.
+//!
+//! # Where an edit goes
+//!
+//! Nothing here changes the document. The view holds a
+//! [`FlowEditor`] rather than a [`GraphWorld`] and there is **no
+//! `world_mut`**;
+//! every gesture that means an edit goes through
+//! [`apply_gesture`](crate::commands::gesture::apply_gesture),
+//! which turns §25's effects into §30's commands. `commands::editor`'s module
+//! doc says why that is enforced by ownership rather than by convention, and
+//! `commands::gesture`'s says why the mapping is not in this file.
+//!
+//! Two effects stay here because they are not the document's: `PanBy` moves the
+//! camera, and `CommitBoxSelect` needs the spatial broad phase to say what its
+//! rectangle contains.
 
 use std::sync::OnceLock;
 
 use gpui::{
     App, Bounds, Context, DispatchPhase, FocusHandle, Focusable, Hitbox, HitboxBehavior,
     InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, PinchEvent, Pixels, Point, Render,
-    ScrollWheelEvent, Styled, Window, canvas, div, px,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Path, PinchEvent, Pixels, Point, Render,
+    ScrollWheelEvent, ShapedLine, Styled, Window, canvas, div, px,
 };
 use gpui_component::ActiveTheme;
 
 use crate::{
     budgets::RenderBudgets,
+    commands::{FlowEditor, gesture},
     geometry::{Attachment, EdgeRoute, Rect, RouteOptions, Vec2, Viewport, route},
+    instrument::{Instruments, Probe},
     interaction::{
-        ConnectionSource, InputModifiers, InteractionEffect, InteractionEvent, InteractionMachine,
-        PointerButton,
+        BoxSelection, CanvasTool, InputModifiers, InteractionEffect, InteractionEvent,
+        InteractionMachine, PointerButton,
     },
-    models::{Color, EdgeRouting, FlowDocument, NodeIndex, RenderQuality},
+    models::{
+        Color, EdgeIndex, EdgeRouting, FlowDocument, NodeIndex, RenderQuality, RenderStyle,
+        SketchStyle,
+    },
     render::{
-        GridLevel, GridLimits, GridSettings, PaintPlan, PaintStats, WindowPainter, edges, grid,
-        plan::{DashSpec, PathPrimitive, QuadPrimitive},
+        GridLevel, GridLimits, GridSettings, PaintPlan, PaintStats, SceneInk, SceneOptions,
+        SceneStats, WindowPainter,
+        cache::{CacheStats, GeometryCache, ShapedLineCache},
+        edges,
+        lod::LodPlan,
+        painter::from_hsla,
+        plan::{PathPrimitive, QuadPrimitive},
+        registry::NodeRendererRegistry,
+        scene,
+        scene::GRAPH_NODE_RADIUS,
         shapes,
+        snapshot::{RenderSnapshot, SnapshotCounts},
     },
-    runtime::{EdgeEnd, GraphWorld, HitTolerance, NodeShape, PointerTarget},
+    runtime::{BoxQuery, EdgeEnd, GraphWorld, HitTolerance, PointerTarget, SelectionSet},
+    spatial::{SpatialIndex, SyncReport, VisibleSet},
+    views::{
+        keymap::{Delete, Redo, SelectTool, ToggleToolLock, Undo},
+        nodes, palette,
+    },
 };
 
 /// The key-binding context the canvas establishes on its root, so canvas
 /// bindings fire only while it holds focus and never leak into another tool —
 /// the same scoping every other dodo tool uses.
+///
+/// **The scoping has a precondition that is easy to miss and silent when it is
+/// missed**: GPUI dispatches a key event down the *focus* path, and
+/// `Window::dispatch_key_event` falls back to the dispatch tree's **root node**
+/// when nothing is focused. A canvas that never takes focus therefore has its
+/// context, its key handlers and its actions outside the path entirely — every
+/// binding is dead and nothing says so. [`FlowView::new`] focuses on mount and
+/// the mouse-down handler refocuses, which is what makes this constant mean
+/// anything.
+///
+/// dodo's `gpui-component-recipes` skill already states this — *"with nothing
+/// focused, the dispatch path is the window root alone"* — and says to focus in
+/// the constructor. This canvas did not, from Phase 2 until Phase 7 needed a
+/// binding that anybody would notice was missing. The lesson is about the
+/// failure mode rather than the fact: a dead binding produces no error, no
+/// warning and no wrong behaviour, only an absence, so it survives every review
+/// that is not specifically looking for it.
 pub const KEY_CONTEXT: &str = "FlowCanvas";
 
 /// The key that turns a left-drag into a pan, alongside the middle button.
@@ -130,60 +187,29 @@ fn tracing_input() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("DODO_FLOW_TRACE_INPUT").is_some())
 }
 
-/// The colours an element falls back to when its own style leaves them unset.
+/// Whether to print one line after the first painted frame.
 ///
-/// Resolved from the active theme once per frame and passed down, rather than
-/// read per element: `cx.theme()` is a lookup, and this is the inner loop over
-/// every shape in the document.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct CanvasInk {
-    fill: Color,
-    stroke: Color,
-    /// Edges and their markers.
-    edge: Color,
-    /// Handle dots.
-    handle: Color,
-    /// The selection outline, the box-select rectangle and the connection
-    /// preview — everything that says "you are doing something".
-    accent: Color,
+/// Here rather than in the launcher for one reason: everything worth reporting
+/// — the LOD rung, the element count, the cache — only exists **after** a frame
+/// has been extracted *and* painted, and a wrapper view's `render` runs before
+/// its child's. A launcher can only see those numbers on the second frame, and
+/// a window nobody is looking at may never produce one.
+fn reporting() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("DODO_FLOW_REPORT").is_some())
 }
-
-/// How big a handle dot is drawn, in **screen** pixels.
-///
-/// Screen rather than world, so a handle stays grabbable when zoomed out and
-/// does not swallow its node when zoomed in. It is the same number
-/// [`HitTolerance::HANDLE_SCREEN_RADIUS`] tests against, less the grabbing
-/// margin — a target you can hit slightly outside is right, a target that is
-/// smaller than it looks is not.
-const HANDLE_SCREEN_RADIUS: f32 = 4.5;
 
 /// The width the connection preview is drawn at, in screen pixels.
 const PREVIEW_WIDTH: f32 = 1.5;
 
-/// A graph node's body radius in world units, when its style does not set one.
-///
-/// A default rather than a hard-coded look: `ElementStyle::corner_radius` wins
-/// whenever a document says anything, and this is only what an unstyled node
-/// falls back to so it reads as a node rather than as a drawn rectangle.
-const GRAPH_NODE_RADIUS: f32 = 6.0;
-
-/// The outline width of a selected element, in screen pixels. Constant on
-/// screen rather than in world units, so selection stays visible at any zoom.
-const SELECTED_STROKE_PIXELS: f32 = 2.0;
-
-/// Applies an element's opacity to one of its colours.
-///
-/// `ElementStyle::opacity` multiplies both stroke and fill alpha rather than
-/// replacing it, so a half-transparent fill inside a half-transparent element
-/// is a quarter — which is what every other editor does and what a user
-/// dragging an opacity slider expects.
-fn fade(color: Color, opacity: f32) -> Color {
-    color.with_alpha(color.a * opacity.clamp(0.0, 1.0))
-}
-
 /// The Flow Canvas.
 pub struct FlowView {
-    world: GraphWorld,
+    /// **The world, and the only door to it** (§30). Held as a
+    /// [`FlowEditor`] rather than as a [`GraphWorld`] on purpose: this view is
+    /// where every gesture lands, so it is where a mutation that bypasses the
+    /// undo history would be written, and an editor lends no `&mut` to the
+    /// world it owns. `commands::editor`'s module doc has the whole argument.
+    editor: FlowEditor,
     viewport: Viewport,
     budgets: RenderBudgets,
     focus_handle: FocusHandle,
@@ -191,6 +217,58 @@ pub struct FlowView {
     grid: GridSettings,
     grid_limits: GridLimits,
     interaction: InteractionMachine,
+
+    /// §21's index over the world, and the visible set it answers into. Both
+    /// are fields rather than locals so a pan reuses their buffers (§40 rule
+    /// 14) — the visible set is refilled sixty times a second during a drag.
+    spatial: SpatialIndex,
+    visible: VisibleSet,
+    last_sync: SyncReport,
+    last_scene: SceneStats,
+
+    /// Broad-phase scratch for a committed rubber band. Kept for the same
+    /// reason, and cleared rather than reallocated.
+    node_candidates: Vec<NodeIndex>,
+    edge_candidates: Vec<EdgeIndex>,
+
+    /// §39's probes. Off unless `DODO_FLOW_INSTRUMENT` is set; see
+    /// [`crate::instrument`] for what that costs.
+    instruments: Instruments,
+
+    /// §24's extraction, and the two caches it feeds. All three are fields
+    /// rather than locals for the same reason the plan is: a pan refills them
+    /// and must not reallocate them.
+    snapshot: RenderSnapshot,
+    geometry_cache: GeometryCache<Path<Pixels>>,
+    text_cache: ShapedLineCache<ShapedLine>,
+    /// §43's registry. Held here so a launcher or an embedding app can register
+    /// its own node kinds against a mounted canvas.
+    registry: NodeRendererRegistry,
+
+    /// The node the pointer is over, or `None`. §44's other half: a hovered
+    /// node gets controls, and nothing else does.
+    hovered: Option<NodeIndex>,
+
+    /// The pane's size as of the last paint.
+    ///
+    /// **`render` runs before layout**, so this is the only size it can extract
+    /// a snapshot against. It is exact on every frame but the first and on a
+    /// resize, and `paint` requests one animation frame when it changes — see
+    /// `FlowView::paint`.
+    pane: Vec2,
+
+    /// Whether the camera zoomed since the last frame. The geometry cache needs
+    /// it to tell a live pinch (scale the cached tessellation, stay responsive)
+    /// from a settled camera (re-tessellate, be correct) — see
+    /// [`crate::render::cache`].
+    zooming: bool,
+    /// Whether [`reporting`]'s one-shot line has been printed.
+    reported: bool,
+
+    /// The text colour the shaped-line cache was filled at. A `ShapedLine`
+    /// bakes its colour at shape time, and dodo applies a theme change live, so
+    /// a changed ink is a cache that has to go.
+    text_ink: Option<Color>,
 
     /// Reused across frames. See the module doc: a pan must not allocate.
     plan: PaintPlan,
@@ -212,32 +290,46 @@ pub struct FlowView {
     /// The connection preview's route, kept so that dragging one out rebuilds
     /// into the same buffers instead of allocating per mouse move (§40 rule 14).
     preview_route: EdgeRoute,
-
-    /// The one selected node.
-    ///
-    /// **Not a selection model.** §28's selection is a *set*, and resolving a
-    /// box selection into one needs the spatial index's broad phase, which is
-    /// Phase 4's. This is the single node a drag highlights, so that dragging
-    /// has feedback; it is the field Phase 4 replaces, not a design.
-    selection: Option<NodeIndex>,
 }
 
 impl FlowView {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> FlowView {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> FlowView {
         // Resolved once, here, rather than read per frame: it is a compile-time
         // property of the build. Held on the view rather than reached for
         // globally so a benchmark or a test can mount a view against another
         // platform's budgets.
         let budgets = crate::budgets::current();
 
+        // **Focused on mount, and refocused on every press** — see
+        // `KEY_CONTEXT`. Without a focus the canvas's key context is not on
+        // GPUI's dispatch path at all, and every binding scoped to it is dead.
+        let focus_handle = cx.focus_handle();
+        window.focus(&focus_handle, cx);
+
         FlowView {
-            world: GraphWorld::new(),
+            editor: FlowEditor::new(),
             viewport: Viewport::default(),
             grid: GridSettings::default(),
             grid_limits: GridLimits::from_budgets(&budgets),
             budgets,
-            focus_handle: cx.focus_handle(),
+            focus_handle,
             interaction: InteractionMachine::new(),
+            spatial: SpatialIndex::new(crate::spatial::DEFAULT_CELL_SIZE),
+            visible: VisibleSet::new(),
+            last_sync: SyncReport::default(),
+            last_scene: SceneStats::default(),
+            node_candidates: Vec::new(),
+            edge_candidates: Vec::new(),
+            instruments: Instruments::from_env(),
+            snapshot: RenderSnapshot::new(),
+            geometry_cache: GeometryCache::new(&budgets),
+            text_cache: ShapedLineCache::new(&budgets),
+            registry: NodeRendererRegistry::with_generic_kinds(),
+            hovered: None,
+            pane: Vec2::ZERO,
+            zooming: false,
+            reported: false,
+            text_ink: None,
             plan: PaintPlan::new(),
             last_paint: PaintStats::default(),
             last_grid: GridLevel::empty(),
@@ -245,23 +337,34 @@ impl FlowView {
             pan_key_held: false,
             rebuilt_routes: 0,
             preview_route: EdgeRoute::default(),
-            selection: None,
         }
     }
 
     /// The runtime graph — the stores, the adjacency index and the dirty state.
     pub fn world(&self) -> &GraphWorld {
-        &self.world
+        self.editor.world()
     }
 
-    pub fn world_mut(&mut self) -> &mut GraphWorld {
-        &mut self.world
+    /// The editor: the world plus §30's history, and every door that may change
+    /// the document.
+    ///
+    /// **There is deliberately no `world_mut`.** It existed until Phase 7 and it
+    /// was the bypass — a caller holding `&mut GraphWorld` moves a node without
+    /// the history hearing, and the corruption surfaces three undos later with
+    /// nothing to trace it to. Everything that went through it goes through
+    /// [`FlowEditor::apply`] or one of the editor's named non-recording doors.
+    pub fn editor(&self) -> &FlowEditor {
+        &self.editor
+    }
+
+    pub fn editor_mut(&mut self) -> &mut FlowEditor {
+        &mut self.editor
     }
 
     /// The world written back out as a document. Allocates; for a save or a
     /// test, never for a frame.
     pub fn to_document(&self) -> FlowDocument {
-        self.world.to_document()
+        self.editor.world().to_document()
     }
 
     /// Replaces the document, **rebuilding the runtime from it**.
@@ -274,11 +377,35 @@ impl FlowView {
     /// back in the [`LoadReport`](crate::runtime::LoadReport) — a dangling edge
     /// is a fact about the file, and swallowing it here would be the loader
     /// deciding on the caller's behalf.
+    /// **The undo history goes with it.** A stored delta names runtime indices,
+    /// and every index means something else in a different document.
     pub fn set_document(&mut self, document: FlowDocument) -> crate::runtime::LoadReport {
-        let (world, report) = GraphWorld::from_document(&document);
-        self.world = world;
-        self.selection = None;
+        let report = self.editor.load_document(document);
+        // The index is built from the routes, so they have to exist first —
+        // and the whole-document rebuild is the one place that is allowed to
+        // be proportional to the file rather than to the screen.
+        self.editor.rebuild_all_geometry();
+        self.rebuild_spatial_index();
         report
+    }
+
+    /// Rebuilds the spatial index from the whole world, and spends the dirty
+    /// queues the build filled.
+    ///
+    /// Document-proportional, so it belongs to loading rather than to a frame;
+    /// [`SpatialIndex::sync`] is the per-frame call. Public because a caller
+    /// that has replaced the world wholesale — a launcher building a scene, a
+    /// benchmark — has to say so.
+    pub fn rebuild_spatial_index(&mut self) {
+        self.spatial = SpatialIndex::for_world(self.editor.world());
+        self.editor.clear_spatial_updates();
+        // Every cached tessellation and every shaped line is filed under a
+        // runtime index, and a rebuilt world means those indices point at
+        // something else. Keeping them would paint one document's geometry for
+        // another's.
+        self.geometry_cache.clear();
+        self.text_cache.clear();
+        self.snapshot.reset();
     }
 
     pub fn viewport(&self) -> &Viewport {
@@ -334,15 +461,238 @@ impl FlowView {
         self.rebuilt_routes
     }
 
-    /// The selected node, if any. See the field's own doc — a selection *set*
-    /// is Phase 4's, once the box select can resolve into one.
-    pub fn selection(&self) -> Option<NodeIndex> {
-        self.selection
+    /// **What is selected** (§28), as compact runtime ids.
+    pub fn selection(&self) -> &SelectionSet {
+        self.editor.world().selection()
+    }
+
+    /// The spatial index over the world.
+    pub fn spatial(&self) -> &SpatialIndex {
+        &self.spatial
+    }
+
+    /// **What the viewport could see on the last frame** — §16's number, from
+    /// outside. A 100,000-node document must make this tens, not thousands.
+    pub fn visible(&self) -> &VisibleSet {
+        &self.visible
+    }
+
+    /// What the last frame's extraction produced.
+    pub fn last_scene(&self) -> SceneStats {
+        self.last_scene
+    }
+
+    /// **§24's snapshot from the last frame** — what the canvas and the element
+    /// tree were both drawn from.
+    pub fn snapshot(&self) -> &RenderSnapshot {
+        &self.snapshot
+    }
+
+    /// What the last frame's snapshot decided, in counts. `rich_nodes` is §16's
+    /// number.
+    pub fn snapshot_counts(&self) -> SnapshotCounts {
+        self.snapshot.counts()
+    }
+
+    /// **Every GPUI element the last frame created** (§16). Tens on any
+    /// document, however large.
+    pub fn element_count(&self) -> u32 {
+        self.snapshot.element_count()
+    }
+
+    /// The LOD rung the last frame ran at (§15), or `None` before the first.
+    pub fn last_lod(&self) -> Option<LodPlan> {
+        self.snapshot.lod()
+    }
+
+    /// **§23's cache, from the last frame.** `hit_rate` is ~1.0 during a pure
+    /// pan and `translated` is what it did about it.
+    pub fn geometry_cache_stats(&self) -> CacheStats {
+        self.geometry_cache.frame_stats()
+    }
+
+    /// The bytes the geometry cache is holding. Never above
+    /// [`RenderBudgets::geometry_cache_max_bytes`].
+    pub fn geometry_cache_bytes(&self) -> usize {
+        self.geometry_cache.bytes()
+    }
+
+    /// The engine's own shaped-line cache (§9).
+    pub fn text_cache_stats(&self) -> CacheStats {
+        self.text_cache.stats()
+    }
+
+    /// §43's registry, so a launcher can register node kinds against a mounted
+    /// canvas.
+    pub fn registry_mut(&mut self) -> &mut NodeRendererRegistry {
+        &mut self.registry
+    }
+
+    /// The node under the pointer, or `None`.
+    pub fn hovered(&self) -> Option<NodeIndex> {
+        self.hovered
+    }
+
+    /// What the last frame's spatial sync had to do. `nodes_moved` is zero for
+    /// a pure pan and small for a drag; see [`SyncReport`].
+    pub fn last_sync(&self) -> SyncReport {
+        self.last_sync
+    }
+
+    /// §39's probes. Off unless `DODO_FLOW_INSTRUMENT` is set.
+    pub fn instruments(&self) -> &Instruments {
+        &self.instruments
+    }
+
+    pub fn instruments_mut(&mut self) -> &mut Instruments {
+        &mut self.instruments
+    }
+
+    /// §13's render style. **A renderer strategy, not document geometry.**
+    pub fn render_style(&self) -> RenderStyle {
+        self.editor.world().settings().render_style
+    }
+
+    /// **Switches between clean and hand-drawn** (§13).
+    ///
+    /// One field and a repaint. Nothing is recreated, nothing is marked dirty,
+    /// no route is rebuilt and no element is touched — which is what makes this
+    /// a rendering strategy rather than a second document, and it is asserted
+    /// by `runtime::world`'s
+    /// `switching_render_style_touches_no_element`. The geometry cache keeps
+    /// both hands' entries apart by key ([`GeometryKey::sketch`](crate::render::cache::GeometryKey::sketch)),
+    /// so switching back finds the old tessellations still warm.
+    pub fn set_render_style(&mut self, style: RenderStyle, cx: &mut Context<Self>) {
+        if self.editor.world().settings().render_style == style {
+            return;
+        }
+        self.editor.set_render_style(style);
+        cx.notify();
+    }
+
+    pub fn toggle_render_style(&mut self, cx: &mut Context<Self>) {
+        let next = match self.render_style() {
+            RenderStyle::Clean => RenderStyle::Sketch,
+            RenderStyle::Sketch => RenderStyle::Clean,
+        };
+        self.set_render_style(next, cx);
+    }
+
+    /// **§45's active tool**: what the next press on the canvas means.
+    pub fn tool(&self) -> CanvasTool {
+        self.interaction.tool()
+    }
+
+    /// **Picks up a tool.** The palette's click handler and the key bindings
+    /// both land here.
+    ///
+    /// It goes through the interaction machine as an event rather than setting
+    /// a field, because §45's rule is that tool activation *is* an interaction
+    /// state change — and because the machine is then the only thing that knows
+    /// which tool is active, so there is no second copy to drift.
+    ///
+    /// A tool change while a gesture is in progress is refused by the machine;
+    /// see [`InteractionEvent::SelectTool`]. `Esc` is the way out, and
+    /// [`FlowView::on_key_down`] sends the cancel first for exactly that
+    /// reason.
+    pub fn set_tool(&mut self, tool: CanvasTool, window: &mut Window, cx: &mut Context<Self>) {
+        // The palette is a sibling element, so clicking it moves the focus off
+        // the canvas and every binding scoped to `KEY_CONTEXT` would go dead
+        // until the next press on the canvas itself — the exact failure Phase 7
+        // found, arriving through a control this phase added. Taking the focus
+        // back here is the whole fix.
+        self.focus_handle.clone().focus(window, cx);
+
+        let effect = self.interaction.handle(InteractionEvent::SelectTool(tool));
+        if effect.needs_repaint() {
+            cx.notify();
+        }
+    }
+
+    /// **§45's tool lock**: whether finishing a drawing keeps the tool.
+    pub fn tool_locked(&self) -> bool {
+        self.interaction.tool_locked()
+    }
+
+    /// Switches the lock. The toolbar toggle and the `q` binding both land
+    /// here, for the same reason [`FlowView::set_tool`] exists: one door, and
+    /// the interaction machine is the only place the answer is kept.
+    pub fn set_tool_locked(&mut self, locked: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // The palette is a sibling element; clicking it moves the focus off the
+        // canvas and every binding scoped to `KEY_CONTEXT` goes dead until the
+        // next press on the canvas itself. See `set_tool`.
+        self.focus_handle.clone().focus(window, cx);
+
+        let effect = self
+            .interaction
+            .handle(InteractionEvent::SetToolLock(locked));
+        if effect.needs_repaint() {
+            cx.notify();
+        }
+    }
+
+    /// **Removes whatever is selected**, through §30's one applier.
+    ///
+    /// Both delete keys and the toolbar's own action come here, and there is
+    /// nothing between this and [`FlowEditor::delete_selection`] but the focus
+    /// and the repaint — which is the whole point of the phase's state model.
+    /// A view that assembled the command would be a second removal path, and
+    /// the first thing to drift from it would be the incident-edge cascade.
+    pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.clone().focus(window, cx);
+
+        if self.editor.delete_selection() {
+            // A deleted node may have been the hovered one, and §44's controls
+            // are drawn from that field rather than from the snapshot. Left
+            // set, they would hang over a node that is no longer there until
+            // the pointer moved.
+            self.hovered = None;
+            cx.notify();
+        }
+    }
+
+    /// Whether the toolbar's Delete action would do anything — §28's selection,
+    /// asked as the question the button needs.
+    pub fn can_delete(&self) -> bool {
+        !self.editor.world().selection().is_empty()
+    }
+
+    /// The hand [`RenderStyle::Sketch`] draws with (§13).
+    pub fn sketch_style(&self) -> SketchStyle {
+        self.editor.world().settings().sketch
+    }
+
+    /// Changes the hand. A different style is a different cache key, so the
+    /// visible set re-tessellates once and then stays cached.
+    pub fn set_sketch_style(&mut self, style: SketchStyle, cx: &mut Context<Self>) {
+        if self.editor.world().settings().sketch == style {
+            return;
+        }
+        self.editor.set_sketch_style(style);
+        cx.notify();
+    }
+
+    /// What the palette needs to know about the canvas.
+    ///
+    /// Three cheap reads, assembled here rather than in `render`'s `div` chain
+    /// so the palette's inputs are one named thing — and so a fourth (Phase
+    /// 11's) is added in one place.
+    fn palette_state(&self) -> palette::PaletteState {
+        palette::PaletteState {
+            tool: self.interaction.tool(),
+            tool_locked: self.interaction.tool_locked(),
+            can_delete: self.can_delete(),
+        }
+    }
+
+    /// What [`crate::render::scene`] is given each frame.
+    fn scene_options(&self) -> SceneOptions {
+        SceneOptions::new(self.grid, self.grid_limits)
     }
 
     /// Frames the whole document, or resets to 1:1 if it is empty.
     pub fn zoom_to_fit(&mut self) {
-        match self.world.content_bounds() {
+        match self.editor.world().content_bounds() {
             Some(content) => self.viewport.zoom_to_fit(content, 48.0),
             None => self.viewport.reset(),
         }
@@ -355,189 +705,20 @@ impl FlowView {
     /// Done per frame rather than at construction because dodo applies a theme
     /// change live — `dodo-theming-settings` is the rule — and a grid cached at
     /// startup would stay dark on a light theme until the app restarted.
-    fn sync_theme(&mut self, cx: &App) -> CanvasInk {
+    fn sync_theme(&mut self, cx: &App) -> SceneInk {
         let theme = cx.theme();
         let border = from_hsla(theme.border);
 
         self.grid.minor.color = border.with_alpha(border.a * 0.55);
         self.grid.major.color = border;
 
-        CanvasInk {
+        SceneInk {
             fill: from_hsla(theme.secondary),
             stroke: from_hsla(theme.foreground).with_alpha(0.7),
             edge: from_hsla(theme.foreground).with_alpha(0.55),
             handle: from_hsla(theme.primary),
             accent: from_hsla(theme.selection),
-        }
-    }
-
-    /// Every node, as the cheapest primitive that can draw it, and its handles.
-    ///
-    /// **No culling and no spatial query**, and that is a deliberate hole
-    /// rather than an oversight: §40 rule 1 forbids scanning every element to
-    /// find the visible ones, and the uniform grid that answers it properly is
-    /// Phase 4's. Writing a linear scan here would satisfy this phase and then
-    /// be the thing everyone forgot to delete. The vertex ceiling in
-    /// [`PaintPlan::enforce_vertex_ceiling`] is what stands in for culling
-    /// until then — it keeps the window from going black, it does not keep the
-    /// frame fast.
-    ///
-    /// The loop reads the runtime's hot arrays: a position, a size, a one-byte
-    /// [`NodeShape`] and a style. It never touches
-    /// [`ElementKind`](crate::models::ElementKind), which carries a `String` —
-    /// that is what §17's cold/hot split is for and what §40 rule 9 asks.
-    fn plan_nodes(&mut self, ink: CanvasInk) {
-        let quality = self.world.settings().render_quality;
-
-        for node in self.world.nodes().indices() {
-            let nodes = self.world.nodes();
-            if nodes.is_hidden(node) {
-                continue;
-            }
-
-            let shape = nodes.shape(node);
-            if shape == NodeShape::Other {
-                // Text, images, frames and custom kinds are later phases'. A
-                // fallback rectangle here would silently draw them and hide the
-                // fact that they are not implemented.
-                continue;
-            }
-
-            let style = nodes.style(node);
-            let screen = self.viewport.world_rect_to_screen(nodes.bounds(node));
-            // A graph node's body has a radius of its own so it reads as a
-            // node rather than as a drawn rectangle; a shape uses what its
-            // style says.
-            let world_radius = if shape == NodeShape::GraphNode && style.corner_radius <= 0.0 {
-                GRAPH_NODE_RADIUS
-            } else {
-                style.corner_radius
-            };
-            let radius = self.viewport.world_to_screen_length(world_radius);
-
-            // `None` means "the theme decides", which is the whole reason
-            // `models::style` stores colours as `Option<Color>`: a document must
-            // not carry a palette, or it would look wrong in the other theme.
-            let fill = fade(style.fill.unwrap_or(ink.fill), style.opacity);
-            let selected = nodes.is_selected(node);
-            let stroke_color = if selected {
-                ink.accent
-            } else {
-                fade(style.stroke.color.unwrap_or(ink.stroke), style.opacity)
-            };
-            let stroke_width = self
-                .viewport
-                .world_to_screen_length(style.stroke.width)
-                .max(if selected {
-                    SELECTED_STROKE_PIXELS
-                } else {
-                    0.0
-                });
-            let has_stroke = (!style.stroke.is_invisible() || selected) && stroke_width > 0.0;
-
-            if shapes::node_prefers_quad(shape) {
-                // Phase 0's measurement, honoured: 20,000 quads hold 60 fps
-                // where the same count of rectangular paths drop to 30 — and a
-                // quad carries its corner radius and its border for free, so
-                // the border costs no second primitive at all.
-                let mut quad = QuadPrimitive::filled(screen, fill).with_corner_radius(radius);
-                if has_stroke {
-                    quad = quad.with_border(stroke_width, stroke_color);
-                }
-                self.plan.push_quad(quad);
-            } else if let Some(outline) = shapes::outline_for_node(shape, screen, radius) {
-                self.plan
-                    .push_path(PathPrimitive::fill(outline.clone(), fill, quality));
-
-                if has_stroke {
-                    self.plan.push_path(PathPrimitive::stroke(
-                        outline,
-                        stroke_color,
-                        stroke_width,
-                        quality,
-                    ));
-                }
-            }
-
-            self.plan_handles(node, ink);
-        }
-    }
-
-    /// A node's handles, as quads.
-    ///
-    /// **Geometry and data in this phase, not interaction.** A handle is drawn
-    /// so a connection can be aimed at it and so the routing is visible; the
-    /// interactive element with its own hover state and cursor is Phase 5's,
-    /// where §15's LOD decides whether a node is detailed enough to have one at
-    /// all. A circle is a quad with a corner radius of half its side, so a
-    /// hundred thousand of them would still be the cheap primitive.
-    fn plan_handles(&mut self, node: NodeIndex, ink: CanvasInk) {
-        let radius = HANDLE_SCREEN_RADIUS;
-
-        for handle in self.world.nodes().handles(node) {
-            if self.world.handles().is_hidden(handle) {
-                // §4: hidden handles stay connectable. Only the paint is
-                // skipped — routing and hit-testing never read this flag.
-                continue;
-            }
-
-            let center = self
-                .viewport
-                .world_to_screen(self.world.handle_position(handle));
-            self.plan.push_quad(
-                QuadPrimitive::filled(
-                    Rect::new(center - Vec2::splat(radius), Vec2::splat(radius * 2.0)),
-                    ink.handle,
-                )
-                .with_corner_radius(radius)
-                .with_border(1.0, ink.fill),
-            );
-        }
-    }
-
-    /// Every edge, from its **derived** route.
-    ///
-    /// The routes are brought up to date once, at the top of the frame, by
-    /// [`GraphWorld::rebuild_dirty_geometry`] — so this loop rebuilds nothing
-    /// and a pure pan reroutes nothing (§40 rule 6). An edge whose route is
-    /// stale is skipped rather than drawn from a stale one: it will be current
-    /// on the frame the rebuild ran, and painting the old one would show an
-    /// edge hanging off a node that has already moved.
-    fn plan_edges(&mut self, ink: CanvasInk) {
-        let quality = self.world.settings().render_quality;
-
-        for edge in self.world.edges().indices() {
-            if self.world.edges().is_hidden(edge) {
-                continue;
-            }
-            let Some(route) = self.world.route(edge) else {
-                continue;
-            };
-
-            let style = self.world.edges().style(edge);
-            let selected = self.world.edges().is_selected(edge);
-            let color = if selected {
-                ink.accent
-            } else {
-                fade(style.stroke.color.unwrap_or(ink.edge), style.opacity)
-            };
-
-            let paint = edges::EdgePaint {
-                color,
-                width: style.stroke.width,
-                // A dashed edge is the expensive kind, so it is only ever asked
-                // for when the document says so — see `render::plan::PathPaint`.
-                dash: style
-                    .stroke
-                    .dash
-                    .spec()
-                    .map(|(on, off)| DashSpec::new(on, off)),
-                start_marker: style.start_marker,
-                end_marker: style.end_marker,
-                quality,
-            };
-
-            edges::plan_edge(&mut self.plan, route, &paint, &self.viewport);
+            text: from_hsla(theme.foreground),
         }
     }
 
@@ -548,12 +729,12 @@ impl FlowView {
     /// about where it would go. The loose end faces back the way the source
     /// leaves, which is what makes the curve settle instead of kinking as the
     /// pointer crosses the node.
-    fn plan_connection_preview(&mut self, ink: CanvasInk) {
+    fn plan_connection_preview(&mut self, ink: SceneInk) {
         let Some(pending) = self.interaction.pending_connection() else {
             return;
         };
 
-        let source = self.world.attachment(
+        let source = self.editor.world().attachment(
             EdgeEnd::handle(pending.source.node, pending.source.handle),
             pending.current_world,
         );
@@ -577,9 +758,51 @@ impl FlowView {
         );
     }
 
+    /// **The element about to be created** (§45), drawn where it will land.
+    ///
+    /// Painted through the same [`shapes::outline_for_node`] the committed
+    /// element will use, from the same rectangle
+    /// [`creation_rect`](crate::interaction::creation_rect) resolved — so the
+    /// preview is not an approximation of the result, it is the result drawn
+    /// early. A click's default-size box appears the moment the button goes
+    /// down, which is also what tells the user a click is going to place
+    /// something.
+    ///
+    /// Not cached, for the same reason the rubber band is not: §23 says not to
+    /// cache what changes every frame.
+    fn plan_creation_preview(&mut self, ink: SceneInk) {
+        let Some((tool, world)) = self.interaction.creation_preview() else {
+            return;
+        };
+        let Some(kind) = tool.element_kind() else {
+            return;
+        };
+
+        let screen = self.viewport.world_rect_to_screen(world);
+        let shape = crate::runtime::NodeShape::of(&kind);
+        let radius = self.viewport.world_to_screen_length(GRAPH_NODE_RADIUS);
+        let Some(outline) = shapes::outline_for_node(shape, screen, radius) else {
+            return;
+        };
+
+        if !shapes::is_open(shape) {
+            self.plan.push_path(PathPrimitive::fill(
+                outline.clone(),
+                ink.accent.with_alpha(0.12),
+                RenderQuality::BALANCED,
+            ));
+        }
+        self.plan.push_path(PathPrimitive::stroke(
+            outline,
+            ink.accent,
+            PREVIEW_WIDTH,
+            RenderQuality::BALANCED,
+        ));
+    }
+
     /// The box-selection rectangle: **a quad**, so it adds no path batch on top
     /// of the frame it is drawn over.
-    fn plan_selection_rect(&mut self, ink: CanvasInk) {
+    fn plan_selection_rect(&mut self, ink: SceneInk) {
         let Some(world) = self.interaction.selection_rect() else {
             return;
         };
@@ -594,6 +817,50 @@ impl FlowView {
         );
     }
 
+    /// **Brings the graph, the index and the snapshot up to date**, and is the
+    /// one step whose order matters.
+    ///
+    /// Rebuild first, so routes are current; sync the index from those routes;
+    /// query; extract only what came back. Syncing before the rebuild would
+    /// index an edge where it used to be, and querying before the sync would
+    /// return the same.
+    ///
+    /// An idle frame finds both queues empty and does no work at all, which is
+    /// what makes §40 rule 6 hold by construction rather than by care.
+    ///
+    /// **Called from `render`, not from paint.** GPUI builds the element tree
+    /// in `render` and paints afterwards, so a snapshot extracted during paint
+    /// would be a frame late for the elements built from it. The cost of moving
+    /// it earlier is that `render` only knows the pane size the last paint
+    /// measured — see [`FlowView::pane`].
+    fn refresh_snapshot(&mut self) {
+        let timer = self.instruments.start();
+        self.rebuilt_routes = self.editor.rebuild_dirty_geometry();
+        self.instruments.record(Probe::EdgeRoute, timer);
+
+        let timer = self.instruments.start();
+        self.last_sync = self.spatial.sync(self.editor.world());
+        self.editor.clear_spatial_updates();
+        self.instruments.record(Probe::SpatialUpdate, timer);
+
+        let timer = self.instruments.start();
+        self.spatial
+            .query_visible(self.editor.world(), &self.viewport, &mut self.visible);
+        self.instruments.record(Probe::VisibilityQuery, timer);
+
+        let timer = self.instruments.start();
+        self.snapshot.extract(
+            self.editor.world(),
+            &self.visible,
+            &self.viewport,
+            &self.budgets,
+            &self.registry,
+            self.hovered,
+            Rect::new(Vec2::ZERO, self.viewport.size()),
+        );
+        self.instruments.record(Probe::RenderExtract, timer);
+    }
+
     fn paint(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -601,85 +868,174 @@ impl FlowView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.viewport.set_size(Vec2::new(
-            bounds.size.width.as_f32(),
-            bounds.size.height.as_f32(),
-        ));
+        let pane = Vec2::new(bounds.size.width.as_f32(), bounds.size.height.as_f32());
         let ink = self.sync_theme(cx);
 
-        // **Before anything is planned**, and only for what actually changed:
-        // an idle frame finds an empty queue and does no work at all, which is
-        // what makes §40 rule 6 hold by construction rather than by care.
-        self.rebuilt_routes = self.world.rebuild_dirty_geometry();
+        // A `ShapedLine` bakes its colour at shape time and dodo applies a
+        // theme change live, so a changed ink is a cache that has to go. One
+        // comparison a frame, against a re-shape of every visible label the
+        // first time somebody switches theme.
+        if self.text_ink != Some(ink.text) {
+            self.text_cache.clear();
+            self.text_ink = Some(ink.text);
+        }
 
-        self.plan.clear();
-        self.last_grid = grid::generate(
-            &self.grid,
-            &self.viewport,
-            &self.grid_limits,
+        if self.pane != pane {
+            // **The one case `render` cannot have got right.** It extracted
+            // against the previous pane, so the snapshot is for the wrong size
+            // and the frame after this one has to redo it. A `cx.notify()` here
+            // would record the dirty view and schedule nothing —
+            // `WindowInvalidator::invalidate_view` only acts in
+            // `DrawPhase::None` — so this asks for a frame the supported way.
+            self.pane = pane;
+            self.viewport.set_size(pane);
+            self.refresh_snapshot();
+            window.request_animation_frame();
+        }
+
+        let timer = self.instruments.start();
+        let options = self.scene_options();
+        self.last_scene = scene::plan_scene(
             &mut self.plan,
+            self.editor.world(),
+            &self.snapshot,
+            &self.viewport,
+            ink,
+            &options,
         );
-        // Edges under nodes, nodes under the overlays. The *paint* order is
-        // `PaintPlan`'s and is by primitive kind whatever this order is; this
-        // one decides what sits on top within a kind.
-        self.plan_edges(ink);
-        self.plan_nodes(ink);
+        // The two overlays are the view's own, and both are on screen by
+        // construction — a preview follows the pointer and a rubber band is
+        // drawn where it is being dragged. Neither is cached: §23 says not to
+        // cache what changes every frame.
         self.plan_connection_preview(ink);
         self.plan_selection_rect(ink);
+        self.plan_creation_preview(ink);
+        self.instruments.record(Probe::RenderExtract, timer);
 
+        self.last_grid = self.last_scene.grid;
         self.dropped_paths = self.plan.enforce_vertex_ceiling(&self.budgets);
 
-        let mut painter = WindowPainter::new(window, bounds);
-        self.last_paint = self.plan.paint_into(&mut painter);
+        let timer = self.instruments.start();
+        let anchor = WindowPainter::anchor(&self.viewport, bounds);
+        let zooming = self.zooming;
+        // Split so the plan can be read while the caches are written — both are
+        // fields of `self`, and `paint_into` borrows one of each.
+        let FlowView {
+            plan,
+            geometry_cache,
+            text_cache,
+            ..
+        } = self;
+        geometry_cache.begin_frame(anchor, zooming);
+        text_cache.begin_frame();
+        let mut painter = WindowPainter::new(window, cx, bounds, geometry_cache, text_cache);
+        self.last_paint = plan.paint_into(&mut painter);
+        self.geometry_cache.end_frame();
+        self.text_cache.end_frame();
+        self.instruments.record(Probe::CanvasPaint, timer);
+
+        // The gesture is over unless another zoom event arrives before the next
+        // frame, which is what makes the cache re-tessellate once a pinch
+        // settles rather than leaving the canvas with scaled strokes.
+        self.zooming = false;
+
+        if reporting() && !self.reported {
+            self.reported = true;
+            self.report_frame();
+        }
 
         self.install_input(bounds, hitbox, window, cx);
     }
 
-    /// Replaces the selection with at most one node.
+    /// One line describing what the hybrid renderer decided on this frame.
     ///
-    /// A set is §28's and needs the spatial index's broad phase to build from a
-    /// rectangle; this is the one-node case a drag needs, and it is written as
-    /// a method so Phase 4 replaces one body rather than four call sites.
-    fn select_only(&mut self, node: Option<NodeIndex>) {
-        if self.selection == node {
+    /// Off unless `DODO_FLOW_REPORT` is set. It is the launcher's acceptance
+    /// check made printable — §16's element count, §15's rung and §23's cache
+    /// on real geometry, rather than on a benchmark scene.
+    fn report_frame(&self) {
+        let Some(lod) = self.snapshot.lod() else {
             return;
-        }
+        };
+        let counts = self.snapshot.counts();
+        let cache = self.geometry_cache.frame_stats();
 
-        if let Some(previous) = self.selection {
-            self.world.set_node_selected(previous, false);
-        }
-        if let Some(node) = node {
-            self.world.set_node_selected(node, true);
-        }
-        self.selection = node;
+        println!(
+            "first frame: zoom {:.2} -> {:?} detail, edges {:?}, labels {:?} px",
+            lod.zoom, lod.detail, lod.edges, lod.label_font_size
+        );
+        println!(
+            "  §16  {} GPUI elements ({} rich nodes, {} handles, {} toolbar) \
+             from {} document nodes",
+            self.snapshot.element_count(),
+            counts.rich_nodes,
+            counts.interactive_handles,
+            u32::from(self.snapshot.overlay().is_some()),
+            self.editor.world().nodes().len(),
+        );
+        println!(
+            "  §15  {} canvas nodes, {} of {} visible edges drawn, {} skipped, {} labels",
+            counts.canvas_nodes,
+            counts.edges,
+            self.visible.edge_count(),
+            counts.skipped_edges,
+            self.last_scene.labels,
+        );
+        println!(
+            "  §13  style {:?}{} — {} bodies drawn by hand",
+            self.editor.world().settings().render_style,
+            match (self.editor.world().settings().sketch_request(), lod.sketch) {
+                (Some(_), Some(_)) => ", hand kept",
+                (Some(_), None) => ", hand degraded to clean by the ladder",
+                _ => "",
+            },
+            self.last_scene.sketched_bodies,
+        );
+        println!(
+            "  §23  geometry cache {} lookups / {} misses, {:.1} KB; text {} shaped",
+            cache.lookups(),
+            cache.misses,
+            self.geometry_cache.bytes() as f64 / 1e3,
+            self.text_cache.len(),
+        );
+        println!(
+            "  paint {} quads, {} paths, {} vertices, {} batches, {} glyphs",
+            self.last_paint.quads,
+            self.last_paint.paths,
+            self.last_paint.path_vertices,
+            self.last_paint.path_batches,
+            self.last_paint.glyphs,
+        );
     }
 
-    /// Turns a dropped connection into an edge, or into nothing.
+    /// **Resolves a committed rubber band into a selection** (§28).
     ///
-    /// **The validation is the world's** (§4) — this only says where the drop
-    /// landed. A refusal is silent on the canvas and visible under
-    /// `DODO_FLOW_TRACE_INPUT`: the connection tool that colours a handle by
-    /// [`ConnectionError`](crate::runtime::ConnectionError) is Phase 5's, and
-    /// the reason is already carried for it.
-    fn commit_connection(&mut self, source: ConnectionSource, target: PointerTarget) {
-        let end = match target {
-            PointerTarget::Handle { node, handle } => EdgeEnd::handle(node, handle),
-            // §4's whole-node connection mode: dropping on a body connects to
-            // the node, and the router picks a point on its border.
-            PointerTarget::Node(node) => EdgeEnd::node(node),
-            PointerTarget::Empty => {
-                trace(format_args!("Connect dropped on empty canvas"));
-                return;
-            }
-        };
+    /// Broad phase from the spatial index, narrow phase in the world — the two
+    /// halves §21 and §28 both ask for, and neither of them a scan. The
+    /// candidate buffers are fields, so a rubber band released sixty times over
+    /// a session allocates once.
+    fn commit_box_selection(&mut self, selection: BoxSelection) -> bool {
+        let timer = self.instruments.start();
 
-        match self
-            .world
-            .connect(EdgeEnd::handle(source.node, source.handle), end)
-        {
-            Ok(edge) => trace(format_args!("Connect ok, edge={edge}")),
-            Err(error) => trace(format_args!("Connect refused: {error}")),
-        }
+        self.node_candidates.clear();
+        self.edge_candidates.clear();
+        self.spatial
+            .node_candidates(selection.rect, &mut self.node_candidates);
+        self.spatial
+            .edge_candidates(selection.rect, &mut self.edge_candidates);
+
+        let query =
+            BoxQuery::at_zoom(selection.rect, self.viewport.zoom()).additive(selection.additive);
+        let changed = self.editor.apply_box_selection(
+            query,
+            self.node_candidates.iter().copied(),
+            self.edge_candidates.iter().copied(),
+        );
+
+        self.instruments.record(Probe::HitTest, timer);
+        // A band that selected nothing and replaced a selection still changed
+        // something; `apply_box_selection` counts additions, and the clear is
+        // the other half.
+        changed > 0 || !selection.additive
     }
 
     // ---- input ----------------------------------------------------------
@@ -694,22 +1050,32 @@ impl FlowView {
         }
 
         match effect {
+            // The camera is this view's, and nothing below it knows the camera
+            // exists.
             InteractionEffect::PanBy(delta) => self.viewport.pan_by(delta),
 
-            // **The propagation rule, entered from a gesture.** Everything the
-            // move invalidates is decided by `GraphWorld::move_node`; the view
-            // does not know which edges exist and must not.
-            InteractionEffect::DragNodeBy { node, delta } => self.world.move_node(node, delta),
-            InteractionEffect::CancelNodeDrag { node, revert } => {
-                self.world.move_node(node, revert)
+            // **The seam Phase 2 left open.** The machine hands back a world
+            // rectangle and says nothing about what is in it; this is where the
+            // broad phase and the narrow phase answer that (§28).
+            InteractionEffect::CommitBoxSelect(selection) => {
+                return self.commit_box_selection(selection) | effect.needs_repaint();
             }
-            InteractionEffect::BeginNodeDrag(node) => self.select_only(Some(node)),
-            InteractionEffect::BeginBoxSelect(_) => self.select_only(None),
-            InteractionEffect::BeginConnect(source) => self.select_only(Some(source.node)),
-            InteractionEffect::CommitConnect { source, target } => {
-                self.commit_connection(source, target)
+
+            // **Everything that touches the document goes through §30's
+            // commands**, and the mapping lives in `commands::gesture` rather
+            // than here — see that module for why, and for the drag it lets a
+            // test perform with no window. A refusal is silent on the canvas
+            // and visible under `DODO_FLOW_TRACE_INPUT`: the connection tool
+            // that colours a handle by its reason is a later phase's, and the
+            // reason is already carried for it.
+            other => {
+                let report = gesture::apply_gesture(&mut self.editor, other);
+                match report.connection {
+                    Some(Ok(edge)) => trace(format_args!("Connect ok, edge={edge}")),
+                    Some(Err(error)) => trace(format_args!("Connect refused: {error}")),
+                    None => {}
+                }
             }
-            _ => {}
         }
 
         effect.needs_repaint()
@@ -747,32 +1113,36 @@ impl FlowView {
         }
     }
 
-    /// **What is under the pointer** — §29's two phases, with the broad one
-    /// still standing open.
+    /// **What is under the pointer** — §29's two phases, both of them present.
     ///
-    /// `nodes().indices()` is the candidate set, and it is the whole document.
-    /// That is deliberate and it is **not** the linear scan §40 rule 1 forbids:
-    /// rule 1 is about scanning every element *per frame* to find the visible
-    /// ones, and this runs once per pointer press, on an event a human
-    /// generated. Phase 4's uniform grid replaces this one argument with a
-    /// query — there is nothing else here to delete, which is why the candidate
-    /// set is a parameter of `GraphWorld::hit_test` rather than something it
-    /// fetches for itself.
+    /// Broad phase from the spatial index, narrow phase in the world. Phase 3
+    /// wrote `hit_test` to take its candidates as an argument precisely so that
+    /// this line, and only this line, would change; `nodes().indices()` used to
+    /// be the argument and now a grid query is.
+    ///
+    /// The broad phase is asked for the *tolerance*-inflated point rather than
+    /// the point, because a handle sits on its node's border and a press within
+    /// grabbing distance of one can land in a neighbouring cell.
     ///
     /// A **locked** node reads as empty canvas, so a press on one starts a box
     /// selection instead of a drag that would be refused — §26's behaviour, and
     /// cheaper to answer here than to explain after the fact.
     fn target_at(&self, world: Vec2) -> PointerTarget {
-        let tolerance = HitTolerance::new(
-            self.viewport
-                .screen_to_world_length(HitTolerance::HANDLE_SCREEN_RADIUS),
-        );
+        let radius = self
+            .viewport
+            .screen_to_world_length(HitTolerance::HANDLE_SCREEN_RADIUS);
+
+        let mut candidates = Vec::new();
+        self.spatial.nodes_at(world, radius, &mut candidates);
 
         match self
-            .world
-            .hit_test(world, self.world.nodes().indices(), tolerance)
+            .editor
+            .world()
+            .hit_test(world, candidates, HitTolerance::new(radius))
         {
-            PointerTarget::Node(node) if self.world.nodes().is_locked(node) => PointerTarget::Empty,
+            PointerTarget::Node(node) if self.editor.world().nodes().is_locked(node) => {
+                PointerTarget::Empty
+            }
             target => target,
         }
     }
@@ -808,6 +1178,11 @@ impl FlowView {
                 ));
 
                 view.update(cx, |this, cx| {
+                    // Takes the focus back from whatever had it, so the
+                    // canvas's bindings keep working after the pointer has been
+                    // somewhere else — a toolbar button, another pane.
+                    this.focus_handle.clone().focus(window, cx);
+
                     let interaction =
                         this.pointer_event(event.position, bounds, button, event.modifiers);
                     let effect = this.interaction.handle(interaction);
@@ -834,10 +1209,23 @@ impl FlowView {
                 ));
 
                 view.update(cx, |this, cx| {
-                    // While Idle this is `InteractionEffect::None` and notifies
-                    // nothing, which is what keeps a hovering pointer from
-                    // driving a 60 fps repaint loop over an idle canvas.
+                    // **§44's hover half.** A hovered node gets controls, so
+                    // the canvas has to know which one — but only a *change*
+                    // repaints, which is what keeps a pointer moving across one
+                    // node from driving a 60 fps loop.
                     if this.interaction.is_idle() {
+                        let world = this
+                            .viewport
+                            .screen_to_world(this.local(event.position, bounds));
+                        let hovered = match this.target_at(world) {
+                            PointerTarget::Node(node) => Some(node),
+                            PointerTarget::Handle { node, .. } => Some(node),
+                            PointerTarget::Empty => None,
+                        };
+                        if this.hovered != hovered {
+                            this.hovered = hovered;
+                            cx.notify();
+                        }
                         return;
                     }
                     let screen = this.local(event.position, bounds);
@@ -872,9 +1260,6 @@ impl FlowView {
                         world,
                         target: this.target_at(world),
                     });
-                    // A committed box selection is where Phase 4 will resolve
-                    // world rectangle into element ids, through the spatial
-                    // index's broad phase (§28).
                     if this.apply(effect, &hitbox, window) {
                         cx.notify();
                     }
@@ -909,6 +1294,7 @@ impl FlowView {
                     if event.modifiers.platform || event.modifiers.control {
                         this.viewport
                             .zoom_by(anchor, wheel_zoom_factor(pixels.y.as_f32()));
+                        this.zooming = true;
                     } else {
                         this.viewport
                             .pan_by(Vec2::new(pixels.x.as_f32(), pixels.y.as_f32()));
@@ -942,18 +1328,83 @@ impl FlowView {
                     // would otherwise have grown one.
                     let anchor = this.local(event.position, bounds);
                     this.viewport.zoom_by(anchor, pinch_factor(event.delta));
+                    this.zooming = true;
                     cx.notify();
                 });
             });
         }
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    /// §26's undo, reached through the action bound in [`crate::init`].
+    ///
+    /// An open gesture is closed by [`FlowEditor::undo`] itself, so pressing
+    /// undo mid-drag takes a whole step rather than folding into the drag.
+    fn on_undo(&mut self, _: &Undo, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.undo() {
+            cx.notify();
+        }
+    }
+
+    fn on_redo(&mut self, _: &Redo, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.redo() {
+            cx.notify();
+        }
+    }
+
+    /// §45's tool activation, reached through the binding registered in
+    /// [`crate::init`] or through the palette.
+    fn on_select_tool(&mut self, action: &SelectTool, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_tool(action.tool, window, cx);
+    }
+
+    /// `Delete` and `Backspace`, reached through the bindings registered in
+    /// [`crate::init`]. The palette's button calls
+    /// [`FlowView::delete_selection`] directly, so both routes are the same
+    /// method rather than two that have to agree.
+    fn on_delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        self.delete_selection(window, cx);
+    }
+
+    /// `q`, and the palette's toggle.
+    fn on_toggle_tool_lock(
+        &mut self,
+        _: &ToggleToolLock,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_tool_locked(!self.interaction.tool_locked(), window, cx);
+    }
+
+    /// **`Esc` means two things, in order**: abandon whatever is in progress,
+    /// then put the Select tool back.
+    ///
+    /// Two events rather than one, so the interaction machine keeps its
+    /// one-effect-per-event rule — and in this order, because a tool change is
+    /// refused while a gesture is running. `commands::keys` records why this
+    /// keystroke is handled raw here instead of joining the binding table.
+    ///
+    /// Both effects go through the ordinary [`FlowView::apply`], so an
+    /// abandoned creation and an abandoned drag are undone the same way they
+    /// always were.
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event.keystroke.key.as_str() {
             PAN_KEY => self.pan_key_held = true,
             "escape" => {
-                let effect = self.interaction.handle(InteractionEvent::Cancel);
-                if effect.needs_repaint() {
+                let cancelled = self.interaction.handle(InteractionEvent::Cancel);
+                let mut repaint = cancelled.needs_repaint();
+                if repaint {
+                    let report = gesture::apply_gesture(&mut self.editor, cancelled);
+                    repaint |= report.changed;
+                }
+
+                let restored = self
+                    .interaction
+                    .handle(InteractionEvent::SelectTool(CanvasTool::Select));
+                if repaint || restored.needs_repaint() {
+                    // The canvas may have lost the focus to the palette; a
+                    // keystroke that reached this handler proves it has it now,
+                    // and taking it again is free.
+                    self.focus_handle.clone().focus(window, cx);
                     cx.notify();
                 }
             }
@@ -981,15 +1432,6 @@ fn to_pointer_button(button: MouseButton) -> Option<PointerButton> {
     }
 }
 
-/// GPUI's colour as the crate's pure one. The inverse of
-/// [`crate::render::painter::to_hsla`], and it lives here for the same reason:
-/// `models/` may not name a UI framework, so a theme colour can only be
-/// converted on this side of the boundary.
-fn from_hsla(color: gpui::Hsla) -> Color {
-    let rgba: gpui::Rgba = color.into();
-    Color::rgba(rgba.r, rgba.g, rgba.b, rgba.a)
-}
-
 fn trace(args: std::fmt::Arguments<'_>) {
     if tracing_input() {
         eprintln!("[flow-input] {args}");
@@ -1009,6 +1451,26 @@ impl Render for FlowView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
 
+        // **The one piece of work this body does, and it is bounded by the
+        // screen.** Extraction has to happen here rather than in paint: GPUI
+        // builds the element tree in `render` and paints afterwards, so a
+        // snapshot extracted during paint would be a frame late for every
+        // element built from it.
+        //
+        // That is safe against the trap the crate doc names — this body runs
+        // whenever anything above the canvas redraws — because everything it
+        // costs is proportional to the viewport: a 2.3 µs spatial query and a
+        // walk of tens of visible elements. The heavy work stayed in paint, and
+        // the *geometry* it would rebuild is now cached (§23) rather than
+        // rebuilt per frame. What must never appear here is a copy of anything
+        // document-sized.
+        self.refresh_snapshot();
+
+        let nodes = nodes::nodes(&self.snapshot, self.editor.world(), cx);
+        let handles = nodes::handles(&self.snapshot, cx);
+        let selection = nodes::selection_box(&self.snapshot, cx);
+        let toolbar = nodes::toolbar(&self.snapshot, cx);
+
         div()
             .id("flow-canvas")
             .key_context(KEY_CONTEXT)
@@ -1018,6 +1480,11 @@ impl Render for FlowView {
             .overflow_hidden()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
+            .on_action(cx.listener(Self::on_undo))
+            .on_action(cx.listener(Self::on_redo))
+            .on_action(cx.listener(Self::on_select_tool))
+            .on_action(cx.listener(Self::on_delete))
+            .on_action(cx.listener(Self::on_toggle_tool_lock))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
             .child(
@@ -1032,6 +1499,27 @@ impl Render for FlowView {
                 )
                 .absolute()
                 .size_full(),
+            )
+            // **The rich half.** One layer above the canvas, absolutely
+            // positioned, holding tens of elements — never one per document
+            // node. See `views::nodes`.
+            .child(
+                nodes::layer()
+                    .children(nodes)
+                    .children(selection)
+                    .children(handles)
+                    .children(toolbar),
+            )
+            // **§45's palette.** Chrome rather than content, so it sits above
+            // the rich layer and is positioned against the pane rather than
+            // against the document — a control anchored in world space would
+            // pan away from the user.
+            .child(
+                div()
+                    .absolute()
+                    .top(px(12.0))
+                    .left(px(12.0))
+                    .child(palette::palette(cx.entity(), self.palette_state(), cx)),
             )
     }
 }

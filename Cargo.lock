@@ -1768,6 +1768,7 @@ dependencies = [
 name = "dodo-flow"
 version = "0.1.0"
 dependencies = [
+ "dodo-i18n",
  "dodo-paths",
  "gpui",
  "gpui-component",

@@ -262,11 +262,165 @@ pub enum EdgeRouting {
 /// Clean or hand-drawn (§13). **A renderer strategy, not document geometry** —
 /// switching it must not touch a single element, which is what lets sketch mode
 /// be a second painter over the same canonical shapes.
+///
+/// §13 asks for the enum to stay extensible, since blueprint or presentation
+/// themes may follow, so the renderer never asks *"is this Sketch?"* — it asks
+/// [`DocumentSettings::sketch_request`](crate::models::DocumentSettings::sketch_request),
+/// which answers with the generator's parameters or with `None`. A future
+/// variant that wants perturbed geometry returns a [`SketchStyle`] of its own
+/// and every painter below already honours it; one that does not — a blueprint
+/// grid, say — answers `None` and adds its own field beside this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum RenderStyle {
     #[default]
     Clean,
     Sketch,
+}
+
+/// §13's hand-drawn parameters: what the deterministic generator in
+/// [`render::sketch`](crate::render::sketch) is allowed to do to a canonical
+/// outline.
+///
+/// **Document data rather than a viewer preference**, for the same reason
+/// [`RenderStyle`] is: a diagram drawn by hand is drawn by hand every time it
+/// is opened, and the wobble a reader sees has to be the wobble its author saw.
+/// That is also why [`SketchStyle::seed`] is serialized — see it.
+///
+/// The lengths are in **screen pixels**, because that is the space outlines are
+/// built in (see [`crate::render::shapes`]) and because a hand-drawn wobble is
+/// a property of the pen rather than of the document: a 2 px tremor stays a
+/// 2 px tremor when you zoom in, exactly as a real one on real paper does not
+/// grow.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SketchStyle {
+    /// Multiplies everything else. `0.0` is a clean line drawn by the sketch
+    /// path; `1.0` is the default hand; above ~3.0 a shape stops reading as
+    /// what it is.
+    pub roughness: f32,
+    /// How far a straight segment bows away from its chord, as a multiple of
+    /// [`SketchStyle::jitter`]. `0.0` keeps every straight line straight and
+    /// still jitters its endpoints.
+    pub bowing: f32,
+    /// How many times each outline is drawn. Two is the hand-drawn look — a
+    /// line gone over twice — and it is also **the multiplier on everything
+    /// this costs**, which is why it is a `u8` with a documented ceiling rather
+    /// than an open number.
+    pub stroke_count: u8,
+    /// The document's seed. Combined with each element's
+    /// [`ElementId`](crate::models::ElementId) to give the stable per-element
+    /// seed §13 asks for.
+    ///
+    /// **Serialized, and that is the point.** An element's wobble has to
+    /// survive a save and a reload, or reopening a document would redraw every
+    /// shape differently — which is the same failure as generating fresh random
+    /// values per repaint, only slower to notice.
+    pub seed: u64,
+    /// The per-point random displacement in screen pixels at
+    /// `roughness == 1.0`.
+    pub jitter: f32,
+}
+
+impl Default for SketchStyle {
+    fn default() -> SketchStyle {
+        SketchStyle::DEFAULT
+    }
+}
+
+impl SketchStyle {
+    /// The default hand. Two strokes, a 2 px tremor and a gentle bow — enough
+    /// that a rectangle reads as drawn rather than as printed, and little
+    /// enough that a 24 px node is still a rectangle.
+    pub const DEFAULT: SketchStyle = SketchStyle {
+        roughness: 1.0,
+        bowing: 1.0,
+        stroke_count: 2,
+        seed: 0x5EED_5EED_5EED_5EED,
+        jitter: 2.0,
+    };
+
+    /// The most strokes one outline may be drawn with.
+    ///
+    /// A ceiling rather than a taste: every stroke is a full path — its own
+    /// vertices *and* its own [`RenderBudgets::nanos_per_path`](crate::budgets::RenderBudgets::nanos_per_path)
+    /// of fixed CPU — so `stroke_count` multiplies both frame budgets directly.
+    /// Four is already more than any hand-drawn look needs.
+    pub const MAX_STROKES: u8 = 4;
+
+    /// **The tolerance sketch geometry is flattened at, as a multiple of the
+    /// document's.**
+    ///
+    /// A hand-drawn line is deliberately imprecise, so flattening its bow to a
+    /// quarter of a pixel is spending precision on imprecision. Measured on the
+    /// M1 (see [`crate::render::sketch`]): a sketched 160×64 rectangle costs
+    /// 1,104 estimated vertices at the document tolerance and **518 at 3×**,
+    /// with no visible difference at any zoom the shape is legible at. It is
+    /// applied through [`RenderQuality::new`], so it is part of the cache key
+    /// like every other tolerance.
+    pub const TOLERANCE_FACTOR: f32 = 3.0;
+
+    /// Clamped into the range the generator and the budget were measured
+    /// against. **The only constructor that should reach a document**: a
+    /// `roughness` of 40 is not a rougher drawing, it is a shape nobody can
+    /// recognise costing several times the vertices.
+    pub fn new(roughness: f32, bowing: f32, stroke_count: u8, seed: u64, jitter: f32) -> Self {
+        SketchStyle {
+            roughness: roughness.clamp(0.0, 4.0),
+            bowing: bowing.clamp(0.0, 4.0),
+            stroke_count: stroke_count.clamp(1, SketchStyle::MAX_STROKES),
+            seed,
+            jitter: jitter.clamp(0.0, 8.0),
+        }
+    }
+
+    /// The same hand with a different seed, which is how one document draws two
+    /// elements differently without a second style.
+    pub fn with_seed(mut self, seed: u64) -> SketchStyle {
+        self.seed = seed;
+        self
+    }
+
+    /// The strokes this style actually draws, clamped to
+    /// [`SketchStyle::MAX_STROKES`]. **Read this rather than the field** — a
+    /// document from disk carries whatever number was written in it.
+    pub fn strokes(&self) -> u8 {
+        self.stroke_count.clamp(1, SketchStyle::MAX_STROKES)
+    }
+
+    /// The tolerance sketch geometry is tessellated at, given the document's.
+    /// See [`SketchStyle::TOLERANCE_FACTOR`].
+    pub fn quality(&self, document: RenderQuality) -> RenderQuality {
+        RenderQuality::new(document.flattening_tolerance * SketchStyle::TOLERANCE_FACTOR)
+    }
+
+    /// **The hashable form, for a geometry cache key.**
+    ///
+    /// Every field is in it, because every field changes the generated
+    /// geometry: a cache that ignored `roughness` would serve the old hand
+    /// after the style changed, which is the same class of bug as ignoring the
+    /// flattening tolerance (Phase 0 §3 correction 5). Never zero — zero is
+    /// [`GeometryKey`](crate::render::cache::GeometryKey)'s "not sketched", and
+    /// a sketched entry must not collide with a clean one.
+    pub fn cache_key(&self) -> u32 {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |value: u64| {
+            hash ^= value;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        };
+
+        // Quantised, for the same reason `RenderQuality::cache_key` quantises:
+        // `f32` hashes are wrong in both directions, and a hundredth of a pixel
+        // is already finer than any hand.
+        eat((self.roughness * 100.0).round().max(0.0) as u64);
+        eat((self.bowing * 100.0).round().max(0.0) as u64);
+        eat(self.strokes() as u64);
+        eat(self.seed);
+        eat((self.jitter * 100.0).round().max(0.0) as u64);
+
+        // Folded to 32 bits and forced non-zero: the key field is a `u32` so
+        // that `GeometryKey` stays `Copy` and small, and 0 means clean.
+        (((hash >> 32) as u32) ^ (hash as u32)) | 1
+    }
 }
 
 /// The quality/cost trade the whole render budget turns on. See this module's

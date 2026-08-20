@@ -5,18 +5,30 @@ edition = "2024"
 license = "MIT"
 description = "dodo's Flow Canvas: the infinite-canvas document model, the world/screen transform, the per-platform render budgets and the canvas view."
 
-# The list is short because this slice is the engine's pure core plus an empty
-# themed pane. `lib.rs` explains the phase sequence; the deliberate absences
-# are as much a decision as the presences:
+# The list is short because most of this crate is the engine's pure core.
+# `lib.rs` explains the phase sequence; the deliberate absences are as much a
+# decision as the presences:
 #
-# - **No `dodo-i18n`, no `dodo-app-icon`.** The canvas shows no user-visible
-#   string and draws no icon until the sidebar row wires it into the app.
-#   Adding either now would be a dependency with no reason, and this file's whole
-#   convention is that every dependency carries its reason.
+# - **No `dodo-app-icon`.** The palette draws every glyph it needs through the
+#   canvas's own outline builders, so a button cannot drift from the element it
+#   makes — `views::palette`'s module doc has the argument. Nothing here loads
+#   an SVG.
 # - **No `criterion`.** dodo has no bench harness and is deliberate about every
 #   package in the graph (`deny.toml`, `THIRD-PARTY-NOTICES.md`). The benchmark
 #   is an `examples/flow_bench.rs` printing `Instant` timings.
 [dependencies]
+# Every string the canvas shows. The `gpui` feature is what brings `t()` and
+# the active-language global with it, exactly as `dodo-cleaner` takes it: the
+# catalogue itself is pure, but `views::palette` renders a `Str` into a
+# `SharedString` and that needs an `App`.
+#
+# **It is here four phases before the sidebar row**, which is unusual and
+# deliberate: the palette, the Delete action, the tool lock and Phase 11's
+# property panel would otherwise be written as English placeholders and
+# retrofitted in one pass, touching every string twice and inviting a bare
+# literal past dodo's two i18n guards. `dodo_i18n::flow`'s module doc records
+# the decision.
+dodo-i18n = { path = "../dodo-i18n", features = ["gpui"] }
 # `HostOs`, which `budgets` treats as a *parameter* rather than a `cfg` split,
 # so every platform's render ceiling and LOD ladder is asserted from whichever
 # platform you are on — the point of the invariant in the root `AGENTS.md`, and
@@ -60,3 +72,16 @@ path = "examples/flow.rs"
 [[example]]
 name = "flow_graph_bench"
 path = "examples/flow_graph_bench.rs"
+
+# **Phase 4's gate.** §38's scenes and §50's questions: viewport query cost at
+# 100,000 nodes, one node moved in a 300,000-edge graph, painted vertices
+# against the platform ceiling, memory at each scale, and whether a pure pan
+# costs anything it should not. Also §21's own instruction to benchmark the
+# spatial structure rather than assert it — it builds the same scene through
+# the shipping hash grid, a dense array grid and a brute-force scan.
+#
+# **Release only**, and it says so at the top of its own output: a debug build
+# measures the borrow checker rather than the data structure.
+[[example]]
+name = "flow_scene_bench"
+path = "examples/flow_scene_bench.rs"

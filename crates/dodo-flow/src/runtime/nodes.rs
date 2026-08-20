@@ -22,22 +22,43 @@
 //! registry to read when it builds a rich element for the handful of nodes that
 //! get one. That is the §17 rule and §40 rule 9 meeting in one field.
 //!
-//! # Append-only, on purpose, for now
+//! # Append-only, and Phase 7's answer: a tombstone
 //!
-//! There is no `remove`. Every index in the world — an edge's endpoints, an
-//! adjacency entry, a handle's owner — is a slot number, and removing a node
+//! There is still no `remove`. Every index in the world — an edge's endpoints,
+//! an adjacency entry, a handle's owner — is a slot number, so removing a node
 //! means either a tombstone (which every iteration then has to skip) or a
 //! swap-remove (which moves another node's index out from under everything
-//! holding it). Both are real designs; both belong with the command layer
-//! (§30, Phase 7) that has to be able to *undo* a removal, because that is what
-//! decides which one is right. Adding one now would be guessing.
+//! holding it). Phase 3 left the choice to the command layer, because undo is
+//! what decides it, and **§30's history decides it in favour of the
+//! tombstone**:
+//!
+//! - An undo entry *is* a held index. A swap-remove moves some other node into
+//!   the freed slot, and every entry already on the undo stack that named that
+//!   node now names a different one. The corruption is silent and appears three
+//!   steps later — exactly the defect Phase 7 exists to make unexpressible.
+//! - Undo of a removal has to put the element back **at the same index**, so
+//!   that entries recorded either side of it stay valid. A tombstone does that
+//!   by flipping one bit; a swap-remove cannot do it at all.
+//!
+//! So [`NodeFlags::REMOVED`] is the removal, [`NodeStore::is_live`] is the
+//! question everything else asks, and the cost — a skipped slot in
+//! whole-document passes — is paid where it is cheapest.
+//!
+//! **Compaction is a document round-trip, not a background sweep.**
+//! [`GraphWorld::to_document`](crate::runtime::GraphWorld::to_document) skips
+//! tombstones and `from_document` builds a world with none, so saving and
+//! reopening compacts. Nothing else may, because anything that renumbers slots
+//! invalidates the history that made them.
 //!
 //! **This file names no UI framework.**
+
+use std::sync::Arc;
 
 use crate::{
     geometry::{Rect, Vec2},
     models::{
-        ElementId, ElementKind, ElementStyle, GraphNodeKind, HandleIndex, NodeIndex, ShapeKind,
+        ElementId, ElementKind, ElementStyle, GraphNodeKind, HandleIndex, LinearKind, NodeIndex,
+        ShapeKind,
     },
     runtime::CompactList,
 };
@@ -55,6 +76,12 @@ impl NodeFlags {
     pub const LOCKED: NodeFlags = NodeFlags(1 << 1);
     /// In the current selection (§28).
     pub const SELECTED: NodeFlags = NodeFlags(1 << 2);
+    /// **Deleted, as a tombstone** — see the module doc's "Append-only" note
+    /// for why removal is a flag rather than a `Vec::remove`. A removed node is
+    /// not painted, not hit-tested, not indexed and not saved, but its slot and
+    /// every index into it survive, which is what lets an undo entry recorded
+    /// before the removal still name the right element afterwards.
+    pub const REMOVED: NodeFlags = NodeFlags(1 << 3);
 
     pub const fn contains(self, other: NodeFlags) -> bool {
         self.0 & other.0 == other.0
@@ -97,6 +124,12 @@ pub enum NodeShape {
     Triangle,
     /// A React-Flow-style node body: a rounded quad with handles.
     GraphNode,
+    /// §7's free line: an **open** outline, so it is stroked and never filled,
+    /// and it is never degraded to its bounding quad — a line drawn as a solid
+    /// box is not a simplification of a line.
+    Line,
+    /// §7's free arrow: [`Line`](NodeShape::Line) with a head at the end.
+    Arrow,
     /// Text, an image, a frame, a freehand stroke, an embed, a custom kind —
     /// everything whose painter is a later phase's. Deliberately **not** drawn
     /// as a rectangle: a kind that silently paints as something else is a
@@ -116,6 +149,11 @@ impl NodeShape {
             ElementKind::Shape(ShapeKind::Ellipse) => NodeShape::Ellipse,
             ElementKind::Shape(ShapeKind::Diamond) => NodeShape::Diamond,
             ElementKind::Shape(ShapeKind::Triangle) => NodeShape::Triangle,
+            ElementKind::Linear(LinearKind::Line) => NodeShape::Line,
+            ElementKind::Linear(LinearKind::Arrow) => NodeShape::Arrow,
+            // **An elbow is not a diagonal.** Its legs need waypoints, and a
+            // node stores a rectangle; drawing it as a straight line would be
+            // a different element wearing its name.
             _ => NodeShape::Other,
         }
     }
@@ -134,7 +172,15 @@ impl NodeShape {
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeCold {
     pub kind: ElementKind,
-    pub label: Option<String>,
+    /// The node's own text.
+    ///
+    /// `Arc<str>` rather than `String` for one reason and it is a per-frame
+    /// one: a [`TextPrimitive`](crate::render::plan::TextPrimitive) carries the
+    /// text it draws, and cloning a `String` per visible label per frame is
+    /// exactly the allocation §40 rule 10 is about — 1,584 of them on Phase 4's
+    /// dense scene. An `Arc` clone is a refcount bump. The label is written
+    /// rarely and read every frame, which is the shape `Arc` is for.
+    pub label: Option<Arc<str>>,
     /// The container (§11) this node belongs to. An [`ElementId`] rather than a
     /// [`NodeIndex`] because the hierarchy index that resolves it is a later
     /// phase's, and a half-built index is worse than none.
@@ -182,6 +228,13 @@ pub struct NodeStore {
     shapes: Vec<NodeShape>,
     flags: Vec<NodeFlags>,
 
+    /// **§23's cache version, per node.** Bumped by every write that changes
+    /// what the node looks like — position, size, style, flags — so a
+    /// tessellation cache keyed on it misses exactly when the geometry it
+    /// flattened is no longer the geometry that is there. One `u32` per node
+    /// against a re-comparison of a rectangle and a whole `ElementStyle`.
+    versions: Vec<u32>,
+
     // ---- warm ----
     ids: Vec<ElementId>,
     z: Vec<i32>,
@@ -224,6 +277,7 @@ impl NodeStore {
         self.sizes.reserve(additional);
         self.shapes.reserve(additional);
         self.flags.reserve(additional);
+        self.versions.reserve(additional);
         self.ids.reserve(additional);
         self.z.reserve(additional);
         self.handles.reserve(additional);
@@ -245,6 +299,7 @@ impl NodeStore {
             flags = flags | NodeFlags::LOCKED;
         }
         self.flags.push(flags);
+        self.versions.push(0);
 
         self.ids.push(spec.id);
         self.z.push(spec.z);
@@ -253,7 +308,7 @@ impl NodeStore {
 
         self.cold.push(NodeCold {
             kind: spec.kind,
-            label: spec.label,
+            label: spec.label.map(Arc::from),
             parent: spec.parent,
         });
 
@@ -280,6 +335,14 @@ impl NodeStore {
         self.shapes[node.index()]
     }
 
+    /// **The appearance version of one node** — see the `versions` field.
+    ///
+    /// A missing node answers 0 rather than panicking: a cache key for a node
+    /// that does not exist should miss, not crash a frame.
+    pub fn version(&self, node: NodeIndex) -> u32 {
+        self.versions.get(node.index()).copied().unwrap_or(0)
+    }
+
     pub fn flags(&self, node: NodeIndex) -> NodeFlags {
         self.flags[node.index()]
     }
@@ -294,6 +357,26 @@ impl NodeStore {
 
     pub fn is_selected(&self, node: NodeIndex) -> bool {
         self.flags[node.index()].contains(NodeFlags::SELECTED)
+    }
+
+    /// Whether this node has been deleted. See [`NodeFlags::REMOVED`].
+    pub fn is_removed(&self, node: NodeIndex) -> bool {
+        self.flags[node.index()].contains(NodeFlags::REMOVED)
+    }
+
+    /// **The question every reader of the document asks**: does this slot hold
+    /// a node that is really there? A slot that was never allocated and a slot
+    /// whose node was deleted answer the same way, so a caller holding a stale
+    /// index cannot tell them apart and does not have to.
+    pub fn is_live(&self, node: NodeIndex) -> bool {
+        self.contains(node) && !self.is_removed(node)
+    }
+
+    /// Every node that is really there, in insertion order. The whole-document
+    /// counterpart of [`indices`](NodeStore::indices) — save, zoom-to-fit, a
+    /// spatial rebuild — and **not** a visibility query either.
+    pub fn live_indices(&self) -> impl Iterator<Item = NodeIndex> + '_ {
+        self.indices().filter(|node| !self.is_removed(*node))
     }
 
     /// The whole hot geometry array, for a pass that wants it — a spatial
@@ -349,17 +432,25 @@ impl NodeStore {
 
     pub fn set_position(&mut self, node: NodeIndex, position: Vec2) {
         self.positions[node.index()] = position;
+        self.touch(node);
     }
 
     pub fn set_size(&mut self, node: NodeIndex, size: Vec2) {
         self.sizes[node.index()] = size;
+        self.touch(node);
     }
 
     pub fn set_style(&mut self, node: NodeIndex, style: ElementStyle) {
         self.styles[node.index()] = style;
+        self.touch(node);
     }
 
+    /// A mutable style. **Bumps the version on the way out**, unconditionally,
+    /// because the caller may or may not write and this store cannot tell —
+    /// a spurious cache miss is a rebuilt path, a missed one is a stale
+    /// picture.
     pub fn style_mut(&mut self, node: NodeIndex) -> &mut ElementStyle {
+        self.versions[node.index()] = self.versions[node.index()].wrapping_add(1);
         &mut self.styles[node.index()]
     }
 
@@ -370,16 +461,105 @@ impl NodeStore {
         } else {
             *slot & flag.complement()
         };
+        self.touch(node);
     }
 
     pub fn set_label(&mut self, node: NodeIndex, label: Option<String>) {
-        self.cold[node.index()].label = label;
+        self.cold[node.index()].label = label.map(Arc::from);
+        self.touch(node);
+    }
+
+    /// Records that this node's appearance changed. See the `versions` field.
+    fn touch(&mut self, node: NodeIndex) {
+        let slot = &mut self.versions[node.index()];
+        *slot = slot.wrapping_add(1);
     }
 
     /// Records that `handle` belongs to `node`. Called by
     /// [`GraphWorld`](crate::runtime::GraphWorld), which owns the handle arena.
     pub fn attach_handle(&mut self, node: NodeIndex, handle: HandleIndex) {
         self.handles[node.index()].push(handle.raw());
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::{NodeFlags, NodeSpec, NodeStore};
+    use crate::{
+        geometry::Vec2,
+        models::{ElementId, ElementKind, ElementStyle, NodeIndex},
+    };
+
+    /// One named write, for the enumeration below.
+    type Write = (&'static str, fn(&mut NodeStore));
+
+    fn store() -> NodeStore {
+        let mut store = NodeStore::new();
+        store.push(NodeSpec::new(
+            ElementId::new(1),
+            ElementKind::default(),
+            Vec2::ZERO,
+            Vec2::new(160.0, 60.0),
+        ));
+        store
+    }
+
+    /// §23 asks for cache keys based on geometry/style versions. This is the
+    /// property a tessellation cache rests on: **every write that changes what
+    /// the node looks like moves the version**, so a key that compares equal
+    /// really does describe the same picture.
+    #[test]
+    fn every_appearance_changing_write_moves_the_version() {
+        let node = NodeIndex::new(0);
+        let writes: [Write; 6] = [
+            ("set_position", |s| {
+                s.set_position(NodeIndex::new(0), Vec2::new(5.0, 5.0))
+            }),
+            ("set_size", |s| {
+                s.set_size(NodeIndex::new(0), Vec2::new(80.0, 40.0))
+            }),
+            ("set_style", |s| {
+                s.set_style(NodeIndex::new(0), ElementStyle::default())
+            }),
+            ("style_mut", |s| {
+                s.style_mut(NodeIndex::new(0)).opacity = 0.5;
+            }),
+            ("set_flag", |s| {
+                s.set_flag(NodeIndex::new(0), NodeFlags::SELECTED, true)
+            }),
+            ("set_label", |s| {
+                s.set_label(NodeIndex::new(0), Some("x".into()))
+            }),
+        ];
+
+        for (name, write) in writes {
+            let mut store = store();
+            let before = store.version(node);
+            write(&mut store);
+            assert_ne!(store.version(node), before, "{name} left the version alone");
+        }
+    }
+
+    /// The other half: a read must not invalidate anything, or a pure pan
+    /// would miss the cache on every element it looked at.
+    #[test]
+    fn reading_a_node_leaves_its_version_alone() {
+        let store = store();
+        let node = NodeIndex::new(0);
+        let before = store.version(node);
+
+        let _ = store.bounds(node);
+        let _ = store.style(node);
+        let _ = store.shape(node);
+
+        assert_eq!(store.version(node), before);
+    }
+
+    /// A key built for a node that is not there must miss rather than panic —
+    /// a frame is not the place to discover a stale index.
+    #[test]
+    fn an_absent_node_has_a_version_rather_than_a_panic() {
+        assert_eq!(store().version(NodeIndex::new(9_999)), 0);
     }
 }
 

@@ -32,7 +32,7 @@ use crate::{
     models::{
         ElementKind,
         ids::{ElementId, HandleId, IdAllocator},
-        style::{EdgeRouting, ElementStyle, RenderQuality, RenderStyle},
+        style::{EdgeRouting, ElementStyle, RenderQuality, RenderStyle, SketchStyle},
     },
 };
 
@@ -289,9 +289,31 @@ impl FlowEdge {
 #[serde(default)]
 pub struct DocumentSettings {
     pub render_style: RenderStyle,
+    /// The hand [`RenderStyle::Sketch`] draws with. Carried whatever the
+    /// current style is, so switching to sketch and back is a toggle rather
+    /// than a settings edit — see [`DocumentSettings::sketch_request`].
+    pub sketch: SketchStyle,
     pub render_quality: RenderQuality,
     /// The style a newly created element starts from.
     pub default_style: ElementStyle,
+}
+
+impl DocumentSettings {
+    /// **The one question the renderer asks about §13's style**: what hand, if
+    /// any, is this frame drawn with?
+    ///
+    /// `Option<SketchStyle>` rather than a comparison against
+    /// [`RenderStyle::Sketch`] at each call site, so a later variant —
+    /// blueprint, presentation — decides here whether it wants perturbed
+    /// geometry and no painter has to learn about it. A `roughness` of zero
+    /// answers `None` too: a hand that does not move is a clean drawing, and
+    /// paying the sketch path's cost for it would be paying for nothing.
+    pub fn sketch_request(&self) -> Option<SketchStyle> {
+        match self.render_style {
+            RenderStyle::Clean => None,
+            RenderStyle::Sketch => (self.sketch.roughness > 0.0).then_some(self.sketch),
+        }
+    }
 }
 
 /// Free-form metadata (§31), carried through a load/save cycle untouched.

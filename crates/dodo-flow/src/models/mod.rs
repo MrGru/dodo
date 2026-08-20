@@ -45,5 +45,5 @@ pub use kind::{CustomKind, ElementKind, GraphNodeKind, LinearKind, ShapeKind};
 pub use serialization::{CURRENT_VERSION, LoadError, SaveError};
 pub use style::{
     ArrowMarker, Color, DashPattern, EdgeRouting, ElementStyle, FontStyle, RenderQuality,
-    RenderStyle, StrokeStyle,
+    RenderStyle, SketchStyle, StrokeStyle,
 };

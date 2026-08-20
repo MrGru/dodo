@@ -30,13 +30,20 @@
 //! with `|`, `&` and a `contains` — written out below for both element kinds.
 //! The crate can be adopted later without changing a call site.
 //!
-//! # The spatial queue is a seam, not an implementation
+//! # The two spatial queues, and why they are not the render queues
 //!
-//! [`DirtyState::spatial`] collects the nodes whose spatial-index entry is
-//! stale. Phase 4's uniform grid drains it; until then it is the honest record
-//! of "one spatial update" from §19's example, and the property test counts it.
-//! Writing a spatial index here to have something to drain it with would be
-//! exactly the placeholder Phase 2 declined to write for culling.
+//! [`DirtyState::spatial`] collects the nodes and [`DirtyState::edge_spatial`]
+//! the edges whose [`SpatialIndex`](crate::spatial::SpatialIndex) entry is
+//! stale. They are separate from the render queues beside them because they are
+//! drained by a different consumer **at a different point in the frame**: the
+//! index has to re-insert an edge at its *new* route, so it must run after
+//! `GraphWorld::rebuild_dirty_geometry`, where the render invalidation runs
+//! before. One queue serving both would have to be drained twice or read at the
+//! wrong moment.
+//!
+//! A node move puts one entry in the node queue and one per incident edge in
+//! the edge queue — §19's rule extended to the index, and what
+//! `runtime::world`'s property test now counts on both sides.
 //!
 //! **This file names no UI framework.**
 
@@ -142,6 +149,11 @@ dirty_flags!(
         /// `GEOMETRY`, but says why, which the adjacency index needs and the
         /// geometry does not.
         ENDPOINTS = 3;
+        /// The edge's spatial-index entry is stale. Set alongside `GEOMETRY`,
+        /// and queued separately for the same reason `NodeDirty::SPATIAL` is:
+        /// the two consumers drain on different schedules, and the spatial one
+        /// must run **after** the route it re-indexes has been rebuilt.
+        SPATIAL = 4;
     }
 );
 
@@ -158,6 +170,7 @@ pub struct DirtyState {
     dirty_nodes: Vec<NodeIndex>,
     dirty_edges: Vec<EdgeIndex>,
     spatial: Vec<NodeIndex>,
+    edge_spatial: Vec<EdgeIndex>,
 }
 
 impl DirtyState {
@@ -219,6 +232,9 @@ impl DirtyState {
         if before.is_empty() && !slot.is_empty() {
             self.dirty_edges.push(edge);
         }
+        if !before.contains(EdgeDirty::SPATIAL) && flags.contains(EdgeDirty::SPATIAL) {
+            self.edge_spatial.push(edge);
+        }
     }
 
     pub fn dirty_nodes(&self) -> &[NodeIndex] {
@@ -229,13 +245,29 @@ impl DirtyState {
         &self.dirty_edges
     }
 
-    /// The nodes whose spatial entry Phase 4's index will have to reinsert.
+    /// The nodes whose spatial entry [`SpatialIndex`](crate::spatial::SpatialIndex)
+    /// has to reinsert.
     pub fn spatial_updates(&self) -> &[NodeIndex] {
         &self.spatial
     }
 
+    /// The edges whose spatial entry has to be reinserted, drained by the same
+    /// [`SpatialIndex::sync`](crate::spatial::SpatialIndex::sync) call and
+    /// after their routes have been rebuilt.
+    ///
+    /// A node move puts its own index in the node queue and its incident edges
+    /// in this one, so the whole spatial cost of a move stays proportional to
+    /// the moved node's degree — §19's rule, extended to the index it was
+    /// written for.
+    pub fn edge_spatial_updates(&self) -> &[EdgeIndex] {
+        &self.edge_spatial
+    }
+
     pub fn is_clean(&self) -> bool {
-        self.dirty_nodes.is_empty() && self.dirty_edges.is_empty() && self.spatial.is_empty()
+        self.dirty_nodes.is_empty()
+            && self.dirty_edges.is_empty()
+            && self.spatial.is_empty()
+            && self.edge_spatial.is_empty()
     }
 
     /// Hands the dirty-edge queue to a caller that needs `&mut` on the rest of
@@ -262,6 +294,15 @@ impl DirtyState {
     }
 
     /// Clears one edge's flags and returns what they were.
+    ///
+    /// `SPATIAL` goes with the rest, unlike its node twin in
+    /// [`clear_dirty_nodes`](DirtyState::clear_dirty_nodes): the edge spatial
+    /// **queue** is the authority on what the index still owes, and re-marking
+    /// a cleared edge can therefore only add a duplicate to that queue, which
+    /// [`SpatialIndex::sync`](crate::spatial::SpatialIndex::sync) answers with
+    /// an update that reports no change. Preserving the flag instead would keep
+    /// the slot non-empty and stop the *route* queue from ever taking the edge
+    /// again, which is a real failure rather than a redundant one.
     pub fn clear_edge(&mut self, edge: EdgeIndex) -> EdgeDirty {
         match self.edge_flags.get_mut(edge.index()) {
             Some(slot) => std::mem::replace(slot, EdgeDirty::NONE),
@@ -295,13 +336,29 @@ impl DirtyState {
         self.dirty_nodes = queue;
     }
 
-    /// Drops the spatial queue, clearing the flag on every node in it.
+    /// Drops both spatial queues, clearing the flag on everything in them.
+    ///
+    /// Called once, by whoever has just synced the spatial index. The buffers
+    /// go out and come back so a drag draining them sixty times a second
+    /// allocates nothing after the first frame (§40 rule 14).
     pub fn clear_spatial_updates(&mut self) {
-        for node in std::mem::take(&mut self.spatial) {
+        let mut nodes = std::mem::take(&mut self.spatial);
+        for node in &nodes {
             if let Some(slot) = self.node_flags.get_mut(node.index()) {
                 *slot = *slot & NodeDirty::SPATIAL.complement();
             }
         }
+        nodes.clear();
+        self.spatial = nodes;
+
+        let mut edges = std::mem::take(&mut self.edge_spatial);
+        for edge in &edges {
+            if let Some(slot) = self.edge_flags.get_mut(edge.index()) {
+                *slot = *slot & EdgeDirty::SPATIAL.complement();
+            }
+        }
+        edges.clear();
+        self.edge_spatial = edges;
     }
 
     /// Everything clean, queues emptied, capacities kept.
@@ -315,6 +372,7 @@ impl DirtyState {
         self.dirty_nodes.clear();
         self.dirty_edges.clear();
         self.spatial.clear();
+        self.edge_spatial.clear();
     }
 }
 
@@ -406,6 +464,57 @@ mod tests {
         dirty.clear_spatial_updates();
         assert!(dirty.is_clean());
         assert!(dirty.node_flags(node).is_empty());
+    }
+
+    /// The edge queue's twin of the property above: a drag marks the same four
+    /// incident edges sixty times and the index still owes four updates.
+    #[test]
+    fn the_edge_spatial_queue_collects_each_edge_once() {
+        let mut dirty = state(0, 3);
+
+        for _ in 0..60 {
+            dirty.mark_edge(EdgeIndex::new(0), EdgeDirty::GEOMETRY | EdgeDirty::SPATIAL);
+            dirty.mark_edge(EdgeIndex::new(1), EdgeDirty::STYLE);
+            dirty.mark_edge(EdgeIndex::new(2), EdgeDirty::SPATIAL);
+        }
+
+        assert_eq!(
+            dirty.edge_spatial_updates(),
+            &[EdgeIndex::new(0), EdgeIndex::new(2)]
+        );
+        assert!(!dirty.is_clean());
+
+        dirty.clear_spatial_updates();
+        assert!(dirty.edge_spatial_updates().is_empty());
+        assert!(
+            !dirty
+                .edge_flags(EdgeIndex::new(0))
+                .contains(EdgeDirty::SPATIAL)
+        );
+    }
+
+    /// The reason [`DirtyState::clear_edge`] wipes `SPATIAL` where its node
+    /// twin preserves it: a route rebuild must not make the edge unqueueable.
+    #[test]
+    fn rebuilding_a_route_leaves_the_edge_able_to_be_queued_again() {
+        let mut dirty = state(0, 1);
+        let edge = EdgeIndex::new(0);
+        dirty.mark_edge(edge, EdgeDirty::GEOMETRY | EdgeDirty::SPATIAL);
+
+        let queue = dirty.take_edge_queue();
+        assert_eq!(queue, vec![edge]);
+        dirty.clear_edge(edge);
+        dirty.restore_edge_queue(queue);
+
+        dirty.mark_edge(edge, EdgeDirty::GEOMETRY | EdgeDirty::SPATIAL);
+        assert_eq!(
+            dirty.dirty_edges(),
+            &[edge],
+            "the edge stopped being queued"
+        );
+        // The spatial queue now holds it twice, which is the deliberate trade:
+        // a duplicate costs one index update that reports no change.
+        assert_eq!(dirty.edge_spatial_updates(), &[edge, edge]);
     }
 
     #[test]

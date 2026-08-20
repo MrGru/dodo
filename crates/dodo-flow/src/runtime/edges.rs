@@ -99,6 +99,10 @@ impl EdgeFlags {
     pub const NONE: EdgeFlags = EdgeFlags(0);
     pub const HIDDEN: EdgeFlags = EdgeFlags(1 << 0);
     pub const SELECTED: EdgeFlags = EdgeFlags(1 << 1);
+    /// Deleted, as a tombstone — the same decision and the same reasons as
+    /// [`NodeFlags::REMOVED`](crate::runtime::NodeFlags::REMOVED), whose module
+    /// doc records them. §30's *disconnect* is this flag on an edge.
+    pub const REMOVED: EdgeFlags = EdgeFlags(1 << 2);
 
     pub const fn contains(self, other: EdgeFlags) -> bool {
         self.0 & other.0 == other.0
@@ -262,6 +266,21 @@ impl EdgeStore {
         self.flags[edge.index()].contains(EdgeFlags::SELECTED)
     }
 
+    /// Whether this edge has been deleted. See [`EdgeFlags::REMOVED`].
+    pub fn is_removed(&self, edge: EdgeIndex) -> bool {
+        self.flags[edge.index()].contains(EdgeFlags::REMOVED)
+    }
+
+    /// Whether this slot holds an edge that is really there.
+    pub fn is_live(&self, edge: EdgeIndex) -> bool {
+        self.contains(edge) && !self.is_removed(edge)
+    }
+
+    /// Every edge that is really there, in insertion order.
+    pub fn live_indices(&self) -> impl Iterator<Item = EdgeIndex> + '_ {
+        self.indices().filter(|edge| !self.is_removed(*edge))
+    }
+
     pub fn id(&self, edge: EdgeIndex) -> ElementId {
         self.ids[edge.index()]
     }
@@ -305,6 +324,10 @@ impl EdgeStore {
 
     pub fn set_style(&mut self, edge: EdgeIndex, style: ElementStyle) {
         self.styles[edge.index()] = style;
+    }
+
+    pub fn set_label(&mut self, edge: EdgeIndex, label: Option<String>) {
+        self.labels[edge.index()] = label;
     }
 
     pub fn style_mut(&mut self, edge: EdgeIndex) -> &mut ElementStyle {

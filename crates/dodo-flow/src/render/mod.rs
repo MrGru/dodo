@@ -11,10 +11,15 @@
 //! The frame is built in three steps and nothing skips them:
 //!
 //! ```text
-//! grid::generate ─┐
-//! shapes::…       ├─> PaintPlan ─ enforce_vertex_ceiling ─> paint_into(WindowPainter)
-//! selection rect ─┘   (quads | paths | text)                all quads, all paths, all text
+//! VisibleSet ─> scene::plan_scene ─┐
+//! selection rect / preview ────────┴─> PaintPlan ─ enforce_vertex_ceiling ─>
+//!                                      (quads | paths | text)   paint_into(WindowPainter)
 //! ```
+//!
+//! [`scene`] is the step in front of all of it: it takes the
+//! [`VisibleSet`](crate::spatial::VisibleSet) and turns *only that* into
+//! primitives. It moved out of `views::flow` in Phase 4 precisely so the
+//! "no offscreen path reaches the painter" property could be a unit test.
 //!
 //! [`edges`] joins them for a graph edge: it is the one place a world-space
 //! [`EdgeRoute`](crate::geometry::EdgeRoute) becomes screen-space primitives,
@@ -24,14 +29,34 @@
 //! order batched by primitive kind, and painted-vertex accounting. Read its doc
 //! before adding a painter.
 
+pub mod cache;
 pub mod edges;
 pub mod grid;
+pub mod lod;
 pub mod painter;
 pub mod plan;
+pub mod registry;
+pub mod scene;
 pub mod shapes;
+pub mod sketch;
+pub mod snapshot;
 
+pub use cache::{
+    CacheStats, CachedGeometry, GeometryCache, GeometryKey, GeometryPart, ScreenAnchor,
+    ShapedLineCache, TextKey,
+};
 pub use edges::{EdgePaint, plan_connection_preview, plan_edge};
 pub use grid::{GridLevel, GridLimits, GridSettings, GridStyle};
+pub use lod::{EdgeDetail, HandleDetail, LodPlan, SceneLoad};
 pub use painter::WindowPainter;
 pub use plan::{PaintPlan, PaintStats, PathPaint, PathPrimitive, PrimitiveSink, QuadPrimitive};
+pub use registry::{
+    AccentRole, GenericKind, NodeGlyph, NodeRef, NodeRenderer, NodeRendererRegistry, NodeVisual,
+};
+pub use scene::{SceneInk, SceneOptions, SceneStats, plan_scene};
 pub use shapes::Outline;
+pub use sketch::{SketchRng, element_seed, perturb};
+pub use snapshot::{
+    CanvasNode, InteractiveHandle, PlannedEdge, RenderSnapshot, RichNode, SnapshotCounts,
+    SnapshotOverlay,
+};

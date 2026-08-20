@@ -55,6 +55,46 @@
 //! [`current`] is the single place that reads `cfg!`.
 //! Every constant below states what it was measured on and when. Where a
 //! number is derived rather than measured, it says so.
+//!
+//! # The one measurement this crate has failed to take, twice
+//!
+//! Phase 1 wrote a `predicted_paint_micros(paths, vertices)` helper over
+//! [`RenderBudgets::nanos_per_path`] and
+//! [`RenderBudgets::nanos_per_vertex`], fitted over the degraded region of
+//! Phase 0's sweep, and asked a later phase to re-fit it against a healthy
+//! frame. It over-predicted a frame measured at 5.0 ms as ~13 ms — 2.6× — and
+//! it was documented as an upper bound rather than tuned, because nothing
+//! could measure it: those coefficients describe `Window::paint_path`, and
+//! Phase 4's harness is headless.
+//!
+//! **Phase 5 had a window and still could not take it.** `paint_path` is only
+//! reached from inside a real paint pass, so the measurement needs a window
+//! that keeps presenting frames — and an unattended GPUI window on macOS
+//! presents the first frame and then stops, because
+//! `request_animation_frame` depends on a display link the window server does
+//! not drive for an app nobody is looking at. Two runs of
+//! `examples/flow_paint_fit.rs` sat at 0 % CPU after config 1 of 10. It is the
+//! same wall Phase 0 hit posting synthetic input events, and the same answer:
+//! **a human has to run it once.**
+//!
+//! So the decision taken, rather than a third attempt:
+//!
+//! - **`predicted_paint_micros` is deleted.** It had exactly one caller — its
+//!   own test — and a composite cost model that has never been validated where
+//!   it is actually spent is worse than no model, because it invites a caller
+//!   to believe it.
+//! - **The two coefficients stay**, because they are separately load-bearing:
+//!   `nanos_per_path` is what
+//!   [`RenderBudgets::target_paths_per_frame`] is derived from and what makes
+//!   the hairball's 92 ms visible. They are honest as a per-unit tax; it was
+//!   the composite that was pretending.
+//! - **`examples/flow_paint_fit.rs` is committed**, with its sweep and its
+//!   least-squares fit ready, so the measurement is one command for whoever is
+//!   sitting in front of the machine:
+//!
+//!   ```sh
+//!   cargo run --release -p dodo-flow --example flow_paint_fit --locked
+//!   ```
 
 use dodo_paths::HostOs;
 
@@ -160,6 +200,30 @@ pub struct LodThresholds {
     /// Below this rendered height in screen pixels, a label is not drawn at
     /// all — it cannot be read, and shaping it is pure cost.
     pub min_readable_font_px: f32,
+    /// The font size a node label is nominally drawn at in **world** units, so
+    /// its rendered size is this times the zoom before quantisation. Here
+    /// rather than in the renderer because it is the input to the quantisation
+    /// above, and the pair only makes sense read together.
+    pub nominal_label_size: f32,
+    /// Below this rendered side in screen pixels, a node is a plain box: no
+    /// label, no border, no handles, whatever the zoom rung says.
+    ///
+    /// Independent of zoom on purpose — a 20-unit node at zoom 1 and a
+    /// 200-unit node at zoom 0.1 are the same legibility problem, and §15's
+    /// "merge/simplify visual details" is about what reaches the eye rather
+    /// than about the camera.
+    pub min_detailed_node_px: f32,
+    /// Below this rendered width in screen pixels, a selected node gets no
+    /// toolbar (§44). A toolbar over a six-pixel node is a toolbar over
+    /// nothing, and it would be wider than the thing it belongs to.
+    pub min_toolbar_node_px: f32,
+    /// Below this on-screen length in pixels, an edge is not drawn at all.
+    ///
+    /// A three-pixel edge is a smudge on a node's border, and it costs a whole
+    /// path — [`RenderBudgets::nanos_per_path`] of fixed CPU regardless of how
+    /// few vertices it has. This is the cheapest rung of §15's ladder and the
+    /// only one that costs literally nothing.
+    pub min_edge_screen_px: f32,
 }
 
 impl LodThresholds {
@@ -171,6 +235,15 @@ impl LodThresholds {
         curve_to_quad_zoom: 0.35,
         font_size_ladder: &[9.0, 11.0, 13.0, 16.0, 20.0, 28.0],
         min_readable_font_px: 6.0,
+        nominal_label_size: 13.0,
+        // Two node bodies' worth of border and a label's line height do not fit
+        // in less; below it the quad is the whole node.
+        min_detailed_node_px: 24.0,
+        // About three icon buttons and their padding.
+        min_toolbar_node_px: 96.0,
+        // Half a handle's diameter. Shorter than that and the edge is inside
+        // the dots it joins.
+        min_edge_screen_px: 4.0,
     };
 
     /// Snaps a rendered font size onto the ladder. Sizes above the ladder's top
@@ -243,6 +316,26 @@ pub struct RenderBudgets {
     /// reasons.
     pub target_path_vertices_per_frame: u32,
 
+    /// **The budget Phase 4's tables did not have, and the one a hairball
+    /// reaches first.**
+    ///
+    /// Vertices are not the only per-frame ceiling. `Window::paint_path`
+    /// consumes its argument, so a cached path is cloned into it, and the
+    /// vertex array is traversed four times per painted path per frame — a
+    /// *fixed* [`RenderBudgets::nanos_per_path`] whatever the path's length.
+    /// Phase 4's scattered scene put 61,104 edges genuinely in the viewport;
+    /// at 1.5 µs each that is **92 ms of CPU before a single vertex is
+    /// counted**, and it would still be 92 ms if every one of those edges were
+    /// a two-point line.
+    ///
+    /// So a level-of-detail ladder that only simplifies geometry does not bound
+    /// that frame, and [`crate::render::lod`] spends this budget alongside the
+    /// vertex one. **Derived, not measured**: half a 16.7 ms frame divided by
+    /// `nanos_per_path`, which is 5,566, rounded down to 5,000. The dense scene
+    /// paints 3,104 paths and holds its frame, which is the closest measured
+    /// point to it.
+    pub target_paths_per_frame: u32,
+
     /// Contiguous runs of paths per frame, which is a hard cost no CPU
     /// profiler shows.
     ///
@@ -283,6 +376,20 @@ pub struct RenderBudgets {
     /// not a caution, and this is it.
     pub geometry_cache_max_bytes: usize,
 
+    /// The most shaped labels the engine's own text cache holds.
+    ///
+    /// GPUI has a line-layout cache and it is **two frames deep** — current
+    /// frame plus previous, unused keys evicted — so a label that leaves the
+    /// viewport for a single frame is re-shaped on return, at ~7–11 µs against
+    /// ~1.7 µs to paint a cached one. Phase 0 measured 5,000 cached labels
+    /// holding 60 fps at 8.7 ms and 5,000 freshly shaped ones at 18 fps, which
+    /// is why [`crate::render::cache::ShapedLineCache`] exists at all.
+    ///
+    /// 4,096 is above any plausible visible label count — the dense scene shows
+    /// 1,584 nodes — and bounded, so a document with 100,000 labels holds the
+    /// visible ones rather than all of them.
+    pub max_shaped_lines: u32,
+
     /// How far the zoom may drift from the zoom a cached tessellation was built
     /// at before it is rebuilt, as a factor either way.
     ///
@@ -293,17 +400,28 @@ pub struct RenderBudgets {
     /// buys responsiveness during a live pinch without ever showing a polygon.
     pub retessellation_zoom_band: f32,
 
-    /// The fixed per-path CPU cost, in nanoseconds: `paint_path` consumes the
-    /// path, so a cached one must be cloned into it, and the vertex array is
-    /// traversed four times per painted path per frame.
+    /// **The fixed per-path CPU cost, in nanoseconds** — the tax a path pays
+    /// for existing, whatever its length.
     ///
-    /// Fitted over the degraded region of the sweep — see
-    /// [`RenderBudgets::predicted_paint_micros`] for what that means and why
-    /// the pair is an upper bound rather than a prediction.
+    /// `Window::paint_path` consumes its argument, so a cached path is cloned
+    /// into it, and the vertex array is traversed four times per painted path
+    /// per frame. Phase 0 measured 1.29 µs to clone a 306-vertex path and
+    /// Phase 0 §3 correction 13 records that there is no borrow-based
+    /// alternative without patching gpui.
+    ///
+    /// This is the number [`RenderBudgets::target_paths_per_frame`] is derived
+    /// from, and the one that makes the path count a budget in its own right:
+    /// 61,104 hairline edges is 92 ms of frame before a single vertex is
+    /// counted. See [`crate::render::lod`].
+    ///
+    /// Fitted over the **degraded** region of Phase 0's sweep, where frame time
+    /// is no longer vsync-quantised, so it over-states the healthy region — the
+    /// direction a guard has to err in. See the module doc for why a windowed
+    /// re-fit is still outstanding and what is committed to do it.
     pub nanos_per_path: u32,
 
-    /// The marginal CPU cost per painted vertex, in nanoseconds. Same caveat as
-    /// [`RenderBudgets::nanos_per_path`].
+    /// The marginal CPU cost per painted vertex, in nanoseconds. Same
+    /// provenance and same caveat as [`RenderBudgets::nanos_per_path`].
     pub nanos_per_vertex: u32,
 
     pub lod: LodThresholds,
@@ -319,32 +437,6 @@ impl RenderBudgets {
     /// Whether a frame of this size is expected to hold 60 fps.
     pub fn within_frame_target(&self, vertices: u32) -> bool {
         vertices <= self.target_path_vertices_per_frame
-    }
-
-    /// A **conservative upper bound** on the CPU cost of painting `paths` paths
-    /// totalling `vertices` vertices, in microseconds.
-    ///
-    /// One place for the cost model, so a benchmark harness and the renderer's
-    /// own degradation logic cannot disagree — but read what it is before
-    /// trusting a number out of it. The two coefficients come from a
-    /// decomposition sweep over path count and vertex count, and that fit was
-    /// taken over the
-    /// *degraded* region, where the frame time is no longer vsync-quantised.
-    /// Applied to the healthy 60 fps frame recorded on
-    /// [`target_path_vertices_per_frame`](RenderBudgets::target_path_vertices_per_frame)
-    /// — 1,800 paths and 328,836 vertices, measured at 5.0 ms — it predicts
-    /// ~13 ms, about **2.6× the measurement**.
-    ///
-    /// That gap is real and it is documented here rather than tuned away,
-    /// because nothing in this slice can measure the healthy region again and a
-    /// fitted-to-nothing constant would be worse than an honest over-estimate.
-    /// Use it as a ceiling — "this frame will not cost more than" — never as a
-    /// prediction, and re-fit it when the benchmark harness produces its own
-    /// numbers.
-    pub fn predicted_paint_micros(&self, paths: u32, vertices: u32) -> f32 {
-        let nanos = paths as f32 * self.nanos_per_path as f32
-            + vertices as f32 * self.nanos_per_vertex as f32;
-        nanos / 1_000.0
     }
 
     /// How many cached vertices fit in the geometry cache's byte bound.
@@ -380,6 +472,10 @@ const METAL: RenderBudgets = RenderBudgets {
     // budget that sits between them, and halving the flattening tolerance
     // quality roughly doubles it.
     target_path_vertices_per_frame: 350_000,
+    // Derived rather than measured — see the field's doc. Half a 16.7 ms frame
+    // at `nanos_per_path` is 5,566; 5,000 is that rounded down, and the dense
+    // scene's 3,104 paths are the nearest measured point below it.
+    target_paths_per_frame: 5_000,
     // Measured degradation sets in between 130 and 190 batches (128 holds 60
     // fps, 192 drops to 30); 64 is where the cost is still negligible, and is
     // the number the culling phase asserts against.
@@ -387,6 +483,7 @@ const METAL: RenderBudgets = RenderBudgets {
     target_quads_per_frame: 20_000,
     max_rich_elements: 1_600,
     geometry_cache_max_bytes: 64 * 1024 * 1024,
+    max_shaped_lines: 4_096,
     retessellation_zoom_band: 2.0,
     nanos_per_path: 1_500,
     nanos_per_vertex: 32,
@@ -410,10 +507,12 @@ const fn unmeasured(backend: RenderBackend) -> RenderBudgets {
         hard_path_vertex_ceiling: METAL.hard_path_vertex_ceiling / 2,
         safe_path_vertex_ceiling: METAL.safe_path_vertex_ceiling / 2,
         target_path_vertices_per_frame: METAL.target_path_vertices_per_frame / 2,
+        target_paths_per_frame: METAL.target_paths_per_frame / 2,
         max_path_batches_per_frame: METAL.max_path_batches_per_frame / 2,
         target_quads_per_frame: METAL.target_quads_per_frame / 2,
         max_rich_elements: METAL.max_rich_elements / 2,
         geometry_cache_max_bytes: METAL.geometry_cache_max_bytes / 2,
+        max_shaped_lines: METAL.max_shaped_lines / 2,
         retessellation_zoom_band: METAL.retessellation_zoom_band,
         nanos_per_path: METAL.nanos_per_path,
         nanos_per_vertex: METAL.nanos_per_vertex,
@@ -586,29 +685,6 @@ mod tests {
         assert!(
             !b.exceeds_safe_vertices(b.target_path_vertices_per_frame + 1),
             "over the smooth target is a slow frame, not a black one"
-        );
-    }
-
-    #[test]
-    fn the_cost_model_is_an_upper_bound_on_the_measured_realistic_frame() {
-        let b = for_host(HostOs::MacOs);
-
-        // The realistic frame recorded on `METAL`: 600 nodes, 1,800 paths,
-        // 328,836 path vertices, **measured at 5.0 ms** of paint CPU and
-        // holding 60 fps. The model is fitted to the degraded region and
-        // overestimates a healthy frame — this pins how much, so a re-fit
-        // against new measurements is a visible change rather than a silent
-        // one.
-        const MEASURED_MICROS: f32 = 5_000.0;
-        let micros = b.predicted_paint_micros(1_800, 328_836);
-
-        assert!(
-            micros > MEASURED_MICROS,
-            "the model must never under-predict a measured frame: {micros} us"
-        );
-        assert!(
-            micros < MEASURED_MICROS * 3.0,
-            "the model overestimates by more than 3x ({micros} us); re-fit it"
         );
     }
 
