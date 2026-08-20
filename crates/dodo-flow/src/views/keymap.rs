@@ -29,20 +29,35 @@
 //! JSON, so buying a JSON schema here would be paying for a road nothing
 //! drives on.
 //!
-//! # The context, and why it is not optional
+//! # The scope, and why it is a predicate rather than one context
 //!
-//! Every binding is scoped to [`FlowView::KEY_CONTEXT`](super::flow::KEY_CONTEXT),
-//! which the canvas sets on its focused root. Without it, `cmd-z` inside the
-//! canvas would be `cmd-z` inside dodo's JSON formatter as well — the same
-//! scoping every other dodo tool uses, and the reason
-//! `crates/dodo-database/src/lib.rs` binds `cmd-c` the way it does.
+//! Every binding is registered under
+//! [`BINDING_SCOPE`](super::flow::BINDING_SCOPE) — `FlowCanvas && !FlowTyping`
+//! — and the two halves answer two different failures.
+//!
+//! [`KEY_CONTEXT`](super::flow::KEY_CONTEXT) is the canvas's own, set on its
+//! focused root. Without it, `cmd-z` inside the canvas would be `cmd-z` inside
+//! dodo's JSON formatter as well — the same scoping every other dodo tool
+//! uses, and the reason `crates/dodo-database/src/lib.rs` binds `cmd-c` the way
+//! it does.
 //!
 //! **The tool letters make that scoping load-bearing rather than tidy.** `r`
 //! and `l` are bare letters; bound with no context they would be swallowed
 //! before every text field in dodo — `gpui-component-recipes` records that a
 //! context-less binding is treated as the *deepest* match and therefore wins
-//! over an input's own. Scoped to the canvas, and with the canvas focused only
-//! while it is being used, they reach nothing else.
+//! over an input's own.
+//!
+//! **`!FlowTyping` is the half that was missing, and its absence made §9's
+//! caret unusable.** Scoping to the canvas was read as "they reach nothing
+//! else", which is true of every text field in dodo *except the canvas's own*:
+//! the caret and Phase 11's hex prompt are descendants of the root that carries
+//! `FlowCanvas`, so it is on the dispatch path while one of them is focused,
+//! and `gpui-component`'s `Input` context binds no bare letter to outrank it.
+//! Eleven of the letters a person types were consumed as canvas actions, and
+//! each of those actions takes the focus back to the canvas — so the *first* of
+//! them ended the edit. [`TYPING_CONTEXT`](super::flow::TYPING_CONTEXT) carries
+//! the diagnosis; `no_canvas_binding_survives_a_text_field_inside_the_canvas`
+//! is it as a test, driven through GPUI's own matcher.
 //!
 //! # When to call it
 //!
@@ -53,7 +68,7 @@
 
 use gpui::{Action, App, KeyBinding, actions};
 
-use crate::{commands::keys, interaction::CanvasTool, views::flow::KEY_CONTEXT};
+use crate::{commands::keys, interaction::CanvasTool, views::flow::BINDING_SCOPE};
 
 actions!(
     flow,
@@ -99,17 +114,17 @@ pub struct SelectTool {
 /// it would prove nothing if it built them differently.
 fn binding(row: keys::Binding) -> KeyBinding {
     match row.action {
-        keys::EditAction::Undo => KeyBinding::new(row.keystroke, Undo, Some(KEY_CONTEXT)),
-        keys::EditAction::Redo => KeyBinding::new(row.keystroke, Redo, Some(KEY_CONTEXT)),
-        keys::EditAction::Delete => KeyBinding::new(row.keystroke, Delete, Some(KEY_CONTEXT)),
+        keys::EditAction::Undo => KeyBinding::new(row.keystroke, Undo, Some(BINDING_SCOPE)),
+        keys::EditAction::Redo => KeyBinding::new(row.keystroke, Redo, Some(BINDING_SCOPE)),
+        keys::EditAction::Delete => KeyBinding::new(row.keystroke, Delete, Some(BINDING_SCOPE)),
         keys::EditAction::ToggleToolLock => {
-            KeyBinding::new(row.keystroke, ToggleToolLock, Some(KEY_CONTEXT))
+            KeyBinding::new(row.keystroke, ToggleToolLock, Some(BINDING_SCOPE))
         }
         keys::EditAction::InsertImage => {
-            KeyBinding::new(row.keystroke, InsertImage, Some(KEY_CONTEXT))
+            KeyBinding::new(row.keystroke, InsertImage, Some(BINDING_SCOPE))
         }
         keys::EditAction::Tool(tool) => {
-            KeyBinding::new(row.keystroke, SelectTool { tool }, Some(KEY_CONTEXT))
+            KeyBinding::new(row.keystroke, SelectTool { tool }, Some(BINDING_SCOPE))
         }
     }
 }
@@ -122,8 +137,12 @@ pub fn init(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::binding;
-    use crate::commands::keys;
+    use crate::{
+        commands::keys,
+        views::flow::{KEY_CONTEXT, TYPING_CONTEXT},
+    };
     use dodo_paths::HostOs;
+    use gpui::KeyContext;
 
     /// **Every host's bindings, actually built.**
     ///
@@ -137,6 +156,54 @@ mod tests {
         for host in [HostOs::MacOs, HostOs::Windows, HostOs::Unix] {
             for row in keys::for_host(host) {
                 let _ = binding(row);
+            }
+        }
+    }
+
+    /// **The canvas's bindings must be dead while one of the canvas's own text
+    /// fields has the focus** — and alive the rest of the time.
+    ///
+    /// This is the whole of §9's "I cannot type into a node", asked of GPUI's
+    /// own matcher rather than of a window. A caret opened over a node is a
+    /// *descendant* of the root carrying `FlowCanvas`, so the stack a keystroke
+    /// is matched against is `FlowCanvas > FlowTyping > Input`. With the
+    /// bindings scoped to `FlowCanvas` alone that stack matched — `r` fired
+    /// `SelectTool`, which focuses the canvas, and the edit was over before the
+    /// second letter.
+    ///
+    /// Both directions are asserted because either one alone is passed by a
+    /// mistake: a predicate that matches nothing satisfies the second
+    /// assertion, and the bug satisfied the first.
+    #[test]
+    fn no_canvas_binding_survives_a_text_field_inside_the_canvas() {
+        let canvas = KeyContext::parse(KEY_CONTEXT).expect("the canvas context parses");
+        let typing = KeyContext::parse(TYPING_CONTEXT).expect("the typing context parses");
+        // `gpui-component`'s own context for an `InputState`, which is what
+        // actually sits at the bottom of the stack while somebody types.
+        let input = KeyContext::parse("Input").expect("the input context parses");
+
+        for host in [HostOs::MacOs, HostOs::Windows, HostOs::Unix] {
+            for row in keys::for_host(host) {
+                let built = binding(row);
+                let predicate = built
+                    .predicate()
+                    .expect("every canvas binding is scoped to a context");
+
+                assert!(
+                    predicate.depth_of(std::slice::from_ref(&canvas)).is_some(),
+                    "{:?} ({}) is dead on the focused canvas",
+                    row.action,
+                    row.keystroke
+                );
+                assert!(
+                    predicate
+                        .depth_of(&[canvas.clone(), typing.clone(), input.clone()])
+                        .is_none(),
+                    "{:?} ({}) is still live while a text field inside the canvas \
+                     has the focus, so that keystroke never reaches the text",
+                    row.action,
+                    row.keystroke
+                );
             }
         }
     }

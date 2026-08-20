@@ -54,6 +54,39 @@
 //! this hitbox regardless of where the pointer actually is, and auto-releases
 //! on mouse up. That is what lets a pan continue off the edge of the pane.
 //!
+//! ## Every overlay the canvas draws over itself has to `occlude()`
+//!
+//! **This is the second half of "there is no implicit hit testing", and leaving
+//! it out is silent.** The canvas's listeners gate on `hitbox.is_hovered`, and
+//! a hitbox is "hovered" whenever it is in the frame's hit test — which holds
+//! every hitbox under the pointer from the front backwards, stopping only at
+//! one whose behaviour is `HitboxBehavior::BlockMouse`. An overlay built with a
+//! plain `div()` gets `HitboxBehavior::Normal`, so the canvas's hitbox stays in
+//! the set and **one press is delivered to the overlay and to the canvas
+//! both** — the overlay first, because bubble-phase listeners run front to
+//! back.
+//!
+//! It cost two of the three bugs the captain found by using the canvas:
+//!
+//! - Pressing a tool button armed the tool *and* was read by the canvas as the
+//!   press that starts a creation. The release, under the drag threshold, made
+//!   it a click, so picking Rectangle dropped a default-sized rectangle under
+//!   the palette. `views::palette` carries it.
+//! - Pressing a property control applied the edit *and* was read by the canvas
+//!   as a press on empty canvas, which begins a rubber band whose release
+//!   replaces the selection with nothing. The panel is drawn from the
+//!   selection, so it disappeared. `views::properties` carries it.
+//!
+//! Neither could have been noticed by a test in this crate: it is a fact about
+//! how GPUI composes two hitboxes, and every test here is windowless. What is
+//! testable is that the overlays *declare* it, which is
+//! [`tests::every_overlay_the_canvas_draws_over_itself_blocks_the_press`].
+//!
+//! The rule, therefore: **anything this view stacks over the canvas — the
+//! palette, the property panel, the caret — is `occlude()`d where it is
+//! built.** The rich node layer deliberately is not: a press on a node is
+//! supposed to reach the canvas, which is what resolves it to a target.
+//!
 //! **`DODO_FLOW_TRACE_INPUT=1` prints every event this view receives.** It is
 //! here because Phase 0 could not trigger a single real input event — macOS
 //! discards synthetic ones from an untrusted process — so everything known
@@ -182,6 +215,42 @@ fn read_image_bytes(path: &std::path::Path) -> Option<(ImageFormat, Vec<u8>)> {
 /// warning and no wrong behaviour, only an absence, so it survives every review
 /// that is not specifically looking for it.
 pub const KEY_CONTEXT: &str = "FlowCanvas";
+
+/// **The context every text field the canvas opens establishes over itself**,
+/// and the reason [`BINDING_SCOPE`] is a predicate rather than
+/// [`KEY_CONTEXT`] alone.
+///
+/// §45's tool letters are bare characters — `r`, `o`, `t`, `a`, `l`, `n`, `d`,
+/// `v`, `h`, plus `q` and `i` — and [`views::keymap`](crate::views::keymap)'s
+/// doc already records that a binding with no context is treated as the
+/// *deepest* match and would be swallowed before every text field in dodo. It
+/// concluded that scoping them to the canvas meant "they reach nothing else",
+/// **and that conclusion was wrong for the canvas's own fields**: §9's caret
+/// and Phase 11's hex prompt are *descendants* of the root that carries
+/// `FlowCanvas`, so `FlowCanvas` is on the dispatch path while one of them has
+/// the focus. GPUI matches a binding against the whole context stack, and
+/// `gpui-component`'s `Input` context binds no bare letter — so the canvas's
+/// binding was the only match, the keystroke was consumed as an action, and
+/// every one of those actions calls `focus_handle.focus(…)` and takes the
+/// caret's focus away for good.
+///
+/// The symptom is that text cannot be typed into a node, and it looks exactly
+/// like a focus bug caused by repainting. It is not: the field is focused, it
+/// stays focused across any number of repaints, and the *first bound letter* is
+/// what ends it. A word made only of unbound letters — "bus", "sum" — types
+/// perfectly.
+pub const TYPING_CONTEXT: &str = "FlowTyping";
+
+/// **The scope every canvas binding is registered under**: the canvas's own
+/// context, and not while one of its text fields is being typed into.
+///
+/// Written out rather than assembled from the two constants above because
+/// `KeyBinding::new` takes a parsed predicate and there is nothing to assemble
+/// it with in a `const`; [`views::keymap`](crate::views::keymap)'s
+/// `no_canvas_binding_survives_a_text_field_inside_the_canvas` is what holds
+/// the three in step, by evaluating the real predicate against the real
+/// context stacks through GPUI's own matcher.
+pub const BINDING_SCOPE: &str = "FlowCanvas && !FlowTyping";
 
 /// The key that turns a left-drag into a pan, alongside the middle button.
 ///
@@ -2430,6 +2499,17 @@ impl FlowView {
 
         Some(
             div()
+                // **The context that lets a letter be a letter** — see
+                // [`TYPING_CONTEXT`]. Without it every bare-letter binding the
+                // canvas registers is on this field's dispatch path and wins,
+                // because this element is a descendant of the root that
+                // carries `KEY_CONTEXT`.
+                .key_context(TYPING_CONTEXT)
+                // **Chrome, so the press that places the caret is not also a
+                // press on the canvas** — see `chrome`. Without it a click
+                // inside the field reaches `EditingText + PointerDown`, which
+                // commits and closes the editor a user was aiming into.
+                .occlude()
                 .absolute()
                 .left(px(screen.origin.x))
                 .top(px(screen.origin.y))
@@ -2681,5 +2761,101 @@ mod tests {
         assert!((round_tripped.g - original.g).abs() < 1e-3);
         assert!((round_tripped.b - original.b).abs() < 1e-3);
         assert!((round_tripped.a - original.a).abs() < 1e-3);
+    }
+
+    /// Every overlay this view stacks over the canvas, as `(file, source,
+    /// builder)` — the function whose *outermost* element is the overlay.
+    ///
+    /// Listed by hand and read with `include_str!` for the same reason
+    /// `lib.rs`'s `PURE_FILES` is: compile-time, so an overlay added and
+    /// forgotten here is a visible omission in a diff.
+    const OVERLAY_BUILDERS: &[(&str, &str, &str)] = &[
+        (
+            "views/palette.rs",
+            include_str!("palette.rs"),
+            "pub fn palette(",
+        ),
+        (
+            "views/properties.rs",
+            include_str!("properties.rs"),
+            "pub fn panel(",
+        ),
+        (
+            "views/flow.rs",
+            include_str!("flow.rs"),
+            "fn text_editor_element(",
+        ),
+    ];
+
+    /// The body of `needle`'s function: from its signature to the first line
+    /// that closes it at column zero.
+    fn body_of<'a>(source: &'a str, needle: &str) -> &'a str {
+        let start = source
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} is not in this file any more"));
+        let rest = &source[start..];
+        let end = rest.find("\n}\n").unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    /// **Every overlay the canvas draws over itself must block the press.**
+    ///
+    /// The mechanism is in this file's module doc: GPUI's hit test keeps every
+    /// hitbox under the pointer, front to back, until one of them blocks — so
+    /// an overlay built from a plain `div()` lets the press through to the
+    /// canvas underneath, which reads it as a gesture on the document. That
+    /// cost a palette press a spurious rectangle and a panel press its own
+    /// selection.
+    ///
+    /// **This is a source assertion, and that is deliberate rather than lazy.**
+    /// Whether two hitboxes occlude is a fact about a painted frame; every test
+    /// in this crate is windowless, and the crate doc explains why that is
+    /// worth keeping. What can be checked without a window is whether each
+    /// overlay still *declares* the blocking behaviour, which is exactly the
+    /// line that was missing — the same trade `lib.rs`'s
+    /// `the_pure_layers_name_no_ui_framework` and dodo's own `i18n_lint` make.
+    #[test]
+    fn every_overlay_the_canvas_draws_over_itself_blocks_the_press() {
+        for (path, source, builder) in OVERLAY_BUILDERS {
+            assert!(
+                body_of(source, builder).contains(".occlude()"),
+                "{path}'s `{builder}` builds an overlay over the canvas without \
+                 `.occlude()`, so one press on it is also delivered to the canvas \
+                 underneath — see this module's doc"
+            );
+        }
+    }
+
+    /// **Every text field the canvas opens must establish [`TYPING_CONTEXT`].**
+    ///
+    /// The other half of `views::keymap`'s
+    /// `no_canvas_binding_survives_a_text_field_inside_the_canvas`: that test
+    /// proves the bindings are dead *given* the context, and this one proves
+    /// the fields still declare it. Neither is worth much alone — with the
+    /// predicate and no context the letters are eaten again, and with the
+    /// context and no predicate nothing changes at all.
+    #[test]
+    fn every_text_field_inside_the_canvas_establishes_the_typing_context() {
+        let fields: &[(&str, &str, &str)] = &[
+            (
+                "views/flow.rs",
+                include_str!("flow.rs"),
+                "fn text_editor_element(",
+            ),
+            (
+                "views/properties.rs",
+                include_str!("properties.rs"),
+                "fn prompt_row(",
+            ),
+        ];
+
+        for (path, source, builder) in fields {
+            assert!(
+                body_of(source, builder).contains("key_context(TYPING_CONTEXT)"),
+                "{path}'s `{builder}` opens a text field inside the canvas without \
+                 `key_context(TYPING_CONTEXT)`, so every bare-letter binding the \
+                 canvas registers is still live over it — see `TYPING_CONTEXT`"
+            );
+        }
     }
 }

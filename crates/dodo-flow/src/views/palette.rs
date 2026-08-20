@@ -175,8 +175,19 @@ pub struct PaletteState {
 /// handler is handed an `&mut App` — `gpui-component-recipes` records the same
 /// constraint for `Button::on_click`, and the launcher's style toggle already
 /// captures its entity for it.
+///
+/// **[`occlude`](gpui::InteractiveElement::occlude) is the load-bearing line
+/// here**, and its absence was the whole of "picking a tool draws a shape
+/// immediately". See [`views::flow`](crate::views::flow)'s module doc for the
+/// mechanism; the short version is that the canvas registers its listeners on
+/// the *window* and gates them on its own hitbox, a `HitboxBehavior::Normal`
+/// overlay does not remove that hitbox from the hit test, and so one press on a
+/// tool button was delivered twice — once here, arming the tool, and once to
+/// the canvas underneath, where the freshly armed tool read it as the start of
+/// a creation.
 pub fn palette(view: Entity<FlowView>, state: PaletteState, cx: &App) -> impl IntoElement {
     div()
+        .occlude()
         .flex()
         .items_center()
         .gap(px(2.0))
@@ -218,10 +229,10 @@ fn tool_button(
                 .action(&SelectTool { tool }, Some(KEY_CONTEXT))
                 .build(window, cx)
         })
-        // A mouse-down rather than a click: the canvas's own listeners are
-        // registered on the whole window and gated on its hitbox, so a press
-        // that reaches this element must not also be read as a press on the
-        // canvas underneath it.
+        // A mouse-down rather than a click, so the tool is armed before the
+        // press it was picked for can matter. What stops that same press from
+        // *also* reaching the canvas is the `occlude()` on the strip — a
+        // comment here once claimed the mouse-down did it, and it does not.
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             view.update(cx, |this, cx| this.set_tool(tool, window, cx));
         })

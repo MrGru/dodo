@@ -75,7 +75,7 @@ use crate::{
         shapes::{self, Outline},
         sketch,
     },
-    views::{FlowView, palette},
+    views::{FlowView, flow::TYPING_CONTEXT, palette},
 };
 
 /// One control button's side, in screen pixels. Wider than the palette's,
@@ -189,6 +189,16 @@ impl PromptKind {
 ///
 /// Takes the view entity rather than a `Context<FlowView>` for the same reason
 /// the palette does: a click handler is handed an `&mut App`.
+///
+/// **[`occlude`](gpui::InteractiveElement::occlude) is what keeps the panel
+/// open when it is used.** Without it every press on a control was delivered
+/// twice — once here, applying the edit, and once to the canvas underneath,
+/// where it landed on empty canvas, started a rubber band and committed an
+/// empty replacing selection on the release. The selection is what the panel is
+/// drawn *from*, so the panel vanished on the first press: the edit had already
+/// been applied, which is why it looked like the panel closing rather than like
+/// the press going somewhere else. See [`views::flow`](crate::views::flow)'s
+/// module doc for the mechanism.
 pub fn panel(
     view: Entity<FlowView>,
     state: &PanelState,
@@ -203,6 +213,7 @@ pub fn panel(
         .collect();
 
     div()
+        .occlude()
         .flex()
         .flex_col()
         .gap(px(4.0))
@@ -230,8 +241,16 @@ pub fn panel(
 /// A card of its own below the panel rather than a row inside it: the panel
 /// scrolls, and an editor that scrolled out from under the cursor while
 /// somebody was typing into it would be its own bug report.
+///
+/// **[`TYPING_CONTEXT`] is what makes it typable at all.** A hex code is
+/// `#aabbcc` and a link is a sentence of letters; without this the canvas's
+/// bare-letter bindings — which are on the dispatch path, because this element
+/// is a descendant of the canvas's root — would consume `a`, `d`, `o`, `l`, `n`
+/// and the rest as tool activations and take the focus away on the first one.
+/// See [`TYPING_CONTEXT`]'s own doc for the whole diagnosis.
 fn prompt_row(kind: PromptKind, input: &Entity<InputState>, cx: &App) -> impl IntoElement {
     div()
+        .key_context(TYPING_CONTEXT)
         .w(px(PANEL_PIXELS))
         .p(px(6.0))
         .rounded(cx.theme().radius)
@@ -895,9 +914,8 @@ fn button(
             Tooltip::new(text).build(window, cx)
         })
         // A mouse-down rather than a click, for the reason `views::palette`
-        // gives: the canvas's own listeners are registered on the whole window
-        // and gated on its hitbox, so a press that reaches this element must
-        // not also be read as a press on the canvas underneath it.
+        // gives. What stops the press also reaching the canvas is the
+        // `occlude()` on the panel — see `panel`.
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             if !live {
                 return;
