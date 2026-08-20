@@ -28,9 +28,10 @@
 //! which turns out not to be Vietnamese can be handed back exactly as it was
 //! entered — `where` rather than `ưhere`. See
 //! [`spell_check`](super::VietnameseConfig::spell_check) for when that applies
-//! and [`Syllable::raw_is_trustworthy`] for the one case where it does not.
-//! Nothing else reads it, it never leaves the syllable, and it dies with the
-//! syllable at the next word boundary.
+//! and [`Syllable::raw_is_trustworthy`] for the cases where it does not. A
+//! trustworthy impossible run can be restored immediately; otherwise raw input
+//! is only the commit fallback. It never leaves the syllable and dies at the
+//! next word boundary.
 
 use super::rules;
 use super::tone::{self, TonePlacement};
@@ -158,6 +159,22 @@ pub enum MarkOutcome {
     NoTarget,
 }
 
+/// Provenance for one horn command that marked the `uo` pair.
+///
+/// A provisional pair displays open `uơ` until later nucleus/coda context
+/// resolves it to `ươ`. A stable pair was already unambiguous when its command
+/// arrived. Both retain the two targets so repeating that one command can undo
+/// both marks rather than leaving half of it behind.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum InterpretationState {
+    Stable,
+    HornPair {
+        first: usize,
+        second: usize,
+        provisional: bool,
+    },
+}
+
 /// The syllable currently being composed.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Syllable {
@@ -165,6 +182,7 @@ pub struct Syllable {
     tone: Tone,
     raw: String,
     raw_trusted: bool,
+    interpretation: InterpretationState,
 }
 
 impl Default for Syllable {
@@ -174,6 +192,7 @@ impl Default for Syllable {
             tone: Tone::Level,
             raw: String::new(),
             raw_trusted: true,
+            interpretation: InterpretationState::Stable,
         }
     }
 }
@@ -251,6 +270,25 @@ impl Syllable {
         );
     }
 
+    /// Replace the semantic reading with the trustworthy physical letters.
+    ///
+    /// Used once a Telex run becomes structurally impossible. Punctuation and
+    /// a raw record abandoned by Backspace/undo are refused rather than
+    /// guessed.
+    pub fn restore_raw_letters(&mut self) -> bool {
+        if !self.raw_trusted || !self.raw.chars().all(|key| key.is_ascii_alphabetic()) {
+            return false;
+        }
+        self.letters = self
+            .raw
+            .chars()
+            .map(|key| Letter::new(key, key.is_ascii_uppercase()))
+            .collect();
+        self.tone = Tone::Level;
+        self.interpretation = InterpretationState::Stable;
+        true
+    }
+
     /// Remove the last letter, as a backspace would.
     ///
     /// Also drops the tone when the tone was being drawn on that letter, which
@@ -268,6 +306,7 @@ impl Syllable {
         }
         self.letters.truncate(last);
         self.distrust_raw();
+        self.normalize();
         true
     }
 
@@ -303,9 +342,10 @@ impl Syllable {
     ///
     /// `ươ` is the most common two-diacritic nucleus in the language —
     /// `đường`, `người`, `nước`, `được`, `trường` — and both Telex and VNI let
-    /// one key mark the pair, so `uow` and `uo7` give `ươ` rather than `uơ`.
-    /// The pair only counts when neither vowel is already marked, which is what
-    /// keeps `uwow` (`ư` then `ơ`, marked one at a time) working identically.
+    /// one key mark the pair. Open `thuo` is the ambiguous case: its first
+    /// rendering is `thuơ`, and later nucleus/coda context resolves it to `ươ`.
+    /// The pair only counts when neither vowel is already marked, which keeps
+    /// `uwow` (`ư` then `ơ`, marked one at a time) independent.
     fn bare_uo_pair(&self) -> Option<(usize, usize)> {
         let nucleus = rules::parts(&self.letters).nucleus;
         if nucleus.len() < 2 {
@@ -318,6 +358,59 @@ impl Syllable {
             && self.letters[second].base == 'o'
             && self.letters[second].mark.is_none();
         matches.then_some((first, second))
+    }
+
+    /// Clear both targets of a horn command that marked bare `uo`.
+    fn revert_horn_pair(&mut self) -> bool {
+        let InterpretationState::HornPair { first, second, .. } = self.interpretation else {
+            return false;
+        };
+        let valid_pair = self.mark_target(Mark::Horn) == Some(second)
+            && self
+                .letters
+                .get(first)
+                .is_some_and(|letter| letter.base == 'u')
+            && self
+                .letters
+                .get(second)
+                .is_some_and(|letter| letter.base == 'o' && letter.mark == Some(Mark::Horn));
+        if !valid_pair {
+            self.interpretation = InterpretationState::Stable;
+            return false;
+        }
+        if self.letters[first].mark == Some(Mark::Horn) {
+            self.letters[first].mark = None;
+        }
+        self.letters[second].mark = None;
+        self.interpretation = InterpretationState::Stable;
+        true
+    }
+
+    /// Re-evaluate context-sensitive semantic state after every key.
+    pub fn normalize(&mut self) {
+        let InterpretationState::HornPair {
+            first,
+            second,
+            provisional,
+        } = self.interpretation
+        else {
+            return;
+        };
+        let valid_pair = self
+            .letters
+            .get(first)
+            .is_some_and(|letter| letter.base == 'u')
+            && self
+                .letters
+                .get(second)
+                .is_some_and(|letter| letter.base == 'o' && letter.mark == Some(Mark::Horn));
+        if !valid_pair {
+            self.interpretation = InterpretationState::Stable;
+            return;
+        }
+
+        let remains_open = provisional && rules::provisional_uo_horn(&self.letters, first, second);
+        self.letters[first].mark = if remains_open { None } else { Some(Mark::Horn) };
     }
 
     /// Whether `source` is another press of the very letter it is marking.
@@ -361,14 +454,24 @@ impl Syllable {
     /// `Syllable::retypes_last_letter`, and this module's parent docs for the
     /// rule stated whole.
     pub fn apply_mark_from(&mut self, mark: Mark, source: Option<char>) -> MarkOutcome {
+        if mark == Mark::Horn && self.revert_horn_pair() {
+            return MarkOutcome::Reverted;
+        }
         if mark == Mark::Horn
             && let Some((first, second)) = self.bare_uo_pair()
         {
-            self.letters[first].mark = Some(Mark::Horn);
+            let provisional = rules::provisional_uo_horn(&self.letters, first, second);
             self.letters[second].mark = Some(Mark::Horn);
+            self.interpretation = InterpretationState::HornPair {
+                first,
+                second,
+                provisional,
+            };
+            self.normalize();
             return MarkOutcome::Applied;
         }
 
+        self.interpretation = InterpretationState::Stable;
         let Some(at) = self.mark_target(mark) else {
             return MarkOutcome::NoTarget;
         };
@@ -493,11 +596,31 @@ impl Syllable {
         rules::is_valid_syllable(&self.letters)
     }
 
+    /// Whether this incremental semantic reading can still become Vietnamese.
+    pub fn viability(&self) -> rules::Viability {
+        let viability = rules::viability(&self.letters);
+        if viability == rules::Viability::Valid && !rules::allows_tone(&self.letters, self.tone) {
+            rules::Viability::Impossible
+        } else if viability == rules::Viability::Valid
+            && let InterpretationState::HornPair {
+                first,
+                second,
+                provisional: true,
+            } = self.interpretation
+            && rules::provisional_uo_horn(&self.letters, first, second)
+        {
+            rules::Viability::Ambiguous
+        } else {
+            viability
+        }
+    }
+
     pub fn clear(&mut self) {
         self.letters.clear();
         self.tone = Tone::Level;
         self.raw.clear();
         self.raw_trusted = true;
+        self.interpretation = InterpretationState::Stable;
     }
 }
 

@@ -3,8 +3,8 @@
 //! # One keystroke, end to end
 //!
 //! ```text
-//!   KeyEvent ──▶ InputScheme::interpret ──▶ Transform ──▶ Syllable ──▶ render ──▶ EngineAction
-//!               (telex.rs / vni.rs)                     (semantic state)  (NFC)
+//!   KeyEvent ─▶ InputScheme::interpret ─▶ Transform ─▶ Syllable ─▶ normalize ─▶ render ─▶ EngineAction
+//!              (telex.rs / vni.rs)                    (semantic state)       (NFC)
 //! ```
 //!
 //! Four steps, no indirection, nothing dynamically dispatched.
@@ -82,7 +82,9 @@
 //! to know which language the user meant.
 //! [`VietnameseConfig::spell_check`] recovers the cases where the result is
 //! *not* a Vietnamese syllable (`where` stays `where`, `sport` stays `sport`),
-//! which is most of them; the rest are why an input method has an off switch.
+//! which is most of them. Once a trustworthy run becomes impossible it is
+//! restored immediately and later Telex controls stay literal until the
+//! boundary; the rest are why an input method has an off switch.
 
 pub mod rules;
 pub mod syllable;
@@ -173,7 +175,9 @@ pub struct VietnameseConfig {
     /// that were typed.
     ///
     /// On by default, and it is what keeps `where` from becoming `ưhere` and
-    /// `sport` from losing its `r`. It cannot rescue a mangling whose result
+    /// `sport` from losing its `r`. Impossible trustworthy runs are restored
+    /// as soon as they become impossible, not only at commit. It cannot rescue
+    /// a mangling whose result
     /// *is* a Vietnamese syllable — `test` still becomes `tét` — because the
     /// engine has no way to tell that apart from someone typing `tét` on
     /// purpose.
@@ -182,7 +186,7 @@ pub struct VietnameseConfig {
     /// who types no English at all wants.
     pub spell_check: bool,
     /// Whether `[` and `]` type `ơ` and `ư` in Telex. On by default, matching
-    /// Unikey, and the only way to type `uơ` (`thuở`, `huơ`).
+    /// Unikey, and the explicit way to type `uơ` forms such as `huơ`.
     pub bracket_shortcuts: bool,
 }
 
@@ -249,6 +253,9 @@ pub struct VietnameseEngine {
     /// In [`OutputMode::Direct`], how many graphemes of this syllable are
     /// already in the document and would have to be replaced.
     emitted: usize,
+    /// Telex controls stay literal after trustworthy input becomes
+    /// structurally impossible, until the next boundary.
+    literal_mode: bool,
 }
 
 impl Default for VietnameseEngine {
@@ -264,6 +271,7 @@ impl VietnameseEngine {
             syllable: Syllable::new(),
             composition: Composition::new(),
             emitted: 0,
+            literal_mode: false,
         }
     }
 
@@ -367,6 +375,7 @@ impl VietnameseEngine {
         self.syllable.clear();
         self.composition.clear();
         self.emitted = 0;
+        self.literal_mode = false;
     }
 
     /// Commit what is composed, then hand the key to the application.
@@ -388,7 +397,8 @@ impl VietnameseEngine {
     ///
     /// This is where the undo rule lives, once, for both schemes: a diacritic
     /// that was already there comes off and the key is typed as itself, and so
-    /// does a tone that was already set. Everything that cannot apply falls
+    /// does a tone that was already set. The caller then normalizes the changed
+    /// semantic state before rendering. Everything that cannot apply falls
     /// through [`VietnameseEngine::fall_back`].
     fn apply(&mut self, transform: Transform, source: char) -> Applied {
         match transform {
@@ -415,7 +425,7 @@ impl VietnameseEngine {
                 }
             }
             Transform::Tone { tone, literal } => {
-                if !self.syllable.is_valid() {
+                if !self.syllable.is_valid() || !rules::allows_tone(self.syllable.letters(), tone) {
                     return self.fall_back(literal);
                 }
                 if self.syllable.tone() == tone {
@@ -450,6 +460,28 @@ impl VietnameseEngine {
         } else {
             Applied::Release
         }
+    }
+
+    /// Normalize a changed syllable, then stop interpreting Telex controls once
+    /// the trustworthy physical run cannot become Vietnamese.
+    fn normalize(&mut self) {
+        self.syllable.normalize();
+        if self.config.spell_check
+            && self.config.scheme == InputScheme::Telex
+            && self.syllable.viability() == rules::Viability::Impossible
+            && self.syllable.restore_raw_letters()
+        {
+            self.literal_mode = true;
+        }
+    }
+
+    fn type_literal(&mut self, key: char) -> EngineResult {
+        if !word_boundary::is_syllable_letter(key) {
+            return self.release();
+        }
+        self.syllable.record_key(key);
+        self.syllable.push_letter(key, key.is_ascii_uppercase());
+        EngineResult::from_actions(self.show())
     }
 }
 
@@ -492,6 +524,9 @@ impl LanguageEngine for VietnameseEngine {
         let Some(key) = event.typed() else {
             return self.release();
         };
+        if self.literal_mode {
+            return self.type_literal(key);
+        }
 
         let transform = match self.config.scheme {
             InputScheme::Telex => {
@@ -505,7 +540,10 @@ impl LanguageEngine for VietnameseEngine {
 
         self.syllable.record_key(key);
         match self.apply(transform, key) {
-            Applied::Changed => EngineResult::from_actions(self.show()),
+            Applied::Changed => {
+                self.normalize();
+                EngineResult::from_actions(self.show())
+            }
             Applied::Release => self.release(),
         }
     }

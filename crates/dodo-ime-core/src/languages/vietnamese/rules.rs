@@ -34,15 +34,14 @@
 //! of; the structural check errs the other way, which is the right direction
 //! for a rule whose only job is deciding when to stop interfering.
 //!
-//! Two callers depend on it, both for the same reason — *this does not look
-//! like Vietnamese, so stop transforming it*:
-//!
-//! - a tone key is only a tone key when the letters so far could be a syllable
-//!   (`spor` + `t` types `sport`, because `sp` is not a Vietnamese initial);
-//! - at a word boundary, an invalid syllable is replaced by the keys that were
-//!   typed, if [`spell_check`](super::VietnameseConfig::spell_check) is on.
+//! [`viability`] adds the incremental distinction the final validity answer
+//! cannot provide: `th` is a useful prefix, while `br` is impossible. The
+//! engine uses that answer to restore trustworthy foreign input immediately and
+//! keep later Telex controls literal until the boundary. Tone keys and commit
+//! fallback still ask final validity, and [`allows_tone`] adds the compact
+//! checked-coda rule that is not a word-list question.
 
-use super::syllable::Letter;
+use super::syllable::{Letter, Mark, Tone};
 use super::unicode::base_with_mark;
 
 /// The vowel letters, before any diacritic. `y` counts: Vietnamese uses it as a
@@ -72,6 +71,23 @@ pub const FINALS: [&str; 9] = ["", "c", "ch", "m", "n", "ng", "nh", "p", "t"];
 /// The longest a Vietnamese vowel nucleus gets — `uyê` in `khuyên`, `ươi` in
 /// `người`, `oai` in `ngoài`.
 pub const MAX_NUCLEUS: usize = 3;
+
+/// Whether the current letters can still become a Vietnamese syllable.
+///
+/// This is deliberately smaller than a dictionary. It distinguishes an
+/// unfinished onset from a shape that no later letter can repair, while the
+/// semantic syllable promotes a pending `uơ`/`ươ` reading to [`Ambiguous`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Viability {
+    /// An incomplete onset such as `th` or `ngh`.
+    Prefix,
+    /// A structurally complete Vietnamese syllable.
+    Valid,
+    /// More than one semantic reading is still useful.
+    Ambiguous,
+    /// No continuation can repair the onset/nucleus/coda split.
+    Impossible,
+}
 
 /// Where the vowel run is, and therefore where everything else is.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -153,8 +169,7 @@ pub fn cluster(letters: &[Letter], range: std::ops::Range<usize>) -> String {
 
 /// Whether these letters could be a Vietnamese syllable.
 ///
-/// See the module docs for why this is structural rather than a word list, and
-/// for the two callers that depend on it.
+/// See the module docs for why this is structural rather than a word list.
 pub fn is_valid_syllable(letters: &[Letter]) -> bool {
     if letters.is_empty() {
         return false;
@@ -167,10 +182,80 @@ pub fn is_valid_syllable(letters: &[Letter]) -> bool {
         && FINALS.contains(&cluster(letters, parts.coda()).as_str())
 }
 
+/// Classify an incremental letter sequence without pretending that every
+/// incomplete sequence is invalid.
+pub fn viability(letters: &[Letter]) -> Viability {
+    if is_valid_syllable(letters) {
+        return Viability::Valid;
+    }
+
+    let split = parts(letters);
+    if split.has_nucleus() {
+        return Viability::Impossible;
+    }
+
+    let prefix = cluster(letters, split.initial());
+    if INITIALS.iter().any(|initial| initial.starts_with(&prefix)) {
+        Viability::Prefix
+    } else {
+        Viability::Impossible
+    }
+}
+
+/// Whether `tone` is phonotactically possible with the current coda.
+///
+/// Syllables closed by `c`, `ch`, `p`, or `t` carry only sắc or nặng when a
+/// tone key is explicit. The level state remains usable while typing because a
+/// later tone key can still complete it.
+pub fn allows_tone(letters: &[Letter], tone: Tone) -> bool {
+    if matches!(tone, Tone::Level | Tone::Acute | Tone::UnderDot) {
+        return true;
+    }
+    let split = parts(letters);
+    !matches!(
+        cluster(letters, split.coda()).as_str(),
+        "c" | "ch" | "p" | "t"
+    )
+}
+
+/// Whether one horn key over bare `uo` has a useful open `uơ` reading.
+///
+/// In `thuo`, the open nucleus can still become `thuở`, while a following
+/// vowel or coda resolves the same key as `ươ`. Keeping this question in the
+/// phonotactic layer lets the syllable retain provenance without learning a
+/// word-specific exception.
+pub fn provisional_uo_horn(letters: &[Letter], first: usize, second: usize) -> bool {
+    let split = parts(letters);
+    split.nucleus == (first..second + 1)
+        && !split.has_coda()
+        && cluster(letters, split.initial()) == "th"
+}
+
+/// Whether a targetless Telex `w` can begin the true nucleus as `ư`.
+///
+/// Usually that requires no nucleus yet. The derived `gi` split is the useful
+/// exception: appending `ư` turns the current `i` into the initial's glide, so
+/// `giw` can become `giư`/`giữ` without licensing synthetic vowels after
+/// ordinary nuclei such as `ne` or `ti`.
+pub fn can_append_u_horn(letters: &[Letter]) -> bool {
+    let before = parts(letters);
+    if !before.has_nucleus() {
+        return true;
+    }
+
+    let mut candidate = letters.to_vec();
+    candidate.push(Letter::new('u', false).with_mark(Some(Mark::Horn)));
+    let after = parts(&candidate);
+    after.nucleus.start > before.nucleus.start && is_valid_syllable(&candidate)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FINALS, INITIALS, cluster, is_valid_syllable, is_vowel_base, parts};
-    use crate::languages::vietnamese::syllable::{Letter, Mark};
+    use super::{
+        FINALS, INITIALS, Viability, allows_tone, can_append_u_horn, cluster, is_valid_syllable,
+        is_vowel_base, parts, provisional_uo_horn, viability,
+    };
+    use crate::languages::vietnamese::syllable::{Letter, Mark, Tone};
 
     /// Build letters from a spelling, `^` marking the mark on the letter before
     /// it: `d^` is `đ`, `e^` is `ê`. Enough to state the structural cases
@@ -304,6 +389,56 @@ mod tests {
         for (spelling, why) in cases {
             assert!(!is_valid_syllable(&letters(spelling)), "{spelling}: {why}");
         }
+    }
+
+    #[test]
+    fn incremental_viability_distinguishes_prefixes_from_impossible_runs() {
+        for spelling in ["", "t", "th", "ngh"] {
+            assert_eq!(
+                viability(&letters(spelling)),
+                Viability::Prefix,
+                "{spelling}"
+            );
+        }
+        for spelling in ["ta", "thuơ", "thươn", "giư"] {
+            assert_eq!(
+                viability(&letters(spelling)),
+                Viability::Valid,
+                "{spelling}"
+            );
+        }
+        for spelling in ["f", "br", "new", "world"] {
+            assert_eq!(
+                viability(&letters(spelling)),
+                Viability::Impossible,
+                "{spelling}"
+            );
+        }
+    }
+
+    #[test]
+    fn targetless_w_and_uo_horn_are_contextual() {
+        for spelling in ["", "t", "th", "gi"] {
+            assert!(can_append_u_horn(&letters(spelling)), "{spelling}");
+        }
+        for spelling in ["ti", "ne", "vie"] {
+            assert!(!can_append_u_horn(&letters(spelling)), "{spelling}");
+        }
+
+        assert!(provisional_uo_horn(&letters("thuo"), 2, 3));
+        assert!(!provisional_uo_horn(&letters("duo"), 1, 2));
+        assert!(!provisional_uo_horn(&letters("thuon"), 2, 3));
+    }
+
+    #[test]
+    fn stop_codas_accept_only_checked_tones() {
+        let cat = letters("cat");
+        assert!(allows_tone(&cat, Tone::Acute));
+        assert!(allows_tone(&cat, Tone::UnderDot));
+        assert!(!allows_tone(&cat, Tone::Grave));
+        assert!(!allows_tone(&cat, Tone::HookAbove));
+        assert!(!allows_tone(&cat, Tone::Tilde));
+        assert!(allows_tone(&letters("can"), Tone::Grave));
     }
 
     #[test]

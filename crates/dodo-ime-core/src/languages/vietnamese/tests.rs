@@ -87,9 +87,9 @@ fn the_specifications_worked_examples() {
 
 #[test]
 fn telex_rewrites_each_intermediate_state() {
-    let mut telex = engine();
+    let mut normal = engine();
     assert_eq!(
-        action_stream(&mut telex, "thuwowng"),
+        action_stream(&mut normal, "thuwowng"),
         ["t", "th", "thu", "thư", "thưo", "thươ", "thươn", "thương"].map(composition)
     );
 
@@ -99,13 +99,49 @@ fn telex_rewrites_each_intermediate_state() {
         ["t", "th", "thu", "thuo", "thuơ"].map(composition)
     );
     assert_eq!(action_stream(&mut incremental, "n"), [composition("thươn")]);
-    assert_eq!(action_stream(&mut incremental, "g"), [composition("thương")]);
+    assert_eq!(
+        action_stream(&mut incremental, "g"),
+        [composition("thương")]
+    );
 
     let mut coda_first = engine();
     assert_eq!(
         action_stream(&mut coda_first, "thuonw"),
         ["t", "th", "thu", "thuo", "thuon", "thươn"].map(composition)
     );
+    check(
+        &[
+            ("thuowc", "thươc"),
+            ("thuowch", "thươch"),
+            ("thuowm", "thươm"),
+            ("thuowng", "thương"),
+            ("thuownh", "thươnh"),
+            ("thuowp", "thươp"),
+            ("thuowt", "thươt"),
+            ("thuowi", "thươi"),
+            // Tone before/after both the modifier and coda converges.
+            ("thuowrn", "thưởn"),
+            ("thuornw", "thưởn"),
+            ("thuownr", "thưởn"),
+            ("thuonrw", "thưởn"),
+        ],
+        telex,
+    );
+
+    check(
+        &[
+            ("thuo7", "thuơ"),
+            ("thuo7n", "thươn"),
+            ("thuon7", "thươn"),
+        ],
+        vni,
+    );
+
+    let mut reopened = engine();
+    action_stream(&mut reopened, "thuown");
+    let backspace = reopened.process_key(&KeyEvent::special(Key::Backspace));
+    assert_eq!(backspace.actions, composition("thuơ"));
+    assert_eq!(action_stream(&mut reopened, "n"), [composition("thươn")]);
 }
 
 /// The reported failure, key by key.
@@ -123,13 +159,12 @@ fn telex_puts_an_earlier_w_back_where_it_stands() {
     );
 
     // The same recovery reached from the other side. `ww` settles the leading
-    // `w` as a literal first, which leaves the nucleus a bare `i`: no horn can
-    // land there, so the seventh key types `ư` at the end and the eighth takes
-    // that `ư` back.
+    // `w` as literal; after the `i` nucleus, later targetless `w` keys are
+    // literal too rather than synthetic `ư` letters.
     let mut literal = engine();
     assert_eq!(
         action_stream(&mut literal, "wwindoww"),
-        ["ư", "w", "wi", "win", "wind", "windo", "windoư", "window"].map(composition)
+        ["ư", "w", "wi", "win", "wind", "windo", "window", "windoww"].map(composition)
     );
 }
 
@@ -388,11 +423,10 @@ fn a_repeated_standalone_w_takes_back_the_letter_it_made_wherever_it_is() {
             ("willow", "willow"),
             ("WINDOW", "WINDOW"),
             ("Window", "Window"),
-            // In the middle and at the end. `ww` makes the leading `w`
-            // literal, which leaves `windo` a nucleus of `i` — no horn can land
-            // there, so the next `w` types `ư`, and the one after takes it back.
-            ("wwindow", "windoư"),
-            ("wwindoww", "window"),
+            // In the middle and at the end. Once `ww` makes the leading `w`
+            // literal, a later targetless `w` after the `i` nucleus is literal.
+            ("wwindow", "window"),
+            ("wwindoww", "windoww"),
             // After text that has already proved not to be Vietnamese.
             ("sww", "sw"),
             ("twnw", "twnw"),
@@ -1055,7 +1089,9 @@ fn non_vietnamese_words_fall_through_as_typed() {
             ("framework", "framework"),
             ("software", "software"),
             ("browser", "browser"),
-            ("wrong", "wrong"),
+            ("NEW", "NEW"),
+            ("View", "View"),
+            ("Browser", "Browser"),
         ],
         telex,
     );
@@ -1069,9 +1105,13 @@ fn non_vietnamese_words_fall_through_as_typed() {
     let mut software = engine();
     assert_eq!(
         action_stream(&mut software, "software"),
-        ["s", "so", "sof", "soft", "softw", "softwa", "softwar", "software"]
-            .map(composition)
+        [
+            "s", "so", "sò", "soft", "softw", "softwa", "softwar", "software"
+        ]
+        .map(composition)
     );
+
+    check(&[("framework dduwowcj", "framework được")], telex);
 }
 
 /// A checked Vietnamese syllable ending in a stop coda can carry only sắc or
@@ -1106,6 +1146,9 @@ fn required_normal_words_still_converge() {
             ("truwowngf", "trường"),
             ("tuwowngr", "tưởng"),
             ("huwowngr", "hưởng"),
+            ("THUOW", "THUƠ"),
+            ("THUOWN", "THƯƠN"),
+            ("Thuowngf", "Thường"),
         ],
         telex,
     );
@@ -1170,7 +1213,7 @@ fn a_key_the_engine_cannot_use_is_never_swallowed() {
 
 // ------------------------------------------------------------ brackets
 
-/// The only way to reach `uơ`.
+/// The explicit shortcut for `uơ`.
 #[test]
 fn the_bracket_shortcuts_type_o_horn_and_u_horn() {
     check(&[("thu[r", "thuở"), ("hu[", "huơ"), ("t]", "tư")], telex);

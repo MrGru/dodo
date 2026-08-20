@@ -49,19 +49,20 @@
 //!
 //! # Three judgement calls
 //!
-//! - **`w` on its own types `ư`.** With no vowel to put a horn on, Unikey types
-//!   `ư`, so `tw` and `tuw` both give `tư`. Kept, because it is what Vietnamese
-//!   typists have in their fingers — and because `w` is not a Vietnamese letter,
-//!   so nothing is lost.
-//! - **`uo` + `w` marks both vowels.** `ươ` is the most common two-diacritic
-//!   nucleus in the language, so `duowc` and `duwowc` both reach `được`. The
-//!   cost is that `uơ` (`thuở`, `huơ`) cannot be typed with `w`, which is the
-//!   next point.
+//! - **`w` before a nucleus types `ư`.** With no vowel yet, `tw` and `tuw` both
+//!   give `tư`. After an existing nucleus with no horn target it stays literal,
+//!   which is what keeps `new` and `view` intact. `gi` is derived rather than
+//!   excepted: adding `ư` moves its `i` into the initial glide, so `giw` remains
+//!   a valid way to begin `giữ`.
+//! - **One `w` over `uo` owns the pair.** It normally marks both vowels and a
+//!   repeat undoes both. Open `thuo` first displays the viable `uơ` reading;
+//!   later nucleus/coda context resolves the same semantic command to `ươ`.
 //! - **`[` and `]` type `ơ` and `ư` outright.** Unikey's own shortcut, on by
 //!   default there and here
 //!   ([`bracket_shortcuts`](super::VietnameseConfig::bracket_shortcuts)). It is
-//!   the only way to reach `uơ`: `thu[r` gives `thuở`. Turn it off and a
-//!   bracket is an ordinary bracket.
+//!   the explicit, non-provisional way to reach `uơ` (`thu[r` gives `thuở`) and
+//!   remains needed for forms such as `huơ`. Turn it off and a bracket is an
+//!   ordinary bracket.
 
 use super::syllable::{Mark, Syllable, Tone};
 use super::{Transform, rules};
@@ -152,9 +153,13 @@ fn tone_key(lower: char) -> Option<Tone> {
 /// `w` is a breve on `a` and a horn on `o`/`u`, so which mark it is depends on
 /// the vowel it finds. It asks the syllable's target rather than the last
 /// vowel typed: `hoiw` reaches back over the `i` to make `hơi`.
+///
+/// With no target, `w` creates `ư` only before a nucleus. Once a nucleus already
+/// exists, appending a second synthetic vowel is not a useful Vietnamese
+/// reading (`new`, `view`), so the key remains literal.
 fn horn_or_breve(syllable: &Syllable, literal: char, upper: bool) -> Transform {
-    let nucleus = rules::parts(syllable.letters()).nucleus;
-    match syllable.letters()[nucleus]
+    let parts = rules::parts(syllable.letters());
+    match syllable.letters()[parts.nucleus.clone()]
         .iter()
         .rev()
         .find(|letter| matches!(letter.base, 'a' | 'o' | 'u'))
@@ -168,9 +173,14 @@ fn horn_or_breve(syllable: &Syllable, literal: char, upper: bool) -> Transform {
             mark: Mark::Horn,
             literal,
         },
-        _ => Transform::Letter {
+        _ if rules::can_append_u_horn(syllable.letters()) => Transform::Letter {
             base: 'u',
             mark: Some(Mark::Horn),
+            upper,
+        },
+        _ => Transform::Letter {
+            base: 'w',
+            mark: None,
             upper,
         },
     }
@@ -364,10 +374,11 @@ mod tests {
         );
     }
 
-    /// `tw` and `tuw` both give `tư`.
+    /// `tw` and `tuw` both give `tư`, but a nucleus that cannot take a horn
+    /// makes the key literal rather than inventing another vowel.
     #[test]
-    fn w_with_no_vowel_to_decorate_types_u_horn() {
-        for spelling in ["", "t", "th", "ti"] {
+    fn w_without_a_target_depends_on_whether_a_nucleus_exists() {
+        for spelling in ["", "t", "th"] {
             assert_eq!(
                 read('w', spelling),
                 Some(Transform::Letter {
@@ -380,13 +391,24 @@ mod tests {
         }
         // And when `w` is the letter, its own shift is the only case there is:
         // `W` alone is `Ư`.
-        for spelling in ["", "T", "TH", "ti"] {
+        for spelling in ["", "T", "TH"] {
             assert_eq!(
                 read('W', spelling),
                 Some(Transform::Letter {
                     base: 'u',
                     mark: Some(Mark::Horn),
                     upper: true
+                }),
+                "{spelling}"
+            );
+        }
+        for spelling in ["ti", "ne", "vie"] {
+            assert_eq!(
+                read('w', spelling),
+                Some(Transform::Letter {
+                    base: 'w',
+                    mark: None,
+                    upper: false
                 }),
                 "{spelling}"
             );
@@ -463,7 +485,7 @@ mod tests {
         }
     }
 
-    /// The only way to reach `uơ`, and off when the setting is off.
+    /// The explicit way to type `uơ`, and off when the setting is off.
     #[test]
     fn brackets_type_o_horn_and_u_horn_when_enabled() {
         assert_eq!(
