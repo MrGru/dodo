@@ -1908,14 +1908,17 @@ impl FlowView {
             command: modifiers.platform,
         };
 
-        if let Some((node, end)) = target.connector_endpoint() {
-            if let Some(connector) = self.editor.world().nodes().connector(node) {
-                return InteractionEvent::BeginConnectorEndpointDrag {
-                    node,
-                    end,
-                    connector,
-                };
-            }
+        // **An endpoint press is its own event too**, and for the same reason a
+        // grip press is: the machine is world-free, so the geometry the drag
+        // has to be able to cancel back to is handed to it here.
+        if let Some((node, end)) = target.connector_endpoint()
+            && let Some(connector) = self.editor.world().nodes().connector(node)
+        {
+            return InteractionEvent::BeginConnectorEndpointDrag {
+                node,
+                end,
+                connector,
+            };
         }
 
         // **A grip press is its own event, not a press with a grip target.**

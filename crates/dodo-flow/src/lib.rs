@@ -1189,7 +1189,7 @@
 //! read `stroke.dash`), and **a text element was never drawn in the colour its
 //! Stroke row writes** (it writes `stroke.color`; every text painter read
 //! `font.color`, which nothing writes). [`properties`]'s module doc now carries
-//! the rule and all four costumes it has worn.
+//! the rule and every costume it has worn.
 //!
 //! ## What this phase's tests can and cannot be
 //!
@@ -1227,6 +1227,115 @@
 //! revision only when serialized state changes; the view compares that stamp
 //! and clones the document only for a real save. Selection, panning and an
 //! ancestor repaint leave it alone.
+//!
+//! # What the thirteenth slice added: connectors that have two ends
+//!
+//! The captain reported five faults on straight lines and arrows: they behaved
+//! like rectangles, drawing them was direction-sensitive, endpoints could not
+//! be attached to or detached from an element, a double-click did not put the
+//! caret anywhere you could type, and committed text vanished. **Four of the
+//! five were one cause**, and it is the fifth time this crate has shipped
+//! something that looked finished and was not: a linear element stored an
+//! origin and a size, so its geometry *was* a normalised rectangle and there
+//! was nowhere for the answer to live.
+//!
+//! ## The rectangle was the divergence, and it is now derived
+//!
+//! [`models::Connector`] is the authority for `Linear(Line | Arrow)`: two
+//! ordered [`ConnectorEndpoint`]s, each either free or bound to a
+//! non-connector element by id plus a normalised anchor. The rectangle is
+//! computed from the segment for culling, selection bounds and the coarse
+//! broad phase — the three things a box is genuinely good for — and it never
+//! reorders the endpoints. The one place it flows the other way is
+//! [`Connector::with_bounds`], which rebuilds the segment inside an absolute
+//! rectangle **keeping each endpoint on the corner it already occupies**; that
+//! is what lets `commands::apply`'s position and size commands, which speak
+//! rectangles and nothing else, reach a connector and still invert exactly.
+//!
+//! Everything downstream of the box moved with it, and each one was its own
+//! visible fault:
+//!
+//! - [`interaction::tool::connector_endpoints`] is the ordered twin of
+//!   `creation_rect`, and `creation_rect` is now *derived from it*. All three
+//!   of that function's rules — a click takes the default extent, shift squares
+//!   the travel, otherwise the end is the pointer — are stated once, so the
+//!   preview, the committed bounds and the committed segment cannot disagree
+//!   in any of the eight directions.
+//! - [`render::shapes::arrow_between`] puts the head on the true `end`. The
+//!   old `arrow(rect)` put it on `rect.max()`, which is why an arrow dragged
+//!   leftwards pointed right.
+//! - [`render::snapshot::SnapshotOverlay`] carries two endpoint handles instead
+//!   of four resize grips, and `GraphWorld::hit_test_connector_endpoint`
+//!   answers only those two.
+//! - `GraphWorld::hit_test` measures distance to the *segment* for a connector,
+//!   so the empty half of a diagonal's bounding box is canvas again.
+//!
+//! ## Attachment is a binding, not a coincident point
+//!
+//! A bound endpoint is resolved from its target's current geometry, so it
+//! follows a move and a resize, and it survives save/load and undo/redo because
+//! what is persisted is the id and the anchor. `GraphWorld` keeps a
+//! target → bound-endpoint index beside `adjacency` for exactly the reason
+//! `adjacency` exists: moving one element must not scan the document.
+//! `Side::facing` plus `floating_point` choose the direction-appropriate edge
+//! from the *opposite* endpoint, which is why dragging one end round a box
+//! walks the attachment round with it instead of pinning it to one side.
+//!
+//! Two rules keep the graph sane and are asserted rather than assumed: a
+//! connector may not bind to another connector or to itself, and an attachment
+//! that names a missing or invalid target loads **detached at its persisted
+//! point** and is reported in [`runtime::LoadReport`] — never silently moved.
+//!
+//! ## Format version 4, and the only honest migration
+//!
+//! Versions 1–3 never retained the drag direction, so there is nothing to
+//! recover: the migration writes the diagonal those files already *displayed*,
+//! `position` → `position + size`. That is a real loss of nothing, and stating
+//! it here is cheaper than a reader later assuming the old files were reversed.
+//!
+//! ## The label that was written and never read
+//!
+//! The fifth fault was separate and simpler, and it had two independent
+//! causes that produced the identical symptom — type into a shape or an arrow,
+//! commit, watch the words disappear:
+//!
+//! 1. [`render::registry`] answered `shows_label: false` for every `Shape` and
+//!    every `Linear` kind. The commit went through
+//!    [`FlowEditor::commit_text`](commands::FlowEditor::commit_text) and the
+//!    applier exactly as it should; no painter ever asked for the result.
+//! 2. `plan_labels` insets a node's box by `LABEL_PADDING_PIXELS` to keep text
+//!    off its own border. An axis-aligned connector's derived box has zero
+//!    height, so the inset went negative and the label was skipped. A connector
+//!    now gets a box of its own centred on the **true segment midpoint**, which
+//!    is also where [`views::flow`]'s inline editor opens.
+//!
+//! **This is the same failure the twelfth-and-a-half slice recorded twice** —
+//! a style field no painter reads — arriving through a label instead of a
+//! stroke. `properties`' module doc carries the rule and now lists five
+//! costumes; this one is the first that is not a style row, which is the
+//! transferable part: **a field the document stores is not finished until a
+//! painter reads it**, whether a panel writes it or a caret does.
+//!
+//! ## The caret that did not have the keyboard
+//!
+//! `begin_text_edit` focused the field *before* storing it on the view and
+//! never set its selection, so a double-click left an empty caret at offset
+//! zero and the first keystrokes reached the canvas — where a bare letter is a
+//! tool binding. The fix is two lines in the right order; the interesting part
+//! is that it is the first thing in this crate asserted on a **real test
+//! window**. `views::flow`'s
+//! `a_double_click_opens_an_editor_that_already_owns_the_keyboard` drives the
+//! machine transition and the effect handler the double-click actually uses,
+//! because "does this element hold the keyboard?" is a window question and the
+//! twelfth-and-a-half slice's trade — source assertions rather than a windowed
+//! harness — buys nothing once the harness is one dev-dependency feature away.
+//!
+//! ## What only a person can confirm
+//!
+//! That the snap highlight reads as an invitation rather than as a selection,
+//! that the two endpoint grips are findable at working zoom, and that a label
+//! on a steep diagonal sits somewhere a reader would look for it.
+//! `examples/flow.rs` lists them beside the earlier slices'.
 //!
 //! # Where the budget numbers come from, and what they are not
 //!

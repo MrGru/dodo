@@ -70,7 +70,7 @@
 //!
 //! # A row is not finished until a painter reads it
 //!
-//! This is the rule the panel has now broken four times, in four costumes, and
+//! This is the rule the panel has now broken five times, in five costumes, and
 //! it is written here because this table is where a row is *born*:
 //!
 //! 1. Phase 11 shipped `fill_style` and `sloppiness` stored, undoable, read
@@ -88,7 +88,14 @@
 //!    and forced the canvas to paint the body in Sketch. That is what "the
 //!    properties only work in sketch mode" was.
 //!
-//! Each of the four passed every test in the crate, because a test on this
+//! 5. Not a *style* row at all, and it is here because the rule is wider than
+//!    this table: `render::registry` answered `shows_label: false` for every
+//!    drawn shape and every linear element. §9's caret opens on all of them, so
+//!    a label went through `commit_text`, through the applier, into the
+//!    document — and no painter ever asked for it. What a person sees is the
+//!    words vanishing the moment they click away.
+//!
+//! Each of the five passed every test in the crate, because a test on this
 //! table and a test on the round trip both pass either way. **So the test for a
 //! new row asserts what reaches the painter** — the primitive, its colour, its
 //! cache part — and `render::scene`'s
