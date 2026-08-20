@@ -290,7 +290,9 @@ mod tests {
 
         let mut lengths: Vec<f32> = lines
             .commands()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .filter_map(|pair| match (pair[0], pair[1]) {
                 (SubpathCommand::MoveTo(a), SubpathCommand::LineTo(b)) => Some((b - a).length()),
                 _ => None,
