@@ -363,12 +363,8 @@ impl DirtyState {
 
     /// Everything clean, queues emptied, capacities kept.
     pub fn clear_all(&mut self) {
-        for slot in &mut self.node_flags {
-            *slot = NodeDirty::NONE;
-        }
-        for slot in &mut self.edge_flags {
-            *slot = EdgeDirty::NONE;
-        }
+        self.node_flags.fill(NodeDirty::NONE);
+        self.edge_flags.fill(EdgeDirty::NONE);
         self.dirty_nodes.clear();
         self.dirty_edges.clear();
         self.spatial.clear();

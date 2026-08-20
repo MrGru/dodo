@@ -179,7 +179,7 @@ fn sweep(polygon: &[Vec2], direction: Vec2, spacing: f32, lines: &mut Outline) {
     let mut at = low + spacing * 0.5;
     while at < high {
         spans(&rotated, at, &mut crossings);
-        for pair in crossings.chunks_exact(2) {
+        for pair in crossings.as_chunks::<2>().0 {
             // **A zero-length span is not a hatch line.** A shape dragged out
             // to no area still has extent along the sweep's normal, so the
             // parity is right and every span it yields is a point — sixty-four
