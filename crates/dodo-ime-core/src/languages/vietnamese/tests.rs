@@ -367,9 +367,14 @@ fn a_repeated_modifier_undoes_itself_and_types_its_key() {
             ("caa", "câ"),
             ("caaa", "caa"),
             ("cass", "cas"),
+            ("maff", "maf"),
+            ("marr", "mar"),
+            ("maxx", "max"),
+            ("majj", "maj"),
             ("caf f", "cà f"),
             ("cassa", "casa"),
             ("aww", "aw"),
+            ("oww", "ow"),
             // The first `w` is the whole source of `ư`, not a typed `u` with
             // a later mark. Repeating that source removes the whole letter.
             ("ww", "w"),
@@ -431,6 +436,43 @@ fn a_repeated_standalone_w_takes_back_the_letter_it_made_wherever_it_is() {
     );
 }
 
+/// The bracket shortcuts are Telex whole-letter sources, just like bare `w`.
+/// Repeating one takes its letter back and types the key literally; a third
+/// press starts a new shortcut after that punctuation boundary. The visible
+/// composition must be removed in both host output modes when the cancelled
+/// letter was the whole syllable.
+#[test]
+fn a_repeated_bracket_shortcut_takes_back_the_letter_it_made() {
+    let cases = &[
+        ("[", "ơ"),
+        ("[[", "["),
+        ("[[[", "[ơ"),
+        ("]", "ư"),
+        ("]]", "]"),
+        ("]]]", "]ư"),
+        ("{{", "{"),
+        ("{{{", "{Ơ"),
+        ("}}", "}"),
+        ("}}}", "}Ư"),
+    ];
+    check(cases, telex);
+    check(cases, |keys| {
+        type_keys(
+            &mut configured(VietnameseConfig {
+                output: OutputMode::Direct,
+                ..VietnameseConfig::default()
+            }),
+            keys,
+        )
+    });
+
+    // These shortcuts belong to Telex, not VNI.
+    check(
+        &[("[[", "[["), ("]]", "]]"), ("{{", "{{"), ("}}", "}}")],
+        vni,
+    );
+}
+
 /// The distinction the whole fix rests on: `ư` the user typed and `ư` dodo
 /// rendered are different states, and only the second is a `w` to be taken
 /// back.
@@ -477,10 +519,16 @@ fn a_repeated_vni_digit_undoes_itself_and_types_its_digit() {
     check(
         &[
             ("a66", "a6"),
-            ("a11", "a1"),
+            ("ma11", "ma1"),
+            ("ma22", "ma2"),
+            ("ma33", "ma3"),
+            ("ma44", "ma4"),
+            ("ma55", "ma5"),
             ("d99", "d9"),
             ("u77", "u7"),
             ("a88", "a8"),
+            ("a666", "a66"),
+            ("ma111", "ma11"),
             ("ma11n", "ma1n"),
         ],
         vni,
