@@ -746,7 +746,7 @@ fn plan_labels(
                 font.color.unwrap_or(ink.text),
                 world.nodes().style(canvas.node).opacity,
             ),
-            key: TextKey::node(canvas.node, canvas.version, font_size),
+            key: TextKey::node(canvas.node, canvas.text_version, font_size),
             max_width: inner.size.x,
             family: font.family,
             align: font.align,
@@ -1212,6 +1212,310 @@ mod tests {
         plan_scene(&mut plan, &world, &snapshot, &viewport, ink(), &options);
 
         assert_eq!(plan.quad_count(), 0);
+    }
+
+    // ---- §9's text ------------------------------------------------------
+
+    /// Every label a frame planned, in paint order: where it was drawn and
+    /// what the shaped-line cache would file it under.
+    ///
+    /// A sink rather than an accessor on [`PaintPlan`], for the same reason
+    /// [`RecordingSink`] is one: what matters is what actually reaches a
+    /// painter, and `paint_into` is the only thing that decides that.
+    #[derive(Default)]
+    struct TextSink {
+        labels: Vec<(crate::render::cache::TextKey, Vec2, std::sync::Arc<str>)>,
+    }
+
+    impl crate::render::PrimitiveSink for TextSink {
+        fn quad(&mut self, _quad: &crate::render::QuadPrimitive) {}
+        fn path(&mut self, _path: &crate::render::PathPrimitive) -> u32 {
+            0
+        }
+        fn text(&mut self, text: &crate::render::plan::TextPrimitive) -> u32 {
+            self.labels
+                .push((text.key, text.origin, std::sync::Arc::clone(&text.text)));
+            1
+        }
+    }
+
+    fn labels_of(
+        plan: &PaintPlan,
+    ) -> Vec<(crate::render::cache::TextKey, Vec2, std::sync::Arc<str>)> {
+        let mut sink = TextSink::default();
+        plan.paint_into(&mut sink);
+        sink.labels
+    }
+
+    /// Two labelled nodes joined by a labelled edge — the smallest document
+    /// that exercises all three of §9's text carriers.
+    fn labelled_pair() -> GraphWorld {
+        let mut world = GraphWorld::new();
+        world.set_rules(ConnectionRules::PERMISSIVE);
+        let a = world.create_node(
+            ElementKind::GraphNode(GraphNodeKind::Default),
+            Vec2::new(60.0, 60.0),
+            Vec2::new(160.0, 60.0),
+        );
+        let b = world.create_node(
+            ElementKind::GraphNode(GraphNodeKind::Default),
+            Vec2::new(420.0, 60.0),
+            Vec2::new(160.0, 60.0),
+        );
+        world.set_node_label(a, Some("source".into()));
+        world.set_node_label(b, Some("sink".into()));
+        let edge = world
+            .connect(EdgeEnd::node(a), EdgeEnd::node(b))
+            .expect("permissive rules accept it");
+        world.set_edge_label(edge, Some("carries".into()));
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+        world
+    }
+
+    /// A camera on the **Compact** rung.
+    ///
+    /// Deliberately not 100 %: at full detail a graph node becomes a rich GPUI
+    /// element and its label is drawn *inside* that element, where only a
+    /// window can see it. The canvas half is what these tests can assert with
+    /// no window, and it is the half every large document actually uses.
+    fn pane() -> Viewport {
+        Viewport::new(Vec2::ZERO, 0.5, Vec2::new(800.0, 600.0))
+    }
+
+    /// **A node's text moves with the node, and is not re-shaped for it.**
+    ///
+    /// The two halves are one requirement: the phase brief asks for text that
+    /// stays correctly positioned when a node moves, *and* for the engine's
+    /// shaped-line cache to keep paying. A label drawn in the right place by
+    /// re-shaping it every frame satisfies the first and defeats the second,
+    /// and nothing on screen tells the two apart.
+    #[test]
+    fn a_node_label_follows_its_node_without_being_reshaped() {
+        let mut world = labelled_pair();
+        let viewport = pane();
+        let node = NodeIndex::new(0);
+
+        let (before, _) = frame_without_grid(&world, &viewport);
+        let before = labels_of(&before);
+        let (key, origin, text) = before
+            .iter()
+            .find(|(_, _, text)| text.as_ref() == "source")
+            .cloned()
+            .expect("the node's label reached the plan");
+
+        world.move_node(node, Vec2::new(0.0, 120.0));
+        world.rebuild_dirty_geometry();
+
+        let (after, _) = frame_without_grid(&world, &viewport);
+        let after = labels_of(&after);
+        let (moved_key, moved_origin, moved_text) = after
+            .iter()
+            .find(|(_, _, text)| text.as_ref() == "source")
+            .cloned()
+            .expect("it is still drawn");
+
+        assert_eq!(moved_text, text);
+        assert_eq!(
+            moved_origin - origin,
+            Vec2::new(0.0, 60.0),
+            "the label moved exactly as far as the node did, in screen pixels"
+        );
+        assert_eq!(
+            moved_key, key,
+            "a move must not change the shaped-line key — the position is \
+             deliberately not part of it"
+        );
+    }
+
+    /// **An edge's label follows its route**, which is the half of requirement
+    /// 5 that needed no machinery: Phase 3's propagation rebuilds the route
+    /// when an endpoint moves, and the midpoint is read from the route rather
+    /// than remembered.
+    ///
+    /// The key *does* change here, and that is the safe direction: an edge's
+    /// geometry version moves when its route does, so a rerouted edge pays one
+    /// re-shape rather than risking a label shaped for a route it has left.
+    #[test]
+    fn an_edge_label_follows_a_rerouted_edge() {
+        let mut world = labelled_pair();
+        let viewport = pane();
+
+        let (before, _) = frame_without_grid(&world, &viewport);
+        let (key, origin, _) = labels_of(&before)
+            .into_iter()
+            .find(|(_, _, text)| text.as_ref() == "carries")
+            .expect("the edge's label reached the plan");
+
+        // Move the *target*, so the route changes without the label's own
+        // element being touched at all.
+        world.move_node(NodeIndex::new(1), Vec2::new(0.0, 200.0));
+        let rebuilt = world.rebuild_dirty_geometry();
+        assert_eq!(rebuilt, 1, "§19: exactly the one incident edge");
+
+        let (after, _) = frame_without_grid(&world, &viewport);
+        let (moved_key, moved_origin, _) = labels_of(&after)
+            .into_iter()
+            .find(|(_, _, text)| text.as_ref() == "carries")
+            .expect("it is still drawn");
+
+        assert_ne!(
+            moved_origin, origin,
+            "the label sits on the route, so a reroute has to move it"
+        );
+        assert!(
+            moved_origin.y > origin.y,
+            "the target went down, so the midpoint did"
+        );
+        assert_ne!(
+            moved_key, key,
+            "a rerouted edge is a new geometry version, and therefore a new \
+             shaped line — the safe direction"
+        );
+    }
+
+    /// **§40 rule 7, extended to text**: a pure pan re-shapes nothing.
+    ///
+    /// Phase 4 asserted this for edge routes and Phase 5 for tessellations;
+    /// this is the same question for the third cache. It drives a real
+    /// [`ShapedLineCache`](crate::render::cache::ShapedLineCache) over sixty
+    /// panned frames and counts its misses, rather than comparing keys by eye —
+    /// the cache's retention window is part of the answer and only the cache
+    /// knows it.
+    #[test]
+    fn a_pure_pan_shapes_every_label_once_and_never_again() {
+        use crate::render::cache::ShapedLineCache;
+
+        let world = labelled_pair();
+        let mut cache: ShapedLineCache<u32> =
+            ShapedLineCache::new(&for_backend(RenderBackend::Metal));
+
+        for step in 0..60 {
+            let viewport = Viewport::new(
+                Vec2::new(step as f32 * 3.0, 0.0),
+                0.5,
+                Vec2::new(800.0, 600.0),
+            );
+            let (plan, _) = frame_without_grid(&world, &viewport);
+            let labels = labels_of(&plan);
+            assert_eq!(labels.len(), 3, "two node labels and one edge label");
+
+            cache.begin_frame();
+            for (key, _, _) in labels {
+                if cache.get(&key).is_none() {
+                    cache.insert(key, 1);
+                }
+            }
+            cache.end_frame();
+        }
+
+        let stats = cache.stats();
+        assert_eq!(
+            stats.misses, 3,
+            "sixty panned frames must shape each label exactly once"
+        );
+        assert_eq!(stats.reused, 60 * 3 - 3);
+        assert_eq!(stats.evictions, 0, "nothing left the viewport");
+    }
+
+    /// **A text element is its glyphs and nothing else.**
+    ///
+    /// The negative half is the one that matters: `plan_nodes` skips
+    /// `NodeShape::Text` outright, because the fall-through would have painted
+    /// it as a filled quad the moment it stopped being detailed — a box around
+    /// every piece of standalone text, appearing only when zoomed out.
+    #[test]
+    fn a_text_element_draws_its_text_and_no_body() {
+        let mut world = GraphWorld::new();
+        let node = world.create_node(
+            ElementKind::Text,
+            Vec2::new(100.0, 100.0),
+            Vec2::new(200.0, 22.0),
+        );
+        world.set_node_label(node, Some("standalone".into()));
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let viewport = pane();
+        let (plan, stats) = frame_without_grid(&world, &viewport);
+
+        assert_eq!(plan.text_count(), 1, "the glyphs are the whole element");
+        assert_eq!(plan.quad_count(), 0, "no box");
+        assert_eq!(plan.path_count(), 0, "no outline");
+        assert_eq!(
+            stats.unsupported_nodes, 0,
+            "text is painted now, not counted as missing"
+        );
+
+        // And it is still a real element: it has bounds, so it is culled,
+        // hit-tested and selected exactly like everything else.
+        let labels = labels_of(&plan);
+        assert_eq!(labels[0].2.as_ref(), "standalone");
+    }
+
+    /// The same element zoomed far out: §15's first bullet, on the kind that
+    /// has nothing *but* text. Nothing is drawn — not a box, not a smudge —
+    /// because there is nothing else it could be reduced to.
+    #[test]
+    fn a_text_element_below_readable_zoom_costs_nothing_at_all() {
+        let mut world = GraphWorld::new();
+        let node = world.create_node(
+            ElementKind::Text,
+            Vec2::new(0.0, 0.0),
+            Vec2::new(200.0, 22.0),
+        );
+        world.set_node_label(node, Some("standalone".into()));
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let viewport = Viewport::new(Vec2::new(-2_000.0, -2_000.0), 0.1, Vec2::new(800.0, 600.0));
+        let (plan, _) = frame_without_grid(&world, &viewport);
+
+        assert_eq!(
+            plan.text_count(),
+            0,
+            "§15: not laid out, not merely unpainted"
+        );
+        assert_eq!(plan.quad_count(), 0);
+        assert_eq!(plan.path_count(), 0);
+    }
+
+    /// **Each element is quantised against its own authored step**, so `S` text
+    /// stops being laid out at a zoom `XL` text survives. The alternative — one
+    /// size per frame — is what the ladder did before §9's four steps existed,
+    /// and it would draw a heading and a footnote at the same size.
+    #[test]
+    fn two_sizes_of_text_disappear_at_two_different_zooms() {
+        use crate::models::FontSize;
+
+        let mut world = GraphWorld::new();
+        for (index, size) in [FontSize::Small, FontSize::ExtraLarge]
+            .into_iter()
+            .enumerate()
+        {
+            let node = world.create_node(
+                ElementKind::Text,
+                Vec2::new(0.0, index as f32 * 60.0),
+                Vec2::new(200.0, 40.0),
+            );
+            world.set_node_label(node, Some(size.name().to_owned()));
+            let mut style = world.nodes().style(node).clone();
+            style.font.size = size;
+            world.set_node_style(node, style);
+        }
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let close = Viewport::new(Vec2::new(-20.0, -20.0), 1.0, Vec2::new(800.0, 600.0));
+        let (plan, _) = frame_without_grid(&world, &close);
+        assert_eq!(plan.text_count(), 2, "both read at 100 %");
+
+        // 12 × 0.3 = 3.6 px, under the readable floor; 28 × 0.3 = 8.4 px, over.
+        let far = Viewport::new(Vec2::new(-20.0, -20.0), 0.3, Vec2::new(800.0, 600.0));
+        let (plan, _) = frame_without_grid(&world, &far);
+        let drawn = labels_of(&plan);
+        assert_eq!(drawn.len(), 1, "only the large one is still worth shaping");
+        assert_eq!(drawn[0].2.as_ref(), "xl");
     }
 
     /// The scene's clip is the pane it was extracted for, so a plan and its

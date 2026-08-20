@@ -227,21 +227,21 @@ impl FlowEditor {
     /// than edits. `None` for a target that has no text yet — a pending
     /// element, or an element nobody has typed into — which the caller shows as
     /// an empty field with a placeholder rather than as the word "None".
+    /// **Liveness, not mere presence.** A removed element keeps its whole row —
+    /// removal is a tombstone, so an undo entry can still name it — and its
+    /// words are still sitting in that row. Reading them back would let a caret
+    /// open on a deleted element and, worse, would make "is there text here?"
+    /// answer yes for something nobody can see. `commit_text` refuses the same
+    /// targets, and the two agree because they ask the same question.
     pub fn text_of(&self, target: TextTarget) -> Option<&str> {
         match target {
-            TextTarget::Node(node) => self
-                .world
-                .nodes()
-                .contains(node)
-                .then(|| self.world.nodes().cold(node).label.as_deref())
-                .flatten(),
-            TextTarget::Edge(edge) => self
-                .world
-                .edges()
-                .contains(edge)
-                .then(|| self.world.edges().label(edge).map(Arc::as_ref))
-                .flatten(),
-            TextTarget::New(_) => None,
+            TextTarget::Node(node) if self.world.node_is_live(node) => {
+                self.world.nodes().cold(node).label.as_deref()
+            }
+            TextTarget::Edge(edge) if self.world.edge_is_live(edge) => {
+                self.world.edges().label(edge).map(Arc::as_ref)
+            }
+            _ => None,
         }
     }
 
@@ -487,6 +487,7 @@ mod tests {
     use crate::{
         commands::edit::{EditCommand, NodeDraft},
         geometry::Vec2,
+        interaction::TextTarget,
         models::{ElementId, ElementKind, NodeIndex, ShapeKind},
         runtime::NodeSpec,
     };
@@ -527,6 +528,154 @@ mod tests {
             .expect("adding a node cannot fail");
         let node = summary.added_nodes[0];
         (editor, node)
+    }
+
+    // ---- §9's text -----------------------------------------------------
+
+    /// **Existing text is editable again, not merely replaceable.**
+    ///
+    /// The phase brief calls this out by name, and the failure it prevents is
+    /// quiet: an editor that always opened blank looks identical until somebody
+    /// double-clicks a label to *read* it, presses Escape, and finds it gone —
+    /// or types one correction and loses the rest of the sentence.
+    /// `text_of` is what an editor is seeded from, so this is that whole
+    /// requirement asserted with no window.
+    #[test]
+    fn a_label_can_be_typed_edited_and_edited_again() {
+        let (mut editor, node) = editor_with_a_node();
+        let target = TextTarget::Node(node);
+
+        assert_eq!(editor.text_of(target), None, "nothing typed yet");
+
+        assert!(editor.commit_text(target, "first"));
+        assert_eq!(editor.text_of(target), Some("first"));
+
+        // The second edit sees the first — which is the whole point.
+        assert!(editor.commit_text(target, "first, corrected"));
+        assert_eq!(editor.text_of(target), Some("first, corrected"));
+
+        // Committing the same text again is not an edit.
+        assert!(!editor.commit_text(target, "first, corrected"));
+
+        // And clearing is an edit, because a user who selected all and deleted
+        // said something.
+        assert!(editor.commit_text(target, ""));
+        assert_eq!(editor.text_of(target), None);
+    }
+
+    /// The same, for an edge — the carrier §9 adds and the one nothing else in
+    /// the engine had a door to.
+    #[test]
+    fn an_edge_label_can_be_typed_edited_and_cleared() {
+        use crate::runtime::{ConnectionRules, EdgeEnd};
+
+        let (mut editor, first) = editor_with_a_node();
+        editor.set_rules(ConnectionRules::PERMISSIVE);
+        let second = editor
+            .apply(EditCommand::AddNodes(vec![NodeDraft::new(NodeSpec::new(
+                ElementId::NONE,
+                ElementKind::Shape(ShapeKind::Rectangle),
+                Vec2::new(300.0, 0.0),
+                Vec2::new(50.0, 30.0),
+            ))]))
+            .unwrap()
+            .added_nodes[0];
+        let edge = editor
+            .apply(EditCommand::Connect(vec![crate::runtime::EdgeSpec::new(
+                ElementId::NONE,
+                EdgeEnd::node(first),
+                EdgeEnd::node(second),
+            )]))
+            .unwrap()
+            .added_edges[0];
+
+        let target = TextTarget::Edge(edge);
+        assert_eq!(editor.text_of(target), None);
+        assert!(editor.commit_text(target, "yes"));
+        assert_eq!(editor.text_of(target), Some("yes"));
+        assert!(editor.commit_text(target, "no"));
+        assert_eq!(editor.text_of(target), Some("no"));
+        assert!(editor.commit_text(target, "   "));
+        assert_eq!(editor.text_of(target), None, "whitespace is empty");
+    }
+
+    /// **Every text edit is one undo step, and undo walks back through them.**
+    ///
+    /// The property the phase asks for, and the reason `commit_text` is on the
+    /// editor rather than in the view: it is an ordinary `apply`, so the label,
+    /// the node's text version and its shaped line all come back together with
+    /// no line in `commands/` knowing a caret exists.
+    #[test]
+    fn text_edits_undo_and_redo_one_press_at_a_time() {
+        let (mut editor, node) = editor_with_a_node();
+        let target = TextTarget::Node(node);
+        let depth = editor.history().undo_depth();
+
+        editor.commit_text(target, "one");
+        editor.commit_text(target, "two");
+        assert_eq!(editor.history().undo_depth(), depth + 2);
+
+        assert!(editor.undo());
+        assert_eq!(editor.text_of(target), Some("one"));
+        assert!(editor.undo());
+        assert_eq!(editor.text_of(target), None);
+
+        assert!(editor.redo());
+        assert_eq!(editor.text_of(target), Some("one"));
+        assert!(editor.redo());
+        assert_eq!(editor.text_of(target), Some("two"));
+    }
+
+    /// **Emptying a text element removes it, and one undo brings it back.**
+    ///
+    /// A text element is its glyphs, so an empty one is invisible — and an
+    /// invisible, selectable, undoable element is exactly the failure Phase 7.5
+    /// recorded for Line and Arrow. Here it would arrive through an edit rather
+    /// than through a palette, which is why the decision is in `commit_text`
+    /// and not in whatever widget collected the characters.
+    #[test]
+    fn emptying_a_text_element_removes_it_and_undo_brings_it_back() {
+        let mut editor = FlowEditor::new();
+        let pending = TextTarget::New(crate::geometry::Rect::new(
+            Vec2::new(10.0, 10.0),
+            Vec2::new(200.0, 22.0),
+        ));
+
+        assert!(editor.commit_text(pending, "temporary"));
+        let node = NodeIndex::new(0);
+        assert!(editor.world().nodes().is_live(node));
+
+        assert!(editor.commit_text(TextTarget::Node(node), ""));
+        assert!(
+            !editor.world().nodes().is_live(node),
+            "an empty text element would be invisible, so it goes"
+        );
+
+        assert!(editor.undo());
+        assert!(editor.world().nodes().is_live(node));
+        assert_eq!(editor.text_of(TextTarget::Node(node)), Some("temporary"));
+
+        // Clearing a *labelled shape* is the other answer: the element stays,
+        // because a rectangle with no label is still a rectangle.
+        let (mut editor, shape) = editor_with_a_node();
+        editor.commit_text(TextTarget::Node(shape), "labelled");
+        assert!(editor.commit_text(TextTarget::Node(shape), ""));
+        assert!(editor.world().nodes().is_live(shape));
+    }
+
+    /// A target that has gone away answers rather than panicking. An undo
+    /// between the double-click and the commit is an ordinary race, not a bug.
+    #[test]
+    fn committing_text_to_something_that_is_gone_changes_nothing() {
+        let (mut editor, node) = editor_with_a_node();
+        editor
+            .apply(EditCommand::remove(vec![node], Vec::new()))
+            .unwrap();
+
+        assert_eq!(editor.text_of(TextTarget::Node(node)), None);
+        assert!(!editor.commit_text(TextTarget::Node(node), "ghost"));
+        assert!(!editor.commit_text(TextTarget::Node(NodeIndex::new(99)), "ghost"));
+        assert!(!editor.commit_text(TextTarget::Edge(crate::models::EdgeIndex::new(99)), "x"));
     }
 
     #[test]

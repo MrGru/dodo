@@ -2106,6 +2106,70 @@ mod tests {
         assert_ne!(hit, PointerTarget::Node(under));
     }
 
+    // ---- §29's edge narrow phase (§9's double-click needs it) -----------
+
+    /// **An edge is hit by its drawn line, not by its bounding box.**
+    ///
+    /// The whole reason the narrow phase is a distance: an edge from (0,0) to
+    /// (400,200) has a bounding box of 80,000 square units and covers a few
+    /// hundred of them. A box test would make the empty corners of every edge
+    /// unclickable canvas.
+    #[test]
+    fn an_edge_is_hit_near_its_line_and_missed_in_the_corners_of_its_box() {
+        let (world, a, b) = pair();
+        let edge = world.incident_edges(a).next().expect("the pair is joined");
+        let route = world.route(edge).expect("geometry was rebuilt");
+        let tolerance = HitTolerance::new(9.0);
+
+        let on_the_line = route.midpoint(1.0);
+        assert_eq!(
+            world.hit_test_edge(on_the_line, world.edges().indices(), tolerance, 1.0),
+            Some(edge)
+        );
+
+        // A corner of the route's own bounding box, far from the curve.
+        let corner = Vec2::new(route.bounds().min().x, route.bounds().max().y);
+        assert_eq!(
+            world.hit_test_edge(corner, world.edges().indices(), tolerance, 1.0),
+            None,
+            "the box is not the edge"
+        );
+
+        // And well outside it.
+        assert_eq!(
+            world.hit_test_edge(
+                Vec2::new(-5_000.0, -5_000.0),
+                world.edges().indices(),
+                tolerance,
+                1.0
+            ),
+            None
+        );
+        let _ = b;
+    }
+
+    /// A removed edge is not hit. Removal is a tombstone, so its row and its
+    /// route survive — and a hit test that read them would let a user label an
+    /// edge that is not there.
+    #[test]
+    fn a_removed_edge_is_not_hit() {
+        let (mut world, a, _) = pair();
+        let edge = world.incident_edges(a).next().unwrap();
+        let on_the_line = world.route(edge).unwrap().midpoint(1.0);
+
+        world.remove_edge(edge);
+
+        assert_eq!(
+            world.hit_test_edge(
+                on_the_line,
+                world.edges().indices(),
+                HitTolerance::new(9.0),
+                1.0
+            ),
+            None
+        );
+    }
+
     // ---- load and save ---------------------------------------------------
 
     fn document() -> FlowDocument {

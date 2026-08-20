@@ -397,6 +397,58 @@ mod tests {
         assert_eq!(editor.to_document(), document_before);
     }
 
+    /// **§9's text does not outlive what it is attached to, and comes back
+    /// with it.**
+    ///
+    /// Phase 9 found that `set_presence` cascades a node's edges and nothing
+    /// above it did. Text has the same shape of hazard by construction —
+    /// a node's text is a field of the node and an edge's label a field of the
+    /// edge, so nothing can strand one — and the reason this is a test rather
+    /// than a sentence is the *undo*: a restored element has to come back with
+    /// its words, and that only holds because the tombstone keeps the whole
+    /// row rather than clearing it.
+    #[test]
+    fn deleting_a_labelled_node_takes_its_edges_labels_with_it_and_undo_returns_them() {
+        use crate::interaction::TextTarget;
+
+        let (mut editor, mut index, viewport) = scene_editor();
+        let before = frame(&mut editor, &mut index, &viewport);
+
+        let node = visible_connected_node(&before, editor.world());
+        let edge = editor
+            .world()
+            .incident_edges(node)
+            .next()
+            .expect("visible_connected_node has at least one edge");
+
+        editor.commit_text(TextTarget::Node(node), "the host");
+        editor.commit_text(TextTarget::Edge(edge), "the label");
+        let document_before = editor.to_document();
+
+        editor.select_only(Some(node));
+        assert!(editor.delete_selection());
+
+        assert!(!editor.world().node_is_live(node));
+        assert!(
+            !editor.world().edge_is_live(edge),
+            "the labelled edge went with its node"
+        );
+        // The words are unreachable rather than lingering: `text_of` reads
+        // liveness, so a removed element has no text even though its row
+        // survives as a tombstone.
+        assert_eq!(editor.text_of(TextTarget::Node(node)), None);
+        assert_eq!(editor.text_of(TextTarget::Edge(edge)), None);
+
+        assert!(editor.undo());
+        assert_eq!(editor.text_of(TextTarget::Node(node)), Some("the host"));
+        assert_eq!(editor.text_of(TextTarget::Edge(edge)), Some("the label"));
+        assert_eq!(
+            editor.to_document(),
+            document_before,
+            "one press of undo restores the elements and their words"
+        );
+    }
+
     /// A rubber band takes edges as well as nodes, so Delete has to remove
     /// both — and an edge deleted *on its own* must not take its nodes with it.
     #[test]

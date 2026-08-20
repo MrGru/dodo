@@ -247,6 +247,22 @@ pub struct NodeStore {
     /// against a re-comparison of a rectangle and a whole `ElementStyle`.
     versions: Vec<u32>,
 
+    /// **§9's shaped-line version, per node** — deliberately *not* the one
+    /// above.
+    ///
+    /// A shaped line depends on the text, the font and the width it is wrapped
+    /// into. It does **not** depend on where the node is, and that difference
+    /// is worth a second array: a node's appearance version bumps on every
+    /// move, so a dragged node keyed on it would re-shape its label sixty times
+    /// a second — 7–11 µs each against 1.7 µs to paint a cached one, for a line
+    /// that has not changed a glyph. Four bytes per node against that, and 400
+    /// KB at a hundred thousand nodes.
+    ///
+    /// Bumped by everything that changes what the glyphs would be — the label,
+    /// the style, a resize (which changes the wrap width) — and by nothing
+    /// else. `moving_a_node_does_not_reshape_its_label` is the property.
+    text_versions: Vec<u32>,
+
     // ---- warm ----
     ids: Vec<ElementId>,
     z: Vec<i32>,
@@ -290,6 +306,7 @@ impl NodeStore {
         self.shapes.reserve(additional);
         self.flags.reserve(additional);
         self.versions.reserve(additional);
+        self.text_versions.reserve(additional);
         self.ids.reserve(additional);
         self.z.reserve(additional);
         self.handles.reserve(additional);
@@ -312,6 +329,7 @@ impl NodeStore {
         }
         self.flags.push(flags);
         self.versions.push(0);
+        self.text_versions.push(0);
 
         self.ids.push(spec.id);
         self.z.push(spec.z);
@@ -353,6 +371,12 @@ impl NodeStore {
     /// that does not exist should miss, not crash a frame.
     pub fn version(&self, node: NodeIndex) -> u32 {
         self.versions.get(node.index()).copied().unwrap_or(0)
+    }
+
+    /// **The version this node's shaped line is keyed on** (§9) — see the
+    /// `text_versions` field for why it is not [`version`](NodeStore::version).
+    pub fn text_version(&self, node: NodeIndex) -> u32 {
+        self.text_versions.get(node.index()).copied().unwrap_or(0)
     }
 
     pub fn flags(&self, node: NodeIndex) -> NodeFlags {
@@ -450,11 +474,15 @@ impl NodeStore {
     pub fn set_size(&mut self, node: NodeIndex, size: Vec2) {
         self.sizes[node.index()] = size;
         self.touch(node);
+        // A resize changes the width the label wraps into, which is part of
+        // what `shape_line` produces — so this one *is* a re-shape.
+        self.touch_text(node);
     }
 
     pub fn set_style(&mut self, node: NodeIndex, style: ElementStyle) {
         self.styles[node.index()] = style;
         self.touch(node);
+        self.touch_text(node);
     }
 
     /// A mutable style. **Bumps the version on the way out**, unconditionally,
@@ -463,6 +491,7 @@ impl NodeStore {
     /// picture.
     pub fn style_mut(&mut self, node: NodeIndex) -> &mut ElementStyle {
         self.versions[node.index()] = self.versions[node.index()].wrapping_add(1);
+        self.text_versions[node.index()] = self.text_versions[node.index()].wrapping_add(1);
         &mut self.styles[node.index()]
     }
 
@@ -479,11 +508,20 @@ impl NodeStore {
     pub fn set_label(&mut self, node: NodeIndex, label: Option<String>) {
         self.cold[node.index()].label = label.map(Arc::from);
         self.touch(node);
+        self.touch_text(node);
     }
 
     /// Records that this node's appearance changed. See the `versions` field.
     fn touch(&mut self, node: NodeIndex) {
         let slot = &mut self.versions[node.index()];
+        *slot = slot.wrapping_add(1);
+    }
+
+    /// Records that this node's *glyphs* would come out differently. See the
+    /// `text_versions` field for the one write that deliberately does not call
+    /// this: a move.
+    fn touch_text(&mut self, node: NodeIndex) {
+        let slot = &mut self.text_versions[node.index()];
         *slot = slot.wrapping_add(1);
     }
 
@@ -552,6 +590,56 @@ mod version_tests {
         }
     }
 
+    /// **The one write that must move the appearance version and leave the
+    /// text version alone** (§9), and the four that must move both.
+    ///
+    /// This is what makes dragging a labelled node free of re-shaping. Keyed on
+    /// the appearance version the label would be re-shaped sixty times a second
+    /// during a drag — 7–11 µs each against 1.7 µs to paint a cached one — for
+    /// a line whose glyphs have not changed. A resize *is* in the second group,
+    /// because it changes the width the run wraps into and that is part of what
+    /// the text system produced.
+    #[test]
+    fn moving_a_node_does_not_reshape_its_label() {
+        let node = NodeIndex::new(0);
+
+        let mut moved = store();
+        let (appearance, text) = (moved.version(node), moved.text_version(node));
+        moved.set_position(node, Vec2::new(500.0, 500.0));
+        assert_ne!(moved.version(node), appearance, "the geometry moved");
+        assert_eq!(
+            moved.text_version(node),
+            text,
+            "the glyphs did not, so the shaped line must survive"
+        );
+
+        let reshaping: [Write; 4] = [
+            ("set_size", |s| {
+                s.set_size(NodeIndex::new(0), Vec2::new(80.0, 40.0))
+            }),
+            ("set_style", |s| {
+                s.set_style(NodeIndex::new(0), ElementStyle::default())
+            }),
+            ("style_mut", |s| {
+                s.style_mut(NodeIndex::new(0)).font.size = crate::models::FontSize::Large;
+            }),
+            ("set_label", |s| {
+                s.set_label(NodeIndex::new(0), Some("x".into()))
+            }),
+        ];
+
+        for (name, write) in reshaping {
+            let mut store = store();
+            let before = store.text_version(node);
+            write(&mut store);
+            assert_ne!(
+                store.text_version(node),
+                before,
+                "{name} changes the glyphs and must re-shape"
+            );
+        }
+    }
+
     /// The other half: a read must not invalidate anything, or a pure pan
     /// would miss the cache on every element it looked at.
     #[test]
@@ -572,6 +660,7 @@ mod version_tests {
     #[test]
     fn an_absent_node_has_a_version_rather_than_a_panic() {
         assert_eq!(store().version(NodeIndex::new(9_999)), 0);
+        assert_eq!(store().text_version(NodeIndex::new(9_999)), 0);
     }
 }
 

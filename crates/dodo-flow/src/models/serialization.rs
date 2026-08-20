@@ -449,6 +449,68 @@ mod tests {
         assert!(matches!(err, LoadError::Json(_)), "{err:?}");
     }
 
+    /// **§9's whole vocabulary survives a save and a reload** — the text on a
+    /// node, the label on an edge, a standalone text element, and every one of
+    /// the properties Phase 11's panel will edit.
+    ///
+    /// Stated as a full round trip rather than as field-by-field assertions,
+    /// because the failure this catches is a field that was added to the model
+    /// and forgotten in the format: `#[serde(default)]` makes that silent, and
+    /// the symptom is a document that opens with somebody's headings back at
+    /// Medium.
+    #[test]
+    fn text_and_every_text_property_survive_a_round_trip() {
+        use crate::models::{Color, TextAlign};
+
+        let mut original = FlowDocument::new();
+        let a = original.add_node(
+            ElementKind::default(),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(160.0, 60.0),
+        );
+        let b = original.add_node(
+            ElementKind::Text,
+            Vec2::new(300.0, 40.0),
+            Vec2::new(200.0, 22.0),
+        );
+        let edge = original.add_edge(Endpoint::node(a), Endpoint::node(b));
+
+        original.node_mut(a).unwrap().label = Some("a heading".into());
+        {
+            let font = &mut original.node_mut(a).unwrap().style.font;
+            font.size = FontSize::ExtraLarge;
+            font.family = FontFamily::HandDrawn;
+            font.align = TextAlign::Center;
+            font.color = Some(Color::from_rgba8(178, 242, 187, 255));
+        }
+
+        original.node_mut(b).unwrap().label = Some("standalone".into());
+        original.node_mut(b).unwrap().style.font.size = FontSize::Small;
+        original.node_mut(b).unwrap().style.font.family = FontFamily::Code;
+
+        let edge_index = original
+            .edges
+            .iter()
+            .position(|e| e.id == edge)
+            .expect("the edge is there");
+        original.edges[edge_index].label = Some("carries".into());
+        original.edges[edge_index].style.font.align = TextAlign::Right;
+
+        let loaded = FlowDocument::from_json(&original.to_json().unwrap()).expect("loads");
+        assert_eq!(loaded, original);
+
+        // And the four steps really are written as names rather than numbers,
+        // which is what makes them readable in a diff and stable across a
+        // change to the world sizes.
+        let value: Value = serde_json::from_str(&original.to_json().unwrap()).unwrap();
+        assert_eq!(
+            value["nodes"][0]["style"]["font"]["size"],
+            json!("ExtraLarge")
+        );
+        assert_eq!(value["nodes"][1]["style"]["font"]["family"], json!("Code"));
+        assert_eq!(value["edges"][0]["label"], json!("carries"));
+    }
+
     /// **The ladder's first real rung, driven through the real loader.**
     ///
     /// A version-1 document is what every build before Phase 10 wrote, and its

@@ -2028,6 +2028,183 @@ mod tests {
         }
     }
 
+    // ---- §9's text editing ----------------------------------------------
+
+    use crate::models::EdgeIndex;
+
+    fn double_click(target: PointerTarget, world: Vec2) -> InteractionEvent {
+        InteractionEvent::DoubleClick { world, target }
+    }
+
+    /// **The three things a double-click can land on, and the three targets
+    /// they mean.** This is requirement 4 in one test: a node edits its text,
+    /// an edge its label, empty canvas places new text.
+    #[test]
+    fn a_double_click_opens_a_caret_on_whatever_it_landed_on() {
+        let edge = EdgeIndex::new(4);
+        let cases = [
+            (PointerTarget::Node(NODE), TextTarget::Node(NODE)),
+            (PointerTarget::Edge(edge), TextTarget::Edge(edge)),
+            (
+                // A handle is *on* its node and carries no text of its own, so
+                // it edits the node — which is what a user aiming at the edge
+                // of a small node actually asked for.
+                PointerTarget::Handle {
+                    node: NODE,
+                    handle: HANDLE,
+                },
+                TextTarget::Node(NODE),
+            ),
+        ];
+
+        for (landed, expected) in cases {
+            let mut machine = InteractionMachine::new();
+            assert_eq!(
+                machine.handle(double_click(landed, Vec2::new(50.0, 50.0))),
+                InteractionEffect::BeginTextEdit(expected),
+                "{landed:?}"
+            );
+            assert!(matches!(
+                machine.state(),
+                InteractionState::EditingText { .. }
+            ));
+        }
+
+        // Empty canvas is the fourth: a *pending* element, centred on the
+        // pointer, through the same `creation_rect` a Text-tool click uses.
+        let mut machine = InteractionMachine::new();
+        let InteractionEffect::BeginTextEdit(TextTarget::New(rect)) =
+            machine.handle(double_click(PointerTarget::Empty, Vec2::new(300.0, -50.0)))
+        else {
+            panic!("empty canvas must place new text");
+        };
+        assert_eq!(rect.center(), Vec2::new(300.0, -50.0));
+        assert_eq!(rect.size, CanvasTool::Text.default_size());
+    }
+
+    /// **The Text tool's release opens a caret rather than committing.**
+    ///
+    /// The negative half is what stops an invisible element: no `CommitCreate`
+    /// is ever emitted for text, so nothing downstream can add one.
+    #[test]
+    fn the_text_tool_finishes_a_drag_by_opening_a_caret() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::SelectTool(CanvasTool::Text));
+        machine.handle(press(
+            PointerButton::Left,
+            PointerTarget::Empty,
+            Vec2::new(20.0, 30.0),
+            InputModifiers::NONE,
+        ));
+        machine.handle(move_to(Vec2::new(220.0, 52.0), Vec2::new(220.0, 52.0)));
+
+        let InteractionEffect::BeginTextEdit(TextTarget::New(rect)) =
+            machine.handle(up(PointerButton::Left))
+        else {
+            panic!("the text tool must not commit an element");
+        };
+        assert_eq!(rect.origin, Vec2::new(20.0, 30.0));
+        assert_eq!(rect.size, Vec2::new(200.0, 22.0));
+        assert_eq!(
+            machine.tool(),
+            CanvasTool::Select,
+            "it still lands back on Select, lock aside"
+        );
+    }
+
+    /// **A caret is left three ways, and only two of them reach the document.**
+    #[test]
+    fn a_caret_is_committed_by_enter_or_a_press_and_abandoned_by_escape() {
+        let target = TextTarget::Node(NODE);
+
+        let mut by_enter = InteractionMachine::new();
+        by_enter.handle(double_click(PointerTarget::Node(NODE), Vec2::ZERO));
+        assert_eq!(
+            by_enter.handle(InteractionEvent::FinishTextEdit),
+            InteractionEffect::CommitTextEdit(target)
+        );
+        assert!(by_enter.is_idle());
+
+        // Clicking away commits, which is what it means everywhere else — and
+        // the press is consumed rather than also starting a gesture, because
+        // this file's rule is one effect per event.
+        let mut by_press = InteractionMachine::new();
+        by_press.handle(double_click(PointerTarget::Node(NODE), Vec2::ZERO));
+        assert_eq!(
+            by_press.handle(press(
+                PointerButton::Left,
+                PointerTarget::Empty,
+                Vec2::splat(400.0),
+                InputModifiers::NONE
+            )),
+            InteractionEffect::CommitTextEdit(target)
+        );
+        assert!(by_press.is_idle());
+
+        let mut by_escape = InteractionMachine::new();
+        by_escape.handle(double_click(PointerTarget::Node(NODE), Vec2::ZERO));
+        assert_eq!(
+            by_escape.handle(InteractionEvent::Cancel),
+            InteractionEffect::CancelTextEdit
+        );
+        assert!(by_escape.is_idle());
+    }
+
+    /// A caret is not a drag, so the pointer moving over one and any stray
+    /// release both mean nothing — and a second double-click cannot open an
+    /// editor over the first.
+    #[test]
+    fn a_caret_ignores_moves_releases_and_a_second_double_click() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(double_click(PointerTarget::Node(NODE), Vec2::ZERO));
+
+        for event in [
+            move_to(Vec2::splat(9.0), Vec2::splat(9.0)),
+            up(PointerButton::Left),
+            double_click(PointerTarget::Node(NODE), Vec2::ZERO),
+        ] {
+            assert_eq!(machine.handle(event), InteractionEffect::None);
+            assert!(matches!(
+                machine.state(),
+                InteractionState::EditingText { .. }
+            ));
+        }
+    }
+
+    /// A double-click that arrives mid-drag is a stray second press the
+    /// platform coalesced. Opening an editor under a moving hand is worse than
+    /// ignoring it.
+    #[test]
+    fn a_double_click_during_a_gesture_is_ignored() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(down_on(PointerButton::Left, PointerTarget::Node(NODE)));
+
+        assert_eq!(
+            machine.handle(double_click(PointerTarget::Node(NODE), Vec2::ZERO)),
+            InteractionEffect::None
+        );
+        assert!(machine.dragging_node().is_some());
+    }
+
+    /// **A press on an edge starts a rubber band**, exactly as one on empty
+    /// canvas does. Adding the variant made three `== PointerTarget::Empty`
+    /// comparisons silently wrong, and a press that started *nothing* reads as
+    /// a canvas that has stopped responding.
+    #[test]
+    fn a_press_on_an_edge_behaves_like_a_press_on_the_canvas() {
+        let mut machine = InteractionMachine::new();
+        let effect = machine.handle(down_on(
+            PointerButton::Left,
+            PointerTarget::Edge(EdgeIndex::new(1)),
+        ));
+
+        assert!(matches!(effect, InteractionEffect::BeginBoxSelect(_)));
+        assert!(matches!(
+            machine.state(),
+            InteractionState::BoxSelecting { .. }
+        ));
+    }
+
     /// The middle button still pans under every tool. A creating tool that
     /// swallowed the pan would leave a user unable to scroll while drawing.
     #[test]

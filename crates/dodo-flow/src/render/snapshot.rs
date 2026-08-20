@@ -119,6 +119,10 @@ pub struct CanvasNode {
     pub detailed: bool,
     /// The quantised label size, or `None`.
     pub label_font_size: Option<f32>,
+    /// **The version this node's shaped line is keyed on** (§9) — its
+    /// [`NodeStore::text_version`](crate::runtime::NodeStore::text_version),
+    /// not the geometry one beside it, so a dragged node does not re-shape.
+    pub text_version: u32,
 }
 
 /// An edge that survived the ladder's count cap.
@@ -370,12 +374,23 @@ impl RenderSnapshot {
             // **The element's own step, not the frame's default** (§9). Two
             // nodes at two authored sizes get two answers from the same rung,
             // and each disappears at the zoom where *it* stops being readable.
-            let label_font_size =
-                if visual.shows_label && detailed && nodes.cold(node).label.is_some() {
-                    lod.font_size_for(&thresholds, nodes.style(node).font.world_size())
-                } else {
-                    None
-                };
+            //
+            // **`detailed` is not asked of a text element**, and that is a
+            // finding rather than an exception. `min_detailed_node_px` asks
+            // whether a *body* is big enough to be worth a border and a line of
+            // label **inside** it — 24 px, "two node bodies' worth of border
+            // and a label's line height". A standalone text element has no
+            // border and no body: it is exactly one line tall, 22 world units
+            // by default, so it would never qualify and the whole kind would
+            // have been invisible at 100 % zoom. The only legibility question
+            // it has is whether its glyphs can be read, and `font_size_for` is
+            // already the answer to that.
+            let laid_out = visual.shows_label
+                && nodes.cold(node).label.is_some()
+                && (detailed || visual.body == NodeShape::Text);
+            let label_font_size = laid_out
+                .then(|| lod.font_size_for(&thresholds, nodes.style(node).font.world_size()))
+                .flatten();
 
             let wants_element = lod.detail == DetailLevel::Full
                 && detailed
@@ -407,6 +422,7 @@ impl RenderSnapshot {
                 selected,
                 detailed,
                 label_font_size,
+                text_version: nodes.text_version(node),
             });
         }
     }
