@@ -344,10 +344,21 @@ pub struct TextPrimitive {
     /// Where the shaped-line cache files this run. See
     /// [`crate::render::cache::ShapedLineCache`].
     pub key: TextKey,
-    /// The width the run is laid out into, in screen pixels — the element's
-    /// inner width. A run wider than this is truncated by the painter rather
-    /// than allowed to spill across its neighbours.
+    /// The element's inner width in screen pixels — **the box, exactly**, and
+    /// what [`align`](TextPrimitive::align) positions the run inside.
+    ///
+    /// Kept exact rather than quantised, because a right-aligned label snapped
+    /// onto an eight-pixel grid would sit visibly short of its own border.
     pub max_width: f32,
+    /// **The width the text wraps into**, in screen pixels — already snapped
+    /// onto [`TextKey::quantize_wrap_width`](crate::render::cache::TextKey::quantize_wrap_width),
+    /// which is the same number [`key`](TextPrimitive::key) records.
+    ///
+    /// Its own field rather than a reuse of [`max_width`](TextPrimitive::max_width)
+    /// because the two answer different questions and only one of them is part
+    /// of the shaped result: where a line breaks is baked into the cache entry,
+    /// and where the block sits inside its box is arithmetic applied after.
+    pub wrap_width: f32,
     /// Which face to shape with. Resolved against the theme by the painter,
     /// which is the only layer that knows what is installed — see
     /// [`FontFamily`](crate::models::FontFamily).
@@ -358,6 +369,42 @@ pub struct TextPrimitive {
     /// run's *measured* width, and only the painter has shaped it. Baking it
     /// here would mean shaping twice or guessing.
     pub align: TextAlign,
+}
+
+impl TextPrimitive {
+    /// **§9's line-height model**, and it is one number on purpose.
+    ///
+    /// Phase 10 painted a single line at `font_size * 1.3` and said a real
+    /// model belonged with multi-line text. This is that model: the same 1.3,
+    /// promoted from a literal in the painter to the constant both the painter
+    /// and the vertical centring read, so a block of four lines is exactly four
+    /// times as tall as the one line it replaced.
+    ///
+    /// It is deliberately not a style field. A per-element line height is a
+    /// document-format change and a fifth thing in every text cache key; the
+    /// canvas has no control that would set one, and a constant that is wrong
+    /// for nobody beats a field that is unreachable for everybody.
+    pub const LINE_HEIGHT_RATIO: f32 = 1.3;
+
+    /// One line's height in screen pixels.
+    pub fn line_height(&self) -> f32 {
+        self.font_size * TextPrimitive::LINE_HEIGHT_RATIO
+    }
+
+    /// **How far up a block of `lines` has to move to stay centred where one
+    /// line was.**
+    ///
+    /// [`origin`](TextPrimitive::origin) is built before anything is shaped, so
+    /// it is the top-left of a *single* line centred on the element — the only
+    /// answer available to a scene builder that does not know how many lines
+    /// the text will take. The painter knows, and applies this.
+    ///
+    /// Zero for one line, which is what makes wrapping a superset of Phase 10's
+    /// placement rather than a change to it: an unwrapped label lands on the
+    /// same pixel it always did.
+    pub fn vertical_offset(&self, lines: u32) -> f32 {
+        -(lines.saturating_sub(1) as f32) * self.line_height() * 0.5
+    }
 }
 
 /// What one frame actually painted.
@@ -725,12 +772,56 @@ mod tests {
         TextPrimitive {
             origin: Vec2::ZERO,
             text: "abc".into(),
-            key: TextKey::node(crate::models::NodeIndex::new(0), 1, 12.0),
+            key: TextKey::node(crate::models::NodeIndex::new(0), 1, 12.0, 100.0),
             max_width: 100.0,
+            wrap_width: 100.0,
             font_size: 12.0,
             color: Color::WHITE,
             family: FontFamily::default(),
             align: TextAlign::default(),
+        }
+    }
+
+    /// **The line-height model** (Phase 10.5), and the property that makes
+    /// wrapping a superset of Phase 10's single line rather than a change to
+    /// it.
+    ///
+    /// A scene builder centres one line on its element, because that is all it
+    /// can know before anything is shaped. The painter learns how many lines
+    /// there really were and lifts the block by half of every line past the
+    /// first — so one line lands on the pixel it always did, and a block of any
+    /// height stays centred on the same point.
+    #[test]
+    fn a_wrapped_block_stays_centred_where_one_line_was() {
+        let text = a_text();
+        let line = text.line_height();
+
+        assert_eq!(line, 12.0 * TextPrimitive::LINE_HEIGHT_RATIO);
+        assert_eq!(
+            text.vertical_offset(1),
+            0.0,
+            "an unwrapped label moved, so every Phase 10 placement shifted"
+        );
+        assert_eq!(
+            text.vertical_offset(0),
+            0.0,
+            "no lines is not a negative lift"
+        );
+
+        // Two lines: the block is one line taller, so it rises half a line.
+        assert_eq!(text.vertical_offset(2), -line * 0.5);
+        assert_eq!(text.vertical_offset(5), -line * 2.0);
+
+        // The centre of the block is the centre of the single line it replaced,
+        // whatever the count — the statement the arithmetic above is for.
+        for lines in 1..8_u32 {
+            let top = text.vertical_offset(lines);
+            let centre = top + line * lines as f32 * 0.5;
+            assert!(
+                (centre - line * 0.5).abs() < 1e-4,
+                "{lines} lines centred at {centre} instead of {}",
+                line * 0.5
+            );
         }
     }
 

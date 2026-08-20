@@ -183,12 +183,23 @@ fn decorated(
                     div()
                         .flex_1()
                         // Without this a long label pushes the row wider
-                        // than the node instead of truncating — the
+                        // than the node instead of wrapping inside it — the
                         // `min_w_0` rule dodo's other tools also live by.
                         .min_w_0()
                         .text_size(px(font_size))
                         .text_color(theme.foreground)
-                        .truncate()
+                        // **Wrapping, not truncation** (Phase 10.5), because a
+                        // rich node and a canvas node are the same element seen
+                        // through two zoom rungs and they must not disagree
+                        // about what a label does. `truncate()` — which is
+                        // `overflow_hidden` + `whitespace_nowrap` +
+                        // `text_ellipsis` — kept the ellipsis behaviour here
+                        // while `render::painter` wrapped, so a sentence read
+                        // as "a long lab…" at 100 % and as three lines at 60 %.
+                        // Only the clipping is kept: it is what stops an
+                        // unbroken word from reaching a neighbour, and GPUI's
+                        // wrapper already breaks one that cannot fit.
+                        .overflow_hidden()
                         .child(label.to_string()),
                 )
                 .into_any_element(),

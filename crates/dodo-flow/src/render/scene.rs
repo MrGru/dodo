@@ -734,6 +734,12 @@ fn plan_labels(
         }
 
         let font = &world.nodes().style(canvas.node).font;
+        // **Node text wraps to its host's width** (§9), which is the inner
+        // rectangle above: a text element uses its whole box and every other
+        // body insets by its padding, so the rule is the same sentence for both
+        // and the padding is the only difference. Quantised here rather than in
+        // the painter so the primitive and its cache key carry one number.
+        let wrap_width = TextKey::quantize_wrap_width(inner.size.x);
         plan.push_text(TextPrimitive {
             // Vertically centred on the body, which is where a node's label
             // belongs; the painter subtracts the line's own height.
@@ -746,8 +752,9 @@ fn plan_labels(
                 font.color.unwrap_or(ink.text),
                 world.nodes().style(canvas.node).opacity,
             ),
-            key: TextKey::node(canvas.node, canvas.text_version, font_size),
+            key: TextKey::node(canvas.node, canvas.text_version, font_size, wrap_width),
             max_width: inner.size.x,
+            wrap_width,
             family: font.family,
             align: font.align,
         });
@@ -811,8 +818,20 @@ fn plan_edge_labels(
             text: Arc::clone(label),
             font_size,
             color: fade(style.font.color.unwrap_or(ink.text), style.opacity),
-            key: TextKey::edge(planned.edge, planned.version, font_size),
+            key: TextKey::edge(
+                planned.edge,
+                planned.version,
+                font_size,
+                EDGE_LABEL_MAX_PIXELS,
+            ),
             max_width: EDGE_LABEL_MAX_PIXELS,
+            // **An edge label wraps to a constant screen width**, not to
+            // anything about its route. An edge has no rectangle to lay text
+            // into, so the box below is invented at the size a label is allowed
+            // to take — and being a *screen* constant it needs no quantisation
+            // and never re-wraps on a zoom, which is the one place edge labels
+            // are cheaper than node labels rather than dearer.
+            wrap_width: EDGE_LABEL_MAX_PIXELS,
             family: style.font.family,
             // **Centred whatever the style says**, because the box is centred
             // on the route rather than anchored to anything the author placed.
@@ -1247,6 +1266,37 @@ mod tests {
         sink.labels
     }
 
+    /// Every label's text, the box it is aligned in and the width it wraps
+    /// into (Phase 10.5).
+    ///
+    /// A second collector rather than a wider tuple on [`labels_of`], so the
+    /// tests that ask about keys and positions read exactly as they did.
+    fn wraps_of(plan: &PaintPlan) -> Vec<(std::sync::Arc<str>, f32, f32)> {
+        #[derive(Default)]
+        struct WrapSink {
+            widths: Vec<(std::sync::Arc<str>, f32, f32)>,
+        }
+
+        impl crate::render::PrimitiveSink for WrapSink {
+            fn quad(&mut self, _quad: &crate::render::QuadPrimitive) {}
+            fn path(&mut self, _path: &crate::render::PathPrimitive) -> u32 {
+                0
+            }
+            fn text(&mut self, text: &crate::render::plan::TextPrimitive) -> u32 {
+                self.widths.push((
+                    std::sync::Arc::clone(&text.text),
+                    text.max_width,
+                    text.wrap_width,
+                ));
+                1
+            }
+        }
+
+        let mut sink = WrapSink::default();
+        plan.paint_into(&mut sink);
+        sink.widths
+    }
+
     /// Two labelled nodes joined by a labelled edge — the smallest document
     /// that exercises all three of §9's text carriers.
     fn labelled_pair() -> GraphWorld {
@@ -1374,6 +1424,122 @@ mod tests {
         );
     }
 
+    // ---- Phase 10.5: what each kind of text wraps into -------------------
+
+    /// **The wrap rule, stated for all three carriers at once.**
+    ///
+    /// - Node text wraps to its **host's inner width** — the box minus its
+    ///   label padding, because the run sits inside a border it must not touch.
+    /// - A standalone text element wraps to its **whole box**: it has no border
+    ///   to keep clear of, and inset text would start six pixels from where the
+    ///   user put it.
+    /// - An edge label wraps to a **constant screen width**, because an edge
+    ///   has no rectangle to lay text into — see [`EDGE_LABEL_MAX_PIXELS`].
+    ///
+    /// Leaving that implicit is how a later phase discovers that two of the
+    /// three wrap somewhere nobody chose.
+    #[test]
+    fn each_kind_of_text_wraps_to_the_width_its_own_rule_names() {
+        let mut world = labelled_pair();
+        let text = world.create_node(
+            ElementKind::Text,
+            Vec2::new(60.0, 400.0),
+            Vec2::new(240.0, 22.0),
+        );
+        world.set_node_label(text, Some("standalone".into()));
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let viewport = pane();
+        let zoom = viewport.zoom();
+        let (plan, _) = frame_without_grid(&world, &viewport);
+        let widths = wraps_of(&plan);
+
+        let width_of = |label: &str| -> (f32, f32) {
+            widths
+                .iter()
+                .find(|(text, _, _)| text.as_ref() == label)
+                .map(|(_, max, wrap)| (*max, *wrap))
+                .unwrap_or_else(|| panic!("{label} did not reach the plan"))
+        };
+
+        // A 160-unit node at zoom 0.5 is 80 screen pixels wide, less the
+        // padding on both sides.
+        let (node_max, node_wrap) = width_of("source");
+        assert_eq!(node_max, 160.0 * zoom - LABEL_PADDING_PIXELS * 2.0);
+        assert_eq!(node_wrap, TextKey::quantize_wrap_width(node_max));
+
+        // The text element uses its whole rectangle: no padding subtracted.
+        let (text_max, text_wrap) = width_of("standalone");
+        assert_eq!(text_max, 240.0 * zoom);
+        assert_eq!(text_wrap, TextKey::quantize_wrap_width(text_max));
+
+        // And the edge's box is invented at a constant screen width, so it is
+        // its own quantum already and never re-wraps on a zoom.
+        let (edge_max, edge_wrap) = width_of("carries");
+        assert_eq!(edge_max, EDGE_LABEL_MAX_PIXELS);
+        assert_eq!(edge_wrap, EDGE_LABEL_MAX_PIXELS);
+    }
+
+    /// **A wrapped label follows a moved node without being re-wrapped**, and a
+    /// *resized* one is re-wrapped exactly once.
+    ///
+    /// The pair is the requirement. Phase 10 found a moved node re-shaping its
+    /// label sixty times a second, and wrapping multiplies whatever that costs:
+    /// a paragraph is several shaped lines, not one. A resize is the case that
+    /// genuinely must miss, because the width a run wraps into is part of the
+    /// laid-out result — and `text_version` already bumps for it, which is why
+    /// this needed no new plumbing.
+    #[test]
+    fn a_moved_node_keeps_its_wrap_and_a_resized_one_earns_a_new_one() {
+        let mut world = labelled_pair();
+        let viewport = pane();
+        let node = NodeIndex::new(0);
+
+        let key_and_wrap = |world: &GraphWorld| {
+            let (plan, _) = frame_without_grid(world, &viewport);
+            let key = labels_of(&plan)
+                .into_iter()
+                .find(|(_, _, text)| text.as_ref() == "source")
+                .map(|(key, _, _)| key)
+                .expect("the label reached the plan");
+            let wrap = wraps_of(&plan)
+                .into_iter()
+                .find(|(text, _, _)| text.as_ref() == "source")
+                .map(|(_, _, wrap)| wrap)
+                .expect("the label reached the plan");
+            (key, wrap)
+        };
+
+        let (key, wrap) = key_and_wrap(&world);
+
+        world.move_node(node, Vec2::new(0.0, 120.0));
+        world.rebuild_dirty_geometry();
+        let (moved_key, moved_wrap) = key_and_wrap(&world);
+
+        assert_eq!(moved_key, key, "a move re-wrapped the label");
+        assert_eq!(moved_wrap, wrap);
+
+        world.set_node_size(node, Vec2::new(320.0, 60.0));
+        world.rebuild_dirty_geometry();
+        let (resized_key, resized_wrap) = key_and_wrap(&world);
+
+        assert!(
+            resized_wrap > wrap,
+            "a wider node did not give its text more room: {resized_wrap} vs {wrap}"
+        );
+        assert_ne!(
+            resized_key, key,
+            "a resized node served its old paragraph, laid out for a box it \
+             has left"
+        );
+        assert_eq!(
+            resized_key.wrap_width,
+            (resized_wrap * 10.0).round() as u32,
+            "the key and the primitive disagree about the wrap width"
+        );
+    }
+
     /// **§40 rule 7, extended to text**: a pure pan re-shapes nothing.
     ///
     /// Phase 4 asserted this for edge routes and Phase 5 for tessellations;
@@ -1382,6 +1548,10 @@ mod tests {
     /// panned frames and counts its misses, rather than comparing keys by eye —
     /// the cache's retention window is part of the answer and only the cache
     /// knows it.
+    ///
+    /// It covers the wrap width for free, because Phase 10.5 put the wrap width
+    /// **in the key**: a pan changes no element's screen size, so a wrapped
+    /// paragraph is laid out once here too.
     #[test]
     fn a_pure_pan_shapes_every_label_once_and_never_again() {
         use crate::render::cache::ShapedLineCache;

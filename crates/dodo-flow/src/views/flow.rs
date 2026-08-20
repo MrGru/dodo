@@ -89,7 +89,7 @@ use gpui::{
     App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior,
     InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Path, PinchEvent, Pixels, Point, Render,
-    ScrollWheelEvent, ShapedLine, SharedString, Styled, Window, canvas, div, px,
+    ScrollWheelEvent, SharedString, Styled, Window, canvas, div, px,
 };
 use gpui::{AppContext as _, Div};
 use gpui_component::{
@@ -113,10 +113,10 @@ use crate::{
     render::{
         GridLevel, GridLimits, GridSettings, PaintPlan, PaintStats, SceneInk, SceneOptions,
         SceneStats, WindowPainter,
-        cache::{CacheStats, GeometryCache, ShapedLineCache},
+        cache::{CacheStats, GeometryCache},
         edges,
         lod::LodPlan,
-        painter::{self, from_hsla},
+        painter::{self, TextCache, from_hsla},
         plan::{PathPrimitive, QuadPrimitive},
         registry::NodeRendererRegistry,
         scene,
@@ -259,7 +259,7 @@ pub struct FlowView {
     /// and must not reallocate them.
     snapshot: RenderSnapshot,
     geometry_cache: GeometryCache<Path<Pixels>>,
-    text_cache: ShapedLineCache<ShapedLine>,
+    text_cache: TextCache,
     /// §43's registry. Held here so a launcher or an embedding app can register
     /// its own node kinds against a mounted canvas.
     registry: NodeRendererRegistry,
@@ -284,9 +284,9 @@ pub struct FlowView {
     /// Whether [`reporting`]'s one-shot line has been printed.
     reported: bool,
 
-    /// The text colour the shaped-line cache was filled at. A `ShapedLine`
-    /// bakes its colour at shape time, and dodo applies a theme change live, so
-    /// a changed ink is a cache that has to go.
+    /// The text colour the text cache was filled at. A shaped line bakes its
+    /// colour at shape time, and dodo applies a theme change live, so a changed
+    /// ink is a cache that has to go.
     text_ink: Option<Color>,
 
     /// §9's three faces, and the theme's two font names they were resolved
@@ -358,7 +358,7 @@ impl FlowView {
             instruments: Instruments::from_env(),
             snapshot: RenderSnapshot::new(),
             geometry_cache: GeometryCache::new(&budgets),
-            text_cache: ShapedLineCache::new(&budgets),
+            text_cache: TextCache::new(&budgets),
             registry: NodeRendererRegistry::with_generic_kinds(),
             hovered: None,
             pane: Vec2::ZERO,
@@ -965,7 +965,7 @@ impl FlowView {
         let pane = Vec2::new(bounds.size.width.as_f32(), bounds.size.height.as_f32());
         let ink = self.sync_theme(cx);
 
-        // A `ShapedLine` bakes its colour at shape time and dodo applies a
+        // A shaped line bakes its colour at shape time and dodo applies a
         // theme change live, so a changed ink is a cache that has to go. One
         // comparison a frame, against a re-shape of every visible label the
         // first time somebody switches theme.

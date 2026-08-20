@@ -649,22 +649,59 @@ pub struct TextKey {
     /// is neither `Eq` nor `Hash`, and for the same reason
     /// [`RenderQuality::cache_key`] is one.
     pub font_size: u32,
+    /// **The quantised wrap width**, in tenths of a screen pixel.
+    ///
+    /// Phase 10.5's addition, and it is not optional: once text wraps, the
+    /// width it wraps into decides where every line break falls, so a cache
+    /// that ignored it would serve a paragraph laid out for a box the element
+    /// has since left. Phase 10 could omit it only because
+    /// [`shape_line`](https://docs.rs/gpui) has no wrap width at all — see
+    /// [`crate::render::painter`] for what that argument really was.
+    ///
+    /// Quantised for exactly the reason the font size is: a node's wrap width
+    /// is its *screen* width, so it changes on every frame of a zoom, and an
+    /// unquantised one would re-wrap every visible paragraph sixty times a
+    /// second. [`TextKey::quantize_wrap_width`] is the grid, and it snaps
+    /// **down** so the text never wraps wider than the box holding it.
+    pub wrap_width: u32,
 }
 
 impl TextKey {
-    pub fn node(node: NodeIndex, version: u32, font_size: f32) -> TextKey {
-        TextKey::new(TextOwner::Node(node), version, font_size)
+    /// The screen-pixel grid a wrap width is snapped down onto.
+    ///
+    /// Eight pixels is a little over half a character at the ladder's middle
+    /// rung, so a paragraph wraps at most one short word early; a continuous
+    /// zoom over a 160-pixel node asks for about twenty widths instead of one
+    /// per frame. It buys the cache back, and it costs up to eight pixels of
+    /// unused width on the right of a wrapped paragraph — a trade this is the
+    /// one place to re-make.
+    pub const WRAP_WIDTH_QUANTUM: f32 = 8.0;
+
+    /// Snaps a wrap width down onto [`TextKey::WRAP_WIDTH_QUANTUM`], never
+    /// below one quantum.
+    ///
+    /// **The scene builder calls this and puts the answer in the primitive**,
+    /// so the width the painter shapes at and the width this key records are
+    /// the same number by construction rather than by two agreeing roundings.
+    pub fn quantize_wrap_width(width: f32) -> f32 {
+        let steps = (width / TextKey::WRAP_WIDTH_QUANTUM).floor().max(1.0);
+        steps * TextKey::WRAP_WIDTH_QUANTUM
     }
 
-    pub fn edge(edge: EdgeIndex, version: u32, font_size: f32) -> TextKey {
-        TextKey::new(TextOwner::Edge(edge), version, font_size)
+    pub fn node(node: NodeIndex, version: u32, font_size: f32, wrap_width: f32) -> TextKey {
+        TextKey::new(TextOwner::Node(node), version, font_size, wrap_width)
     }
 
-    pub fn new(owner: TextOwner, version: u32, font_size: f32) -> TextKey {
+    pub fn edge(edge: EdgeIndex, version: u32, font_size: f32, wrap_width: f32) -> TextKey {
+        TextKey::new(TextOwner::Edge(edge), version, font_size, wrap_width)
+    }
+
+    pub fn new(owner: TextOwner, version: u32, font_size: f32, wrap_width: f32) -> TextKey {
         TextKey {
             owner,
             version,
             font_size: (font_size.max(0.0) * 10.0).round() as u32,
+            wrap_width: (wrap_width.max(0.0) * 10.0).round() as u32,
         }
     }
 }
@@ -1206,7 +1243,12 @@ mod tests {
         let mut keys: Vec<TextKey> = (1..=400)
             .map(|step| {
                 let rendered = lod.nominal_label_size * step as f32 / 100.0;
-                TextKey::node(NodeIndex::new(0), 1, lod.quantize_font_size(rendered))
+                TextKey::node(
+                    NodeIndex::new(0),
+                    1,
+                    lod.quantize_font_size(rendered),
+                    160.0,
+                )
             })
             .collect();
         keys.sort_unstable();
@@ -1219,13 +1261,97 @@ mod tests {
         );
     }
 
+    /// **The wrap width snaps down**, never up and never below one quantum.
+    ///
+    /// Down is the direction that matters: a width rounded *up* would wrap text
+    /// wider than the box holding it, which is the one failure wrapping is
+    /// supposed to remove.
+    #[test]
+    fn a_wrap_width_is_snapped_down_onto_its_grid() {
+        let quantum = TextKey::WRAP_WIDTH_QUANTUM;
+
+        for width in [8.0_f32, 63.9, 64.0, 64.1, 159.0, 160.0, 1_000.0] {
+            let snapped = TextKey::quantize_wrap_width(width);
+            assert!(
+                snapped <= width,
+                "{width} snapped up to {snapped}, so the text wraps wider than its box"
+            );
+            assert!(
+                width - snapped < quantum,
+                "{width} lost {} pixels",
+                width - snapped
+            );
+            assert_eq!(snapped % quantum, 0.0, "{snapped} is off the grid");
+        }
+
+        // A box narrower than one quantum still wraps somewhere, rather than at
+        // zero — a zero wrap width puts one character on each line forever.
+        assert_eq!(TextKey::quantize_wrap_width(0.0), quantum);
+        assert_eq!(TextKey::quantize_wrap_width(-40.0), quantum);
+        assert_eq!(TextKey::quantize_wrap_width(3.0), quantum);
+    }
+
+    /// **The wrap result is cached rather than recomputed**, over a zoom.
+    ///
+    /// The companion to `quantised_sizes_collapse_a_zoom_sweep_into_a_few_text_keys`
+    /// and the reason the wrap width had to be quantised at all: a node's wrap
+    /// width is its *screen* width, so it changes on every frame of a zoom, and
+    /// an exact one in the key would re-wrap every visible paragraph sixty
+    /// times a second — which is precisely the cost §23's cache exists to
+    /// remove, reintroduced through a new field.
+    #[test]
+    fn a_zoom_sweep_re_wraps_a_paragraph_a_handful_of_times() {
+        let lod = budgets().lod;
+        // A 160-unit node swept from 25 % to 400 %.
+        let mut keys: Vec<TextKey> = (25..=400)
+            .map(|percent| {
+                let zoom = percent as f32 / 100.0;
+                TextKey::node(
+                    NodeIndex::new(0),
+                    1,
+                    lod.quantize_font_size(lod.nominal_label_size * zoom),
+                    TextKey::quantize_wrap_width(160.0 * zoom),
+                )
+            })
+            .collect();
+        let frames = keys.len();
+        keys.sort_unstable();
+        keys.dedup();
+
+        assert!(
+            keys.len() * 4 < frames,
+            "{frames} zoom steps produced {} distinct layouts",
+            keys.len()
+        );
+    }
+
+    /// A paragraph laid out for one box must not be served under another, which
+    /// is the correctness half of the field above.
+    #[test]
+    fn a_narrower_box_is_a_different_paragraph() {
+        let mut cache: ShapedLineCache<u32> = ShapedLineCache::new(&budgets());
+        let wide = TextKey::node(NodeIndex::new(0), 1, 16.0, 240.0);
+        let narrow = TextKey::node(NodeIndex::new(0), 1, 16.0, 120.0);
+
+        assert_ne!(wide, narrow);
+
+        cache.begin_frame();
+        cache.insert(wide, 1);
+        assert_eq!(
+            cache.get(&narrow),
+            None,
+            "the wide layout answered for the narrow box"
+        );
+        assert_eq!(cache.get(&wide), Some(&1));
+    }
+
     /// The whole reason the engine owns this cache: GPUI's is two frames deep,
     /// so a label that leaves the viewport for one frame is re-shaped on
     /// return. This one is not.
     #[test]
     fn a_shaped_line_survives_longer_than_the_frameworks_two_frames() {
         let mut cache: ShapedLineCache<u32> = ShapedLineCache::new(&budgets());
-        let key = TextKey::node(NodeIndex::new(0), 1, 13.0);
+        let key = TextKey::node(NodeIndex::new(0), 1, 13.0, 160.0);
 
         cache.begin_frame();
         cache.insert(key, 42);
@@ -1249,8 +1375,8 @@ mod tests {
     fn a_node_and_an_edge_with_the_same_index_are_different_lines() {
         let mut cache: ShapedLineCache<u32> = ShapedLineCache::new(&budgets());
 
-        let node = TextKey::node(NodeIndex::new(3), 1, 16.0);
-        let edge = TextKey::edge(EdgeIndex::new(3), 1, 16.0);
+        let node = TextKey::node(NodeIndex::new(3), 1, 16.0, 160.0);
+        let edge = TextKey::edge(EdgeIndex::new(3), 1, 16.0, 160.0);
         assert_ne!(node, edge);
 
         cache.insert(node, 10);
@@ -1263,10 +1389,16 @@ mod tests {
     fn an_edited_label_is_a_different_shaped_line() {
         let mut cache: ShapedLineCache<u32> = ShapedLineCache::new(&budgets());
         cache.begin_frame();
-        cache.insert(TextKey::node(NodeIndex::new(0), 1, 13.0), 42);
+        cache.insert(TextKey::node(NodeIndex::new(0), 1, 13.0, 160.0), 42);
 
-        assert_eq!(cache.get(&TextKey::node(NodeIndex::new(0), 2, 13.0)), None);
-        assert_eq!(cache.get(&TextKey::node(NodeIndex::new(0), 1, 16.0)), None);
+        assert_eq!(
+            cache.get(&TextKey::node(NodeIndex::new(0), 2, 13.0, 160.0)),
+            None
+        );
+        assert_eq!(
+            cache.get(&TextKey::node(NodeIndex::new(0), 1, 16.0, 160.0)),
+            None
+        );
     }
 
     /// Four times the cache's capacity, offered one label at a time, with the
@@ -1283,7 +1415,7 @@ mod tests {
         cache.begin_frame();
 
         for index in 0..(budgets.max_shaped_lines * 4) {
-            cache.insert(TextKey::node(NodeIndex::new(index), 1, 13.0), index);
+            cache.insert(TextKey::node(NodeIndex::new(index), 1, 13.0, 160.0), index);
             assert!(cache.len() <= budgets.max_shaped_lines as usize);
         }
     }
@@ -1292,7 +1424,7 @@ mod tests {
     fn an_unused_shaped_line_is_dropped_after_the_retention_window() {
         let mut cache: ShapedLineCache<u32> = ShapedLineCache::new(&budgets());
         cache.begin_frame();
-        cache.insert(TextKey::node(NodeIndex::new(0), 1, 13.0), 42);
+        cache.insert(TextKey::node(NodeIndex::new(0), 1, 13.0, 160.0), 42);
         cache.end_frame();
 
         for _ in 0..RETAIN_FRAMES {
