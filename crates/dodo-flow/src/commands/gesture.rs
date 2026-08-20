@@ -331,6 +331,184 @@ mod tests {
         }
     }
 
+    /// Drives one whole resize the way a person performs it, through the real
+    /// machine and the real mapping.
+    ///
+    /// Answers the frame the drag ended on and the number of undo steps it
+    /// cost, because those are the two questions every resize test below asks.
+    fn resize(
+        editor: &mut FlowEditor,
+        node: NodeIndex,
+        corner: crate::geometry::ResizeCorner,
+        to: Vec2,
+        keeps_aspect: bool,
+    ) -> (crate::geometry::Rect, usize) {
+        let depth = editor.history().undo_depth();
+        let frame = editor.world().nodes().bounds(node);
+
+        let mut machine = InteractionMachine::new();
+        let effect = machine.handle(InteractionEvent::BeginResize {
+            node,
+            corner,
+            frame,
+            keeps_aspect,
+        });
+        apply_gesture(editor, effect);
+
+        // Ten moves rather than one: a resize that is only correct for its last
+        // event is a resize whose coalescing is wrong.
+        let start = corner.of(frame);
+        for step in 1..=10 {
+            let at = start + (to - start) * (step as f32 / 10.0);
+            let effect = machine.handle(InteractionEvent::PointerMove {
+                screen: at,
+                world: at,
+            });
+            apply_gesture(editor, effect);
+        }
+
+        let effect = machine.handle(InteractionEvent::PointerUp {
+            button: PointerButton::Left,
+            world: to,
+            target: PointerTarget::Empty,
+        });
+        apply_gesture(editor, effect);
+
+        (
+            editor.world().nodes().bounds(node),
+            editor.history().undo_depth() - depth,
+        )
+    }
+
+    /// **A whole resize is one undo press**, however many moves it took — the
+    /// same requirement a drag has, met by two commands rather than one because
+    /// a corner drag moves the origin as well as the size.
+    #[test]
+    fn a_resize_drag_is_one_undo_step_and_undoes_exactly() {
+        use crate::geometry::ResizeCorner;
+
+        let (mut editor, node, _) = editor_with_two_nodes();
+        let before = editor.world().nodes().bounds(node);
+
+        let (after, steps) = resize(
+            &mut editor,
+            node,
+            ResizeCorner::BottomRight,
+            Vec2::new(300.0, 200.0),
+            false,
+        );
+
+        assert_eq!(steps, 1, "a resize drag cost {steps} undo presses");
+        assert!((after.size.x - 300.0).abs() < 1e-3, "{after:?}");
+        assert!((after.size.y - 200.0).abs() < 1e-3, "{after:?}");
+
+        assert!(editor.undo());
+        let restored = editor.world().nodes().bounds(node);
+        assert!(
+            (restored.origin - before.origin).length() < 1e-3
+                && (restored.size - before.size).length() < 1e-3,
+            "{restored:?} is not {before:?}"
+        );
+    }
+
+    /// **§10's aspect lock, through the gesture that spends it.** A locked drag
+    /// keeps the picture's proportions whatever the pointer does; the free one
+    /// beside it is the same drag with the lock off, and it is what a
+    /// shift-drag produces.
+    #[test]
+    fn a_locked_resize_keeps_the_picture_s_shape_and_a_free_one_does_not() {
+        use crate::geometry::ResizeCorner;
+
+        let (mut editor, node, _) = editor_with_two_nodes();
+        let aspect = {
+            let size = editor.world().nodes().size(node);
+            size.x / size.y
+        };
+
+        let (locked, _) = resize(
+            &mut editor,
+            node,
+            ResizeCorner::BottomRight,
+            Vec2::new(320.0, 400.0),
+            true,
+        );
+        assert!(
+            (locked.size.x / locked.size.y - aspect).abs() < 1e-3,
+            "the lock let the shape drift: {locked:?}"
+        );
+
+        editor.undo();
+
+        let (free, _) = resize(
+            &mut editor,
+            node,
+            ResizeCorner::BottomRight,
+            Vec2::new(320.0, 400.0),
+            false,
+        );
+        assert!(
+            (free.size.x / free.size.y - aspect).abs() > 0.5,
+            "the free drag kept the shape anyway: {free:?}"
+        );
+    }
+
+    /// **Dragging the top-left grip moves the origin**, which is why the effect
+    /// carries a whole rectangle rather than a size.
+    #[test]
+    fn resizing_from_the_top_left_holds_the_bottom_right_still() {
+        use crate::geometry::ResizeCorner;
+
+        let (mut editor, node, _) = editor_with_two_nodes();
+        let before = editor.world().nodes().bounds(node);
+
+        let (after, _) = resize(
+            &mut editor,
+            node,
+            ResizeCorner::TopLeft,
+            before.min() - Vec2::new(40.0, 20.0),
+            false,
+        );
+
+        assert!((after.max() - before.max()).length() < 1e-3, "{after:?}");
+        assert!((after.min() - (before.min() - Vec2::new(40.0, 20.0))).length() < 1e-3);
+    }
+
+    /// An abandoned resize is not an undo step, exactly as an abandoned drag is
+    /// not: the entries the gesture recorded are applied in reverse and
+    /// discarded.
+    #[test]
+    fn an_abandoned_resize_leaves_nothing_on_the_stack() {
+        use crate::geometry::ResizeCorner;
+
+        let (mut editor, node, _) = editor_with_two_nodes();
+        let before = editor.world().nodes().bounds(node);
+        let depth = editor.history().undo_depth();
+
+        let mut machine = InteractionMachine::new();
+        let effect = machine.handle(InteractionEvent::BeginResize {
+            node,
+            corner: ResizeCorner::BottomRight,
+            frame: before,
+            keeps_aspect: false,
+        });
+        apply_gesture(&mut editor, effect);
+        let effect = machine.handle(InteractionEvent::PointerMove {
+            screen: Vec2::new(500.0, 500.0),
+            world: Vec2::new(500.0, 500.0),
+        });
+        apply_gesture(&mut editor, effect);
+
+        let effect = machine.handle(InteractionEvent::Cancel);
+        apply_gesture(&mut editor, effect);
+
+        assert_eq!(editor.history().undo_depth(), depth);
+        let restored = editor.world().nodes().bounds(node);
+        assert!(
+            (restored.size - before.size).length() < 1e-3,
+            "{restored:?} is not {before:?}"
+        );
+    }
+
     /// Drives the real state machine through the drag a person performs, and
     /// feeds every effect through the real mapping. **The phase's coalescing
     /// requirement, with no window anywhere.**

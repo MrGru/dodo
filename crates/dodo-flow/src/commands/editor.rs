@@ -1244,6 +1244,196 @@ mod tests {
         assert!(!editor.commit_text(TextTarget::Edge(crate::models::EdgeIndex::new(99)), "x"));
     }
 
+    // ---- §10's images -------------------------------------------------
+
+    /// A picture whose "bytes" are a recognisable pattern. Nothing here decodes
+    /// them — a decoder is `views/`'s, and every rule this file holds is about
+    /// the handle rather than the pixels.
+    fn a_picture(width: u32, height: u32, tag: u8) -> crate::models::ImageResource {
+        crate::models::ImageResource::new(
+            crate::models::ImageFormat::Png,
+            width,
+            height,
+            vec![tag; 64],
+        )
+    }
+
+    /// **Insertion is one undo step**, and the undo takes the element rather
+    /// than the picture: the resource stays in the store so the redo has
+    /// something to name.
+    #[test]
+    fn inserting_an_image_undoes_and_redoes_in_one_press() {
+        let mut editor = FlowEditor::new();
+        let depth = editor.history().undo_depth();
+
+        let node = editor
+            .insert_image(a_picture(400, 200, 1), Vec2::ZERO, Vec2::new(800.0, 600.0))
+            .expect("an insert cannot fail on an empty document");
+
+        assert_eq!(editor.history().undo_depth(), depth + 1);
+        assert!(editor.world().node_is_live(node));
+        assert_eq!(
+            editor.world().nodes().size(node),
+            Vec2::new(400.0, 200.0),
+            "a picture that fits arrives at its own size"
+        );
+        assert!(editor.image_of(node).is_some());
+        assert_eq!(
+            editor.world().selection().single_node(),
+            Some(node),
+            "what was just inserted is what is selected"
+        );
+
+        assert!(editor.undo());
+        assert!(!editor.world().node_is_live(node));
+        assert_eq!(
+            editor.world().image_count(),
+            1,
+            "the bytes must survive an undo, or the redo restores a hole"
+        );
+
+        assert!(editor.redo());
+        assert!(editor.world().node_is_live(node));
+        assert!(editor.image_of(node).is_some());
+    }
+
+    /// **Deleting an image is Phase 9's method, unchanged** — which is the
+    /// claim that method's own doc made three phases ago, asserted now that
+    /// there is an image to make it with.
+    #[test]
+    fn deleting_an_image_undoes_like_any_other_element() {
+        let mut editor = FlowEditor::new();
+        let node = editor
+            .insert_image(a_picture(100, 100, 2), Vec2::ZERO, Vec2::new(800.0, 600.0))
+            .unwrap();
+
+        assert!(editor.delete_selection());
+        assert!(!editor.world().node_is_live(node));
+
+        assert!(editor.undo());
+        assert!(editor.world().node_is_live(node));
+        assert!(
+            editor.image_of(node).is_some(),
+            "the restored element lost its picture"
+        );
+    }
+
+    /// **§10's rule through the Duplicate action**: a copy is a handle, so the
+    /// store holds one picture however many elements show it.
+    #[test]
+    fn duplicating_an_image_shares_its_bytes_rather_than_copying_them() {
+        let mut editor = FlowEditor::new();
+        let first = editor
+            .insert_image(a_picture(120, 60, 3), Vec2::ZERO, Vec2::new(800.0, 600.0))
+            .unwrap();
+
+        assert!(editor.duplicate_selection());
+
+        let live: Vec<NodeIndex> = editor.world().nodes().live_indices().collect();
+        assert_eq!(live.len(), 2);
+        assert_eq!(
+            editor.world().image_count(),
+            1,
+            "the duplicate copied the bytes"
+        );
+
+        let copy = live
+            .into_iter()
+            .find(|&node| node != first)
+            .expect("the copy is there");
+        assert_eq!(
+            editor.image_of(copy).map(|it| it.handle),
+            editor.image_of(first).map(|it| it.handle),
+            "the copy shows a different picture"
+        );
+
+        // And the same file inserted a second time is still one resource,
+        // because the handle is a content hash.
+        editor
+            .insert_image(a_picture(120, 60, 3), Vec2::ZERO, Vec2::new(800.0, 600.0))
+            .unwrap();
+        assert_eq!(editor.world().image_count(), 1);
+    }
+
+    /// **Crop, both directions, one undo press each** — and the pixels are
+    /// never touched, which is asserted as the bytes being the same `Arc`
+    /// afterwards.
+    #[test]
+    fn cropping_is_undoable_and_leaves_the_bytes_alone() {
+        use crate::properties::CropChoice;
+
+        let mut editor = FlowEditor::new();
+        let node = editor
+            .insert_image(a_picture(400, 200, 4), Vec2::ZERO, Vec2::new(800.0, 600.0))
+            .unwrap();
+        let handle = editor.image_of(node).unwrap().handle;
+        let before = std::sync::Arc::clone(editor.world().image(handle).unwrap());
+
+        // Nothing to do yet: the frame is the picture's own shape.
+        assert_eq!(editor.selection_crop(), None);
+        assert!(!editor.crop_selection());
+
+        // Squash the frame — what a shift-drag on a corner produces — and the
+        // button offers to crop to it.
+        editor
+            .apply(EditCommand::resize_node(node, Vec2::new(200.0, 200.0)))
+            .unwrap();
+        assert_eq!(editor.selection_crop(), Some(CropChoice::ToFrame));
+
+        let depth = editor.history().undo_depth();
+        assert!(editor.crop_selection());
+        assert_eq!(
+            editor.history().undo_depth(),
+            depth + 1,
+            "a crop is one press of undo"
+        );
+
+        let crop = editor.image_of(node).unwrap().crop;
+        assert!(!crop.is_full(), "{crop:?}");
+        assert!((crop.width - 0.5).abs() < 1e-3, "{crop:?}");
+        assert!(
+            std::sync::Arc::ptr_eq(&before, editor.world().image(handle).unwrap()),
+            "cropping rewrote the picture"
+        );
+
+        // The same button now offers the whole picture back, and taking it
+        // restores the frame's shape as well as the crop.
+        assert_eq!(editor.selection_crop(), Some(CropChoice::Reset));
+        assert!(editor.crop_selection());
+        assert!(editor.image_of(node).unwrap().crop.is_full());
+        let size = editor.world().nodes().size(node);
+        assert!(
+            (size.x / size.y - 2.0).abs() < 1e-3,
+            "the frame did not follow the picture back: {size:?}"
+        );
+
+        // And one press of undo walks each of those back.
+        assert!(editor.undo());
+        assert!(!editor.image_of(node).unwrap().crop.is_full());
+        assert!(editor.undo());
+        assert!(editor.image_of(node).unwrap().crop.is_full());
+    }
+
+    /// A picture too big for the room it is given arrives shrunk, and one
+    /// small enough arrives at its own size — the placement rule, through the
+    /// door that uses it.
+    #[test]
+    fn an_inserted_picture_is_centred_and_fitted() {
+        let mut editor = FlowEditor::new();
+        let node = editor
+            .insert_image(
+                a_picture(4000, 2000, 5),
+                Vec2::new(100.0, 100.0),
+                Vec2::new(800.0, 600.0),
+            )
+            .unwrap();
+
+        let bounds = editor.world().nodes().bounds(node);
+        assert!((bounds.size.x - 800.0).abs() < 1e-3, "{bounds:?}");
+        assert!((bounds.center().x - 100.0).abs() < 1e-3, "{bounds:?}");
+        assert!((bounds.center().y - 100.0).abs() < 1e-3, "{bounds:?}");
+    }
+
     #[test]
     fn an_edit_that_changed_nothing_records_no_step() {
         let (mut editor, node) = editor_with_a_node();

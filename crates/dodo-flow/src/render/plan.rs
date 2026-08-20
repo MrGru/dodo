@@ -29,21 +29,34 @@
 //!
 //! # Where §10's images sit in that order, and what it costs
 //!
-//! **Between the quads and the paths**, one contiguous run of their own, and the
-//! position is a decision rather than an accident. A picture is a *body*: its
-//! neighbours in the paint order are the other bodies, and the two orderings a
-//! user actually asks for are "put my annotations on top of this screenshot" and
-//! "put this screenshot behind my diagram". Both work from here — a quad-bodied
-//! shape that a depth order needs *above* an image is promoted into the path run
-//! by [`render::scene`](crate::render::scene)'s `promotes_to_path`, which is the
-//! same mechanism Phase 11 built for quads against paths.
+//! **One contiguous run of their own, and the run moves.** A picture is a
+//! *body*, so its neighbours in the paint order are the other bodies — but
+//! unlike every other kind here it has no second form: a quad-bodied shape that
+//! a depth needs above a path is *promoted* into the path run (Phase 11's
+//! `promotes_to_path`), and a picture has no outline to promote, exactly as a
+//! glyph run has none.
 //!
-//! What does not work is the mirror image, and it is recorded rather than
-//! hidden: **an image cannot be brought in front of a path-bodied element** — an
-//! ellipse, a diamond, a triangle, anything drawn by §13's hand — because there
-//! is no promotion available in that direction. A picture has no outline form,
-//! exactly as a glyph run has none, so this is text's limitation from Phase 11
-//! arriving for the same reason on a second kind.
+//! So the run's position is chosen per frame instead:
+//!
+//! - **Before the paths by default**, which is where a picture belongs — the
+//!   overwhelmingly common thing to do with one is put a screenshot down and
+//!   annotate over it, and everything drawn as a path (ellipses, diamonds,
+//!   every edge, everything §13's hand touches) is then above it for free.
+//! - **After the paths when the document asks**, which is
+//!   [`PaintPlan::set_images_after_paths`] and is decided by
+//!   [`render::scene`](crate::render::scene) from the *depths actually
+//!   planned*: if the topmost picture sits above the topmost path-bodied
+//!   element, the whole run moves.
+//!
+//! The batching contract is untouched either way — one run each, in one of two
+//! orders — and what the frame paints is still decided in one place.
+//!
+//! **The limitation this leaves is narrow and is a user's to meet**: the run
+//! moves as a whole, so two pictures on opposite sides of one path-bodied body
+//! cannot both be satisfied — the one the document puts *lower* wins, because
+//! the flag is set from the topmost picture. A canvas with one screenshot behind
+//! a diagram and a second logo on top of it draws the logo behind the ellipse it
+//! was meant to cover.
 //!
 //! An image is **cheap**: no tessellation, no path batch and no path vertices at
 //! all. It is a textured quad, and its batching cost is one sprite batch per
@@ -525,8 +538,15 @@ impl PaintStats {
     }
 }
 
-/// The three primitive kinds, in paint order. `Ord` **is** the contract: a
-/// recording sink sorts its log by this and must find it already sorted.
+/// The four primitive kinds, in their **default** paint order.
+///
+/// `Ord` is the contract for three of them: a recording sink sorts its log by
+/// this and must find it already sorted. [`Image`](PrimitiveKind::Image) is the
+/// exception and says so here rather than in a comment somewhere — its run
+/// moves to the far side of the paths when a depth order asks
+/// ([`PaintPlan::set_images_after_paths`]), so what holds for it is the weaker
+/// and more important property: **the sequence never returns to a kind it has
+/// left**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PrimitiveKind {
     Quad,
@@ -575,6 +595,9 @@ pub struct PaintPlan {
     culled_paths: u32,
     culled_quads: u32,
     culled_images: u32,
+    /// Whether §10's pictures are emitted after the paths rather than before
+    /// them. See [`PaintPlan::set_images_after_paths`].
+    images_after_paths: bool,
 }
 
 impl Default for PaintPlan {
@@ -588,6 +611,7 @@ impl Default for PaintPlan {
             culled_paths: 0,
             culled_quads: 0,
             culled_images: 0,
+            images_after_paths: false,
         }
     }
 }
@@ -623,6 +647,7 @@ impl PaintPlan {
         self.culled_paths = 0;
         self.culled_quads = 0;
         self.culled_images = 0;
+        self.images_after_paths = false;
     }
 
     /// The pane this frame is clipped against.
@@ -668,6 +693,21 @@ impl PaintPlan {
             return;
         }
         self.images.push(image);
+    }
+
+    /// **Moves §10's image run to the far side of the paths** — the whole of
+    /// how a picture is brought in front of an ellipse.
+    ///
+    /// Set by the scene from the depths it actually planned, and reset by
+    /// [`clear`](PaintPlan::clear) with everything else, so a frame cannot
+    /// inherit the previous one's answer. See the module doc for the rule and
+    /// for the case it cannot satisfy.
+    pub fn set_images_after_paths(&mut self, after: bool) {
+        self.images_after_paths = after;
+    }
+
+    pub fn images_after_paths(&self) -> bool {
+        self.images_after_paths
     }
 
     pub fn push_text(&mut self, text: TextPrimitive) {
@@ -809,12 +849,11 @@ impl PaintPlan {
             stats.quads += 1;
         }
 
-        // §10's pictures, between the bodies that are quads and the bodies
-        // that are paths. See the module doc for why here.
-        for image in &self.images {
-            stats.images = stats.images.saturating_add(sink.image(image));
+        // §10's pictures, on whichever side of the path run this frame's
+        // depths asked for — see `set_images_after_paths`. One run either way.
+        if !self.images_after_paths {
+            self.paint_images_into(sink, &mut stats);
         }
-        stats.culled_images = self.culled_images;
 
         for path in &self.paths {
             let vertices = sink.path(path);
@@ -829,11 +868,28 @@ impl PaintPlan {
         // proves the claim; this is what reports it.
         stats.path_batches = u32::from(stats.paths > 0);
 
+        if self.images_after_paths {
+            self.paint_images_into(sink, &mut stats);
+        }
+
         for text in &self.texts {
             stats.glyphs = stats.glyphs.saturating_add(sink.text(text));
         }
 
         stats
+    }
+
+    /// The image run, wherever [`paint_into`](PaintPlan::paint_into) puts it.
+    ///
+    /// A method rather than the loop written twice, because "one contiguous
+    /// run" is the property the whole file exists to make structural and two
+    /// copies of the loop is exactly how a frame ends up emitting half of it in
+    /// each place.
+    fn paint_images_into<S: PrimitiveSink + ?Sized>(&self, sink: &mut S, stats: &mut PaintStats) {
+        for image in &self.images {
+            stats.images = stats.images.saturating_add(sink.image(image));
+        }
+        stats.culled_images = self.culled_images;
     }
 }
 
@@ -981,6 +1037,77 @@ mod tests {
                 PrimitiveKind::Text,
             ]
         );
+    }
+
+    fn an_image() -> ImagePrimitive {
+        ImagePrimitive {
+            bounds: rect(0.0, 0.0),
+            node: NodeIndex::new(0),
+            image: crate::models::NodeImage::new(crate::models::ImageHandle::of(b"x")),
+            opacity: 1.0,
+            corner_radius: 0.0,
+        }
+    }
+
+    /// **§10's run, on either side of the paths, and one run either way.**
+    ///
+    /// The position is a depth question and the *contiguity* is the contract —
+    /// see the module doc. This asserts both halves, because a frame that moved
+    /// the run by emitting half of it in each place would satisfy the depth and
+    /// cost the batch the whole file exists to save.
+    #[test]
+    fn the_image_run_moves_as_a_whole_or_not_at_all() {
+        for after in [false, true] {
+            let mut plan = PaintPlan::new();
+            plan.clear(a_pane());
+            plan.set_images_after_paths(after);
+            plan.push_quad(a_quad());
+            plan.push_image(an_image());
+            plan.push_path(a_path());
+            plan.push_image(an_image());
+            plan.push_text(a_text());
+
+            let mut sink = RecordingSink {
+                vertices_per_path: 7,
+                ..RecordingSink::default()
+            };
+            let stats = plan.paint_into(&mut sink);
+
+            assert_eq!(stats.images, 2, "a picture was dropped at after={after}");
+            let expected = if after {
+                vec![
+                    PrimitiveKind::Quad,
+                    PrimitiveKind::Path,
+                    PrimitiveKind::Image,
+                    PrimitiveKind::Image,
+                    PrimitiveKind::Text,
+                ]
+            } else {
+                vec![
+                    PrimitiveKind::Quad,
+                    PrimitiveKind::Image,
+                    PrimitiveKind::Image,
+                    PrimitiveKind::Path,
+                    PrimitiveKind::Text,
+                ]
+            };
+            assert_eq!(sink.log, expected, "after={after}");
+        }
+    }
+
+    /// A picture that misses the pane is rejected before the painter, exactly
+    /// as a quad is and for the same reason.
+    #[test]
+    fn an_offscreen_picture_is_culled() {
+        let mut plan = PaintPlan::new();
+        plan.clear(a_pane());
+        plan.push_image(ImagePrimitive {
+            bounds: Rect::new(Vec2::new(5_000.0, 5_000.0), Vec2::new(10.0, 10.0)),
+            ..an_image()
+        });
+
+        assert_eq!(plan.image_count(), 0);
+        assert_eq!(plan.culled_images(), 1);
     }
 
     /// The property the batching cost actually depends on: whatever is pushed,

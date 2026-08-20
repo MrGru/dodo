@@ -241,6 +241,7 @@ pub fn plan_scene(
     };
 
     plan_bodies(plan, world, snapshot, viewport, ink, &mut stats);
+    plan.set_images_after_paths(images_belong_above_paths(world, snapshot));
     plan_handles(plan, world, snapshot, viewport, ink, &mut stats);
     plan_labels(plan, world, snapshot, ink, &mut stats);
     plan_edge_labels(plan, world, snapshot, viewport, ink, &mut stats);
@@ -672,6 +673,51 @@ fn plan_hatch(
             CLEAN,
         )),
     );
+}
+
+/// **Which side of the path run this frame's pictures belong on** (§10).
+///
+/// A picture has no second form — a quad-bodied body that a depth needs above a
+/// path is promoted into the path run, and there is nothing to promote a
+/// bitmap into — so instead of moving one element, the whole image run moves.
+/// See [`render::plan`](crate::render::plan)'s module doc for the rule and for
+/// the case it cannot satisfy.
+///
+/// The answer is read off the *snapshot*, which is where the depths already
+/// are, and it is one walk of the visible set rather than of the document. An
+/// unlayered document answers `false` in one `bool` read, exactly as
+/// [`promotes_to_path`] does — a canvas nobody has reordered pays nothing for
+/// a mechanism it is not using.
+fn images_belong_above_paths(world: &GraphWorld, snapshot: &RenderSnapshot) -> bool {
+    if !world.is_layered() {
+        return false;
+    }
+
+    let mut highest_image: Option<i32> = None;
+    let mut highest_path: Option<i32> = None;
+
+    for canvas in snapshot.canvas() {
+        if canvas.body == NodeShape::Image {
+            highest_image = Some(highest_image.map_or(canvas.z, |it: i32| it.max(canvas.z)));
+        } else if !shapes::node_prefers_quad(canvas.body) && canvas.body != NodeShape::Text {
+            // Only the bodies that really are painted as paths count. A
+            // rectangle is a quad and is *already* below the pictures, so
+            // letting one vote here would move the run for a body the run was
+            // never above.
+            highest_path = Some(highest_path.map_or(canvas.z, |it: i32| it.max(canvas.z)));
+        }
+    }
+
+    // Every edge is a path, and an edge passing over a picture is the case a
+    // user notices first.
+    for edge in snapshot.edges() {
+        highest_path = Some(highest_path.map_or(edge.z, |it: i32| it.max(edge.z)));
+    }
+
+    match (highest_image, highest_path) {
+        (Some(image), Some(path)) => image > path,
+        _ => false,
+    }
 }
 
 /// **Where the per-element order and the per-kind one actually collide, and
@@ -1400,6 +1446,236 @@ mod tests {
         let mut sink = OrderSink::default();
         plan.paint_into(&mut sink);
         sink.rows
+    }
+
+    /// A world holding one picture and one shape that overlaps it, both
+    /// visible, with the picture behind by default.
+    ///
+    /// The bytes are nonsense — nothing in this file decodes anything, and the
+    /// *plan* is what is under test — but they are real bytes, because the
+    /// handle is their content hash.
+    fn picture_and_shape() -> (GraphWorld, NodeIndex, NodeIndex) {
+        use crate::models::{ImageFormat, ImageResource, NodeImage};
+
+        let mut world = GraphWorld::new();
+        let handle = world.insert_image(ImageResource::new(
+            ImageFormat::Png,
+            400,
+            200,
+            vec![9u8; 32],
+        ));
+
+        let picture = world.create_node(
+            ElementKind::Image,
+            Vec2::new(100.0, 100.0),
+            Vec2::new(400.0, 200.0),
+        );
+        world.set_node_image(picture, Some(NodeImage::new(handle)));
+
+        let shape = world.create_node(
+            ElementKind::Shape(crate::models::ShapeKind::Ellipse),
+            Vec2::new(200.0, 150.0),
+            Vec2::new(200.0, 150.0),
+        );
+
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+        (world, picture, shape)
+    }
+
+    /// **A picture reaches the plan as one image primitive and no path
+    /// vertices at all.**
+    ///
+    /// The second half is the budget claim: an image is closer to a quad than
+    /// to a path, so a screenful of them cannot walk into
+    /// `enforce_vertex_ceiling`. It is asserted rather than assumed because the
+    /// crate has been wrong about a cost model before — see the crate doc's
+    /// Phase 6 correction.
+    #[test]
+    fn a_picture_costs_one_image_and_no_path_vertices() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let (world, picture, _) = picture_and_shape();
+
+        let (plan, stats) = frame_without_grid(&world, &viewport);
+
+        assert_eq!(stats.images, 1);
+        assert_eq!(plan.image_count(), 1);
+        let planned = plan.planned_images();
+        assert_eq!(planned[0].node, picture);
+        assert!(planned[0].image.crop.is_full());
+        assert!((planned[0].opacity - 1.0).abs() < 1e-6);
+
+        // The picture itself tessellates nothing. The one path in the frame is
+        // the ellipse's fill and stroke; the picture adds none of it.
+        let (plain, _) = {
+            let mut bare = GraphWorld::new();
+            bare.create_node(
+                ElementKind::Shape(crate::models::ShapeKind::Ellipse),
+                Vec2::new(200.0, 150.0),
+                Vec2::new(200.0, 150.0),
+            );
+            bare.rebuild_all_geometry();
+            bare.clear_spatial_updates();
+            frame_without_grid(&bare, &viewport)
+        };
+        assert_eq!(
+            plan.estimated_path_vertices(),
+            plain.estimated_path_vertices(),
+            "a picture charged the frame's vertex budget"
+        );
+    }
+
+    /// **A selected picture gains one path and it is painted over the
+    /// picture.**
+    ///
+    /// The ring cannot be a quad: quads are painted before the image run, so a
+    /// bordered quad would be a selection ring hidden underneath the very thing
+    /// it is around. This is that decision as a sequence.
+    #[test]
+    fn a_selected_picture_s_ring_is_painted_after_it() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let (mut world, picture, _) = picture_and_shape();
+        world.set_node_selected(picture, true);
+
+        let rows = painted_rows(&world, &viewport);
+        let image_at = rows.iter().position(|(kind, _)| *kind == "image");
+        let ring_at = rows.iter().rposition(|(kind, owner)| {
+            *kind == "path" && *owner == Some(crate::render::cache::GeometryOwner::Node(picture))
+        });
+
+        assert!(image_at.is_some(), "{rows:?}");
+        assert!(
+            ring_at.is_some(),
+            "the selected picture drew no ring: {rows:?}"
+        );
+        assert!(
+            image_at < ring_at,
+            "the ring was painted under the picture: {rows:?}"
+        );
+    }
+
+    /// **A picture takes its place in the depth order**, in the direction that
+    /// needed a mechanism: brought in front of a path-bodied body.
+    ///
+    /// Behind is the default and needs nothing — every path is emitted after
+    /// the image run, so an ellipse is over a screenshot the moment both exist,
+    /// which is what annotating one looks like. **In front** is the case with
+    /// no promotion available: a bitmap has no outline form, so the run itself
+    /// moves, and this is that rule as the sequence a painter is handed.
+    #[test]
+    fn a_picture_can_be_brought_in_front_of_a_path_bodied_shape() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let (mut world, picture, shape) = picture_and_shape();
+
+        // Default: the ellipse is a path, so it is over the picture already.
+        let rows = painted_rows(&world, &viewport);
+        let image_at = rows.iter().position(|(kind, _)| *kind == "image");
+        let ellipse_at = rows.iter().position(|(kind, owner)| {
+            *kind == "path" && *owner == Some(crate::render::cache::GeometryOwner::Node(shape))
+        });
+        assert!(image_at.is_some() && ellipse_at.is_some(), "{rows:?}");
+        assert!(
+            image_at < ellipse_at,
+            "a picture is behind by default: {rows:?}"
+        );
+
+        // Bring the picture to the front. The ellipse cannot move — it is a
+        // path either way — so the image run does.
+        world.set_node_z(picture, 5);
+        assert!(world.is_layered());
+
+        let rows = painted_rows(&world, &viewport);
+        let image_at = rows
+            .iter()
+            .position(|(kind, _)| *kind == "image")
+            .expect("the picture is still drawn");
+        let ellipse_at = rows
+            .iter()
+            .position(|(kind, owner)| {
+                *kind == "path" && *owner == Some(crate::render::cache::GeometryOwner::Node(shape))
+            })
+            .expect("the ellipse is still drawn");
+
+        assert!(
+            ellipse_at < image_at,
+            "the picture did not reach the front: {rows:?}"
+        );
+
+        // And the run is still one run: the contract is not what moved.
+        let images: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, (kind, _))| *kind == "image")
+            .map(|(index, _)| index)
+            .collect();
+        assert!(
+            images.windows(2).all(|pair| pair[1] == pair[0] + 1),
+            "the image run was broken up: {rows:?}"
+        );
+    }
+
+    /// **An unlayered document pays one `bool` read**, and its pictures are
+    /// where they always were. The same property Phase 11 asserted for the
+    /// depth-ordered planning walk, for the mechanism this phase added beside
+    /// it.
+    #[test]
+    fn a_document_nobody_has_reordered_leaves_the_image_run_alone() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let (world, _, _) = picture_and_shape();
+        assert!(!world.is_layered());
+
+        let (plan, _) = frame_without_grid(&world, &viewport);
+
+        assert!(
+            !plan.images_after_paths(),
+            "an unreordered document moved its image run"
+        );
+    }
+
+    /// **What a screenful of pictures costs**, beside the numbers this module
+    /// already records for bodies and for a layered frame.
+    ///
+    /// Twenty-four pictures filling a 1440×900 pane: **zero path vertices, zero
+    /// path batches from the pictures themselves, and one image primitive
+    /// each.** Their batching cost is GPUI's, one sprite batch per *atlas
+    /// texture* rather than one per picture, and a sprite batch is a draw call
+    /// with a texture bind — not the full-viewport intermediate pass with a
+    /// clear that a path batch costs. See `render::plan`'s module doc.
+    #[test]
+    fn a_screenful_of_pictures_costs_no_path_vertices() {
+        use crate::models::{ImageFormat, ImageResource, NodeImage};
+
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(1440.0, 900.0));
+        let mut world = GraphWorld::new();
+        let handle =
+            world.insert_image(ImageResource::new(ImageFormat::Png, 240, 180, vec![1u8; 8]));
+
+        for row in 0..4 {
+            for column in 0..6 {
+                let node = world.create_node(
+                    ElementKind::Image,
+                    Vec2::new(column as f32 * 240.0, row as f32 * 225.0),
+                    Vec2::new(230.0, 215.0),
+                );
+                world.set_node_image(node, Some(NodeImage::new(handle)));
+            }
+        }
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let (plan, stats) = frame_without_grid(&world, &viewport);
+
+        assert_eq!(stats.images, 24, "not every picture was planned");
+        assert_eq!(plan.image_count(), 24);
+        assert_eq!(
+            plan.estimated_path_vertices(),
+            0,
+            "pictures charged the vertex budget"
+        );
+        assert_eq!(plan.path_count(), 0, "pictures cost a path batch");
+        // And one resource behind all of them, which is §10's rule holding at
+        // the twenty-fourth element as well as at the second.
+        assert_eq!(world.image_count(), 1);
     }
 
     /// **Phase 2's contract, with a depth order applied over it.**
