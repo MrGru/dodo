@@ -343,10 +343,20 @@ impl VietnameseEngine {
     }
 
     /// Accept the syllable as final text and start a new one.
+    ///
+    /// An empty semantic syllable can still have visible text: cancelling a
+    /// one-key marked source removes its last letter before a non-letter
+    /// fallback is passed through. Clear that stale composition (or delete the
+    /// direct output) before the literal key reaches the application.
     fn finish(&mut self) -> Vec<EngineAction> {
         if self.syllable.is_empty() {
+            let actions = if self.composition.is_empty() {
+                Vec::new()
+            } else {
+                self.show()
+            };
             self.reset_state();
-            return Vec::new();
+            return actions;
         }
         let text = self.commit_text();
         let mut actions = Vec::with_capacity(2);
@@ -451,7 +461,9 @@ impl VietnameseEngine {
     /// A letter joins the syllable — `cass` is `cas`, still one composition. A
     /// digit or a bracket cannot be part of a Vietnamese syllable, so the
     /// syllable ends and the key goes to the application: `a11` is `a` followed
-    /// by `1`.
+    /// by `1`. The next press is then interpreted from that resulting semantic
+    /// state: after a punctuation boundary it starts fresh, while a joined
+    /// letter remains available to be modified again.
     fn fall_back(&mut self, literal: char) -> Applied {
         if word_boundary::is_syllable_letter(literal) {
             self.syllable
