@@ -1788,9 +1788,9 @@ mod tests {
     use crate::{
         geometry::{Side, Vec2},
         models::{
-            Connector, ConnectorAttachment, ConnectorEndpoint, EdgeRouting, ElementId, ElementKind,
-            Endpoint, FlowDocument, GraphNodeKind, Handle, HandleDirection, HandleId,
-            HandlePlacement, LinearKind, NodeIndex, ShapeKind,
+            Connector, ConnectorAttachment, ConnectorEnd, ConnectorEndpoint, EdgeRouting,
+            ElementId, ElementKind, Endpoint, FlowDocument, GraphNodeKind, Handle, HandleDirection,
+            HandleId, HandlePlacement, LinearKind, NodeIndex, ShapeKind,
         },
         runtime::{
             BoxQuery, BoxSelectMode, ConnectionError, ConnectionRules, EdgeEnd, HandleSpec,
@@ -1908,6 +1908,99 @@ mod tests {
         assert_eq!(snap.target, target);
         assert_eq!(snap.point, Vec2::new(200.0, 140.0));
         assert_eq!(snap.attachment.anchor, Vec2::new(1.0, 0.5));
+    }
+
+    /// **A selected connector offers two grips and only two.** Four rectangle
+    /// corners is what the old representation could express, and it is what
+    /// made "drag a corner" mean "reshape a box" instead of "move this end".
+    #[test]
+    fn a_connectors_grips_are_its_two_ordered_endpoints() {
+        let (world, _, _, line) = bound_connector_world();
+        let connector = world.nodes().connector(line).unwrap();
+        let tolerance = HitTolerance::new(9.0);
+
+        assert_eq!(
+            world.hit_test_connector_endpoint(connector.start.point, line, tolerance),
+            Some(ConnectorEnd::Start)
+        );
+        assert_eq!(
+            world.hit_test_connector_endpoint(connector.end.point, line, tolerance),
+            Some(ConnectorEnd::End)
+        );
+        // The bounding box's other two corners are not grips at all.
+        let bounds = connector.bounds();
+        for corner in [
+            Vec2::new(bounds.min().x, bounds.max().y),
+            Vec2::new(bounds.max().x, bounds.min().y),
+        ] {
+            if (corner - connector.start.point).length() <= tolerance.grip_radius
+                || (corner - connector.end.point).length() <= tolerance.grip_radius
+            {
+                continue;
+            }
+            assert_eq!(
+                world.hit_test_connector_endpoint(corner, line, tolerance),
+                None,
+                "{corner:?} is a rectangle corner, not an endpoint"
+            );
+        }
+        assert_eq!(
+            world.hit_test_connector_endpoint(connector.midpoint(), line, tolerance),
+            None,
+            "the middle of the segment is the body, not a grip"
+        );
+    }
+
+    /// A whole-connector move or resize goes through the rectangle — every
+    /// caller in `commands::apply` speaks positions and sizes — and must not
+    /// reorder the endpoints or leave the segment behind. It also has to be
+    /// **exactly** invertible, which is why the segment is rebuilt from the
+    /// absolute rectangle rather than translated by a delta.
+    #[test]
+    fn moving_or_resizing_a_connector_keeps_its_ordered_endpoints() {
+        for (start, end) in [
+            (Vec2::new(400.0, 300.0), Vec2::new(100.0, 60.0)),
+            (Vec2::new(100.0, 300.0), Vec2::new(400.0, 60.0)),
+            (Vec2::new(100.0, 60.0), Vec2::new(400.0, 300.0)),
+            (Vec2::new(400.0, 60.0), Vec2::new(100.0, 300.0)),
+        ] {
+            let mut world = GraphWorld::new();
+            let line = world.create_node(
+                ElementKind::Linear(LinearKind::Arrow),
+                Vec2::ZERO,
+                Vec2::new(1.0, 1.0),
+            );
+            world.set_node_connector(line, Connector::new(start, end));
+            let before = world.nodes().connector(line).unwrap();
+            let origin = world.nodes().position(line);
+            let size = world.nodes().size(line);
+
+            world.move_node(line, Vec2::new(37.0, -19.0));
+            let moved = world.nodes().connector(line).unwrap();
+            assert_eq!(moved.start.point, start + Vec2::new(37.0, -19.0));
+            assert_eq!(moved.end.point, end + Vec2::new(37.0, -19.0));
+            assert_eq!(world.nodes().bounds(line), moved.bounds());
+
+            world.set_node_size(line, size * 2.0);
+            let resized = world.nodes().connector(line).unwrap();
+            assert_eq!(
+                (
+                    resized.start.point.x < resized.end.point.x,
+                    resized.start.point.y < resized.end.point.y
+                ),
+                (start.x < end.x, start.y < end.y),
+                "{start:?} -> {end:?} reversed under a resize"
+            );
+
+            // The inverses `commands::apply` records, applied in order.
+            world.set_node_size(line, size);
+            world.set_node_position(line, origin);
+            assert_eq!(
+                world.nodes().connector(line).unwrap(),
+                before,
+                "{start:?} -> {end:?} did not come home exactly"
+            );
+        }
     }
 
     #[test]
