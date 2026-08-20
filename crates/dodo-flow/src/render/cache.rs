@@ -163,6 +163,12 @@ pub enum GeometryPart {
     /// The perturbed fill of a shape that has no quad form. Separate from
     /// [`GeometryPart::Fill`] so a toggle back to clean cannot serve it.
     SketchFill,
+    /// **A hatched interior** — [`render::hatch`](crate::render::hatch)'s line
+    /// set, as one path. Its own part rather than [`GeometryPart::Fill`]'s,
+    /// because a shape can be switched between solid and hatched and back and
+    /// the two are different geometry over the same outline: filing them under
+    /// one key would serve a hachure to a solid fill on the way back.
+    Hatch,
 }
 
 /// Which element a cached tessellation belongs to.

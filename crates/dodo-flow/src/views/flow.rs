@@ -1551,6 +1551,35 @@ impl FlowView {
         }
     }
 
+    /// **Opens the hyperlink on whatever is under the pointer**, and says
+    /// whether it found one.
+    ///
+    /// The other half of Phase 11's Link action: the panel sets a link, and
+    /// this is what "followed" means. `App::open_url` hands the string to the
+    /// platform, which is the only thing that knows what a user's default
+    /// browser is — and is also why nothing here validates the URL. A link is
+    /// stored verbatim (see [`FlowNode::link`](crate::models::FlowNode::link)),
+    /// so a `mailto:` or a `file:` works exactly as well as an `https:`, and a
+    /// string the platform cannot open is refused by the platform with its own
+    /// message rather than by a guess made here.
+    ///
+    /// **Which element the press landed on is `target_at`'s answer**, so a node
+    /// wins over an edge exactly as it does for every other gesture; the lookup
+    /// itself is [`FlowEditor::link_at`], which is asserted with no window.
+    fn follow_link_at(
+        &self,
+        position: Point<Pixels>,
+        bounds: Bounds<Pixels>,
+        cx: &mut App,
+    ) -> bool {
+        let world = self.viewport.screen_to_world(self.local(position, bounds));
+        let Some(link) = self.editor.link_at(self.target_at(world)) else {
+            return false;
+        };
+        cx.open_url(link);
+        true
+    }
+
     /// **What is under the pointer** — §29's two phases, both of them present.
     ///
     /// Broad phase from the spatial index, narrow phase in the world. Phase 3
@@ -1645,6 +1674,22 @@ impl FlowView {
                     // the tool palette instead of into the text.
                     if this.editing.is_none() {
                         this.focus_handle.clone().focus(window, cx);
+                    }
+
+                    // **Following a link, before the machine sees the press.**
+                    //
+                    // Deliberately not an interaction transition, and the line
+                    // is the same one `PanBy` and `CommitBoxSelect` sit on:
+                    // §25's machine models what a *gesture on the document*
+                    // means, and opening a URL changes no document, raises no
+                    // command and has no state to be in. It is a modifier-click
+                    // — the same chord every editor with this feature uses — so
+                    // an ordinary press still selects and drags.
+                    if button == PointerButton::Left
+                        && (event.modifiers.platform || event.modifiers.control)
+                        && this.follow_link_at(event.position, bounds, cx)
+                    {
+                        return;
                     }
 
                     // **§9's double-click**, raised instead of a press rather

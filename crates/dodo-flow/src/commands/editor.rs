@@ -73,7 +73,10 @@ use crate::{
         DocumentSettings, EdgeIndex, EdgeRouting, ElementId, ElementKind, ElementStyle,
         FlowDocument, NodeIndex, RenderStyle, SketchStyle,
     },
-    runtime::{BoxQuery, ConnectionRules, DirtyState, EdgeSpec, GraphWorld, LoadReport, NodeSpec},
+    runtime::{
+        BoxQuery, ConnectionRules, DirtyState, EdgeSpec, GraphWorld, LoadReport, NodeSpec,
+        PointerTarget,
+    },
 };
 
 /// How far a duplicate lands from what it copied, in world units.
@@ -510,6 +513,33 @@ impl FlowEditor {
             ([], [edge]) if self.world.edge_is_live(*edge) => self.world.edges().link(*edge),
             _ => None,
         }
+    }
+
+    /// **The hyperlink on whatever a press landed on**, or `None`.
+    ///
+    /// Here rather than in the view because it is the same question
+    /// [`selection_link`](FlowEditor::selection_link) asks from the other end,
+    /// and two places that read a link out of a target are two places that can
+    /// disagree about a tombstone. A handle answers its node's link: the handle
+    /// is part of the node as far as a user pressing it is concerned.
+    ///
+    /// **Liveness, not presence** — the same rule
+    /// [`text_of`](FlowEditor::text_of) follows, and for the same reason: a
+    /// removed element keeps its whole row, and following a link on something
+    /// nobody can see is worse than finding none.
+    pub fn link_at(&self, target: PointerTarget) -> Option<&str> {
+        match target {
+            PointerTarget::Node(node) | PointerTarget::Handle { node, .. }
+                if self.world.node_is_live(node) =>
+            {
+                self.world.nodes().cold(node).link.as_deref()
+            }
+            PointerTarget::Edge(edge) if self.world.edge_is_live(edge) => {
+                self.world.edges().link(edge)
+            }
+            _ => None,
+        }
+        .filter(|link| !link.trim().is_empty())
     }
 
     /// Sets or clears the hyperlink on every selected element. An empty string

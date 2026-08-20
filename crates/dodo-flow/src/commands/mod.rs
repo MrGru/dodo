@@ -1214,6 +1214,53 @@ mod tests {
         );
     }
 
+    /// **What "followed" means for a link**, up to the one call that needs a
+    /// platform.
+    ///
+    /// `App::open_url` is the last line of the view's handler and cannot be
+    /// driven headlessly; everything in front of it can, and this is that:
+    /// which element a press resolves to a link, which ones resolve to none,
+    /// and the tombstone rule.
+    #[test]
+    fn a_press_resolves_to_the_link_under_it_and_to_nothing_when_there_is_none() {
+        use crate::runtime::PointerTarget;
+
+        let (mut editor, nodes) = panel_editor();
+        editor.select_only(Some(nodes[0]));
+        editor.set_selection_link("https://example.invalid/a");
+
+        assert_eq!(
+            editor.link_at(PointerTarget::Node(nodes[0])),
+            Some("https://example.invalid/a")
+        );
+        assert_eq!(editor.link_at(PointerTarget::Node(nodes[1])), None);
+        assert_eq!(editor.link_at(PointerTarget::Empty), None);
+
+        // An edge carries one too, and it is reachable now that a press can
+        // land on one.
+        let edge = EdgeIndex::new(0);
+        editor.clear_selection();
+        editor.set_edge_selected(edge, true);
+        editor.set_selection_link("https://example.invalid/b");
+        assert_eq!(
+            editor.link_at(PointerTarget::Edge(edge)),
+            Some("https://example.invalid/b")
+        );
+
+        // **A deleted element hands back nothing**, even though its row — and
+        // its link — are still there. Removal is a tombstone, and following a
+        // link on something nobody can see is worse than finding none.
+        editor.clear_selection();
+        editor.set_node_selected(nodes[0], true);
+        assert!(editor.delete_selection());
+        assert_eq!(editor.link_at(PointerTarget::Node(nodes[0])), None);
+        assert!(editor.undo());
+        assert_eq!(
+            editor.link_at(PointerTarget::Node(nodes[0])),
+            Some("https://example.invalid/a")
+        );
+    }
+
     /// Not every element is a graph node; a plain shape has to be editable too,
     /// and its `NodeShape` projection has to survive the round trip.
     #[test]

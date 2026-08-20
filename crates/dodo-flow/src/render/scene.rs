@@ -66,12 +66,12 @@ use std::sync::Arc;
 use crate::{
     budgets::DetailLevel,
     geometry::{Rect, Vec2, Viewport},
-    models::SketchStyle,
     models::{Color, NodeIndex, RenderQuality},
+    models::{SketchStyle, Sloppiness},
     render::{
         GridLevel, GridLimits, GridSettings, PaintPlan,
         cache::{CLEAN, GeometryKey, GeometryPart, TextKey},
-        edges,
+        edges, hatch,
         lod::{HandleDetail, LodPlan},
         plan::{DashSpec, PathPrimitive, QuadPrimitive, TextPrimitive},
         shapes, sketch,
@@ -95,6 +95,12 @@ pub const HANDLE_SCREEN_RADIUS: f32 = 4.5;
 /// whenever a document says anything, and this is only what an unstyled node
 /// falls back to so it reads as a node rather than as a drawn rectangle.
 pub const GRAPH_NODE_RADIUS: f32 = 6.0;
+
+/// The width a hatch line is stroked at, in screen pixels.
+///
+/// Thinner than a body's border on purpose: a hatch reads as shading, and at a
+/// border's weight it reads as a second shape drawn inside the first.
+pub const HATCH_STROKE_PIXELS: f32 = 1.0;
 
 /// The outline width of a selected element, in screen pixels. Constant on
 /// screen rather than in world units, so selection stays visible at any zoom.
@@ -305,7 +311,11 @@ fn plan_one_edge(
             // The seed is the edge's own id, so an edge wobbles the same way
             // for the life of the document and differently from its neighbour
             // — see `render::sketch::element_seed`.
-            sketch: lod.sketch.map(|style| {
+            // The edge presses as hard as *it* asks, exactly as a node does —
+            // see `pressed`. An edge and the node it joins can sit at two
+            // sloppinesses and each is drawn at its own.
+            sketch: lod.sketch.map(|hand| {
+                let style = pressed(hand, style.sloppiness);
                 edges::SketchHand::new(
                     style,
                     sketch::element_seed(&style, world.edges().id(planned.edge), SKETCH_EDGE_PART),
@@ -420,7 +430,17 @@ fn plan_one_node(
         // border is too small to be worth a wobble either, so `detailed` gates
         // it here rather than in the ladder — that is a per-node question and
         // the ladder answers per frame.
-        if let Some(sketch_style) = lod.sketch.filter(|_| canvas.detailed)
+        // **The element's own hand, not the frame's** (Phase 11). The document
+        // decides what a hand looks like and each element says how hard it
+        // presses, so the Sloppiness row multiplies the roughness rather than
+        // replacing the style. `Artist` is `1.0` and therefore the identity,
+        // which is what lets this be added to a format that already has
+        // documents in it — and the scaled style is what
+        // `SketchStyle::cache_key` is taken from, so two elements at two
+        // sloppinesses cannot serve each other's squiggle.
+        let hand = lod.sketch.map(|sketch| pressed(sketch, style.sloppiness));
+
+        if let Some(sketch_style) = hand.filter(|_| canvas.detailed)
             && plan_sketched_body(
                 plan,
                 SketchedBody {
@@ -453,18 +473,34 @@ fn plan_one_node(
                 || !canvas.detailed)
             && !promotes_to_path(world, canvas, lod);
 
+        // **A hatched interior is a line set, not a fill** (Phase 11's Fill
+        // row). The body still draws its border; what changes is that the
+        // inside is drawn *with* the fill colour rather than flooded in it. So
+        // the solid fill is suppressed and one stroked path takes its place —
+        // see `render::hatch` for why it is one path and not one per line.
+        //
+        // `detailed` gates it for the same reason it gates the hand: an eight
+        // pixel body has no interior to hatch, and the honest simplification at
+        // that size is the solid box §15 already draws.
+        let hatched = !open && canvas.detailed && style.fill_style.is_hatched();
+
         if as_quad {
             // Phase 0's measurement, honoured: 20,000 quads hold 60 fps where
             // the same count of rectangular paths drop to 30 — and a quad
             // carries its corner radius and its border for free, so the border
             // costs no second primitive at all.
-            let mut quad = QuadPrimitive::filled(screen, fill).with_corner_radius(radius);
+            let mut quad =
+                QuadPrimitive::filled(screen, if hatched { Color::TRANSPARENT } else { fill })
+                    .with_corner_radius(radius);
             if has_stroke {
                 quad = quad.with_border(stroke_width, stroke_color);
             }
             plan.push_quad(quad);
+            if hatched {
+                plan_hatch(plan, canvas, radius, fill, style.fill_style, quality);
+            }
         } else if let Some(outline) = shapes::outline_for_node(canvas.body, screen, radius) {
-            if !open {
+            if !open && !hatched {
                 plan.push_path(PathPrimitive::fill(outline.clone(), fill, quality).keyed(
                     GeometryKey::node(
                         canvas.node,
@@ -474,6 +510,9 @@ fn plan_one_node(
                         CLEAN,
                     ),
                 ));
+            }
+            if hatched {
+                plan_hatch(plan, canvas, radius, fill, style.fill_style, quality);
             }
 
             if has_stroke {
@@ -493,6 +532,52 @@ fn plan_one_node(
 
         stats.nodes += 1;
     }
+}
+
+/// **The document's hand, pressed as hard as one element asks.**
+///
+/// A free function so the node loop and the edge loop cannot disagree about
+/// what a [`Sloppiness`] step means — the two are far apart in this file and a
+/// multiplication written twice is a multiplication that stops matching.
+fn pressed(sketch: SketchStyle, sloppiness: Sloppiness) -> SketchStyle {
+    SketchStyle {
+        roughness: sketch.roughness * sloppiness.roughness_scale(),
+        ..sketch
+    }
+}
+
+/// One shape's hatched interior, as a single cached path.
+///
+/// The spacing is in **screen** pixels and does not scale with the zoom, for
+/// the reason [`hatch::DEFAULT_SPACING`](crate::render::hatch::DEFAULT_SPACING)
+/// gives — which also means the geometry is only valid at the zoom it was built
+/// at, so the cache key carries the node's version and the same anchor every
+/// other cached path does.
+fn plan_hatch(
+    plan: &mut PaintPlan,
+    canvas: &CanvasNode,
+    radius: f32,
+    color: Color,
+    style: crate::models::FillStyle,
+    quality: crate::models::RenderQuality,
+) {
+    let Some(outline) = shapes::outline_for_node(canvas.body, canvas.screen, radius) else {
+        return;
+    };
+    let lines = hatch::hatch(&outline, style, hatch::DEFAULT_SPACING);
+    if lines.is_empty() {
+        return;
+    }
+
+    plan.push_path(
+        PathPrimitive::stroke(lines, color, HATCH_STROKE_PIXELS, quality).keyed(GeometryKey::node(
+            canvas.node,
+            GeometryPart::Hatch,
+            canvas.version,
+            quality,
+            CLEAN,
+        )),
+    );
 }
 
 /// **Where the per-element order and the per-kind one actually collide, and
@@ -1157,6 +1242,9 @@ mod tests {
     #[derive(Default)]
     struct OrderSink {
         rows: Vec<(&'static str, Option<crate::render::cache::GeometryOwner>)>,
+        /// Every cached path's whole key, for the tests that ask *which part*
+        /// of an element was painted and *which hand* drew it.
+        keys: Vec<crate::render::cache::GeometryKey>,
     }
 
     impl crate::render::PrimitiveSink for OrderSink {
@@ -1167,6 +1255,7 @@ mod tests {
         fn path(&mut self, path: &crate::render::PathPrimitive) -> u32 {
             self.rows
                 .push(("path", path.key.as_ref().map(|key| key.owner)));
+            self.keys.extend(path.key);
             1
         }
 
@@ -1340,6 +1429,120 @@ mod tests {
             "the edge is above the node in depth and must be painted after it: \
              node at {node_at:?}, edge at {edge_at:?}"
         );
+    }
+
+    // ---- Phase 11: the two style rows that have to reach the painter ----
+
+    /// **A hatched fill is drawn, and it is drawn instead of the solid one.**
+    ///
+    /// The phase brief forbids a control that silently ignores the user by
+    /// name, and this is the row that would have done it: `fill_style` is
+    /// stored, undoable and read back by the panel whether or not anything
+    /// paints it, so every other test in this crate would have passed with the
+    /// Fill row inert.
+    #[test]
+    fn a_hatched_shape_paints_lines_instead_of_a_flooded_interior() {
+        use crate::models::{FillStyle, ShapeKind};
+        use crate::render::cache::{GeometryOwner, GeometryPart};
+
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let mut world = GraphWorld::new();
+        let node = world.create_node(
+            ElementKind::Shape(ShapeKind::Ellipse),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(220.0, 160.0),
+        );
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let parts = |world: &GraphWorld| -> Vec<GeometryPart> {
+            let (plan, _) = frame_without_grid(world, &viewport);
+            let mut sink = OrderSink::default();
+            plan.paint_into(&mut sink);
+            sink.keys
+                .iter()
+                .filter(|key| key.owner == GeometryOwner::Node(node))
+                .map(|key| key.part)
+                .collect()
+        };
+
+        assert!(parts(&world).contains(&GeometryPart::Fill));
+        assert!(!parts(&world).contains(&GeometryPart::Hatch));
+
+        let mut style = world.nodes().style(node).clone();
+        style.fill_style = FillStyle::CrossHatch;
+        world.set_node_style(node, style);
+
+        let after = parts(&world);
+        assert!(
+            after.contains(&GeometryPart::Hatch),
+            "the Fill row was set to cross-hatch and nothing hatched: {after:?}"
+        );
+        assert!(
+            !after.contains(&GeometryPart::Fill),
+            "a hatched interior must replace the flooded one, not sit under it"
+        );
+    }
+
+    /// **Sloppiness reaches the hand, and two elements at two steps are drawn
+    /// differently.**
+    ///
+    /// Asserted through the *cache key* rather than by comparing squiggles: the
+    /// key carries `SketchStyle::cache_key`, so two steps producing one key
+    /// would mean the second element being served the first one's geometry —
+    /// which is both "the control did nothing" and a cache bug, in one
+    /// assertion.
+    #[test]
+    fn two_sloppinesses_are_two_hands_and_two_cache_keys() {
+        use crate::models::{RenderStyle, ShapeKind};
+        use crate::render::cache::GeometryOwner;
+
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let mut world = GraphWorld::new();
+        world.settings_mut().render_style = RenderStyle::Sketch;
+        let node = world.create_node(
+            ElementKind::Shape(ShapeKind::Ellipse),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(220.0, 160.0),
+        );
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let sketch_keys = |world: &GraphWorld| -> Vec<u32> {
+            let (plan, _) = frame_without_grid(world, &viewport);
+            let mut sink = OrderSink::default();
+            plan.paint_into(&mut sink);
+            sink.keys
+                .iter()
+                .filter(|key| key.owner == GeometryOwner::Node(node))
+                .map(|key| key.sketch)
+                .collect()
+        };
+
+        let artist = sketch_keys(&world);
+        assert!(!artist.is_empty(), "a sketched ellipse paints something");
+
+        let mut style = world.nodes().style(node).clone();
+        style.sloppiness = crate::models::Sloppiness::Cartoonist;
+        world.set_node_style(node, style);
+        let cartoonist = sketch_keys(&world);
+
+        assert_ne!(
+            artist, cartoonist,
+            "the Sloppiness row was moved and the hand did not change"
+        );
+    }
+
+    /// The identity has to be the identity. `Artist` multiplies by `1.0`, so a
+    /// document written before this field existed must draw byte for byte what
+    /// it drew — which is the whole reason the field could be added to a live
+    /// format at all.
+    #[test]
+    fn the_middle_sloppiness_leaves_the_document_s_hand_alone() {
+        let hand = crate::models::SketchStyle::DEFAULT;
+        assert_eq!(pressed(hand, Sloppiness::Artist), hand);
+        assert!(pressed(hand, Sloppiness::Architect).roughness < hand.roughness);
+        assert!(pressed(hand, Sloppiness::Cartoonist).roughness > hand.roughness);
     }
 
     /// **A document nobody has reordered pays nothing.**
