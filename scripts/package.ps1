@@ -72,17 +72,6 @@ New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 Copy-Item $bin (Join-Path $stage "dodo.exe")
 
-# The native TSF host is a COM DLL, not a child process of dodo. Keep it beside
-# the executable in a fixed directory so the in-app Install action can copy it
-# into the current user's data directory and register it without guessing a
-# cargo target path. A missing DLL is a packaging failure, never a ZIP that
-# shows a Native TSF button which cannot work.
-$tsf = Join-Path $repoRoot "target\$Target\$Profile\dodo_ime_windows.dll"
-if (-not (Test-Path $tsf)) { $tsf = Join-Path $repoRoot "target\$Profile\dodo_ime_windows.dll" }
-if (-not (Test-Path $tsf)) { throw "no dodo_ime_windows.dll found; cargo build must build the dodo-ime-windows workspace member" }
-$tsfStage = Join-Path $stage "input-method"
-New-Item -ItemType Directory -Force -Path $tsfStage | Out-Null
-Copy-Item $tsf (Join-Path $tsfStage "dodo_ime_windows.dll")
 # NTFS has no executable bit, so nothing to preserve here — the .exe extension
 # is what makes it runnable. Mentioned because the Unix script has to chmod.
 # LICENSE and THIRD-PARTY-NOTICES.md are required, matching package.sh: dodo's

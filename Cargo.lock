@@ -1787,15 +1787,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dodo-ime-ipc"
-version = "0.1.0"
-dependencies = [
- "dodo-ime-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "dodo-input-method"
 version = "0.1.0"
 dependencies = [
@@ -1833,9 +1824,6 @@ dependencies = [
 [[package]]
 name = "dodo-paths"
 version = "0.1.0"
-dependencies = [
- "dodo-ime-ipc",
-]
 
 [[package]]
 name = "dodo-updater"
@@ -1844,7 +1832,6 @@ dependencies = [
  "dodo-app-icon",
  "dodo-dialog-slot",
  "dodo-i18n",
- "dodo-ime-ipc",
  "dodo-paths",
  "gpui",
  "gpui-component",

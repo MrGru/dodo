@@ -3,7 +3,6 @@
 # Builds a dodo.app bundle around an already-built macOS binary.
 #
 #   scripts/macos-app-bundle.sh --binary <path> [--version <v>] [--out <dir>]
-#                               [--input-method <path-to-.app>]
 #                               [--sign <identity>]
 #                               [--notary-key <path-to-.p8>]
 #                               [--notary-key-id <id>] [--notary-issuer <uuid>]
@@ -15,13 +14,10 @@
 #   dodo.app/Contents/Resources/dodo.icns
 #   dodo.app/Contents/Resources/LICENSE
 #   dodo.app/Contents/Resources/THIRD-PARTY-NOTICES.md
-#   dodo.app/Contents/Helpers/Dodo Vietnamese.app     (only with --input-method)
 #
 # Signing: by default the bundle is ad-hoc signed (--sign -) so it is valid for
 # local use. Pass --sign "Developer ID Application: Name (TEAMID)" — or just the
-# Team ID, which codesign resolves — for a real identity. When --input-method is
-# provided, the nested bundle is signed first (inside-out), then the outer
-# dodo.app, both with the same identity.
+# Team ID, which codesign resolves — for a real identity.
 #
 # Notarisation happens here too, and only when a real identity AND all three
 # --notary-* values are given: an ad-hoc bundle is what a local build and a fork
@@ -37,7 +33,6 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 binary=""
 version=""
 out_dir="$repo_root/dist"
-input_method=""
 sign_identity="-"  # ad-hoc by default
 notary_key=""
 notary_key_id=""
@@ -53,7 +48,6 @@ while [ $# -gt 0 ]; do
         --binary) binary="${2:?--binary needs a value}"; shift 2 ;;
         --version) version="${2:?--version needs a value}"; shift 2 ;;
         --out) out_dir="${2:?--out needs a value}"; shift 2 ;;
-        --input-method) input_method="${2:?--input-method needs a value}"; shift 2 ;;
         --sign) sign_identity="${2:?--sign needs a value}"; shift 2 ;;
         --notary-key) notary_key="${2:?--notary-key needs a value}"; shift 2 ;;
         --notary-key-id) notary_key_id="${2:?--notary-key-id needs a value}"; shift 2 ;;
@@ -156,45 +150,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# The macOS input method, carried inside dodo.app so one archive ships both.
-#
-# Contents/Helpers/ is not a free choice and not the location the investigation
-# first proposed. docs/macos-signing.md §7.2 is the authority: `codesign`
-# discovers nested code in a fixed set of directories, Contents/Library/
-# InputMethods is NOT among them, and a bundle placed there is sealed as an
-# opaque *resource* rather than as code — which notarisation rejects and
-# `--verify --deep --strict` does not even look inside. Contents/Helpers IS on
-# that list and is semantically exactly right.
-#
-# macOS never looks in here: an input method is found in ~/Library/Input Methods
-# or /Library/Input Methods and nowhere else. This copy is dodo's own filing, so
-# that a later round's install action has something to copy out.
-#
-# `ditto` rather than `cp -R`: it preserves extended attributes and ACLs, and it
-# is the documented way to move a bundle that is (or will be) signed.
-if [ -n "$input_method" ]; then
-    [ -d "$input_method" ] || die "no such input-method bundle: $input_method"
-    ime_name="$(basename "$input_method")"
-    mkdir -p "$app/Contents/Helpers"
-    ditto "$input_method" "$app/Contents/Helpers/$ime_name"
-    printf 'nested %s\n' "$app/Contents/Helpers/$ime_name"
-else
-    # Not an error: dodo.app is complete without it, and nothing in the app can
-    # install it yet. scripts/macos-input-method-bundle.sh builds one, and
-    # docs/macos-input-method.md says what the next round has to add before this
-    # is worth wiring into scripts/package.sh and the release workflow.
-    printf 'no input method nested (pass --input-method to include one)\n'
-fi
-
 printf 'built %s\n' "$app"
 
-# Sign inside-out: nested input method first, then outer dodo.app.
-if [ -n "$input_method" ]; then
-    nested="$app/Contents/Helpers/$(basename "$input_method")"
-    printf 'signing nested %s with identity: %s\n' "$nested" "$sign_identity"
-    codesign --force --options runtime --timestamp --sign "$sign_identity" "$nested"
-    codesign --verify --deep --strict --verbose=2 "$nested" || die "nested bundle signature verification failed"
-fi
 printf 'signing %s with identity: %s\n' "$app" "$sign_identity"
 codesign --force --options runtime --timestamp --sign "$sign_identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app" || die "outer bundle signature verification failed"

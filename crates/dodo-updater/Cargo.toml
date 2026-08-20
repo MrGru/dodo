@@ -28,12 +28,6 @@ dodo-paths = { path = "../dodo-paths" }
 # a copy on each side of this boundary would be two slots and the two-identical-
 # cards defect would come back. See that crate's docs.
 dodo-dialog-slot = { path = "../dodo-dialog-slot" }
-# Two constants only — the TSF DLL's file name and the directory it is
-# installed into — so the Windows installer replaces the *packaged* sidecar
-# beside `dodo.exe` and deliberately not the registered `%APPDATA%` copy. The
-# contract crate is where both processes read them from, so the updater cannot
-# drift from the installer.
-dodo-ime-ipc = { path = "../dodo-ime-ipc" }
 # Only the two files under `views/` may name these. The other 25 are gpui-free
 # on purpose: the manifest parse, the SemVer comparison, the incremental
 # SHA-256, the four installers and the whole state machine are tested with no

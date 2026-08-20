@@ -206,16 +206,6 @@ jobs:
       - name: cargo check
         run: cargo check --locked --all-features --target ${{ matrix.target }}
 
-      # The root check covers this through `default-members`; name the TSF host
-      # explicitly as well so a future workspace edit cannot silently stop
-      # compiling or exercising its COM class-factory harness on Windows.
-      - name: Check and test Windows TSF host
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cargo check -p dodo-ime-windows --locked --target ${{ matrix.target }}
-          cargo test -p dodo-ime-windows --locked
-
   # ---------------------------------------------------------------------------
   # One real binary per push, on the one platform dodo is known to work on.
   #

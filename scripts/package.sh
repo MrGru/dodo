@@ -275,27 +275,11 @@ checksum "$archive"
 # ad-hoc signs, exactly as it always has.
 if [ "$app_bundle" = "1" ]; then
     [ "$platform" = "macos" ] || die "--app-bundle is macOS only (target: $target)"
-    ime_bin="$repo_root/target/$target/$profile/DodoVietnamese"
-    [ -f "$ime_bin" ] || die "no target-specific DodoVietnamese found; cargo build must build the dodo-ime-macos workspace member for $target"
-
     app_stage="$out_dir/.stage/app"
-    ime_stage="$out_dir/.stage/input-method"
-    rm -rf "$app_stage" "$ime_stage"
-    mkdir -p "$app_stage" "$ime_stage"
-    # The identity is passed to the input-method bundle too, even though
-    # macos-app-bundle.sh re-signs the nested copy with --force afterwards: it
-    # keeps the standalone bundle in the stage directory honest, and it means a
-    # bad identity fails on the small bundle first.
-    "$repo_root/scripts/macos-input-method-bundle.sh" \
-        --binary "$ime_bin" --version "$version" --out "$ime_stage" \
-        --sign "$sign_identity"
-    input_method="$ime_stage/Dodo Vietnamese.app"
-    [ -d "$input_method" ] || die "input-method bundle assembly produced no Dodo Vietnamese.app"
-    # Notarisation is the outer bundle's job, once: the notary service checks
-    # every executable in the submission, so the nested input method is covered
-    # by dodo.app's own submission and does not need one of its own.
+    rm -rf "$app_stage"
+    mkdir -p "$app_stage"
     app_args=(--binary "$bin" --version "$version" --out "$app_stage"
-              --input-method "$input_method" --sign "$sign_identity")
+              --sign "$sign_identity")
     if [ "$sign_identity" != "-" ] && [ -n "$notary_key" ]; then
         app_args+=(--notary-key "$notary_key"
                    --notary-key-id "$notary_key_id"

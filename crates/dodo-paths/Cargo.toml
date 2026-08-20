@@ -11,9 +11,3 @@ description = "Where dodo keeps the files it writes: the three platform families
 # triple this binary was compiled for — is read by `dodo` and passed in; see
 # `main.rs`'s `paths` module.
 [dependencies]
-
-[dev-dependencies]
-# For one test only: the input-method bundle resolves the macOS support
-# directory itself, and that test is what keeps the two spellings one answer.
-# It is not a dependency of the library — nothing this crate ships links it.
-dodo-ime-ipc = { path = "../dodo-ime-ipc" }

@@ -23,8 +23,8 @@
 #     that does and does not buy.
 #
 # Release run 31655518790 built, packaged, verified and published all four
-# targets. That is artifact evidence only: GUI behaviour, native-host install
-# and typing still require captain runtime checks on each platform.
+# targets. That is artifact evidence only: GUI and global input-listener
+# behaviour still require captain runtime checks on each platform.
 
 name: Release
 
@@ -396,9 +396,6 @@ jobs:
           $root = Join-Path $dest ([IO.Path]::GetFileNameWithoutExtension($archive.Name))
           $exe = Get-Item (Join-Path $root "dodo.exe") -ErrorAction SilentlyContinue
           if (-not $exe) { throw "no dodo.exe at the archive root" }
-          $tsf = Get-Item (Join-Path $root "input-method\dodo_ime_windows.dll") -ErrorAction SilentlyContinue
-          if (-not $tsf) { throw "no Windows TSF host DLL at input-method/dodo_ime_windows.dll" }
-
           $infoFile = Join-Path $env:RUNNER_TEMP "build-info.txt"
           $proc = Start-Process -FilePath $exe.FullName -ArgumentList '--build-info' `
             -RedirectStandardOutput $infoFile -NoNewWindow -Wait -PassThru

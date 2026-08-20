@@ -9,8 +9,8 @@
 #
 #   1. the archive exists and its .sha256 sidecar matches
 #   2. the contents list (printed, so a reviewer sees what shipped)
-#   3. the binary and required native host are at their exact package paths,
-#      executable modes survive where applicable, signatures still verify, a
+#   3. the binary is at its exact package path, executable modes survive where
+#      applicable, signatures still verify, a
 #      Developer ID signed bundle still carries its notarisation ticket, and
 #      LICENSE and THIRD-PARTY-NOTICES.md shipped with them
 #   4. the binary runs: `dodo --build-info` (see the caveat below)
@@ -113,34 +113,18 @@ case "$archive_name" in
 esac
 ok "executable bit preserved"
 
-# The native hosts are required at their exact package-relative paths. A
-# recursive same-name match would let a misplaced helper pass verification
-# while the in-app Install action still cannot find it.
+# App and Windows archives have fixed executable paths; a recursive same-name
+# match alone would let a misplaced binary pass.
 case "$archive_name" in
     *-macos-*-app.tar.gz)
         app="$workdir/dodo.app"
         [ -f "$app/Contents/MacOS/dodo" ] \
             || die "missing app executable at dodo.app/Contents/MacOS/dodo"
-        helper="$app/Contents/Helpers/Dodo Vietnamese.app"
-        helper_bin="$helper/Contents/MacOS/DodoVietnamese"
-        [ -f "$helper_bin" ] || die "missing input method at dodo.app/Contents/Helpers/Dodo Vietnamese.app/Contents/MacOS/DodoVietnamese"
-        [ -x "$helper_bin" ] || die "the input-method executable lost its executable bit"
-        [ -f "$helper/Contents/Info.plist" ] || die "the input-method Info.plist is missing"
         if [ "$(uname -s)" = "Darwin" ]; then
-            plutil -lint "$helper/Contents/Info.plist" >/dev/null \
-                || die "the input-method Info.plist is malformed"
-            codesign --verify --deep --strict --verbose=2 "$helper" \
-                || die "the nested input-method signature is invalid"
             codesign --verify --deep --strict --verbose=2 "$app" \
-                || die "the outer app signature is invalid"
+                || die "the app signature is invalid"
 
-            # The check the whole signing round exists for, and the one that
-            # cannot be done on dist/dodo.app: whether the notarisation ticket
-            # survived into what actually ships. Guarded on the bundle's own
-            # signature rather than on a flag, so it is self-describing — an
-            # ad-hoc bundle (every local build, every fork) skips it, and a
-            # Developer ID bundle must have a valid ticket or this fails here
-            # rather than at a user. docs/macos-signing.md §6.2, step 6.
+            # A Developer ID bundle must keep its ticket through packaging.
             if codesign -dvv "$app" 2>&1 | grep -q '^Authority=Developer ID Application'; then
                 xcrun stapler validate "$app" \
                     || die "Developer ID signed but the notarisation ticket did not survive packaging"
@@ -151,15 +135,13 @@ case "$archive_name" in
                 info "ad-hoc signed; no notarisation ticket to check"
             fi
         fi
-        ok "macOS input method present at its exact path"
+        ok "macOS app present at its exact path"
         ;;
     *-windows-*.zip)
         archive_root="${archive_name%.zip}"
         [ -f "$workdir/$archive_root/dodo.exe" ] \
             || die "missing executable at $archive_root/dodo.exe"
-        dll="$workdir/$archive_root/input-method/dodo_ime_windows.dll"
-        [ -f "$dll" ] || die "missing Windows TSF host at $archive_root/input-method/dodo_ime_windows.dll"
-        ok "Windows TSF host present at its exact path"
+        ok "Windows executable present at its exact path"
         ;;
 esac
 
