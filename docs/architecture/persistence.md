@@ -1,6 +1,6 @@
 # What dodo keeps on disk
 
-dodo writes **ten** files. All of them live under `data_dir()`, and each sits behind a trait so the
+dodo writes **eleven** files. All of them live under `data_dir()`, and each sits behind a trait so the
 state layer never learns where it lives. Loading
 and saving run on the background executor, never on the UI thread.
 
@@ -38,6 +38,7 @@ categories, and a database `data_dir()` that disagreed would silently lose every
 | `cleaner-ignored-items.json` | `cleaner::services::ignore_store` | orphan candidates marked "Keep", keyed by absolute path string rather than a `CleanableItemId`, because that id is a session-local hash with no promise of surviving a restart |
 | `session.json` | `session::services::session_store` | the session — see below |
 | `input-method.json` | `input_method::services::store` | input languages, switch shortcut and Vietnamese engine settings |
+| `flow.json` | `flow::services::document_store` | the active Flow Canvas diagram, including shared image resources |
 
 ## Versioning: copy one pattern, not the other
 
@@ -66,7 +67,7 @@ describing a decision. The captain asked for session restoration on **2026-08-06
 rectangle **and mode**, the open tool, the sidebar's collapsed state, and which tools the sidebar
 lists at all and in what order.
 
-The other nine files persist something `session.json` does not attempt: *what the user typed or
+The other ten files persist something `session.json` does not attempt: *what the user typed or
 decided about one specific thing* — an approved script, a saved query, a path marked "Keep", a
 skipped update version, an edited pattern — which cannot expire each launch without becoming a lie.
 **The one exception is `Run scripts`**, a `ScriptPolicy` global that still starts every launch at

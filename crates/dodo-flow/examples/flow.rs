@@ -842,7 +842,7 @@ fn main() {
             cx.open_window(options, |window, cx| {
                 let view = cx.new(|cx| {
                     let flow = cx.new(|cx| {
-                        let mut flow = FlowView::new(window, cx);
+                        let mut flow = FlowView::new_unpersisted(window, cx);
                         flow.set_document(demo_document(nodes));
 
                         // **The acceptance check, made visible on the first

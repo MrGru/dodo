@@ -37,6 +37,7 @@ pub enum Text {
     EncoderDecoderTitle,
     ApiExplorerTitle,
     CleanerTitle,
+    DiagramTitle,
 
     // API Explorer — the consent gate and its setting.
     RunScripts,

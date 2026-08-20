@@ -3,8 +3,10 @@
 //!
 //! # The shape of a frame
 //!
-//! `render` builds a `div` and a `canvas()` and does **no work**. Everything
-//! happens in the canvas's paint closure, and that split is a contract rather
+//! `render` builds a `div` and a `canvas()` and does only bounded work: the
+//! viewport snapshot, plus Phase 8's revision comparison that copies a document
+//! only after an edit. Everything else happens in the canvas's paint closure,
+//! and that split is a contract rather
 //! than a style: dodo's root `AGENTS.md` records why `render` bodies must stay
 //! cheap — a dirty child marks its whole ancestor path dirty, and an ancestor
 //! redraw sets `Window::refreshing`, which bypasses the element cache for every
@@ -115,7 +117,7 @@
 //! camera, and `CommitBoxSelect` needs the spatial broad phase to say what its
 //! rectangle contains.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use dodo_i18n::{flow, t};
 use gpui::{
@@ -161,6 +163,7 @@ use crate::{
         snapshot::{RenderSnapshot, SnapshotCounts},
     },
     runtime::{BoxQuery, EdgeEnd, GraphWorld, HitTolerance, PointerTarget, SelectionSet},
+    services::document_store::{DiskDocumentStore, DocumentStore},
     spatial::{SpatialIndex, SyncReport, VisibleSet},
     views::{
         images::{self, ImageCache},
@@ -448,6 +451,12 @@ pub struct FlowView {
     /// the current-colour swatch, or the Link action's. One `Option` for both,
     /// because they can never be open at once.
     prompt: Option<PanelPrompt>,
+
+    // ---- Phase 8's app persistence ------------------------------------
+    document_store: Option<Arc<dyn DocumentStore>>,
+    storage_ready: bool,
+    saved_revision: u64,
+    saving_revision: Option<u64>,
 }
 
 /// The panel's open text field.
@@ -457,7 +466,23 @@ struct PanelPrompt {
 }
 
 impl FlowView {
+    /// The app-facing canvas: loads and saves `flow.json` beneath dodo's data
+    /// directory. Disk work always runs on the background executor.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> FlowView {
+        Self::with_store(window, cx, Some(Arc::new(DiskDocumentStore::new())))
+    }
+
+    /// A canvas with no app persistence, for the standalone benchmark/demo
+    /// launcher that installs its own document.
+    pub fn new_unpersisted(window: &mut Window, cx: &mut Context<Self>) -> FlowView {
+        Self::with_store(window, cx, None)
+    }
+
+    fn with_store(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        document_store: Option<Arc<dyn DocumentStore>>,
+    ) -> FlowView {
         // Resolved once, here, rather than read per frame: it is a compile-time
         // property of the build. Held on the view rather than reached for
         // globally so a benchmark or a test can mount a view against another
@@ -470,7 +495,7 @@ impl FlowView {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
-        let view = FlowView {
+        let mut view = FlowView {
             editor: FlowEditor::new(),
             viewport: Viewport::default(),
             grid: GridSettings::default(),
@@ -515,6 +540,10 @@ impl FlowView {
             opacity_shown: None,
             opacity_dragging: false,
             prompt: None,
+            storage_ready: document_store.is_none(),
+            document_store,
+            saved_revision: 0,
+            saving_revision: None,
         };
 
         // **The slider drives the document, and it is the one control that
@@ -545,7 +574,99 @@ impl FlowView {
         )
         .detach();
 
+        view.load_persisted_document(window, cx);
         view
+    }
+
+    fn load_persisted_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(store) = self.document_store.clone() else {
+            return;
+        };
+
+        cx.spawn_in(window, async move |view, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { store.load() })
+                .await;
+
+            let _ = view.update_in(cx, |this, window, cx| match loaded {
+                Ok(document) if this.editor.revision() == 0 => {
+                    this.set_document(document);
+                    this.saved_revision = this.editor.revision();
+                    this.storage_ready = true;
+                    cx.notify();
+                }
+                Ok(_) => {
+                    // Do not replace edits made while a large saved document
+                    // was loading, and do not overwrite that saved document
+                    // with a canvas that never adopted it.
+                    this.storage_ready = false;
+                    window.push_notification(
+                        Notification::error(t(flow::Text::StorageLoadConflict, cx)),
+                        cx,
+                    );
+                }
+                Err(error) => {
+                    // A corrupt/future document remains untouched. Saving is
+                    // disabled for this view so the first edit cannot replace
+                    // it with an empty canvas.
+                    this.storage_ready = false;
+                    window.push_notification(
+                        Notification::error(t(flow::Text::StorageProblem(error.to_string()), cx)),
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Starts at most one write, and copies the document only when its revision
+    /// changed. `render` can run for an unrelated ancestor repaint, so an
+    /// unguarded `to_document` here would copy the whole canvas per frame.
+    fn persist_if_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let revision = self.editor.revision();
+        if !self.storage_ready || revision == self.saved_revision || self.saving_revision.is_some()
+        {
+            return;
+        }
+        let Some(store) = self.document_store.clone() else {
+            return;
+        };
+
+        let document = self.editor.to_document();
+        self.saving_revision = Some(revision);
+        cx.spawn_in(window, async move |view, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { store.persist(&document) })
+                .await;
+
+            let _ = view.update_in(cx, |this, window, cx| {
+                if this.saving_revision == Some(revision) {
+                    this.saving_revision = None;
+                }
+                match result {
+                    Ok(()) => {
+                        this.saved_revision = revision;
+                        // If edits landed during the write, one more render
+                        // starts the next (and only the next) snapshot.
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        this.storage_ready = false;
+                        window.push_notification(
+                            Notification::error(t(
+                                flow::Text::StorageProblem(error.to_string()),
+                                cx,
+                            )),
+                            cx,
+                        );
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     /// The runtime graph — the stores, the adjacency index and the dirty state.
@@ -2548,8 +2669,10 @@ impl Render for FlowView {
         // separately into the `canvas`, so one entity cannot serve both.
         let prepainted = cx.entity();
 
-        // **The one piece of work this body does, and it is bounded by the
-        // screen.** Extraction has to happen here rather than in paint: GPUI
+        self.persist_if_changed(window, cx);
+
+        // **The one piece of frame work this body does, and it is bounded by
+        // the screen.** Extraction has to happen here rather than in paint: GPUI
         // builds the element tree in `render` and paints afterwards, so a
         // snapshot extracted during paint would be a frame late for every
         // element built from it.

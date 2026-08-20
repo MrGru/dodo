@@ -3,7 +3,7 @@
 //! `samples!` also emits an exhaustive `match` over [`Text`], so a variant
 //! with no entry here is a compile error.
 
-use crate::tests::{Sample, plain, term};
+use crate::tests::{DETAIL, Sample, plain, term, with};
 
 use super::Text;
 
@@ -76,6 +76,8 @@ samples! {
     plain LinkPlaceholder;
     plain ColorPlaceholder;
     plain ColorFromTheme;
+    with StorageProblem(DETAIL.into()) [DETAIL];
+    plain StorageLoadConflict;
 
     // The four size glyphs are the same one or two Latin letters in every
     // language — they are the picture as much as the label.

@@ -1194,6 +1194,7 @@ mod tests {
             View::ApiExplorer,
             View::Cleaner,
             View::Database,
+            View::Diagram,
         ] {
             for page in DockerPage::ALL {
                 assert_eq!(title_of(view, page), view.title());

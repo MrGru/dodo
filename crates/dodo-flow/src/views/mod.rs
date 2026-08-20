@@ -2,8 +2,8 @@
 //! may name `gpui` or `gpui-component`**, and that restriction is the crate's
 //! main design constraint — `lib.rs` says why.
 //!
-//! [`flow::FlowView`] is the entity the standalone launcher mounts and the one
-//! the app's `tools!` row will eventually point at. It owns the
+//! [`flow::FlowView`] is the entity both the standalone launcher and the app's
+//! `tools!` row mount. It owns the
 //! [`Viewport`](crate::geometry::Viewport), the graph, the spatial index and
 //! §24's snapshot, and it is where the two halves of the hybrid renderer meet.
 //!

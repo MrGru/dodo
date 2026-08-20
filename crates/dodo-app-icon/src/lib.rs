@@ -137,6 +137,10 @@ pub enum AppIcon {
     /// being read at 16px on the collapsed rail with no label beside it.
     Keyboard,
 
+    /// The Diagram tool's sidebar row. A workflow rather than a generic shape:
+    /// the canvas is both a drawing surface and a connected node graph.
+    Workflow,
+
     // Cleaner's section and category rows. Most resolve through `Assets`'
     // fallback to `gpui_component_assets`.
     /// The Cleanup section. Ships as our own `icons/brush-cleaning.svg`:
@@ -222,6 +226,7 @@ impl IconNamed for AppIcon {
             Self::EyeOff => "icons/eye-off.svg",
             Self::GripVertical => "icons/grip-vertical.svg",
             Self::Keyboard => "icons/keyboard.svg",
+            Self::Workflow => "icons/workflow.svg",
             Self::BrushCleaning => "icons/brush-cleaning.svg",
             Self::LayoutDashboard => "icons/layout-dashboard.svg",
             Self::Bot => "icons/bot.svg",

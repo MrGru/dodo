@@ -51,6 +51,10 @@ use dodo_docker as docker;
 // The Encoder/Decoder is a feature crate. `layout.rs` names `Format` and the
 // tool table names `EncoderDecoder`; this alias keeps both paths unchanged.
 use dodo_encoder_decoder as encoder_decoder;
+// The Flow Canvas is a feature crate. The tool table names `FlowView`, this
+// file calls `flow::init` for its scoped key bindings, and the crate owns the
+// `flow.json` persistence seam beneath dodo's shared data directory.
+use dodo_flow as flow;
 // Every string dodo shows, plus the three UI-bound pieces (`t`, the active-
 // language global, `Language::current` / `set`) that the crate's `gpui`
 // feature switches on. Both halves are `crates/dodo-i18n` now: a feature
@@ -141,6 +145,14 @@ mod paths {
         fn the_input_method_crate_resolves_the_same_host_as_this_binary() {
             assert_eq!(super::current(), dodo_input_method::paths::current());
             assert_eq!(super::data_dir(), dodo_input_method::paths::data_dir());
+        }
+
+        /// `dodo_flow::paths` resolves the active diagram beside every other
+        /// persisted dodo file; disagreement would make it appear lost.
+        #[test]
+        fn the_flow_crate_resolves_the_same_data_directory_as_this_binary() {
+            assert_eq!(super::current(), dodo_flow::paths::current());
+            assert_eq!(super::data_dir(), dodo_flow::paths::data_dir());
         }
 
         /// `dodo_updater::paths` is the fifth copy of the same seam, and the
@@ -283,6 +295,8 @@ fn main() {
         docker::init(cx);
         // Binds copy-cell and copy-row while the Database result grid has focus.
         database::init(cx);
+        // Binds undo, redo and the drawing-tool keys inside the Flow Canvas.
+        flow::init(cx);
         // Binds quick navigation's paste chords and Escape, and starts the
         // `quick-nav.json` load. Same post-`gpui_component::init` ordering as
         // the four above, and it matters more here than for any of them: the

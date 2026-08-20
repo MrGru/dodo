@@ -1615,6 +1615,7 @@ dependencies = [
  "dodo-dialog-slot",
  "dodo-docker",
  "dodo-encoder-decoder",
+ "dodo-flow",
  "dodo-i18n",
  "dodo-ime-core",
  "dodo-input-method",

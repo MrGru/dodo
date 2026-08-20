@@ -108,6 +108,9 @@ pub struct EditSummary {
 pub struct FlowEditor {
     world: GraphWorld,
     history: CommandHistory,
+    /// Monotonic stamp for the persisted document. Selection and derived
+    /// geometry leave it alone; every document write moves it.
+    revision: u64,
 }
 
 impl FlowEditor {
@@ -115,6 +118,7 @@ impl FlowEditor {
         FlowEditor {
             world: GraphWorld::new(),
             history: CommandHistory::new(),
+            revision: 0,
         }
     }
 
@@ -126,6 +130,7 @@ impl FlowEditor {
             FlowEditor {
                 world,
                 history: CommandHistory::new(),
+                revision: 0,
             },
             report,
         )
@@ -141,6 +146,7 @@ impl FlowEditor {
         let (world, report) = GraphWorld::from_document(&document);
         self.world = world;
         self.history.clear();
+        self.bump_revision();
         report
     }
 
@@ -158,6 +164,17 @@ impl FlowEditor {
 
     pub fn to_document(&self) -> FlowDocument {
         self.world.to_document()
+    }
+
+    /// Changes only when the serialized document can have changed. The app's
+    /// persistence seam uses this to avoid copying a whole canvas from a
+    /// `render` that may run for an unrelated ancestor repaint.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn can_undo(&self) -> bool {
@@ -185,6 +202,7 @@ impl FlowEditor {
 
         if changed {
             self.history.push(redo, inverse);
+            self.bump_revision();
         }
 
         Ok(EditSummary {
@@ -927,6 +945,9 @@ impl FlowEditor {
             entry.redo = outcome.inverse;
             self.history.record_undone(entry);
         }
+        if changed {
+            self.bump_revision();
+        }
         changed
     }
 
@@ -942,6 +963,9 @@ impl FlowEditor {
             changed |= outcome.changed;
             entry.undo = outcome.inverse;
             self.history.record_redone(entry);
+        }
+        if changed {
+            self.bump_revision();
         }
         changed
     }
@@ -962,6 +986,9 @@ impl FlowEditor {
             let outcome = apply(&mut self.world, entry.undo)
                 .expect("a recorded inverse is always applicable");
             changed |= outcome.changed;
+        }
+        if changed {
+            self.bump_revision();
         }
         changed
     }
@@ -1007,19 +1034,31 @@ impl FlowEditor {
     }
 
     pub fn set_render_style(&mut self, style: RenderStyle) {
-        self.world.settings_mut().render_style = style;
+        if self.world.settings().render_style != style {
+            self.world.settings_mut().render_style = style;
+            self.bump_revision();
+        }
     }
 
     pub fn set_sketch_style(&mut self, sketch: SketchStyle) {
-        self.world.settings_mut().sketch = sketch;
+        if self.world.settings().sketch != sketch {
+            self.world.settings_mut().sketch = sketch;
+            self.bump_revision();
+        }
     }
 
     pub fn set_route_options(&mut self, options: RouteOptions) {
-        self.world.set_route_options(options);
+        if self.world.route_options() != &options {
+            self.world.set_route_options(options);
+            self.bump_revision();
+        }
     }
 
     pub fn set_rules(&mut self, rules: ConnectionRules) {
-        self.world.set_rules(rules);
+        if self.world.rules() != rules {
+            self.world.set_rules(rules);
+            self.bump_revision();
+        }
     }
 
     // ---- derivation: recomputes, never changes ---------------------------
@@ -1094,6 +1133,27 @@ mod tests {
             .expect("adding a node cannot fail");
         let node = summary.added_nodes[0];
         (editor, node)
+    }
+
+    #[test]
+    fn the_persistence_revision_moves_only_for_document_changes() {
+        let mut editor = FlowEditor::new();
+        let initial = editor.revision();
+        editor.clear_selection();
+        assert_eq!(editor.revision(), initial, "selection is view state");
+
+        let (mut editor, _) = editor_with_a_node();
+        let added = editor.revision();
+        assert_ne!(added, initial);
+        assert!(editor.undo());
+        assert_ne!(editor.revision(), added);
+
+        let undone = editor.revision();
+        editor.set_render_style(crate::models::RenderStyle::Sketch);
+        assert_ne!(editor.revision(), undone);
+        let sketch = editor.revision();
+        editor.set_render_style(crate::models::RenderStyle::Sketch);
+        assert_eq!(editor.revision(), sketch, "an identical write is a no-op");
     }
 
     // ---- §9's text -----------------------------------------------------

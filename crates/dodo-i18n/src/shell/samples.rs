@@ -29,6 +29,7 @@ samples! {
     plain EncoderDecoderTitle;
     plain ApiExplorerTitle;
     plain CleanerTitle;
+    plain DiagramTitle;
     plain RunScripts;
     plain RunScriptsDescription;
     plain CheckForUpdates;

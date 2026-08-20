@@ -4,7 +4,7 @@
 
 A native desktop app that puts the tools a developer keeps reaching for in one
 window: format some JSON, decode a token, fire an HTTP request, look inside a
-container, query a database, clean up a disk. One collapsible sidebar, one tool
+container, query a database, clean up a disk, sketch a diagram. One collapsible sidebar, one tool
 per row, no browser tab and no Electron.
 
 Written in Rust on Zed's GPUI framework — a native window, no web runtime.
@@ -62,6 +62,11 @@ Event Tap on macOS and Keyboard Hook on Windows. It works while Dodo is running;
 macOS requires Accessibility permission. The pane selects input languages, the
 switch shortcut and Vietnamese engine settings. Linux has no sidebar row until
 it has an implementation.
+
+**Diagram** — an infinite canvas for node graphs and free-form drawing. Create,
+connect, style, layer and resize shapes, text and images; switch between clean
+and hand-drawn rendering; undo and redo edits. The active diagram is saved
+beneath dodo's data directory and restored on the next launch.
 
 ### Around the tools
 

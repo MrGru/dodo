@@ -2,14 +2,13 @@
 //! graphs, Excalidraw-style drawing and a hand-drawn render mode — built
 //! directly on GPUI, with no WebView and no foreign UI framework.
 //!
-//! **Nothing here reaches the running app yet** — by design. The canvas is
-//! built in phases, each one buildable, testable and reviewable on its own, and
-//! the sidebar row (Phase 8) is deliberately held until last so nobody meets a
-//! half-built tool. It was eight phases when this file was started; the captain
-//! reviewed the running canvas after Phase 7.5 and specified a second scope, so
-//! Phases 9 to 12 — editing, text, the property panel, images — now come first
-//! and the row lands after them. The per-slice sections below are the record,
-//! in order. Until the row lands, the canvas runs through its own launcher:
+//! The canvas was built in phases, each one buildable, testable and reviewable
+//! on its own, and the sidebar row (Phase 8) was deliberately held until last
+//! so nobody met a half-built tool. The captain reviewed the running canvas
+//! after Phase 7.5 and specified a second scope, so Phases 9 to 12 — editing,
+//! text, the property panel and images — landed before Phase 8 wired the
+//! finished Diagram tool into dodo. The per-slice sections below are the record,
+//! in order. The standalone launcher remains available for focused work:
 //!
 //! ```sh
 //! cargo run -p dodo-flow --example flow --locked
@@ -1209,6 +1208,26 @@
 //! panel still open, and that a sentence can be typed into a node.
 //! `examples/flow.rs` lists them.
 //!
+//! # What the eighth and final slice added: the app seam
+//!
+//! Phase 8 is deliberately small: dodo aliases this crate, calls [`init`] once
+//! for the canvas-scoped bindings, and gives [`FlowView`] the last row in its
+//! `tools!` table. The row uses the workflow glyph, is last in the default
+//! sidebar order and declares no paste detector.
+//!
+//! The active diagram lives in `flow.json` beneath dodo's existing
+//! `data_dir()`. [`services::document_store`] follows the same contract as the
+//! app's other stores: missing means a new document, parsing uses the format's
+//! existing migration ladder, writes go through a sibling temporary file, and
+//! all blocking work runs on GPUI's background executor. A refused load
+//! disables writes for that view, so the first edit cannot replace a corrupt or
+//! newer document with an empty canvas.
+//!
+//! Persistence does not make `render` document-sized. [`FlowEditor`] stamps a
+//! revision only when serialized state changes; the view compares that stamp
+//! and clones the document only for a real save. Selection, panning and an
+//! ancestor repaint leave it alone.
+//!
 //! # Where the budget numbers come from, and what they are not
 //!
 //! [`budgets`] is the one named place for every render ceiling and LOD
@@ -1248,10 +1267,12 @@ pub mod geometry;
 pub mod instrument;
 pub mod interaction;
 pub mod models;
+pub mod paths;
 pub mod properties;
 pub mod render;
 pub mod runtime;
 pub mod scenes;
+pub(crate) mod services;
 pub mod spatial;
 pub mod views;
 
@@ -1309,6 +1330,7 @@ mod tests {
             include_str!("models/serialization.rs"),
         ),
         ("models/style.rs", include_str!("models/style.rs")),
+        ("paths.rs", include_str!("paths.rs")),
         ("properties.rs", include_str!("properties.rs")),
         ("render/cache.rs", include_str!("render/cache.rs")),
         ("render/edges.rs", include_str!("render/edges.rs")),
@@ -1341,6 +1363,11 @@ mod tests {
         ("runtime/selection.rs", include_str!("runtime/selection.rs")),
         ("runtime/world.rs", include_str!("runtime/world.rs")),
         ("scenes.rs", include_str!("scenes.rs")),
+        ("services/mod.rs", include_str!("services/mod.rs")),
+        (
+            "services/document_store.rs",
+            include_str!("services/document_store.rs"),
+        ),
         ("spatial/mod.rs", include_str!("spatial/mod.rs")),
         ("spatial/grid.rs", include_str!("spatial/grid.rs")),
         ("spatial/index.rs", include_str!("spatial/index.rs")),

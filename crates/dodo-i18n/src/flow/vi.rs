@@ -77,5 +77,12 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::LinkPlaceholder => "Dán một liên kết".into(),
         Text::ColorPlaceholder => "Mã màu hex".into(),
         Text::ColorFromTheme => "Theo giao diện".into(),
+        Text::StorageProblem(detail) => {
+            format!("Không thể lưu hoặc tải sơ đồ: {detail}").into()
+        }
+        Text::StorageLoadConflict => {
+            "Sơ đồ đã thay đổi trước khi tải xong tài liệu đã lưu. Hãy khởi động lại dodo để thử lại."
+                .into()
+        }
     }
 }

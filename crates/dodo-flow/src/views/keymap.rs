@@ -61,8 +61,8 @@
 //!
 //! # When to call it
 //!
-//! After `gpui_component::init`, exactly once per process. The launcher does
-//! it; the app's `tools!` row will do it in Phase 8. Calling it twice binds the
+//! After `gpui_component::init`, exactly once per process. The launcher and
+//! dodo's startup each do it. Calling it twice binds the
 //! same keystrokes twice, which GPUI resolves to the same action and which
 //! nothing depends on.
 

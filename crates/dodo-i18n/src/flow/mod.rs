@@ -164,4 +164,8 @@ pub enum Text {
     /// The tooltip on that swatch when there is no colour of the element's own
     /// to show — the theme is answering.
     ColorFromTheme,
+
+    // Phase 8: the app-owned persisted document.
+    StorageProblem(String),
+    StorageLoadConflict,
 }

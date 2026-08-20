@@ -378,6 +378,15 @@ tools! {
         hosts: any(target_os = "macos", target_os = "windows"),
         pane: input_method: crate::input_method::views::InputMethodView,
     }
+
+    /// Last by design: the canvas stayed out of the app until every editing
+    /// phase was complete. It accepts no quick-navigation paste.
+    Diagram {
+        code: "diagram",
+        title: shell::Text::DiagramTitle,
+        icon: AppIcon::Workflow,
+        pane: diagram: crate::flow::FlowView,
+    }
 }
 
 impl View {
@@ -567,6 +576,7 @@ mod tests {
                 "docker",
                 "database",
                 "input-method",
+                "diagram",
             ]
         );
 
@@ -595,6 +605,7 @@ mod tests {
         if INPUT_METHOD_HOST {
             expected.push("input-method");
         }
+        expected.push("diagram");
         assert_eq!(codes, expected);
     }
 
@@ -604,7 +615,7 @@ mod tests {
     /// what this build has. Asserting the whole of both rather than a prefix,
     /// so a tool cannot be dropped from the middle of either unnoticed.
     #[test]
-    fn the_sidebar_lists_every_tool_once_with_docker_flat_and_last() {
+    fn the_sidebar_lists_every_tool_once_with_diagram_last() {
         assert_eq!(
             View::DECLARED,
             [
@@ -615,6 +626,7 @@ mod tests {
                 View::Docker,
                 View::Database,
                 View::InputMethod,
+                View::Diagram,
             ]
         );
 
@@ -629,6 +641,7 @@ mod tests {
                 View::Docker,
                 View::Database,
                 View::InputMethod,
+                View::Diagram,
             ]
         );
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -641,14 +654,15 @@ mod tests {
                 View::Cleaner,
                 View::Docker,
                 View::Database,
+                View::Diagram,
             ]
         );
 
         // One row per tool: Docker and Database are each a single entry, not a
         // group of children — an icon-collapsed sidebar renders no children at
         // all, which is what made Docker's four pages unreachable.
-        assert_eq!(View::DECLARED.len(), 7);
-        assert_eq!(View::ALL.len(), if INPUT_METHOD_HOST { 7 } else { 6 });
+        assert_eq!(View::DECLARED.len(), 8);
+        assert_eq!(View::ALL.len(), if INPUT_METHOD_HOST { 8 } else { 7 });
         assert_eq!(AVAILABLE, View::ALL.len());
     }
 
@@ -707,6 +721,7 @@ mod tests {
 
         assert_eq!(View::ApiExplorer.icon().path(), "icons/globe.svg");
         assert_eq!(View::InputMethod.icon().path(), "icons/keyboard.svg");
+        assert_eq!(View::Diagram.icon().path(), "icons/workflow.svg");
     }
 
     /// The Docker row reads "Docker" — the pane heading is the one that follows
@@ -828,7 +843,7 @@ mod tests {
             assert!(features.can_toggle(view.code()), "{view:?}");
             features
                 .set_enabled(view.code(), false)
-                .unwrap_or_else(|_| panic!("{view:?} is not the last of six"));
+                .unwrap_or_else(|_| panic!("{view:?} is not the last visible tool"));
 
             assert!(!features.is_enabled(view.code()));
             assert_eq!(
@@ -874,6 +889,7 @@ mod tests {
             (Detector::Base64, View::EncoderDecoder),
         ] {
             assert_eq!(View::for_detector(detector), view);
+            assert_ne!(view, View::Diagram, "Diagram has no paste route");
         }
     }
 
@@ -940,10 +956,11 @@ mod tests {
         let mut expected: Vec<(&str, bool)> = vec![("docker", true), ("database", true)];
         if INPUT_METHOD_HOST {
             // Beside its default neighbour, not at an absolute index: the list
-            // it is joining is the user's order, and index 6 of that means
+            // it is joining is the user's order, and an absolute index means
             // nothing.
             expected.push(("input-method", true));
         }
+        expected.push(("diagram", true));
         expected.extend([
             ("json-formatter", true),
             ("api-explorer", false),
@@ -970,7 +987,7 @@ mod tests {
         if INPUT_METHOD_HOST {
             wanted.push(View::InputMethod);
         }
-        wanted.extend([View::JsonFormatter, View::EncoderDecoder]);
+        wanted.extend([View::Diagram, View::JsonFormatter, View::EncoderDecoder]);
         assert_eq!(visible, wanted);
     }
 
@@ -982,8 +999,8 @@ mod tests {
     ///
     /// Written with the Input method in the middle deliberately: on a build
     /// without an Input method implementation that entry is *dropped* rather than moved, and the
-    /// six around it keep their order and their positions relative to each
-    /// other.
+    /// tools around it keep their order and their positions relative to each
+    /// other. Diagram is absent because this session predates it.
     #[test]
     fn a_reordered_session_with_every_tool_comes_back_in_the_users_order() {
         const REORDERED: &[u8] = br#"{
@@ -1011,7 +1028,13 @@ mod tests {
         if INPUT_METHOD_HOST {
             expected.push("input-method");
         }
-        expected.extend(["json-formatter", "docker", "encoder-decoder", "cleaner"]);
+        expected.extend([
+            "diagram",
+            "json-formatter",
+            "docker",
+            "encoder-decoder",
+            "cleaner",
+        ]);
 
         let restored: Vec<&str> = features.all().iter().map(|entry| entry.code).collect();
         assert_eq!(restored, expected);

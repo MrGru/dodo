@@ -77,5 +77,10 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::LinkPlaceholder => "Paste a link".into(),
         Text::ColorPlaceholder => "Hex colour".into(),
         Text::ColorFromTheme => "From the theme".into(),
+        Text::StorageProblem(detail) => format!("The diagram could not be saved or loaded: {detail}").into(),
+        Text::StorageLoadConflict => {
+            "The diagram changed before its saved document finished loading. Restart dodo to try again."
+                .into()
+        }
     }
 }
