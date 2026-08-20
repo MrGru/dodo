@@ -95,6 +95,7 @@ use gpui::{AppContext as _, Div};
 use gpui_component::{
     ActiveTheme,
     input::{Input, InputState},
+    slider::{SliderEvent, SliderState},
 };
 
 use crate::{
@@ -110,6 +111,7 @@ use crate::{
         Color, EdgeIndex, EdgeRouting, FlowDocument, FontFamily, NodeIndex, RenderQuality,
         RenderStyle, SketchStyle,
     },
+    properties::{ArrowKind, Availability, ControlState, SelectionKind},
     render::{
         GridLevel, GridLimits, GridSettings, PaintPlan, PaintStats, SceneInk, SceneOptions,
         SceneStats, WindowPainter,
@@ -128,7 +130,7 @@ use crate::{
     spatial::{SpatialIndex, SyncReport, VisibleSet},
     views::{
         keymap::{Delete, Redo, SelectTool, ToggleToolLock, Undo},
-        nodes, palette,
+        nodes, palette, properties,
     },
 };
 
@@ -325,6 +327,34 @@ pub struct FlowView {
     /// The connection preview's route, kept so that dragging one out rebuilds
     /// into the same buffers instead of allocating per mouse move (§40 rule 14).
     preview_route: EdgeRoute,
+
+    // ---- Phase 11's property panel ------------------------------------
+    /// The opacity slider's own state, which is `gpui-component`'s and needs a
+    /// window to exist. Built once and reused: a slider rebuilt per frame would
+    /// lose the drag the moment anything else repainted.
+    opacity: Entity<SliderState>,
+
+    /// The percent the slider was last *told*. **The panel is a view of the
+    /// document, and the slider is a widget with state of its own**, so
+    /// something has to push one into the other; this is what keeps that from
+    /// happening every frame. `set_value` notifies, and a notify per frame is a
+    /// repaint loop.
+    opacity_shown: Option<u8>,
+
+    /// Whether the slider is mid-drag, so the gesture is opened once on the
+    /// first tick and closed on the release rather than per tick.
+    opacity_dragging: bool,
+
+    /// The panel's single-line editor, when one is open — the hex field behind
+    /// the current-colour swatch, or the Link action's. One `Option` for both,
+    /// because they can never be open at once.
+    prompt: Option<PanelPrompt>,
+}
+
+/// The panel's open text field.
+struct PanelPrompt {
+    kind: properties::PromptKind,
+    input: Entity<InputState>,
 }
 
 impl FlowView {
@@ -341,7 +371,7 @@ impl FlowView {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
-        FlowView {
+        let view = FlowView {
             editor: FlowEditor::new(),
             viewport: Viewport::default(),
             grid: GridSettings::default(),
@@ -375,7 +405,47 @@ impl FlowView {
             pan_key_held: false,
             rebuilt_routes: 0,
             preview_route: EdgeRoute::default(),
-        }
+            opacity: cx.new(|_| {
+                SliderState::new()
+                    .min(0.0)
+                    .max(100.0)
+                    .step(1.0)
+                    .default_value(100.0)
+            }),
+            opacity_shown: None,
+            opacity_dragging: false,
+            prompt: None,
+        };
+
+        // **The slider drives the document, and it is the one control that
+        // emits sixty events for one gesture.** `Change` opens the gesture on
+        // its first tick and `Release` closes it, so the whole drag is one undo
+        // step — and `EditCommand::supersedes` keeps it at one history entry
+        // rather than sixty. See `commands::edit`.
+        cx.subscribe_in(
+            &view.opacity,
+            window,
+            |this: &mut FlowView, _, event: &SliderEvent, window, cx| match event {
+                SliderEvent::Change(value) => {
+                    if !this.opacity_dragging {
+                        this.opacity_dragging = true;
+                        this.editor.begin_gesture();
+                    }
+                    let percent = value.start().clamp(0.0, 100.0).round() as u8;
+                    this.opacity_shown = Some(percent);
+                    this.apply_panel_change(properties::Change::Opacity(percent), window, cx);
+                }
+                SliderEvent::Release(_) => {
+                    if this.opacity_dragging {
+                        this.opacity_dragging = false;
+                        this.editor.end_gesture();
+                    }
+                }
+            },
+        )
+        .detach();
+
+        view
     }
 
     /// The runtime graph — the stores, the adjacency index and the dirty state.
@@ -715,6 +785,223 @@ impl FlowView {
     /// Three cheap reads, assembled here rather than in `render`'s `div` chain
     /// so the palette's inputs are one named thing — and so a fourth (Phase
     /// 11's) is added in one place.
+    /// **What the property panel draws, this frame.**
+    ///
+    /// `None` when nothing is selected, which is the honest answer: an empty
+    /// panel is a card of section labels over nothing.
+    ///
+    /// The whole of "which sections?" is [`crate::properties::sections_for`]'s
+    /// and is asserted with no window; what this method does is read the
+    /// selection's kinds and its *first* element's style. First rather than a
+    /// merge, and that is a decision worth naming: a mixed selection with two
+    /// different stroke colours has no honest single answer, so the panel shows
+    /// the leading element's and a press writes to all of them. Excalidraw does
+    /// the same, and the alternative — a tri-state on every control — is a lot
+    /// of machinery for a case that resolves itself the moment anybody presses
+    /// anything.
+    fn panel_state(&self) -> Option<properties::PanelState> {
+        let world = self.editor.world();
+        let selection = world.selection();
+        let (nodes, edges) = (selection.nodes(), selection.edges());
+        if nodes.is_empty() && edges.is_empty() {
+            return None;
+        }
+
+        let kinds: Vec<SelectionKind> = nodes
+            .iter()
+            .filter(|&&node| world.node_is_live(node))
+            .map(|&node| SelectionKind::of_kind(world.nodes().kind(node)))
+            .chain(
+                edges
+                    .iter()
+                    .filter(|&&edge| world.edge_is_live(edge))
+                    .map(|_| SelectionKind::Edge),
+            )
+            .collect();
+        let sections = crate::properties::sections_for(&kinds);
+        if sections.is_empty() {
+            return None;
+        }
+
+        let style = nodes
+            .iter()
+            .find(|&&node| world.node_is_live(node))
+            .map(|&node| world.nodes().style(node))
+            .or_else(|| {
+                edges
+                    .iter()
+                    .find(|&&edge| world.edge_is_live(edge))
+                    .map(|&edge| world.edges().style(edge))
+            })?;
+
+        let arrow = edges
+            .iter()
+            .find(|&&edge| world.edge_is_live(edge))
+            .map(|&edge| ArrowKind::of(world.edges().routing(edge)))
+            .unwrap_or_default();
+
+        Some(properties::PanelState {
+            sections,
+            controls: ControlState::of(style),
+            arrow,
+            sloppiness: Availability::of_sloppiness(
+                world.settings().render_style == RenderStyle::Sketch,
+            ),
+            has_link: self.editor.selection_link().is_some(),
+        })
+    }
+
+    /// **One press on the property panel, as an edit.**
+    ///
+    /// Every button on every row lands here, which is the point: a control that
+    /// was drawn and never wired is a missing `match` arm below rather than a
+    /// button that quietly does nothing — the failure Phase 7.5 recorded and
+    /// this phase has forty more chances to repeat.
+    ///
+    /// Every style row goes through
+    /// [`FlowEditor::restyle_selection`](crate::commands::FlowEditor::restyle_selection),
+    /// so it is undoable, it applies to the whole selection, and it is one
+    /// press of undo. Nothing here reaches the world.
+    pub fn apply_panel_change(
+        &mut self,
+        change: properties::Change,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = match &change {
+            properties::Change::Arrow(kind) => self.editor.reroute_selection(kind.routing()),
+            properties::Change::Layer(action) => self.editor.reorder_selection(*action),
+            properties::Change::Action(action) => match action {
+                crate::properties::ElementAction::Duplicate => self.editor.duplicate_selection(),
+                crate::properties::ElementAction::Delete => self.editor.delete_selection(),
+                _ => {
+                    self.open_prompt(properties::PromptKind::Link, window, cx);
+                    false
+                }
+            },
+            properties::Change::Prompt(kind) => {
+                self.open_prompt(*kind, window, cx);
+                false
+            }
+            other => match other.as_style_edit() {
+                Some(edit) => self.editor.restyle_selection(edit),
+                None => false,
+            },
+        };
+
+        if changed {
+            // A resize, a duplicate or a restyle can move what the spatial
+            // index holds, and the next frame culls against it.
+            self.editor.rebuild_dirty_geometry();
+            // The slider is a widget with state; a change that came from
+            // somewhere else has to be pushed back into it, and this is what
+            // makes `render` notice.
+            if !matches!(change, properties::Change::Opacity(_)) {
+                self.opacity_shown = None;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Opens one of the panel's two single-line editors, seeded with whatever
+    /// the selection already holds — the same "seed it, do not blank it"
+    /// argument §9's caret is built on. A blank hex field is a field that
+    /// *replaces* rather than edits.
+    fn open_prompt(
+        &mut self,
+        kind: properties::PromptKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let seed = match kind {
+            properties::PromptKind::Link => {
+                self.editor.selection_link().unwrap_or_default().to_owned()
+            }
+            properties::PromptKind::StrokeColor => self
+                .panel_state()
+                .and_then(|state| state.controls.stroke)
+                .map(crate::properties::hex)
+                .unwrap_or_default(),
+            properties::PromptKind::BackgroundColor => self
+                .panel_state()
+                .and_then(|state| state.controls.background)
+                .map(crate::properties::hex)
+                .unwrap_or_default(),
+        };
+
+        let placeholder = kind.placeholder();
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t(placeholder, cx))
+                .default_value(seed)
+        });
+        window.focus(&input.focus_handle(cx), cx);
+        self.prompt = Some(PanelPrompt { kind, input });
+        cx.notify();
+    }
+
+    /// **Commits the open editor.** An empty value clears — a link, or a colour
+    /// that goes back to the theme's — which is the same decision
+    /// [`FlowEditor::commit_text`](crate::commands::FlowEditor::commit_text)
+    /// makes for §9's caret and is made here for the same reason: "the user
+    /// selected all and deleted" is a thing they said.
+    ///
+    /// **A hex that does not parse is refused rather than applied**, and the
+    /// editor stays open with what was typed still in it. Applying black for
+    /// `#12345` would be a control quietly disagreeing with its input.
+    fn commit_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(prompt) = self.prompt.take() else {
+            return;
+        };
+        let text = prompt.input.read(cx).value().to_string();
+
+        let changed = match prompt.kind {
+            properties::PromptKind::Link => self.editor.set_selection_link(&text),
+            kind => {
+                let color = if text.trim().is_empty() {
+                    None
+                } else {
+                    match crate::properties::parse_hex(&text) {
+                        Some(color) => Some(color),
+                        None => {
+                            // Put it back rather than swallow it.
+                            self.prompt = Some(prompt);
+                            cx.notify();
+                            return;
+                        }
+                    }
+                };
+                let change = if kind == properties::PromptKind::StrokeColor {
+                    properties::Change::Stroke(color)
+                } else {
+                    properties::Change::Background(color)
+                };
+                match change.as_style_edit() {
+                    Some(edit) => self.editor.restyle_selection(edit),
+                    None => false,
+                }
+            }
+        };
+
+        self.close_prompt(changed, window, cx);
+    }
+
+    fn cancel_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt = None;
+        self.close_prompt(false, window, cx);
+    }
+
+    /// Both endings: give the canvas its focus back — or every binding scoped
+    /// to it is dead, which is Phase 7's lesson and `after_text_edit` says the
+    /// same thing four lines up — and repaint.
+    fn close_prompt(&mut self, changed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.clone().focus(window, cx);
+        if changed {
+            self.editor.rebuild_dirty_geometry();
+        }
+        cx.notify();
+    }
+
     fn palette_state(&self) -> palette::PaletteState {
         palette::PaletteState {
             tool: self.interaction.tool(),
@@ -1596,6 +1883,21 @@ impl FlowView {
             return;
         }
 
+        // **The panel's field answers the same two keys**, and it reaches this
+        // handler by the same route: it is a descendant of this element, and a
+        // single-line `Input` calls `cx.propagate()` for both. It is *not* run
+        // through the interaction machine — the machine models what a gesture
+        // on the canvas means, and typing a hex code into a chrome control is
+        // not one, which is the same line `PanBy` and `CommitBoxSelect` sit on.
+        if self.prompt.is_some() {
+            match event.keystroke.key.as_str() {
+                "enter" => self.commit_prompt(window, cx),
+                "escape" => self.cancel_prompt(window, cx),
+                _ => {}
+            }
+            return;
+        }
+
         match event.keystroke.key.as_str() {
             PAN_KEY => self.pan_key_held = true,
             "escape" => {
@@ -1823,7 +2125,7 @@ impl Render for FlowView {
     /// **Deliberately empty of work.** See the module doc: this body runs
     /// whenever anything above the canvas redraws, so everything that costs
     /// something happens in the paint closure instead.
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
 
         // **The one piece of work this body does, and it is bounded by the
@@ -1844,6 +2146,22 @@ impl Render for FlowView {
         // Built before the tree, because it reads the viewport and the world
         // and both are `&mut self` borrows the builder below already holds.
         let editor = self.text_editor_element(cx);
+
+        // **The panel is a view of the document and the slider is a widget with
+        // state of its own**, so the selection's opacity has to be pushed into
+        // it. Guarded on the value rather than done every frame: `set_value`
+        // notifies, and an unguarded notify from `render` is a repaint loop that
+        // never settles. See `opacity_shown`.
+        let panel = self.panel_state();
+        if let Some(state) = &panel {
+            let percent = state.controls.opacity_percent;
+            if self.opacity_shown != Some(percent) {
+                self.opacity_shown = Some(percent);
+                self.opacity.update(cx, |slider, cx| {
+                    slider.set_value(percent as f32, window, cx);
+                });
+            }
+        }
 
         let nodes = nodes::nodes(&self.snapshot, self.editor.world(), cx);
         let handles = nodes::handles(&self.snapshot, cx);
@@ -1900,6 +2218,25 @@ impl Render for FlowView {
                     .left(px(12.0))
                     .child(palette::palette(cx.entity(), self.palette_state(), cx)),
             )
+            // **The contextual property panel** (Phase 11), beside the palette
+            // and under it. Chrome, like the palette, and `children` rather
+            // than `child` for the same reason the caret is: a canvas with
+            // nothing selected builds no panel at all.
+            .children(panel.map(|state| {
+                div()
+                    .absolute()
+                    .top(px(52.0))
+                    .left(px(12.0))
+                    .child(properties::panel(
+                        cx.entity(),
+                        &state,
+                        self.prompt
+                            .as_ref()
+                            .map(|prompt| (prompt.kind, &prompt.input)),
+                        &self.opacity,
+                        cx,
+                    ))
+            }))
             // **§9's caret, above everything.** `children` rather than `child`
             // so an idle canvas builds no element at all — text editing costs
             // one `Option` when nobody is typing.

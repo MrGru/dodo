@@ -1,4 +1,5 @@
-//! The Flow Canvas: the tool palette and the actions beside it.
+//! The Flow Canvas: the tool palette, the actions beside it, and the
+//! contextual property panel.
 //!
 //! **This area exists four phases before the canvas reaches the sidebar**, and
 //! that is the decision worth recording. The sidebar row is deliberately last,
@@ -48,4 +49,104 @@ pub enum Text {
     /// The tool lock: with it on, finishing a drawing keeps the tool rather
     /// than returning to Select.
     KeepToolActive,
+
+    // ---- the contextual property panel (Phase 11) ----
+    //
+    // Every control on the panel is iconographic — line samples, wobble
+    // samples, corner and arrow glyphs — so with one exception these are
+    // *section labels* and *tooltips* rather than button captions. The
+    // exception is the font-size row, whose glyphs are the letters S, M, L and
+    // XL: those are drawn from the size names below rather than hard-coded,
+    // because a language that sizes its text differently is exactly the case a
+    // catalogue exists for.
+
+    // The section labels, in panel order.
+    SectionStroke,
+    SectionBackground,
+    SectionFill,
+    SectionStrokeWidth,
+    SectionStrokeStyle,
+    SectionSloppiness,
+    SectionEdges,
+    SectionArrowType,
+    SectionArrowheads,
+    SectionFontFamily,
+    SectionFontSize,
+    SectionTextAlign,
+    SectionOpacity,
+    SectionLayers,
+    SectionActions,
+
+    // Fill.
+    FillHachure,
+    FillCrossHatch,
+    FillSolid,
+
+    // Stroke width.
+    StrokeWidthThin,
+    StrokeWidthBold,
+    StrokeWidthExtraBold,
+
+    // Stroke style.
+    StrokeStyleSolid,
+    StrokeStyleDashed,
+    StrokeStyleDotted,
+
+    // Sloppiness. Excalidraw's three names, because they say what the hand is
+    // rather than how rough the number is.
+    SloppinessArchitect,
+    SloppinessArtist,
+    SloppinessCartoonist,
+    /// Why the Sloppiness row is muted: it edits a real property that a clean
+    /// drawing cannot show.
+    SloppinessNeedsSketch,
+
+    // Edges (the corner style).
+    EdgesSharp,
+    EdgesRound,
+
+    // Arrow type.
+    ArrowStraight,
+    ArrowCurved,
+    ArrowElbow,
+
+    // Arrowheads, as two toggles.
+    ArrowheadStart,
+    ArrowheadEnd,
+
+    // Font family.
+    FontHandDrawn,
+    FontNormal,
+    FontCode,
+
+    /// The four discrete sizes, drawn *as* the button's glyph. Short by
+    /// design — one or two characters — because they are the picture as well as
+    /// the label.
+    FontSizeSmall,
+    FontSizeMedium,
+    FontSizeLarge,
+    FontSizeExtraLarge,
+
+    // Text alignment.
+    AlignLeft,
+    AlignCenter,
+    AlignRight,
+
+    // Layers.
+    LayerSendToBack,
+    LayerSendBackward,
+    LayerBringForward,
+    LayerBringToFront,
+
+    // Actions. `Delete` is Phase 9's and is reused rather than duplicated.
+    ActionDuplicate,
+    /// Opens the link editor.
+    ActionLink,
+    /// The link editor's placeholder.
+    LinkPlaceholder,
+    /// The colour editor's placeholder, on the swatch past the separator.
+    ColorPlaceholder,
+    /// The tooltip on that swatch when there is no colour of the element's own
+    /// to show — the theme is answering.
+    ColorFromTheme,
 }

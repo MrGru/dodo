@@ -32,6 +32,7 @@
 pub mod cache;
 pub mod edges;
 pub mod grid;
+pub mod hatch;
 pub mod lod;
 pub mod painter;
 pub mod plan;
@@ -47,6 +48,7 @@ pub use cache::{
 };
 pub use edges::{EdgePaint, plan_connection_preview, plan_edge};
 pub use grid::{GridLevel, GridLimits, GridSettings, GridStyle};
+pub use hatch::hatch;
 pub use lod::{EdgeDetail, HandleDetail, LodPlan, SceneLoad};
 pub use painter::WindowPainter;
 pub use plan::{PaintPlan, PaintStats, PathPaint, PathPrimitive, PrimitiveSink, QuadPrimitive};

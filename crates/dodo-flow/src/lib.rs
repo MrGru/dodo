@@ -853,6 +853,7 @@ pub mod geometry;
 pub mod instrument;
 pub mod interaction;
 pub mod models;
+pub mod properties;
 pub mod render;
 pub mod runtime;
 pub mod scenes;
@@ -865,6 +866,7 @@ pub use geometry::{Rect, Vec2, Viewport};
 pub use instrument::{Instruments, Probe};
 pub use interaction::{InteractionEffect, InteractionEvent, InteractionMachine, InteractionState};
 pub use models::{ElementId, ElementKind, FlowDocument};
+pub use properties::{PanelSection, SelectionKind};
 pub use render::{GridSettings, GridStyle, PaintPlan, PaintStats, SceneInk, SceneOptions};
 pub use runtime::{
     BoxQuery, BoxSelectMode, ConnectionRules, EdgeEnd, GraphWorld, NodeSpec, PointerTarget,
@@ -912,9 +914,11 @@ mod tests {
             include_str!("models/serialization.rs"),
         ),
         ("models/style.rs", include_str!("models/style.rs")),
+        ("properties.rs", include_str!("properties.rs")),
         ("render/cache.rs", include_str!("render/cache.rs")),
         ("render/edges.rs", include_str!("render/edges.rs")),
         ("render/grid.rs", include_str!("render/grid.rs")),
+        ("render/hatch.rs", include_str!("render/hatch.rs")),
         ("render/lod.rs", include_str!("render/lod.rs")),
         ("render/mod.rs", include_str!("render/mod.rs")),
         ("render/plan.rs", include_str!("render/plan.rs")),
