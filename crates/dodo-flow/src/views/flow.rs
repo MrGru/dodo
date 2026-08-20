@@ -1481,7 +1481,7 @@ impl FlowView {
         // could actually draw, and what the decode cache is holding. The two
         // counts differ exactly when a resource could not be decoded, which is
         // otherwise a hole on screen with nothing to say why.
-        if self.last_scene.images > 0 || self.image_cache.len() > 0 {
+        if self.last_scene.images > 0 || !self.image_cache.is_empty() {
             println!(
                 "  §10  {} pictures planned, {} painted, {} decoded ({:.1} MB)",
                 self.last_scene.images,

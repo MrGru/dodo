@@ -967,6 +967,157 @@
 //! forward and it is the same risk the plan named as "live input is
 //! source-verified, never observed".
 //!
+//! # What the twelfth slice added: pictures, and the run that moves
+//!
+//! §10. The last of the captain's editing scope, and the feature is images;
+//! **the deliverable is two rules that had to be made structural**, because
+//! both fail silently and both are easy to write the wrong way once and never
+//! notice.
+//!
+//! The first is the requirement's own: *do not duplicate raw image bytes per
+//! element*. [`models::image`] makes that unexpressible rather than
+//! remembered — an element carries an [`ImageHandle`](models::ImageHandle),
+//! which is a **content hash**, and the bytes live once in
+//! [`FlowDocument::images`](models::FlowDocument::images). One file inserted
+//! twice collides by construction, the Duplicate action copies twenty bytes,
+//! and the decode cache in [`views::images`] is keyed the same way, so two
+//! elements showing one picture share the decoded pixels as well as the file.
+//!
+//! - **The bytes are embedded, not referenced.** A path breaks silently the
+//!   moment a document is moved or sent to somebody, and dodo has no asset
+//!   directory for a canvas file to sit beside — that is Phase 8's question and
+//!   `docs/architecture/persistence.md` is its authority. The cost, base64's
+//!   33 %, is recorded beside the decision.
+//! - **Document version 3, and the rung it climbs is the identity.** The
+//!   version moved for what it tells an *older* build: dropping an unknown
+//!   `fill_style` loses a look a press restores; dropping an unknown `images`
+//!   table loses the only copy of a photograph.
+//!   [`CURRENT_VERSION`](models::CURRENT_VERSION) carries that rule, which is
+//!   also why Phase 11 was right not to move it.
+//! - **A crop is four fractions of the source** ([`models::ImageCrop`]) and it
+//!   is spent as arithmetic on a child element's box —
+//!   [`views::images::crop_layout`] — with the parent's clip doing the rest. No
+//!   pixel is read and no buffer is copied, which is §10's "the original bytes
+//!   are untouched and shared" holding at the render layer as well as in the
+//!   file.
+//!
+//! ## The picture is an element, and that is not a preference
+//!
+//! GPUI paints a bitmap in one call and it **cannot carry an opacity**:
+//! `Window::paint_image` reads the sprite's alpha from
+//! `Window::element_opacity`, which is `pub(crate)` and is written by exactly
+//! one thing in the framework — a styled element's own paint. The property
+//! panel gives every kind an Opacity row, images included, so the raw call
+//! would have shipped a control that writes a field no painter reads: Phase 7's
+//! dead bindings, Phase 7.5's absent palette and Phase 11's unread `fill_style`
+//! for the fourth time.
+//!
+//! So a picture is built and **prepainted** by [`views::images`] during the
+//! canvas's prepaint — the only phase GPUI lays an element out in — and painted
+//! by [`render::painter`] at the point in
+//! [`PaintPlan::paint_into`](render::PaintPlan::paint_into)'s order the image
+//! run occupies. It keeps its place among the bodies instead of floating above
+//! everything the way the rich half does, and it gets opacity, the crop's clip
+//! and a corner radius from the element tree.
+//!
+//! ## Z-order against the batching contract, the second time
+//!
+//! Phase 11 composed a per-element depth with the per-kind runs by **promoting**
+//! a quad-bodied body into the path run. A bitmap has no outline form — exactly
+//! as a glyph run has none — so that mechanism is unavailable, and with the
+//! image run pinned anywhere the depth order is half-dead in one direction.
+//!
+//! **The run moves instead.** It is emitted before the paths by default, which
+//! is where a picture belongs (put a screenshot down, annotate over it), and
+//! after them when [`render::scene`]'s `images_belong_above_paths` finds the
+//! topmost picture above the topmost path-bodied element. One contiguous run
+//! either way, so the contract Phase 0 measured is untouched; an unlayered
+//! document pays one `bool` read, like every other part of the depth machinery.
+//!
+//! ## What was missing, and had to be built before any of it could be used
+//!
+//! **There was no resize gesture.** `ResizeNodes` and its applier had existed
+//! since Phase 7 and nothing raised one: no state, no grips, no hit test — so
+//! an element's size could be changed by a command and by nothing a person
+//! could do. It is built here for **every** kind rather than for images:
+//! [`geometry::resize_from_corner`], [`runtime::PointerTarget::ResizeGrip`],
+//! `InteractionState::Resizing`, and two commands in one gesture (a corner drag
+//! moves the origin as well as the size, and the two coalesce by different
+//! rules — see [`commands::EditCommand::merge`] and `supersedes`).
+//!
+//! **§10's aspect lock is the element's default and shift asks for the other
+//! one** — locked for a picture, free for a shape. That reads as "shift
+//! constrains" on a shape and "shift releases" on an image, which is one rule
+//! rather than two, and it is what makes Crop an action rather than a mode:
+//! shift-drag a corner to say what shape you want, then press Crop to turn that
+//! stretch into a window on the source. [`properties::crop_choice`] is the
+//! whole of the button's three states.
+//!
+//! ## The numbers
+//!
+//! `render::scene`'s `a_screenful_of_pictures_costs_no_path_vertices`, on the
+//! same 1440×900 pane the rest of this file measures: **twenty-four pictures
+//! filling the view cost 0 path vertices and 0 path batches.** A picture is a
+//! textured quad; its batching cost is GPUI's, one sprite batch per *atlas
+//! texture* rather than one per picture, and a sprite batch is a draw call with
+//! a texture bind rather than the full-viewport intermediate pass with a clear
+//! that a path batch costs. The vertex ceiling and Phase 11's layered-cost bound
+//! are both untouched by images.
+//!
+//! ## What the launcher's own report found, which no test would have
+//!
+//! `DODO_FLOW_PICTURES=1` opens the camera on the demo row and the first-frame
+//! report said **two pictures planned, one painted**. `render` extracts §24's
+//! snapshot against the *previous* pane — it is handed no bounds — and paint
+//! was where that had always been noticed. A picture is laid out one phase
+//! earlier than the plan is built, so on the first frame and after every resize
+//! the prepaint used the stale set and the plan the fresh one. `sync_pane` runs
+//! in prepaint now. **The pattern is Phase 7's and Phase 7.5's a third time**:
+//! nothing failed, every test passed, and a capability was quietly absent for
+//! one frame at a time.
+//!
+//! ## And the limitations a user meets, recorded where they are caused
+//!
+//! 1. **Two pictures on opposite sides of one path-bodied body cannot both be
+//!    honoured.** The image run moves as a whole, and the flag is set from the
+//!    topmost picture — so a screenshot behind a diagram and a logo over it
+//!    disagree, and the logo loses. [`render::plan`]'s module doc carries it.
+//!    Per-picture ordering against paths needs a promotion a bitmap cannot
+//!    have, or one render pass per picture.
+//! 2. **A cropped picture has square corners.** The Edges row rounds the
+//!    *sprite*, and a crop is a clip: GPUI's content mask is a rectangle with
+//!    no radii, so the rounding a cropped picture would show is off-screen.
+//!    [`views::images`] says so where it is caused.
+//! 3. **The crop is centred and cannot be nudged.** "Which part of the picture"
+//!    is chosen by resizing the frame, and the window it produces keeps the
+//!    middle. Panning the crop inside its frame is a second drag gesture on an
+//!    element that already has one, and it belongs with whatever gives the
+//!    canvas modal in-place editing.
+//! 4. **A picture cannot be rotated, and neither can anything else.** Nothing
+//!    in the engine has an angle — `commands::edit`'s doc has had that recorded
+//!    since Phase 7 — so the resize grips are the four corners of an
+//!    axis-aligned box.
+//! 5. **Decoding a large picture stalls the frame that first needs it.** The
+//!    insert path decodes off the moment a file is chosen and primes the cache,
+//!    so this is only paid by a *loaded* document's first frame, once per
+//!    picture. [`views::images`] carries the trade.
+//!
+//! ## What was verified by running, and what was not
+//!
+//! Everything above is `cargo test` with no window: the sharing rule as a
+//! count, the round trip with a crop in it, the resize through the real machine
+//! and the real applier (locked and free), the run's position on both sides of
+//! the paths as the sequence a painter is handed, and every edit as an undo
+//! depth. The launcher was **run**, and its report shows two pictures planned,
+//! two painted and one resource decoded — §10's rule in a real frame.
+//!
+//! **What that cannot show is whether it looks right, and this phase has three
+//! things that are expected to look odd.** `examples/flow.rs` lists the seven
+//! things only a person at the keyboard can check, and flags which of them are
+//! recorded limitations rather than bugs. This is the fifth phase to hand that
+//! forward and it is the same risk the plan named as "live input is
+//! source-verified, never observed".
+//!
 //! # Where the budget numbers come from, and what they are not
 //!
 //! [`budgets`] is the one named place for every render ceiling and LOD
