@@ -683,10 +683,23 @@ impl FlowEditor {
     /// is the whole correctness of "one press, one undo", and a method that
     /// returned early between the two calls would leave a gesture open for the
     /// next unrelated edit to join.
+    ///
+    /// **It nests**, and it has to. [`begin_gesture`](FlowEditor::begin_gesture)
+    /// was already re-entrant — it hands back the gesture that is open rather
+    /// than starting a second — but [`end_gesture`](FlowEditor::end_gesture)
+    /// closes unconditionally, so a helper that always closed would end the
+    /// caller's gesture on its way out. That is not theoretical: a slider drag
+    /// opens a gesture and then calls `restyle_selection` sixty times, and
+    /// without this the first tick would close the drag and the other
+    /// fifty-nine would each become an undo step of their own. It was found by
+    /// counting the entries in a test rather than by reading this.
     fn in_one_step(&mut self, body: impl FnOnce(&mut FlowEditor) -> bool) -> bool {
+        let outer = self.history.open_gesture();
         self.begin_gesture();
         let changed = body(self);
-        self.end_gesture();
+        if outer.is_none() {
+            self.end_gesture();
+        }
         changed
     }
 

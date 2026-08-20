@@ -868,6 +868,352 @@ mod tests {
         ))
     }
 
+    // ---- Phase 11: the property panel's edits -------------------------
+
+    /// An editor holding three shapes and one connection, which is enough for
+    /// every panel operation below to have something to be wrong about.
+    fn panel_editor() -> (FlowEditor, Vec<NodeIndex>) {
+        let mut editor = FlowEditor::new();
+        editor.set_rules(ConnectionRules::PERMISSIVE);
+        let nodes: Vec<NodeIndex> = (0..3)
+            .map(|i| {
+                editor
+                    .apply(EditCommand::AddNodes(vec![graph_node(i as f32 * 200.0)]))
+                    .unwrap()
+                    .added_nodes[0]
+            })
+            .collect();
+        editor
+            .apply(EditCommand::Connect(vec![EdgeSpec::new(
+                ElementId::NONE,
+                EdgeEnd::node(nodes[0]),
+                EdgeEnd::node(nodes[1]),
+            )]))
+            .unwrap();
+        (editor, nodes)
+    }
+
+    /// **Every property the panel writes is an edit, and every edit undoes.**
+    ///
+    /// One test rather than fifteen, because the interesting claim is the
+    /// *shape* — the panel hands a closure to one method and the method does
+    /// the rest — and fifteen copies of it would only assert that fifteen
+    /// closures were written correctly. Each row here changes a different field
+    /// through the same door.
+    #[test]
+    fn every_style_the_panel_writes_changes_the_document_and_undoes() {
+        use crate::models::{FillStyle, FontFamily, FontSize, Sloppiness, TextAlign};
+
+        /// One row of the table below: a name, the write the panel's control
+        /// makes, and the question that says whether it took.
+        type StyleRow = (
+            &'static str,
+            Box<dyn Fn(&mut ElementStyle)>,
+            Box<dyn Fn(&ElementStyle) -> bool>,
+        );
+
+        let rows: Vec<StyleRow> = vec![
+            (
+                "stroke colour",
+                Box::new(|style: &mut ElementStyle| {
+                    style.stroke.color = Some(Color::rgb(1.0, 0.0, 0.0))
+                }),
+                Box::new(|style: &ElementStyle| {
+                    style.stroke.color == Some(Color::rgb(1.0, 0.0, 0.0))
+                }),
+            ),
+            (
+                "background",
+                Box::new(|style: &mut ElementStyle| style.fill = Some(Color::TRANSPARENT)),
+                Box::new(|style: &ElementStyle| style.fill == Some(Color::TRANSPARENT)),
+            ),
+            (
+                "fill style",
+                Box::new(|style: &mut ElementStyle| style.fill_style = FillStyle::CrossHatch),
+                Box::new(|style: &ElementStyle| style.fill_style == FillStyle::CrossHatch),
+            ),
+            (
+                "stroke width",
+                Box::new(|style: &mut ElementStyle| style.stroke.width = 4.0),
+                Box::new(|style: &ElementStyle| style.stroke.width == 4.0),
+            ),
+            (
+                "stroke dash",
+                Box::new(|style: &mut ElementStyle| {
+                    style.stroke.dash = crate::models::DashPattern::new(vec![2.0, 6.0])
+                }),
+                Box::new(|style: &ElementStyle| !style.stroke.dash.is_solid()),
+            ),
+            (
+                "sloppiness",
+                Box::new(|style: &mut ElementStyle| style.sloppiness = Sloppiness::Cartoonist),
+                Box::new(|style: &ElementStyle| style.sloppiness == Sloppiness::Cartoonist),
+            ),
+            (
+                "corner radius",
+                Box::new(|style: &mut ElementStyle| style.corner_radius = 12.0),
+                Box::new(|style: &ElementStyle| style.corner_radius == 12.0),
+            ),
+            (
+                "opacity",
+                Box::new(|style: &mut ElementStyle| style.opacity = 0.4),
+                Box::new(|style: &ElementStyle| style.opacity == 0.4),
+            ),
+            (
+                "font family",
+                Box::new(|style: &mut ElementStyle| style.font.family = FontFamily::Code),
+                Box::new(|style: &ElementStyle| style.font.family == FontFamily::Code),
+            ),
+            (
+                "font size",
+                Box::new(|style: &mut ElementStyle| style.font.size = FontSize::ExtraLarge),
+                Box::new(|style: &ElementStyle| style.font.size == FontSize::ExtraLarge),
+            ),
+            (
+                "text align",
+                Box::new(|style: &mut ElementStyle| style.font.align = TextAlign::Right),
+                Box::new(|style: &ElementStyle| style.font.align == TextAlign::Right),
+            ),
+            (
+                "arrowheads",
+                Box::new(|style: &mut ElementStyle| {
+                    style.end_marker = crate::models::ArrowMarker::Dot
+                }),
+                Box::new(|style: &ElementStyle| {
+                    style.end_marker == crate::models::ArrowMarker::Dot
+                }),
+            ),
+        ];
+
+        for (name, write, holds) in rows {
+            let (mut editor, nodes) = panel_editor();
+            editor.select_only(Some(nodes[0]));
+            let before = editor.world().nodes().style(nodes[0]).clone();
+
+            assert!(editor.restyle_selection(&write), "{name} changed nothing");
+            assert!(
+                holds(editor.world().nodes().style(nodes[0])),
+                "{name} did not take"
+            );
+
+            assert!(editor.undo(), "{name} left no undo step");
+            assert_eq!(
+                editor.world().nodes().style(nodes[0]),
+                &before,
+                "{name} did not come back"
+            );
+
+            assert!(editor.redo());
+            assert!(
+                holds(editor.world().nodes().style(nodes[0])),
+                "{name} did not redo"
+            );
+        }
+    }
+
+    /// A restyle that touches a node *and* an edge is two commands and must
+    /// still be one press of undo — otherwise a mixed selection restyled once
+    /// takes two presses to put back and nobody can tell why.
+    #[test]
+    fn restyling_a_mixed_selection_is_one_undo_step() {
+        let (mut editor, nodes) = panel_editor();
+        let edge = EdgeIndex::new(0);
+        editor.select_only(Some(nodes[0]));
+        editor.set_edge_selected(edge, true);
+        let before = editor.history().undo_depth();
+
+        assert!(editor.restyle_selection(|style| style.opacity = 0.25));
+        assert_eq!(editor.world().nodes().style(nodes[0]).opacity, 0.25);
+        assert_eq!(editor.world().edges().style(edge).opacity, 0.25);
+
+        // Two commands — a node style and an edge style — and therefore two
+        // entries. One press has to take both, which is exactly what gesture
+        // grouping is for: merging keeps the stack small, grouping keeps the
+        // *step* whole, and they are deliberately different mechanisms.
+        assert_eq!(editor.history().undo_depth(), before + 2);
+        assert!(editor.undo());
+        assert_eq!(editor.world().nodes().style(nodes[0]).opacity, 1.0);
+        assert_eq!(editor.world().edges().style(edge).opacity, 1.0);
+        assert_eq!(
+            editor.history().undo_depth(),
+            before,
+            "one press should have been enough"
+        );
+    }
+
+    /// **A slider drag is one undo step and one history entry**, which are two
+    /// different claims and the second is the one `EditCommand::supersedes`
+    /// exists for. Sixty ticks that each pushed an entry would still undo in
+    /// one press through gesture grouping — and would also evict sixty older
+    /// steps from a bounded stack.
+    #[test]
+    fn dragging_the_opacity_slider_is_one_step_and_one_entry() {
+        let (mut editor, nodes) = panel_editor();
+        editor.select_only(Some(nodes[0]));
+        let before = editor.history().undo_depth();
+
+        editor.begin_gesture();
+        for tick in 0..60 {
+            let opacity = 1.0 - tick as f32 * 0.01;
+            editor.restyle_selection(|style| style.opacity = opacity);
+        }
+        editor.end_gesture();
+
+        assert!((editor.world().nodes().style(nodes[0]).opacity - 0.41).abs() < 1e-5);
+        assert_eq!(
+            editor.history().undo_depth(),
+            before + 1,
+            "sixty ticks must coalesce into one entry"
+        );
+
+        assert!(editor.undo());
+        assert_eq!(editor.world().nodes().style(nodes[0]).opacity, 1.0);
+        assert_eq!(editor.history().undo_depth(), before);
+    }
+
+    /// **Depth survives a save, a load and an undo**, which are three different
+    /// paths through three different modules and the phase brief names all
+    /// three.
+    #[test]
+    fn depth_survives_serialization_and_undo() {
+        let (mut editor, nodes) = panel_editor();
+        editor.select_only(Some(nodes[0]));
+        assert!(!editor.world().is_layered());
+
+        assert!(editor.reorder_selection(crate::commands::LayerAction::BringToFront));
+        let raised = editor.world().nodes().z(nodes[0]);
+        assert!(raised > 0);
+        assert!(editor.world().is_layered());
+
+        // Serialization.
+        let json = serde_json::to_string(&editor.to_document()).expect("a document serializes");
+        let back: FlowDocument = serde_json::from_str(&json).expect("and comes back");
+        let (reloaded, report) = FlowEditor::from_document(&back);
+        assert!(report.dangling_edges.is_empty());
+        assert_eq!(reloaded.world().nodes().z(nodes[0]), raised);
+        assert!(
+            reloaded.world().is_layered(),
+            "a reloaded document has to know it is layered, or its frame is drawn in the wrong order"
+        );
+
+        // Undo.
+        assert!(editor.undo());
+        assert_eq!(editor.world().nodes().z(nodes[0]), 0);
+        assert!(
+            !editor.world().is_layered(),
+            "undoing the only reorder puts the frame back on its fast path"
+        );
+        assert!(editor.redo());
+        assert_eq!(editor.world().nodes().z(nodes[0]), raised);
+    }
+
+    /// The four buttons through the editor rather than through the arithmetic:
+    /// one gesture, one press of undo, and a press with nowhere to go that
+    /// consumes nothing.
+    #[test]
+    fn the_layer_buttons_reorder_the_selection_and_refuse_when_there_is_nowhere_to_go() {
+        use crate::commands::LayerAction;
+
+        let (mut editor, nodes) = panel_editor();
+        editor.select_only(Some(nodes[1]));
+
+        assert!(editor.reorder_selection(LayerAction::BringToFront));
+        assert!(
+            !editor.reorder_selection(LayerAction::BringToFront),
+            "already at the front"
+        );
+        assert!(editor.reorder_selection(LayerAction::SendToBack));
+        assert!(
+            !editor.reorder_selection(LayerAction::SendToBack),
+            "already at the back"
+        );
+
+        // Two real presses and two refusals, so exactly two undo steps stand
+        // above the edits that built the document.
+        let depth = editor.history().undo_depth();
+        assert!(editor.undo());
+        assert!(editor.undo());
+        assert_eq!(editor.history().undo_depth(), depth - 2);
+        assert_eq!(editor.world().nodes().z(nodes[1]), 0);
+    }
+
+    /// Duplicating copies the nodes, the edges *between* them, and the handles
+    /// — and selects the copies, so a second press walks across the canvas.
+    #[test]
+    fn duplicating_copies_the_selection_its_internal_edges_and_undoes_in_one_press() {
+        let (mut editor, nodes) = panel_editor();
+        editor.select_only(Some(nodes[0]));
+        editor.set_node_selected(nodes[1], true);
+
+        let before = editor.to_document();
+        assert!(editor.duplicate_selection());
+
+        let after = editor.to_document();
+        assert_eq!(after.nodes.len(), before.nodes.len() + 2);
+        assert_eq!(
+            after.edges.len(),
+            before.edges.len() + 1,
+            "the edge joining the two copied nodes is copied with them"
+        );
+        assert_eq!(
+            editor.world().selection().nodes().len(),
+            2,
+            "the copies become the selection"
+        );
+
+        assert!(editor.undo());
+        assert_eq!(editor.to_document().nodes, before.nodes);
+        assert_eq!(editor.to_document().edges, before.edges);
+    }
+
+    /// An edge with only one end in the selection is **not** copied: the copy
+    /// would attach to the original node and leave two edges converging on it.
+    #[test]
+    fn duplicating_one_end_of_a_connection_copies_no_edge() {
+        let (mut editor, nodes) = panel_editor();
+        editor.select_only(Some(nodes[0]));
+
+        let before = editor.to_document().edges.len();
+        assert!(editor.duplicate_selection());
+        assert_eq!(editor.to_document().edges.len(), before);
+    }
+
+    /// A link is document data: it is set through a command, it survives a
+    /// round trip, and it undoes.
+    #[test]
+    fn a_link_is_stored_undone_and_round_tripped() {
+        let (mut editor, nodes) = panel_editor();
+        editor.select_only(Some(nodes[0]));
+        assert_eq!(editor.selection_link(), None);
+
+        assert!(editor.set_selection_link("  https://example.invalid/spec  "));
+        assert_eq!(
+            editor.selection_link(),
+            Some("https://example.invalid/spec")
+        );
+
+        let json = serde_json::to_string(&editor.to_document()).unwrap();
+        let back: FlowDocument = serde_json::from_str(&json).unwrap();
+        let (reloaded, _) = FlowEditor::from_document(&back);
+        reloaded.world().nodes().live_indices().for_each(|node| {
+            if node == nodes[0] {
+                assert_eq!(
+                    reloaded.world().nodes().cold(node).link.as_deref(),
+                    Some("https://example.invalid/spec")
+                );
+            }
+        });
+
+        // Empty clears, exactly as an empty text commit does.
+        assert!(editor.set_selection_link("   "));
+        assert_eq!(editor.selection_link(), None);
+        assert!(editor.undo());
+        assert_eq!(
+            editor.selection_link(),
+            Some("https://example.invalid/spec")
+        );
+    }
+
     /// Not every element is a graph node; a plain shape has to be editable too,
     /// and its `NodeShape` projection has to survive the round trip.
     #[test]

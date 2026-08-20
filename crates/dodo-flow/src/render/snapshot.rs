@@ -101,6 +101,10 @@ pub struct RichNode {
     /// The quantised size its label is shaped at, or `None` when there is no
     /// label to shape.
     pub label_font_size: Option<f32>,
+    /// **The node's place in the paint order**, carried so the element tree can
+    /// be built in it. See [`RenderSnapshot::extract`] for how a per-element
+    /// order composes with a per-kind one.
+    pub z: i32,
 }
 
 /// A node the painter draws.
@@ -123,6 +127,8 @@ pub struct CanvasNode {
     /// [`NodeStore::text_version`](crate::runtime::NodeStore::text_version),
     /// not the geometry one beside it, so a dragged node does not re-shape.
     pub text_version: u32,
+    /// The node's place in the paint order.
+    pub z: i32,
 }
 
 /// An edge that survived the ladder's count cap.
@@ -139,6 +145,8 @@ pub struct PlannedEdge {
     /// would render below the readable floor. All three mean *do not lay it
     /// out*, which is §15's first bullet costing nothing.
     pub label_font_size: Option<f32>,
+    /// The edge's place in the paint order.
+    pub z: i32,
 }
 
 /// One handle that gets a real element: hoverable, with a cursor (§44).
@@ -199,6 +207,33 @@ pub struct RenderSnapshot {
     interactive_handles: Vec<InteractiveHandle>,
     overlay: Option<SnapshotOverlay>,
     counts: SnapshotCounts,
+    /// Scratch for the layered path only — see
+    /// [`extract_nodes`](RenderSnapshot::extract_nodes). Held on the snapshot
+    /// rather than allocated per frame, for the same §40 rule 14 reason every
+    /// other buffer here is.
+    pending: Vec<MeasuredNode>,
+}
+
+/// One visible node, measured but not yet placed.
+///
+/// Everything both halves of the hybrid renderer need, so that *where* a node
+/// goes can be decided after every node has been measured — which is what a
+/// depth order requires and what a single pass cannot give.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MeasuredNode {
+    node: NodeIndex,
+    screen: Rect,
+    visual: NodeVisual,
+    version: u32,
+    text_version: u32,
+    selected: bool,
+    hovered: bool,
+    detailed: bool,
+    label_font_size: Option<f32>,
+    z: i32,
+    /// Whether this node *could* be a GPUI element. Whether it *is* one also
+    /// depends on the depth order and on the element budget.
+    rich_capable: bool,
 }
 
 impl RenderSnapshot {
@@ -242,6 +277,7 @@ impl RenderSnapshot {
         self.canvas.clear();
         self.edges.clear();
         self.interactive_handles.clear();
+        self.pending.clear();
         self.overlay = None;
         self.counts = SnapshotCounts::default();
 
@@ -311,11 +347,31 @@ impl RenderSnapshot {
                 version: world.geometry().version(edge),
                 selected: world.edges().is_selected(edge),
                 label_font_size,
+                z: world.edges().z(edge),
             });
+        }
+
+        // **After the cap, never before.** The cap takes a prefix of the
+        // *visible* order because that order is stable frame to frame, and a
+        // scene over budget must drop the same edges every frame rather than a
+        // different subset. Sorting first would make the cap drop by depth,
+        // which is both a different set and the wrong one — it would throw away
+        // the edges the author had deliberately put on top.
+        if world.is_layered() {
+            self.edges.sort_unstable_by_key(|it| (it.z, it.edge.raw()));
         }
     }
 
     /// Every visible node, down one of the three routes. See the module doc.
+    ///
+    /// **Two shapes, and the second one exists only for a layered document.**
+    /// With every element on the same depth — which is every document nobody
+    /// has pressed a Layers button in — each node is measured and placed in one
+    /// pass, exactly as it was before z-order existed, and this costs one `bool`
+    /// read per frame. Once a depth has been expressed, the nodes are measured
+    /// into a scratch buffer, sorted, and *then* placed, because which of them
+    /// can be a GPUI element depends on where they all ended up. See
+    /// [`place_in_depth_order`](RenderSnapshot::place_in_depth_order).
     #[allow(clippy::too_many_arguments)]
     fn extract_nodes(
         &mut self,
@@ -327,6 +383,7 @@ impl RenderSnapshot {
         hovered: Option<NodeIndex>,
         lod: &LodPlan,
     ) {
+        let layered = world.is_layered();
         let nodes = world.nodes();
         let thresholds = budgets.lod;
 
@@ -392,39 +449,110 @@ impl RenderSnapshot {
                 .then(|| lod.font_size_for(&thresholds, nodes.style(node).font.world_size()))
                 .flatten();
 
-            let wants_element = lod.detail == DetailLevel::Full
-                && detailed
-                && is_rectangular(visual.body)
-                && nodes.cold(node).parent.is_none();
-
-            if wants_element {
-                if self.rich.len() as u32 >= lod.max_rich_nodes.min(budgets.max_rich_elements) {
-                    self.counts.demoted_rich += 1;
-                } else {
-                    self.rich.push(RichNode {
-                        node,
-                        screen,
-                        visual,
-                        version,
-                        selected,
-                        hovered: hovered == Some(node),
-                        label_font_size,
-                    });
-                    continue;
-                }
-            }
-
-            self.canvas.push(CanvasNode {
+            let measured = MeasuredNode {
                 node,
                 screen,
-                body: visual.body,
+                visual,
                 version,
+                text_version: nodes.text_version(node),
                 selected,
+                hovered: hovered == Some(node),
                 detailed,
                 label_font_size,
-                text_version: nodes.text_version(node),
-            });
+                z: nodes.z(node),
+                rich_capable: lod.detail == DetailLevel::Full
+                    && detailed
+                    && is_rectangular(visual.body)
+                    && nodes.cold(node).parent.is_none(),
+            };
+
+            if layered {
+                self.pending.push(measured);
+            } else {
+                self.place(measured, lod, budgets);
+            }
         }
+
+        if layered {
+            self.place_in_depth_order(lod, budgets);
+        }
+    }
+
+    /// One measured node, into whichever half of the hybrid renderer takes it.
+    fn place(&mut self, measured: MeasuredNode, lod: &LodPlan, budgets: &RenderBudgets) {
+        if measured.rich_capable {
+            if self.rich.len() as u32 >= lod.max_rich_nodes.min(budgets.max_rich_elements) {
+                self.counts.demoted_rich += 1;
+            } else {
+                self.rich.push(RichNode {
+                    node: measured.node,
+                    screen: measured.screen,
+                    visual: measured.visual,
+                    version: measured.version,
+                    selected: measured.selected,
+                    hovered: measured.hovered,
+                    label_font_size: measured.label_font_size,
+                    z: measured.z,
+                });
+                return;
+            }
+        }
+
+        self.canvas.push(CanvasNode {
+            node: measured.node,
+            screen: measured.screen,
+            body: measured.visual.body,
+            version: measured.version,
+            selected: measured.selected,
+            detailed: measured.detailed,
+            label_font_size: measured.label_font_size,
+            text_version: measured.text_version,
+            z: measured.z,
+        });
+    }
+
+    /// **The half of z-order the element tree owns**, and the one rule that is
+    /// not simply "sort by depth".
+    ///
+    /// The rich half of §16's hybrid renderer is a layer of GPUI elements
+    /// *above* the canvas, so a rich node is painted after every canvas node
+    /// whatever the two depths say. Sorting is therefore not enough: a
+    /// rectangle sent behind an ellipse would still be drawn on top of it,
+    /// because the rectangle is an element and the ellipse is a path.
+    ///
+    /// So a node may stay rich only while **nothing below it in the depth order
+    /// is canvas-drawn**. Walking the sorted list from the top and stopping at
+    /// the first canvas-only body gives exactly that set — the largest suffix
+    /// that is safely above everything — in one pass, and it is minimal: every
+    /// node it demotes has a canvas element above it and would have been drawn
+    /// in the wrong order.
+    ///
+    /// **A demoted node loses its accent bar, its glyph and its hover
+    /// feedback**, and keeps its body, its border and its label, which the
+    /// canvas painter draws. That is the price of an ordering the user asked
+    /// for, it is paid only by the elements the ordering actually reached, and
+    /// it is recorded in the crate doc as a limitation rather than hidden here.
+    fn place_in_depth_order(&mut self, lod: &LodPlan, budgets: &RenderBudgets) {
+        let mut pending = std::mem::take(&mut self.pending);
+        // `sort_unstable_by_key` on `(z, index)` rather than a stable sort on
+        // `z` alone: the index is the creation order, so two elements nobody
+        // has separated still paint oldest-first — and the answer does not
+        // depend on the order the spatial grid happened to yield.
+        pending.sort_unstable_by_key(|it| (it.z, it.node.raw()));
+
+        let mut top_of_rich = pending.len();
+        while top_of_rich > 0 && pending[top_of_rich - 1].rich_capable {
+            top_of_rich -= 1;
+        }
+
+        for (position, mut measured) in pending.drain(..).enumerate() {
+            measured.rich_capable &= position >= top_of_rich;
+            self.place(measured, lod, budgets);
+        }
+
+        // Reclaim the buffer: `drain` emptied it and kept its capacity, which
+        // is what §40 rule 14 asks of a per-frame allocation.
+        self.pending = pending;
     }
 
     /// §44's controls: the selection overlay, and interactive handles for the

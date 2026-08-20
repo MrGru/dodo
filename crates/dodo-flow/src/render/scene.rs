@@ -72,10 +72,10 @@ use crate::{
         GridLevel, GridLimits, GridSettings, PaintPlan,
         cache::{CLEAN, GeometryKey, GeometryPart, TextKey},
         edges,
-        lod::HandleDetail,
+        lod::{HandleDetail, LodPlan},
         plan::{DashSpec, PathPrimitive, QuadPrimitive, TextPrimitive},
         shapes, sketch,
-        snapshot::{CanvasNode, RenderSnapshot},
+        snapshot::{CanvasNode, PlannedEdge, RenderSnapshot},
     },
     runtime::{GraphWorld, NodeShape},
 };
@@ -229,8 +229,7 @@ pub fn plan_scene(
         ..SceneStats::default()
     };
 
-    plan_edges(plan, world, snapshot, viewport, ink, &mut stats);
-    plan_nodes(plan, world, snapshot, viewport, ink, &mut stats);
+    plan_bodies(plan, world, snapshot, viewport, ink, &mut stats);
     plan_handles(plan, world, snapshot, viewport, ink, &mut stats);
     plan_labels(plan, world, snapshot, ink, &mut stats);
     plan_edge_labels(plan, world, snapshot, viewport, ink, &mut stats);
@@ -259,8 +258,25 @@ fn plan_edges(
     let quality = world.settings().render_quality;
 
     for planned in snapshot.edges() {
+        plan_one_edge(plan, world, planned, viewport, ink, &lod, quality, stats);
+    }
+}
+
+/// One edge, from its derived route.
+#[allow(clippy::too_many_arguments)]
+fn plan_one_edge(
+    plan: &mut PaintPlan,
+    world: &GraphWorld,
+    planned: &PlannedEdge,
+    viewport: &Viewport,
+    ink: SceneInk,
+    lod: &LodPlan,
+    quality: crate::models::RenderQuality,
+    stats: &mut SceneStats,
+) {
+    {
         let Some(route) = world.route(planned.edge) else {
-            continue;
+            return;
         };
 
         let style = world.edges().style(planned.edge);
@@ -320,17 +336,41 @@ fn plan_nodes(
     let Some(lod) = snapshot.lod() else {
         return;
     };
-    let nodes = world.nodes();
     let quality = world.settings().render_quality;
 
     for canvas in snapshot.canvas() {
+        plan_one_node(plan, world, canvas, viewport, ink, &lod, quality, stats);
+    }
+
+    plan_sketched_rich_bodies(plan, world, snapshot, viewport, ink, stats);
+}
+
+/// One canvas node, as the cheapest primitive that **the frame's depth order
+/// allows**.
+///
+/// The second half of that sentence is this phase's, and
+/// [`promotes_to_path`](crate::render::scene::promotes_to_path) is where it is
+/// decided.
+#[allow(clippy::too_many_arguments)]
+fn plan_one_node(
+    plan: &mut PaintPlan,
+    world: &GraphWorld,
+    canvas: &CanvasNode,
+    viewport: &Viewport,
+    ink: SceneInk,
+    lod: &LodPlan,
+    quality: crate::models::RenderQuality,
+    stats: &mut SceneStats,
+) {
+    let nodes = world.nodes();
+    {
         // **A text element is its glyphs and nothing else** (§9). Skipped here
         // rather than allowed to fall through, because the fall-through is not
         // harmless: at low zoom or at a small size `as_quad` below is true for
         // *every* body, so a text element would paint as a solid rectangle the
         // moment it stopped being detailed. `plan_labels` is what draws it.
         if canvas.body == NodeShape::Text {
-            continue;
+            return;
         }
 
         let style = nodes.style(canvas.node);
@@ -401,7 +441,7 @@ fn plan_nodes(
         {
             stats.nodes += 1;
             stats.sketched_bodies += 1;
-            continue;
+            return;
         }
 
         // §15 and Phase 0 §3 correction 7: an ellipse is 337 vertices against a
@@ -410,7 +450,8 @@ fn plan_nodes(
         let as_quad = !open
             && (shapes::node_prefers_quad(canvas.body)
                 || (lod.degrade_curves && canvas.body != NodeShape::Diamond)
-                || !canvas.detailed);
+                || !canvas.detailed)
+            && !promotes_to_path(world, canvas, lod);
 
         if as_quad {
             // Phase 0's measurement, honoured: 20,000 quads hold 60 fps where
@@ -451,6 +492,113 @@ fn plan_nodes(
         }
 
         stats.nodes += 1;
+    }
+}
+
+/// **Where the per-element order and the per-kind one actually collide, and
+/// what is done about it.**
+///
+/// [`PaintPlan`](crate::render::PaintPlan) emits every quad, then every path,
+/// then every text, one contiguous run each — a *correctness* contract, not a
+/// preference: interleaving costs a full-viewport render pass per batch, and
+/// 192 of them halve the frame rate. So a quad can never be painted above a
+/// path, however deep the path is, and the axis-aligned rectangles Phase 0
+/// measured into quads are exactly the bodies a user is most likely to send
+/// behind an ellipse.
+///
+/// The composition rule is therefore: **depth is exact within a run, the run
+/// order dominates between them, and a body that a depth order needs on the
+/// other side of that line is promoted out of the quad run into the path run.**
+/// Promotion is what closes the only gap between quads and paths that a user
+/// can reach.
+///
+/// Three conditions, and each is load-bearing:
+///
+/// - **The document must be layered.** With every element at one depth nobody
+///   has expressed an order, so nothing is violated by the one the batching
+///   prefers — and the dense scene keeps its 1,584 free rectangles.
+/// - **The node must be `detailed`.** Below that rung the quad *is* the
+///   simplification (§15): the border has become the whole box. Promoting
+///   there would spend the path budget to fix an ordering error a few pixels
+///   across, on the frames that can least afford it.
+/// - **The frame must not be degrading curves.** Same argument, from the other
+///   threshold: `degrade_curves` means this frame is already trading fidelity
+///   for vertices.
+///
+/// What is left over is recorded in the crate doc rather than hidden here:
+/// **text is a run of its own and always the last**, so a text element cannot
+/// be sent behind a shape's fill. There is no promotion available for it — a
+/// glyph run has no outline form — and the batching contract is worth more than
+/// the ordering.
+fn promotes_to_path(world: &GraphWorld, canvas: &CanvasNode, lod: &LodPlan) -> bool {
+    world.is_layered() && canvas.detailed && !lod.degrade_curves
+}
+
+/// **Every body in the frame, in the order the document asks for.**
+///
+/// Two shapes, and the fast one is the default. With no depth expressed, the
+/// edges are planned and then the nodes, exactly as they were before z-order
+/// existed. Once a depth *has* been expressed, the two already-sorted lists are
+/// merged so that one walk visits every body in depth order — which is what
+/// gives each of the plan's runs a depth-sorted run of its own, since a run
+/// keeps its insertion order.
+///
+/// At equal depth an **edge is planned before a node**, which keeps a
+/// connection behind the boxes it joins. That is the order the two loops
+/// already had; it is stated here rather than left to which loop ran first.
+fn plan_bodies(
+    plan: &mut PaintPlan,
+    world: &GraphWorld,
+    snapshot: &RenderSnapshot,
+    viewport: &Viewport,
+    ink: SceneInk,
+    stats: &mut SceneStats,
+) {
+    if !world.is_layered() {
+        plan_edges(plan, world, snapshot, viewport, ink, stats);
+        plan_nodes(plan, world, snapshot, viewport, ink, stats);
+        return;
+    }
+
+    let Some(lod) = snapshot.lod() else {
+        return;
+    };
+    let quality = world.settings().render_quality;
+    let (edges, canvas) = (snapshot.edges(), snapshot.canvas());
+    let (mut next_edge, mut next_node) = (0, 0);
+
+    while next_edge < edges.len() || next_node < canvas.len() {
+        let take_edge = match (edges.get(next_edge), canvas.get(next_node)) {
+            (Some(edge), Some(node)) => edge.z <= node.z,
+            (Some(_), None) => true,
+            _ => false,
+        };
+
+        if take_edge {
+            plan_one_edge(
+                plan,
+                world,
+                &edges[next_edge],
+                viewport,
+                ink,
+                &lod,
+                quality,
+                stats,
+            );
+            next_edge += 1;
+        } else {
+            plan_one_node(
+                plan,
+                world,
+                &canvas[next_node],
+                viewport,
+                ink,
+                &lod,
+                quality,
+                stats,
+            );
+            next_node += 1;
+        }
     }
 
     plan_sketched_rich_bodies(plan, world, snapshot, viewport, ink, stats);
@@ -998,6 +1146,255 @@ mod tests {
         let mut plan = PaintPlan::new();
         let stats = plan_scene(&mut plan, world, &snapshot, viewport, ink(), &options());
         (plan, stats)
+    }
+
+    /// **What the painter is handed, in the order it is handed it.**
+    ///
+    /// Depth order is only observable as a sequence, so this is the sink the
+    /// z-order tests read: one row per primitive, tagged with its kind and —
+    /// for a path — with the element it belongs to. Everything else in this
+    /// file asks *what* reached the plan; these ask *when*.
+    #[derive(Default)]
+    struct OrderSink {
+        rows: Vec<(&'static str, Option<crate::render::cache::GeometryOwner>)>,
+    }
+
+    impl crate::render::PrimitiveSink for OrderSink {
+        fn quad(&mut self, _quad: &crate::render::QuadPrimitive) {
+            self.rows.push(("quad", None));
+        }
+
+        fn path(&mut self, path: &crate::render::PathPrimitive) -> u32 {
+            self.rows
+                .push(("path", path.key.as_ref().map(|key| key.owner)));
+            1
+        }
+
+        fn text(&mut self, _text: &crate::render::plan::TextPrimitive) -> u32 {
+            self.rows.push(("text", None));
+            0
+        }
+    }
+
+    /// Two overlapping shapes with different bodies: a rectangle (a quad when
+    /// nothing has been reordered) and an ellipse (always a path). That pairing
+    /// is the whole point — it is the case where a per-element order and a
+    /// per-kind one disagree.
+    fn overlapping_pair() -> GraphWorld {
+        let mut world = GraphWorld::new();
+        world.create_node(
+            ElementKind::Shape(crate::models::ShapeKind::Rectangle),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(200.0, 150.0),
+        );
+        world.create_node(
+            ElementKind::Shape(crate::models::ShapeKind::Ellipse),
+            Vec2::new(150.0, 130.0),
+            Vec2::new(200.0, 150.0),
+        );
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+        world
+    }
+
+    fn painted_rows(
+        world: &GraphWorld,
+        viewport: &Viewport,
+    ) -> Vec<(&'static str, Option<crate::render::cache::GeometryOwner>)> {
+        let (plan, _) = frame_without_grid(world, viewport);
+        let mut sink = OrderSink::default();
+        plan.paint_into(&mut sink);
+        sink.rows
+    }
+
+    /// **Phase 2's contract, with a depth order applied over it.**
+    ///
+    /// Every quad, then every path, then every text — one contiguous run each.
+    /// This is the assertion the whole z-order design had to fit inside: a
+    /// frame that interleaved to satisfy a depth would cost a full-viewport
+    /// render pass per switch, and 192 of those halve the frame rate.
+    #[test]
+    fn depth_order_does_not_interleave_the_paint_runs() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let mut world = overlapping_pair();
+        world.set_node_z(NodeIndex::new(1), -5);
+        world.set_node_z(NodeIndex::new(0), 3);
+        assert!(world.is_layered());
+
+        let kinds: Vec<&str> = painted_rows(&world, &viewport)
+            .iter()
+            .map(|(kind, _)| *kind)
+            .collect();
+
+        let mut seen: Vec<&str> = Vec::new();
+        for kind in kinds {
+            if seen.last() != Some(&kind) {
+                assert!(
+                    !seen.contains(&kind),
+                    "the {kind} run was broken and resumed: {seen:?}"
+                );
+                seen.push(kind);
+            }
+        }
+        // The runs may be empty, but they may never be out of order.
+        let order = ["quad", "path", "text"];
+        let mut expected = order.iter().filter(|kind| seen.contains(kind));
+        for kind in &seen {
+            assert_eq!(Some(kind), expected.next(), "runs out of order: {seen:?}");
+        }
+    }
+
+    /// **The gap the promotion closes**, which took a test to find the shape of.
+    ///
+    /// The obvious case — a rectangle brought to the front of an ellipse —
+    /// needs no promotion at all: a rectangle at full detail is a GPUI element,
+    /// and the element layer already paints above the canvas. The case that
+    /// genuinely breaks is a quad-bodied body in the **middle**: an ellipse
+    /// below it, an ellipse above it. The one above demotes it out of the
+    /// element layer (see `place_in_depth_order`), and once it is on the canvas
+    /// a quad is painted before *every* path — including the ellipse it is
+    /// supposed to cover. Promoting it into the path run is what puts it back
+    /// where the depths say.
+    #[test]
+    fn a_quad_bodied_shape_between_two_paths_is_promoted_into_the_path_run() {
+        use crate::models::ShapeKind;
+        use crate::render::cache::GeometryOwner;
+
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let mut world = GraphWorld::new();
+        let below = world.create_node(
+            ElementKind::Shape(ShapeKind::Ellipse),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(200.0, 150.0),
+        );
+        let middle = world.create_node(
+            ElementKind::Shape(ShapeKind::Rectangle),
+            Vec2::new(130.0, 120.0),
+            Vec2::new(200.0, 150.0),
+        );
+        let above = world.create_node(
+            ElementKind::Shape(ShapeKind::Ellipse),
+            Vec2::new(160.0, 140.0),
+            Vec2::new(200.0, 150.0),
+        );
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        world.set_node_z(below, 1);
+        world.set_node_z(middle, 2);
+        world.set_node_z(above, 3);
+
+        let rows = painted_rows(&world, &viewport);
+        let position = |node| {
+            rows.iter()
+                .position(|(_, owner)| *owner == Some(GeometryOwner::Node(node)))
+                .unwrap_or_else(|| panic!("{node:?} never reached the painter as a path"))
+        };
+
+        assert!(
+            position(below) < position(middle) && position(middle) < position(above),
+            "the three depths must be the three paint positions: {rows:?}"
+        );
+    }
+
+    /// The other direction, and the one that needs the *edges* to be in the
+    /// walk rather than planned as a block before it.
+    #[test]
+    fn an_edge_sent_to_the_front_is_painted_over_the_body_it_crosses() {
+        use crate::models::ShapeKind;
+        use crate::render::cache::GeometryOwner;
+
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let mut world = GraphWorld::new();
+        world.set_rules(ConnectionRules::PERMISSIVE);
+        // Ellipses, so both bodies are canvas paths and the assertion is about
+        // the walk rather than about which half of the renderer took them.
+        for column in 0..2 {
+            world.create_node(
+                ElementKind::Shape(ShapeKind::Ellipse),
+                Vec2::new(column as f32 * 260.0, 100.0),
+                Vec2::new(160.0, 120.0),
+            );
+        }
+        world
+            .connect(
+                EdgeEnd::node(NodeIndex::new(0)),
+                EdgeEnd::node(NodeIndex::new(1)),
+            )
+            .expect("permissive rules accept it");
+        let (edge, node) = (crate::models::EdgeIndex::new(0), NodeIndex::new(1));
+        world.set_edge_z(edge, 5);
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let rows = painted_rows(&world, &viewport);
+        let node_at = rows
+            .iter()
+            .position(|(_, owner)| *owner == Some(GeometryOwner::Node(node)));
+        let edge_at = rows
+            .iter()
+            .position(|(_, owner)| *owner == Some(GeometryOwner::Edge(edge)));
+
+        assert!(
+            matches!((node_at, edge_at), (Some(node), Some(edge)) if edge > node),
+            "the edge is above the node in depth and must be painted after it: \
+             node at {node_at:?}, edge at {edge_at:?}"
+        );
+    }
+
+    /// **A document nobody has reordered pays nothing.**
+    ///
+    /// The whole design rests on this: with one depth shared by everything, the
+    /// frame is byte-for-byte the frame the engine produced before z-order
+    /// existed — same primitives, same order, same quads.
+    #[test]
+    fn an_unlayered_document_plans_exactly_what_it_always_did() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let mut world = document(4, 3);
+        assert!(!world.is_layered());
+        let before = painted_rows(&world, &viewport);
+
+        // Reordering and putting it back must also come home, because the
+        // counter that decides the fast path is symmetric rather than sticky.
+        world.set_node_z(NodeIndex::new(0), 4);
+        assert!(world.is_layered());
+        world.set_node_z(NodeIndex::new(0), 0);
+        assert!(!world.is_layered());
+
+        assert_eq!(before, painted_rows(&world, &viewport));
+    }
+
+    /// The rich layer is a layer of GPUI elements above the canvas, so a node
+    /// that must sit under a canvas-drawn body cannot stay in it. This is that
+    /// rule, and it is the reason the split happens after the sort rather than
+    /// during the walk.
+    #[test]
+    fn a_node_that_must_sit_below_a_path_leaves_the_element_layer() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let mut world = overlapping_pair();
+        let (rectangle, ellipse) = (NodeIndex::new(0), NodeIndex::new(1));
+
+        let index = SpatialIndex::for_world(&world);
+        let mut visible = VisibleSet::new();
+        index.query_visible(&world, &viewport, &mut visible);
+        let snapshot = snapshot_of(&world, &visible, &viewport);
+        assert!(
+            snapshot.rich().iter().any(|it| it.node == rectangle),
+            "a detailed rectangle is a GPUI element at full zoom"
+        );
+
+        world.set_node_z(ellipse, 2);
+        let index = SpatialIndex::for_world(&world);
+        let mut visible = VisibleSet::new();
+        index.query_visible(&world, &viewport, &mut visible);
+        let snapshot = snapshot_of(&world, &visible, &viewport);
+
+        assert!(
+            !snapshot.rich().iter().any(|it| it.node == rectangle),
+            "the ellipse is above the rectangle, so the rectangle cannot stay in \
+             the layer that paints above the ellipse"
+        );
+        assert!(snapshot.canvas().iter().any(|it| it.node == rectangle));
     }
 
     /// The same frame with **no background grid**, so a test can count the
