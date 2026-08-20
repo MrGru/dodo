@@ -58,12 +58,13 @@
 //! line itself, so a long diagonal is selected from its empty corners too.
 //! `render::shapes` and `runtime::hit` carry both, with the shape of the fix.
 //!
-//! # §9's text, and the four things to look at
+//! # §9's text, and the six things to look at
 //!
 //! The document opens with a text row below the routing showcase: the four
 //! sizes the property panel offers, each in a different family and alignment,
-//! plus a labelled edge under them. Four things are worth checking by hand,
-//! because no test in this crate can:
+//! plus a labelled edge under them. Six things are worth checking by hand,
+//! because no test in this crate can: shaping and hit-testing both need a live
+//! window, and an unattended one presents its first frame and stops.
 //!
 //! 1. **Double-click a node, an edge and a text element, type, press `Enter`,
 //!    then double-click the same thing again.** The field must come up holding
@@ -78,13 +79,24 @@
 //!    hand-drawn faces installed it looks exactly like Normal, and that is the
 //!    honest behaviour rather than a bug — dodo ships no font of its own. See
 //!    [`FontFamily::preferred_faces`](dodo_flow::models::FontFamily::preferred_faces).
+//! 5. **Click an edge — once, on the line** (Phase 10.5). It becomes the
+//!    selection on its own, so `Delete` removes it and one `Cmd+Z` puts it
+//!    back; shift-click a node as well and both go together. The two halves to
+//!    watch for are that a press on *empty* canvas still starts a rubber band,
+//!    and that the six-pixel band around a route stays the same width on screen
+//!    when you zoom right in and right out.
+//! 6. **Type a sentence into a node** (Phase 10.5). It wraps onto as many lines
+//!    as it needs, at the node's own width, and stays wrapped while you drag
+//!    the node about. Do it at 100 % zoom *and* zoomed out past the rung where
+//!    a node stops being a rich element — the two paths are different code and
+//!    must read the same. Long enough and it will overflow the node top and
+//!    bottom; that is the recorded limitation, not a bug — `render::painter`
+//!    says why clipping it would be worse.
 //!
-//! **Two limitations a user meets here.** An edge cannot be selected by
-//! clicking it — a press on one starts a rubber band, exactly as a press on
-//! empty canvas does, so `Delete` reaches an edge only through a band. And the
-//! text editor is a single line: a long label is typed into one field and drawn
-//! truncated to its element's width. `runtime::hit` and `render::painter` carry
-//! both, with what each would cost to close.
+//! **The limitation that is left here.** dodo ships no hand-drawn face, so
+//! choosing that family may change nothing on screen — item 4 above. The two
+//! Phase 10 recorded beside it, an unclickable edge and single-line text, are
+//! closed.
 //!
 //! **Hover a palette button and it tells you what it is and which key it
 //! answers to.** The label comes from `dodo_i18n::flow`, in whichever language
@@ -109,6 +121,8 @@
 //! | drag out of a handle dot | a connection preview follows the pointer |
 //! | drop it on a handle or a node body | connect, if §4's rules allow it |
 //! | drop it on empty canvas | cancel |
+//! | **click an edge's line** | it becomes the selection — `Delete` then removes it |
+//! | **shift-click a node or an edge** | add it to the selection instead of replacing it |
 //! | drag on empty space with the left button | rubber band — **it selects on release** |
 //! | shift + drag on empty space | add the band's contents to the selection |
 //! | **double-click a node** | edit its text, seeded with whatever is already there |

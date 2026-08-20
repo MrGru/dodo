@@ -697,16 +697,9 @@
 //!
 //! ## And the limitations a user meets, recorded where they are caused
 //!
-//! 1. **An edge cannot be selected by clicking it.** A press on one starts a
-//!    rubber band, exactly as a press on empty canvas does, so `Delete` reaches
-//!    an edge only through a band. The narrow phase — the expensive half — is
-//!    done; the gesture is not, and [`runtime::hit`]'s doc says why it should
-//!    arrive with whatever makes an edge draggable rather than before it.
-//! 2. **Text is a single line.** `shape_line` panics on a newline in a debug
-//!    build, so one is flattened to a space, and a label wider than its element
-//!    is truncated rather than wrapped. [`render::painter`] carries the three
-//!    changes that close it, which are one coherent piece of work rather than a
-//!    fix to bolt onto that call.
+//! 1. ~~**An edge cannot be selected by clicking it.**~~ *Closed by Phase 10.5.*
+//! 2. ~~**Text is a single line.**~~ *Closed by Phase 10.5, and the reason
+//!    given for the first of its three changes was wrong — see below.*
 //! 3. **Choosing Hand-drawn may change nothing on screen.** dodo ships no
 //!    hand-drawn face — a bundled font is a licence, a build step and half a
 //!    megabyte in every release artefact — so `views::flow` probes the text
@@ -728,6 +721,98 @@
 //! text row put there for exactly that pass, and its doc lists the four things
 //! to look at. This is the third phase to hand that forward, and it is the same
 //! risk the plan named as "live input is source-verified, never observed".
+//!
+//! # What the tenth-and-a-half slice added: the two limitations, closed
+//!
+//! Both were recorded honestly at the line that caused them, and both turned
+//! out to be one arm plus its supporting cast rather than a phase's work. The
+//! half number says so.
+//!
+//! ## An edge is clickable
+//!
+//! [`interaction::InteractionEffect::SelectEdge`],
+//! raised from `Idle` and **leaving the machine in `Idle`**. An edge has no
+//! drag gesture, so the moves after such a press mean nothing and `Idle`
+//! already answers every event with `None`; a state entered only to ignore
+//! things is a state to keep correct for no behaviour.
+//!
+//! Phase 10 argued the gesture should wait for whatever makes an edge
+//! *draggable*, so the two would be designed together. **That was wrong, and
+//! the shape of the mistake is worth more than the fix.** Selecting is a press
+//! that ends where it started; dragging is what the *following* moves mean.
+//! They share a target and nothing else, and treating "these two features touch
+//! the same type" as "these two features are one design" cost a user the only
+//! way to delete an edge for a whole phase. [`runtime::hit`]'s doc carries it.
+//!
+//! Two things fell out of doing it:
+//!
+//! - **Shift did not extend the selection for nodes either.** The brief asked
+//!   for edges to behave "the way it does for nodes"; `BeginNodeDrag` called
+//!   `select_only` unconditionally, so shift-clicking a second node replaced
+//!   the selection with it and the multi-select a band produced could not be
+//!   built up one press at a time. Both carry `additive` now.
+//! - **[`runtime::HitTolerance::at_zoom`]** — §29's screen-pixel tolerance was
+//!   two lines inside `views::flow`, which put the only statement of "a thin
+//!   edge stays clickable at any zoom" in the one file that needs a `Window` to
+//!   build. It is a pure function now, asserted at seven cameras.
+//!
+//! The trade is stated where it is paid: canvas within six screen pixels of a
+//! route is canvas a rubber band can no longer be started in.
+//!
+//! ## Text wraps
+//!
+//! [`render::painter`]'s three named changes were the right three — `shape_text`
+//! for `shape_line`, a wrapped line in the cache, and a line-height model — and
+//! **the reason given for the first was not**:
+//!
+//! > `shape_line`'s fourth argument is not a wrap width. It is `force_width`,
+//! > the per-glyph advance a terminal grid uses.
+//!
+//! So Phase 10 was not truncating long labels, as its own note said; it was
+//! quietly scattering the glyphs of any label longer than half its box onto a
+//! lattice of `max_width` steps. A parameter whose name you have not read is a
+//! parameter you are guessing at, and the guess was plausible enough to be
+//! written down as a fact and reviewed as one.
+//!
+//! - [`render::plan::TextPrimitive::vertical_offset`] and `line_height` are the
+//!   model, and they are **pure** — the painter learns how many lines a
+//!   paragraph took and lifts the block by half of every line past the first,
+//!   so a one-line label lands on exactly the pixel Phase 10 put it on and a
+//!   block of any height stays centred on the same point.
+//! - **[`render::cache::TextKey`] gains the wrap width.** It could be omitted
+//!   only while nothing wrapped; once a line break is part of the laid-out
+//!   result, a cache that ignores the width is a paragraph laid out for a box
+//!   the element has left. It is quantised down onto an eight-pixel grid for
+//!   exactly the reason the font size is quantised — a node's wrap width is its
+//!   *screen* width, so an exact one would re-wrap every visible paragraph on
+//!   every frame of a zoom, reintroducing through a new field the cost §23's
+//!   cache exists to remove.
+//! - The wrap rule is **recorded per carrier** rather than left implicit: node
+//!   text to its host's inner width, a standalone text element to its whole box
+//!   (it has no border to keep clear of), an edge label to a constant screen
+//!   width (an edge has no rectangle at all, and being a screen constant it
+//!   never re-wraps on a zoom).
+//! - `views::nodes` wraps too. A rich node truncated its label with an ellipsis
+//!   while the canvas path wrapped, so one sentence read two ways either side
+//!   of a zoom rung — the same element seen through two rungs must not disagree
+//!   about what a label does.
+//!
+//! **The limitation this leaves**, at [`render::painter`]: a paragraph can
+//! outgrow its box downwards. `shape_text`'s `line_clamp` would hide that by
+//! deleting words, and overflowing text a user can fix by dragging a corner
+//! beats words that are silently gone. Growing the container is an edit on
+//! every keystroke and belongs with whatever gives an element an auto-height.
+//!
+//! ## What Phase 10.5 verified by running
+//!
+//! `cargo test` covers every claim above that does not need a window, including
+//! the press that selects an edge and the delete and undo after it, driven
+//! through the real machine and the real applier. The launcher was **run**, and
+//! its first-frame report shows the wrapped-text path shaping real labels
+//! through `shape_text` at two zoom levels. What it cannot show is still the
+//! same list: an unattended window presents one frame and stops, so *clicking*
+//! an edge, seeing its ring, pressing `Delete`, and typing a sentence long
+//! enough to wrap are a human's to check.
 //!
 //! # Where the budget numbers come from, and what they are not
 //!

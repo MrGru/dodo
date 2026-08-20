@@ -23,7 +23,7 @@
 //! # §9's text wraps, and where it wraps is decided elsewhere
 //!
 //! Phase 10 drew one line however much was typed; Phase 10.5 wraps. The
-//! shaping call is [`shape_wrapped`], which carries the correction Phase 10's
+//! shaping call is `shape_wrapped` below, which carries the correction Phase 10's
 //! own note needs — the argument it was passing as a wrap width was
 //! `force_width`, a per-glyph advance, and it was scattering long labels rather
 //! than truncating them.
