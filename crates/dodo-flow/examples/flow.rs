@@ -22,7 +22,7 @@
 //!
 //! | Tool gesture | Effect |
 //! |---|---|
-//! | click a palette button, or press its letter | pick that tool up — **it is armed at once**, the next drag draws |
+//! | click a palette button, or press its letter | pick that tool up — **it is armed and nothing is created**; the next press-drag on the canvas is what draws |
 //! | with a shape tool, drag on the canvas | draw the element inside the box you drag — the preview is the real shape, not an outline of it |
 //! | with a shape tool, **click** | place it at its default size, centred where you clicked |
 //! | hold shift while drawing | square the box: a square, a circle, a regular diamond, a 45° line |

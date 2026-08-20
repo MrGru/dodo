@@ -1118,6 +1118,95 @@
 //! forward and it is the same risk the plan named as "live input is
 //! source-verified, never observed".
 //!
+//! # What the twelfth-and-a-half slice added: three bugs a person found
+//!
+//! The captain used the canvas and reported three faults. **Every automated
+//! gate passed on all three**, which is now the fourth time this crate has
+//! shipped a capability that was absent or dead with nothing failing — and the
+//! three causes are worth more than the three fixes, because two of them are
+//! one mechanism and none of them is a mistake in the layer that was blamed.
+//!
+//! ## Chrome did not block the press underneath it
+//!
+//! [`views::flow`] registers its mouse listeners on the **window** and gates
+//! them on the canvas hitbox, because GPUI does no implicit hit testing for
+//! them. GPUI's hit test keeps every hitbox under the pointer, front to back,
+//! until one whose behaviour is `BlockMouse`; a plain `div()` is `Normal`. So
+//! the palette, the property panel and the caret each let **one press be
+//! delivered twice** — to themselves first, because bubble-phase listeners run
+//! front to back, and then to the canvas.
+//!
+//! - Picking a tool armed it *and* was read as the press that begins a
+//!   creation; the release, under [`MIN_DRAG_PIXELS`](interaction::tool::MIN_DRAG_PIXELS),
+//!   made it a click, so a default-sized shape appeared under the palette.
+//! - Pressing a property control applied the edit *and* was read as a press on
+//!   empty canvas, which begins a rubber band whose release replaces the
+//!   selection with nothing — and the panel is drawn from the selection.
+//!
+//! Both files carried a comment claiming the `on_mouse_down` prevented exactly
+//! this. **A comment stating an invariant is not the invariant**, and this one
+//! had been read and copied from one file to the other.
+//!
+//! ## The canvas's bare letters were live over the canvas's own text fields
+//!
+//! [`views::keymap`]'s doc had already worked out that a context-less binding
+//! would be swallowed before every text field in dodo, and concluded that
+//! scoping to `FlowCanvas` meant "they reach nothing else". That is true of
+//! every field *except the canvas's own*: §9's caret and Phase 11's hex prompt
+//! are descendants of the root that carries the context, so it is on their
+//! dispatch path, and `gpui-component`'s `Input` context binds no bare letter
+//! to outrank it. Eleven of the letters a person types were consumed as canvas
+//! actions — and every one of those handlers calls `focus_handle.focus`, so the
+//! *first* of them ended the edit.
+//!
+//! The captain asked whether re-rendering was dropping the focus. It was not,
+//! and the distinction is the transferable part: the field is focused, stays
+//! focused across any number of repaints, and a word made of unbound letters
+//! types perfectly. `FlowCanvas && !FlowTyping` is the fix, and
+//! `no_canvas_binding_survives_a_text_field_inside_the_canvas` drives GPUI's
+//! own matcher over the real context stacks in both directions.
+//!
+//! ## One renderer too many, which is why a property "only worked in sketch"
+//!
+//! A rectangle at working zoom is a **rich** node, and the element painted its
+//! own body from the theme. So Phase 11's whole panel wrote a stroke colour, a
+//! fill, a width, an opacity, a dash and a hatch that nothing on screen read —
+//! *unless* the document was in Sketch mode, where a hand-drawn border has no
+//! `div` form and the canvas had to paint the body. The mode was the symptom
+//! and never the cause, and the elements it spared say so: an ellipse, a
+//! diamond, a line, a text element, a picture and an edge all updated in Clean
+//! mode, because none of them is ever a rich node.
+//!
+//! `render::scene`'s `plan_rich_bodies` runs in both styles now, through the
+//! one `plan_one_node` every other body goes through, and `NodeBody` is that
+//! stated as a type: **one body painter, two callers.** [`views::nodes`] keeps
+//! only what an element is *for*.
+//!
+//! Two more of the same kind, found by checking every panel row against a
+//! painter rather than against the model — both broken in *both* modes and
+//! neither reported: **a node's dash was never drawn** (only `render::edges`
+//! read `stroke.dash`), and **a text element was never drawn in the colour its
+//! Stroke row writes** (it writes `stroke.color`; every text painter read
+//! `font.color`, which nothing writes). [`properties`]'s module doc now carries
+//! the rule and all four costumes it has worn.
+//!
+//! ## What this phase's tests can and cannot be
+//!
+//! Three of the five assert behaviour with no window: the binding predicate
+//! against real context stacks, and what a restyled or hatched rich node hands
+//! the painter in both render styles. Two are **source** assertions — that each
+//! overlay still declares `occlude()` and each text field still declares its
+//! context — and that is deliberate rather than lazy. Whether two hitboxes
+//! occlude is a fact about a painted frame; the crate's whole argument is that
+//! it is testable *because* nothing below `views/` needs a window, and buying a
+//! windowed harness to check two lines would trade that for very little. It is
+//! the same trade `i18n_lint` and `the_pure_layers_name_no_ui_framework` make.
+//!
+//! **What only a person can confirm is unchanged in kind**: that picking a tool
+//! creates nothing until you drag, that a colour applies in Clean mode with the
+//! panel still open, and that a sentence can be typed into a node.
+//! `examples/flow.rs` lists them.
+//!
 //! # Where the budget numbers come from, and what they are not
 //!
 //! [`budgets`] is the one named place for every render ceiling and LOD
