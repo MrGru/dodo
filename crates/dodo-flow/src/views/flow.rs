@@ -2932,7 +2932,114 @@ impl Render for FlowView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::ElementKind;
     use crate::render::painter::to_hsla;
+    use gpui::{Entity, TestAppContext, VisualTestContext};
+
+    /// A canvas on a test window, with no disk store behind it.
+    fn mount(cx: &mut TestAppContext) -> (Entity<FlowView>, VisualTestContext) {
+        cx.update(gpui_component::init);
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.new(|cx| FlowView::new_unpersisted(window, cx))
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let view: Entity<FlowView> = window.root(&mut cx).unwrap();
+        cx.run_until_parked();
+        (view, cx)
+    }
+
+    /// **§9's caret has to arrive holding the keyboard, with a selection.**
+    ///
+    /// The field was focused *before* it was stored on the view, and its
+    /// selection was never set, so a double-click left an empty caret at offset
+    /// zero: the user typed and watched their keystrokes go somewhere else,
+    /// then clicked a second time and it worked. Both halves are asserted here,
+    /// on the two kinds that were also losing their labels, and driven through
+    /// the real machine transition and the real effect handler so it cannot
+    /// pass by calling something the double-click path does not.
+    #[gpui::test]
+    fn a_double_click_opens_an_editor_that_already_owns_the_keyboard(cx: &mut TestAppContext) {
+        let (view, mut cx) = mount(cx);
+
+        for kind in [
+            ElementKind::Shape(crate::models::ShapeKind::Rectangle),
+            ElementKind::Linear(crate::models::LinearKind::Arrow),
+        ] {
+            view.update_in(&mut cx, |this, window, cx| {
+                let node = this
+                    .editor
+                    .apply(crate::commands::EditCommand::AddNodes(vec![
+                        crate::commands::NodeDraft::new(crate::runtime::NodeSpec::new(
+                            crate::models::ElementId::NONE,
+                            kind.clone(),
+                            Vec2::new(120.0, 120.0),
+                            Vec2::new(200.0, 80.0),
+                        )),
+                    ]))
+                    .expect("adding a node cannot fail")
+                    .added_nodes[0];
+                this.editor.commit_text(TextTarget::Node(node), "seeded");
+                this.refresh_snapshot();
+
+                let effect = this.interaction.handle(InteractionEvent::DoubleClick {
+                    world: this.editor.world().nodes().bounds(node).center(),
+                    target: PointerTarget::Node(node),
+                });
+                assert_eq!(
+                    effect,
+                    InteractionEffect::BeginTextEdit(TextTarget::Node(node)),
+                    "{kind:?} did not open a caret",
+                );
+                assert!(this.apply_text_effect(effect, window, cx));
+
+                let editing = this.editing.as_ref().expect("an editor is open");
+                assert_eq!(editing.target, TextTarget::Node(node));
+                assert!(
+                    editing.input.focus_handle(cx).is_focused(window),
+                    "{kind:?}: the inline editor does not hold the keyboard",
+                );
+                assert_eq!(
+                    editing.input.read(cx).selected_range(),
+                    0.."seeded".len(),
+                    "{kind:?}: typing would not replace the existing label",
+                );
+                assert!(
+                    !this.focus_handle.is_focused(window),
+                    "{kind:?}: the canvas kept the keyboard",
+                );
+
+                // And the box it is drawn in is the element's own: an arrow's
+                // is its segment midpoint, not a rectangle it does not have.
+                let bounds = this
+                    .text_edit_bounds(TextTarget::Node(node))
+                    .expect("a live element has editor bounds");
+                let expected = match this.editor.world().nodes().connector(node) {
+                    Some(connector) => connector.midpoint(),
+                    None => this.editor.world().nodes().bounds(node).center(),
+                };
+                assert!(
+                    (bounds.center() - expected).length() < 1e-3,
+                    "{kind:?}: the editor opened at {:?} rather than {expected:?}",
+                    bounds.center(),
+                );
+
+                // Closed the way a click outside closes it: the machine leaves
+                // `EditingText` first and the effect it returns carries the
+                // target, so the next double-click is answerable again.
+                let effect = this.interaction.handle(InteractionEvent::FinishTextEdit);
+                assert!(this.apply_text_effect(effect, window, cx));
+                assert!(this.editing.is_none());
+                assert_eq!(
+                    this.editor.text_of(TextTarget::Node(node)),
+                    Some("seeded"),
+                    "the committed label did not reach the document",
+                );
+            });
+        }
+    }
 
     /// macOS reports `NSEvent.magnification` as a relative factor, so a zero
     /// delta must be the identity — a pinch that reported nothing must not

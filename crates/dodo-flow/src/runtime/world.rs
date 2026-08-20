@@ -1788,9 +1788,9 @@ mod tests {
     use crate::{
         geometry::{Side, Vec2},
         models::{
-            Connector, ConnectorAttachment, ConnectorEnd, ConnectorEndpoint, EdgeRouting,
-            ElementId, ElementKind, Endpoint, FlowDocument, GraphNodeKind, Handle, HandleDirection,
-            HandleId, HandlePlacement, LinearKind, NodeIndex, ShapeKind,
+            Connector, ConnectorAttachment, ConnectorEndpoint, EdgeRouting, ElementId, ElementKind,
+            Endpoint, FlowDocument, GraphNodeKind, Handle, HandleDirection, HandleId,
+            HandlePlacement, LinearKind, NodeIndex, ShapeKind,
         },
         runtime::{
             BoxQuery, BoxSelectMode, ConnectionError, ConnectionRules, EdgeEnd, HandleSpec,
