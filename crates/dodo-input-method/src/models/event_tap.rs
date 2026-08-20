@@ -517,8 +517,10 @@ mod tests {
         }
     }
 
-    /// A deterministic end-cursor document: every plan is applied before its
-    /// physical pass-through event, exactly as the callback stages it.
+    /// A deterministic end-cursor document. A returned physical event can land
+    /// before synthetic output posted by its callback, so mixed rewrite/pass
+    /// plans apply the physical key first. A correct plan must not depend on
+    /// the opposite ordering.
     struct EndCursorHarness {
         composer: DirectComposer,
         document: String,
@@ -536,12 +538,6 @@ mod tests {
 
         fn press(&mut self, event: KeyEvent) -> OutputPlan {
             let plan = self.composer.process(event);
-            self.document =
-                dodo_ime_core::core::truncate_graphemes(&self.document, plan.delete_before);
-            if let Some(insert) = &plan.insert {
-                self.document.push_str(insert);
-            }
-            self.synthetic_events += macos_event_count(&plan);
             if plan.pass_through {
                 if event.key == Key::Backspace {
                     self.document = dodo_ime_core::core::truncate_graphemes(&self.document, 1);
@@ -549,6 +545,12 @@ mod tests {
                     self.document.push(key);
                 }
             }
+            self.document =
+                dodo_ime_core::core::truncate_graphemes(&self.document, plan.delete_before);
+            if let Some(insert) = &plan.insert {
+                self.document.push_str(insert);
+            }
+            self.synthetic_events += macos_event_count(&plan);
             plan
         }
 
@@ -563,6 +565,17 @@ mod tests {
         let mut harness = EndCursorHarness::new();
         harness.type_keys(keys);
         harness.document
+    }
+
+    fn assert_visible_steps(keys: &str, expected: &[&str]) {
+        assert_eq!(keys.chars().count(), expected.len(), "{keys:?}");
+        let mut harness = EndCursorHarness::new();
+        let mut prefix = String::new();
+        for (key, expected) in keys.chars().zip(expected) {
+            prefix.push(key);
+            harness.press(KeyEvent::character(key));
+            assert_eq!(harness.document, *expected, "after {prefix:?}");
+        }
     }
 
     /// One Unicode replacement is one synthetic down/up pair, while every
@@ -705,6 +718,32 @@ mod tests {
         assert_eq!(restore.insert.as_deref(), Some("wind"));
         window.type_keys("ow");
         assert_eq!(window.document, "window");
+    }
+
+    /// Every Telex modifier is checked against the document after every key,
+    /// not merely against the engine's semantic state or its final action list.
+    #[test]
+    fn repeated_telex_modifiers_are_visible_after_every_press() {
+        assert_visible_steps("[[[", &["ơ", "[", "[ơ"]);
+        assert_visible_steps("]]]", &["ư", "]", "]ư"]);
+        assert_visible_steps("{{{", &["Ơ", "{", "{Ơ"]);
+        assert_visible_steps("}}}", &["Ư", "}", "}Ư"]);
+        assert_visible_steps("o[[", &["o", "oơ", "o["]);
+
+        assert_visible_steps("www", &["ư", "w", "wư"]);
+        assert_visible_steps("aaa", &["a", "â", "aa"]);
+        assert_visible_steps("eee", &["e", "ê", "ee"]);
+        assert_visible_steps("ooo", &["o", "ô", "oo"]);
+        assert_visible_steps("ddd", &["d", "đ", "dd"]);
+        assert_visible_steps("aww", &["a", "ă", "aw"]);
+        assert_visible_steps("oww", &["o", "ơ", "ow"]);
+        assert_visible_steps("uww", &["u", "ư", "uw"]);
+        assert_visible_steps("mass", &["m", "ma", "má", "mas"]);
+        assert_visible_steps("maff", &["m", "ma", "mà", "maf"]);
+        assert_visible_steps("marr", &["m", "ma", "mả", "mar"]);
+        assert_visible_steps("maxx", &["m", "ma", "mã", "max"]);
+        assert_visible_steps("majj", &["m", "ma", "mạ", "maj"]);
+        assert_visible_steps("maszz", &["m", "ma", "má", "ma", "maz"]);
     }
 
     #[test]
