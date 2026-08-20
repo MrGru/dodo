@@ -1,7 +1,7 @@
 # `crates/` holds code that shares this lockfile, which is what separates it
 # from `tools/`.
 #
-# There are seventeen members, in three groups.
+# There are fifteen members, in three groups.
 #
 # `crates/dodo-app-icon`, `crates/dodo-i18n`, `crates/dodo-paths` and
 # `crates/dodo-dialog-slot` are *kernel* crates: code many of dodo's modules
@@ -24,20 +24,12 @@
 # the updater and input method needed, what the moves bought and what they did
 # not — and is explicit that build speed was measured and is not among it.
 #
-# The other four are the input method. `crates/dodo-ime-core` is the engine,
-# linked *into* dodo. `crates/dodo-ime-ipc` is the settings and identifier
-# contract shared by dodo and the native hosts. `crates/dodo-ime-macos` is an
-# InputMethodKit app and `crates/dodo-ime-windows` is a TSF COM DLL; neither of
-# those two is linked into dodo, but both link the engine and contract.
+# The other two are the input method's pure engine and persisted-settings
+# model: `crates/dodo-ime-core` and `crates/dodo-ime-ipc`. Both are linked into
+# dodo through the Input method feature crate. The former native host crates are
+# gone; dodo's Event Tap and Keyboard Hook now own input directly.
 #
-# That is what settles the question: `tools/update-manifest` can carry its own
-# `Cargo.lock` because nothing else resolves what it resolves, whereas a second
-# lockfile here would resolve `dodo-ime-core` and `unicode-normalization`
-# independently — so the engine dodo's tests prove and the engine the shipped
-# bundle types with would be two different resolutions that nothing compares. One
-# workspace, one `Cargo.lock`, one `--locked`.
-#
-# `default-members` names all eighteen (the root package and every crate), so a bare
+# `default-members` names all sixteen packages (the root package and every crate), so a bare
 # `cargo test` / `cargo clippy --all-targets` at the root covers each crate's own
 # tests. **Adding a crate means adding it here in the same commit**; without it
 # cargo defaults to the root package alone and the new crate's tests silently
@@ -65,8 +57,6 @@ default-members = [
     "crates/dodo-i18n",
     "crates/dodo-ime-core",
     "crates/dodo-ime-ipc",
-    "crates/dodo-ime-macos",
-    "crates/dodo-ime-windows",
     "crates/dodo-input-method",
     "crates/dodo-json-formatter",
     "crates/dodo-paths",
