@@ -678,6 +678,36 @@ mod tests {
     }
 
     #[test]
+    fn contextual_vietnamese_changes_keep_direct_replacements_minimal() {
+        let mut pending = EndCursorHarness::new();
+        pending.type_keys("thuo");
+        let horn = pending.press(KeyEvent::character('w'));
+        assert_eq!(horn.delete_before, 1);
+        assert_eq!(horn.insert.as_deref(), Some("ơ"));
+        assert_eq!(pending.document, "thuơ");
+
+        let coda = pending.press(KeyEvent::character('n'));
+        assert_eq!(coda.delete_before, 2);
+        assert_eq!(coda.insert.as_deref(), Some("ươn"));
+        assert_eq!(pending.document, "thươn");
+
+        let mut foreign = EndCursorHarness::new();
+        foreign.type_keys("ne");
+        let literal_w = foreign.press(KeyEvent::character('w'));
+        assert!(literal_w.pass_through);
+        assert!(!literal_w.transforms());
+        assert_eq!(foreign.document, "new");
+
+        let mut window = EndCursorHarness::new();
+        window.type_keys("win");
+        let restore = window.press(KeyEvent::character('d'));
+        assert_eq!(restore.delete_before, 3);
+        assert_eq!(restore.insert.as_deref(), Some("wind"));
+        window.type_keys("ow");
+        assert_eq!(window.document, "window");
+    }
+
+    #[test]
     fn direct_document_simulator_converges_dd_and_repeated_w_cancellation() {
         // The case follows the *stroke* key, which is the shared engine's rule
         // and not something either fallback decides — see the Vietnamese

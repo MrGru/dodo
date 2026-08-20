@@ -129,11 +129,7 @@ fn telex_rewrites_each_intermediate_state() {
     );
 
     check(
-        &[
-            ("thuo7", "thuơ"),
-            ("thuo7n", "thươn"),
-            ("thuon7", "thươn"),
-        ],
+        &[("thuo7", "thuơ"), ("thuo7n", "thươn"), ("thuon7", "thươn")],
         vni,
     );
 
