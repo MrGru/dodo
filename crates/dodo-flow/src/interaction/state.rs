@@ -521,8 +521,26 @@ impl InteractionEffect {
                 | InteractionEffect::BeginNodeDrag { .. }
                 | InteractionEffect::BeginConnect(_)
                 | InteractionEffect::BeginCreate { .. }
+                | InteractionEffect::BeginResize { .. }
         )
     }
+
+    /// **Every effect that opens a dragging state**, for the test below. A
+    /// gesture that opens a state and is not captured is one that stops the
+    /// moment the pointer leaves the pane — silently, and only for the users
+    /// with small windows.
+    #[cfg(test)]
+    const OPENS_A_GESTURE: &'static [fn() -> InteractionEffect] = &[
+        || InteractionEffect::BeginPan,
+        || InteractionEffect::BeginBoxSelect(Rect::new(Vec2::ZERO, Vec2::ZERO)),
+        || InteractionEffect::BeginNodeDrag {
+            node: NodeIndex::new(0),
+            additive: false,
+        },
+        || InteractionEffect::BeginResize {
+            node: NodeIndex::new(0),
+        },
+    ];
 
     /// Whether the canvas has to be repainted. dodo repaints on change and
     /// never on a timer (§35, §40 rule 15), so this is the whole condition for
@@ -1145,6 +1163,110 @@ mod tests {
 
     const NODE: NodeIndex = NodeIndex::new(7);
     const HANDLE: HandleIndex = HandleIndex::new(3);
+
+    /// **Every gesture that opens a state is captured**, or it stops the moment
+    /// the pointer leaves the pane.
+    ///
+    /// `views::flow` calls `Window::capture_pointer` on
+    /// [`InteractionEffect::starts_a_drag`], and a `Begin` effect left out of
+    /// that list fails in the one way this crate keeps meeting: not at all on a
+    /// large window, and for everybody else as a drag that dies at the edge.
+    /// §12's resize was left out of it when it was written.
+    #[test]
+    fn every_effect_that_opens_a_gesture_captures_the_pointer() {
+        for build in InteractionEffect::OPENS_A_GESTURE {
+            let effect = build();
+            assert!(
+                effect.starts_a_drag(),
+                "{effect:?} opens a gesture and is not captured"
+            );
+        }
+    }
+
+    /// §12's resize, as the machine sees it: one state, driven by the moves
+    /// after it, ended by the release.
+    #[test]
+    fn a_resize_runs_from_a_grip_press_to_the_release() {
+        use crate::geometry::ResizeCorner;
+
+        let frame = Rect::new(Vec2::new(10.0, 10.0), Vec2::new(200.0, 100.0));
+        let mut machine = InteractionMachine::new();
+
+        let effect = machine.handle(InteractionEvent::BeginResize {
+            node: NODE,
+            corner: ResizeCorner::BottomRight,
+            frame,
+            keeps_aspect: true,
+        });
+        assert_eq!(effect, InteractionEffect::BeginResize { node: NODE });
+        assert!(matches!(
+            machine.state(),
+            InteractionState::Resizing {
+                aspect: Some(_),
+                ..
+            }
+        ));
+
+        let effect = machine.handle(InteractionEvent::PointerMove {
+            screen: Vec2::new(410.0, 120.0),
+            world: Vec2::new(410.0, 120.0),
+        });
+        let InteractionEffect::ResizeNodeTo { rect, .. } = effect else {
+            panic!("a move during a resize did not resize: {effect:?}");
+        };
+        assert!(
+            (rect.width() / rect.height() - 2.0).abs() < 1e-3,
+            "the lock did not hold: {rect:?}"
+        );
+
+        // A press arriving mid-resize is ignored rather than starting a second
+        // gesture under a moving hand — the rule every other state follows.
+        assert_eq!(
+            machine.handle(down_on(PointerButton::Left, PointerTarget::Empty)),
+            InteractionEffect::None
+        );
+
+        let effect = machine.handle(InteractionEvent::PointerUp {
+            button: PointerButton::Left,
+            world: Vec2::new(410.0, 120.0),
+            target: PointerTarget::Empty,
+        });
+        assert_eq!(
+            effect,
+            InteractionEffect::EndResize {
+                node: NODE,
+                changed: true
+            }
+        );
+        assert_eq!(machine.state(), &InteractionState::Idle);
+    }
+
+    /// A grip press that never travelled is a click on a corner, and must not
+    /// become an undo step.
+    #[test]
+    fn a_resize_that_never_moved_reports_no_change() {
+        use crate::geometry::ResizeCorner;
+
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::BeginResize {
+            node: NODE,
+            corner: ResizeCorner::TopLeft,
+            frame: Rect::new(Vec2::ZERO, Vec2::new(50.0, 50.0)),
+            keeps_aspect: false,
+        });
+
+        assert_eq!(
+            machine.handle(InteractionEvent::PointerUp {
+                button: PointerButton::Left,
+                world: Vec2::ZERO,
+                target: PointerTarget::Empty,
+            }),
+            InteractionEffect::EndResize {
+                node: NODE,
+                changed: false
+            }
+        );
+    }
 
     /// A press on empty canvas.
     fn down(button: PointerButton) -> InteractionEvent {
