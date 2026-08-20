@@ -235,6 +235,9 @@ pub enum Transform {
 enum Applied {
     /// The engine consumed the key and the syllable changed.
     Changed,
+    /// An undone transformation restored the syllable and must now emit its
+    /// non-letter source itself, after that restored state is finished.
+    Literal(char),
     /// The key was not, after all, something this engine can use here: commit
     /// what is composed and let the application have the key.
     Release,
@@ -345,9 +348,9 @@ impl VietnameseEngine {
     /// Accept the syllable as final text and start a new one.
     ///
     /// An empty semantic syllable can still have visible text: cancelling a
-    /// one-key marked source removes its last letter before a non-letter
-    /// fallback is passed through. Clear that stale composition (or delete the
-    /// direct output) before the literal key reaches the application.
+    /// one-key marked source removes its last letter before the literal is
+    /// emitted. Clear that stale composition (or delete the direct output)
+    /// before inserting the literal key.
     fn finish(&mut self) -> Vec<EngineAction> {
         if self.syllable.is_empty() {
             let actions = if self.composition.is_empty() {
@@ -415,7 +418,7 @@ impl VietnameseEngine {
             Transform::Letter { base, mark, upper } => {
                 if mark.is_some_and(|mark| self.syllable.cancel_self_mark(mark, source)) {
                     self.syllable.distrust_raw();
-                    self.fall_back(source)
+                    self.literal_after_undo(source)
                 } else {
                     self.syllable
                         .push_marked_letter(base, mark, upper, mark.map(|_| source));
@@ -429,7 +432,7 @@ impl VietnameseEngine {
                     | MarkOutcome::SourceRestored
                     | MarkOutcome::Reverted => {
                         self.syllable.distrust_raw();
-                        self.fall_back(literal)
+                        self.literal_after_undo(literal)
                     }
                     MarkOutcome::NoTarget => self.fall_back(literal),
                 }
@@ -441,7 +444,7 @@ impl VietnameseEngine {
                 if self.syllable.tone() == tone {
                     self.syllable.clear_tone();
                     self.syllable.distrust_raw();
-                    return self.fall_back(literal);
+                    return self.literal_after_undo(literal);
                 }
                 self.syllable.set_tone(tone);
                 Applied::Changed
@@ -453,6 +456,23 @@ impl VietnameseEngine {
                 self.syllable.clear_tone();
                 Applied::Changed
             }
+        }
+    }
+
+    /// Finish an undone transformation by typing its source literally.
+    ///
+    /// Undo always restores the pre-transformation state first, then emits the
+    /// repeated key. A letter can join that restored syllable; a non-letter is
+    /// inserted explicitly after it is finished. Passing a non-letter through
+    /// would let a host apply the restoration after the physical key and delete
+    /// the literal instead (`[[` would remain `ơ`).
+    fn literal_after_undo(&mut self, literal: char) -> Applied {
+        if word_boundary::is_syllable_letter(literal) {
+            self.syllable
+                .push_letter(literal, literal.is_ascii_uppercase());
+            Applied::Changed
+        } else {
+            Applied::Literal(literal)
         }
     }
 
@@ -555,6 +575,11 @@ impl LanguageEngine for VietnameseEngine {
             Applied::Changed => {
                 self.normalize();
                 EngineResult::from_actions(self.show())
+            }
+            Applied::Literal(literal) => {
+                let mut actions = self.finish();
+                actions.push(EngineAction::InsertText(literal.to_string()));
+                EngineResult::from_actions(actions)
             }
             Applied::Release => self.release(),
         }

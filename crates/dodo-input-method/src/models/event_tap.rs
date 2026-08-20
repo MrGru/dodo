@@ -237,11 +237,7 @@ impl DirectComposer {
             };
         }
 
-        let Some(next) = (if passes_through {
-            direct_actions_after(&self.rendered, &result.actions)
-        } else {
-            Some(self.engine.composition().text().to_owned())
-        }) else {
+        let Some(next) = direct_actions_after(&self.rendered, &result.actions) else {
             self.forget();
             return OutputPlan {
                 pass_through: true,
@@ -274,7 +270,12 @@ impl DirectComposer {
             if separator {
                 self.reopenable = None;
             }
-            if let Some(key) = event.typed() {
+            if self.engine.composition().is_empty() {
+                // The actions committed their own literal boundary; only the
+                // document output, not composition intent, survives this key.
+                self.reset_engine();
+                self.rendered.clear();
+            } else if let Some(key) = event.typed() {
                 self.raw.push(key);
             } else {
                 // A direct engine can only keep composing after a printable key.
@@ -743,7 +744,7 @@ mod tests {
         assert_visible_steps("marr", &["m", "ma", "mả", "mar"]);
         assert_visible_steps("maxx", &["m", "ma", "mã", "max"]);
         assert_visible_steps("majj", &["m", "ma", "mạ", "maj"]);
-        assert_visible_steps("maszz", &["m", "ma", "má", "ma", "maz"]);
+        assert_visible_steps("masz", &["m", "ma", "má", "ma"]);
     }
 
     #[test]
