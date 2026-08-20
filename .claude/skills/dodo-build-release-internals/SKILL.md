@@ -8,8 +8,7 @@ it: `docs/build-optimization.md` (release profile, the measured before/after siz
 findings, the dependency report, startup review, and the measured verdict on splitting the binary
 into crates), `docs/release.md` (CI, the release workflow, packaging, verification, the application
 icon, the in-app updater) and `docs/macos-signing.md` (the authority on signing and notarisation:
-what the repo owner had to buy or create, the secrets by exact name, the entitlements — dodo needs
-none, and neither does the input-method bundle — the ordering, and §8's list of what is still owed).
+what the repo owner had to buy or create, the secrets by exact name, the fact dodo needs no entitlements, the ordering, and §8's list of what is still owed).
 The rest is `Cargo.toml`'s `[profile.*]` comments, `build.rs`, `scripts/` and `.github/`.
 
 **macOS signing and notarisation are implemented; Windows and Linux are still unsigned.** The six
@@ -18,8 +17,7 @@ exercised it**, so treat every claim about the signed path as unverified until o
 things that would have cost a release each: signing happens **inside** `scripts/package.sh` /
 `macos-app-bundle.sh`, before the tar, because the published SHA-256 and `update.json` entry are
 computed from that archive; a workflow `if:` **cannot read `secrets`**, it reads an `env:` set from
-one at job level; and `codesign --deep` is deprecated for *signing* while remaining correct for
-verifying, so nested bundles are signed inside-out, one call each. Two consequences worth knowing
+one at job level; and signing happens before notarisation and stapling. Two consequences worth knowing
 before touching either script: with no secrets everything ad-hoc signs exactly as before (that
 path must stay working — it is what a fork gets), and a signed `-app.tar.gz` is **no longer
 byte-reproducible** across runs of the same tag, by design.
@@ -125,10 +123,11 @@ Seven more things about build and release that catch people:
   for `core`" — and never let two toolchains share `target/`, which poisons it with `E0514`
   ("compiled by an incompatible version of rustc") until the affected packages are
   `cargo clean -p`'d.
-  **The `crates/dodo-ime-*` crates *do* cross-check for Windows from here**
-  (`cargo check --locked --target x86_64-pc-windows-msvc -p dodo-ime-core -p dodo-ime-ipc -p
-  dodo-ime-windows --all-targets`) because they link no TLS; only the `dodo` crate itself is
-  unreachable. So a Windows-only mistake in **`src/`** — the classic being a
+  **The engine alone cross-checks for Windows from here** (`cargo check --locked
+  --target x86_64-pc-windows-msvc -p dodo-ime-core --all-targets`). The Input
+  method feature links GPUI, whose `psm` build requires the unavailable MSVC
+  `lib.exe`, so its Windows service is locally unreachable just like `dodo`.
+  A Windows-only mistake in **`src/`** — the classic being a
   `#[cfg(target_os = "macos")]` item called from an `any(macos, windows)` block, which is exactly
   how `InputMethod::refresh_status` broke the Windows build — cannot be caught locally at all, and
   a change to a `cfg`-shaped part of `crates/dodo-input-method/`, `src/tray/` or `src/layout.rs` is

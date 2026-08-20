@@ -1,7 +1,7 @@
 # What dodo keeps on disk
 
-dodo writes **ten** files and reads an eleventh that another process writes. All of them live under
-`data_dir()`, and each sits behind a trait so the state layer never learns where it lives. Loading
+dodo writes **ten** files. All of them live under `data_dir()`, and each sits behind a trait so the
+state layer never learns where it lives. Loading
 and saving run on the background executor, never on the UI thread.
 
 ## Where the files are
@@ -37,11 +37,7 @@ categories, and a database `data_dir()` that disagreed would silently lose every
 | `quick-nav.json` | `quick_nav::services::config_store` | the editable detection patterns |
 | `cleaner-ignored-items.json` | `cleaner::services::ignore_store` | orphan candidates marked "Keep", keyed by absolute path string rather than a `CleanableItemId`, because that id is a session-local hash with no promise of surviving a restart |
 | `session.json` | `session::services::session_store` | the session — see below |
-| `input-method.json` | `input_method::services::store` | the input method's engine settings and selected keyboard language |
-| `input-method-status.json` | **the native host**, never dodo | what the host has actually applied |
-
-The eleventh is the odd one: dodo only *reads* it. `dodo-ime-ipc`'s single-writer rule is why dodo
-has no method that could write it, and `docs/macos-input-method.md` §8 is the authority on the pair.
+| `input-method.json` | `input_method::services::store` | input languages, switch shortcut and Vietnamese engine settings |
 
 ## Versioning: copy one pattern, not the other
 
@@ -59,11 +55,8 @@ loaded from a version-1 file was written straight back *as* version 1, so a newl
 in a file older builds still believed they understood. `src/session/services/session_store.rs`
 carries the fix and the test.
 
-The rule matters more between dodo and its native input methods than anywhere else, because those
-two processes are updated independently: a months-old bundle reading a new dodo's settings file is
-ordinary, not exotic. Both parsers refuse a higher version and the bundle then types with
-`DEFAULT_CONFIG` and reports revision `0`, which is exactly how dodo knows to say "not picked up
-yet".
+`input-method.json` follows the same rule. Its schema remains at version 8 so existing settings load;
+unknown keys from older releases are ignored and disappear on the next save.
 
 ## `session.json`
 

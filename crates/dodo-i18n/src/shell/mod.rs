@@ -71,13 +71,8 @@ pub enum Text {
     FeatureMoveUp,
     FeatureMoveDown,
 
-    // The macOS input method — installing it, and the settings dodo writes for
-    // it.
-    //
-    // These are **dodo's** strings, not the bundle's. The input method's own two
-    // user-visible strings — its name and its mode’s — are read by *macOS* out of
-    // `InfoPlist.strings` and deliberately do not go through this mechanism; see
-    // `docs/macos-input-method.md` §10.
+    // The Input method tool's sidebar title; the pane's text lives in the
+    // `input_method` area.
     InputMethod,
 
     // Close-to-tray and OS startup.

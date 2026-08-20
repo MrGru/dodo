@@ -57,15 +57,11 @@ categories, Windows and Linux eight each — exactly what each platform's scanne
 implement. See [`docs/cleaner/`](docs/cleaner/) for the safety model, privacy
 posture and the known limitations of each scanner.
 
-**Input method** (macOS and Windows) — a Vietnamese Telex/VNI engine with a real
-native host on each platform: InputMethodKit on macOS, a per-user Text Services
-Framework DLL on Windows. Both keep typing once installed, with dodo closed. Each
-platform also offers a dodo-lifetime-only fallback — Event Tap on macOS, Keyboard
-Hook on Windows — and exactly one backend transforms keys at a time. The pane
-installs, reinstalls or removes the native host and carries the engine's
-settings. Linux has no sidebar row until it has an IBus host. See
-[`docs/macos-input-method.md`](docs/macos-input-method.md) and
-[`docs/windows-input-method.md`](docs/windows-input-method.md).
+**Input method** (macOS and Windows) — a Vietnamese Telex/VNI engine driven by
+Event Tap on macOS and Keyboard Hook on Windows. It works while Dodo is running;
+macOS requires Accessibility permission. The pane selects input languages, the
+switch shortcut and Vietnamese engine settings. Linux has no sidebar row until
+it has an implementation.
 
 ### Around the tools
 
@@ -119,9 +115,7 @@ cp -r share ~/.local/          # desktop entry and icons
 Installing `share/` is not decoration: a Wayland compositor matches the window
 against `dodo.desktop` to find the icon.
 
-**Windows** (`dodo-v<version>-windows-x64.zip`) — unzip and run `dodo.exe`. Keep
-`input-method\dodo_ime_windows.dll` beside it; that is the TSF host the input
-method pane installs from.
+**Windows** (`dodo-v<version>-windows-x64.zip`) — unzip and run `dodo.exe`.
 
 **Verify a download.** Every release publishes `SHA256SUMS` alongside a
 `.sha256` sidecar per archive:
@@ -165,8 +159,7 @@ cargo run -p dodo-encoder-decoder --example encoder_decoder --locked
 ```
 
 These are the same views the app mounts, reading the same data directory and
-real machine state. There is also a terminal harness for the Vietnamese engine
-with no input method installed at all:
+real machine state. There is also a terminal harness for the Vietnamese engine:
 
 ```sh
 cargo run -p dodo-ime-core --example telex

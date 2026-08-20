@@ -1,7 +1,7 @@
 # The workspace: which shape a new crate takes
 
 The repo is a cargo workspace. It gained `[workspace]` on 2026-08-08, when the input-method engine
-moved to `crates/dodo-ime-core/`, and `cargo metadata --no-deps` at the root now lists eighteen
+moved to `crates/dodo-ime-core/`, and `cargo metadata --no-deps` at the root now lists fifteen
 packages. The root `Cargo.toml`'s header comments are the authority on the rules; this page is why
 they say what they say.
 
@@ -15,20 +15,11 @@ is the only one: `exclude = ["tools/*"]` in `[package]` keeps it out of `cargo p
 `workspace.exclude` keeps it out of the workspace, it carries its own `Cargo.lock`, and it costs the
 binary zero bytes. Do not add it to the workspace, and do not give dodo a `[[bin]]`.
 
-`crates/dodo-ime-macos/` is the case the rule did not anticipate, and it settles the same way: dodo
-does not link the macOS input-method host at all, but the host links `dodo-ime-core`, which dodo
-*does* — so a second lockfile would resolve the engine independently and "the engine the tests
-prove" and "the engine the shipped bundle types with" would be two resolutions nothing compares.
-
-Three mechanical traps around that:
+Two mechanical traps follow:
 
 - **`default-members` is load-bearing.** Without a crate listed there, a bare `cargo test` or
   `cargo clippy --all-targets` silently stops covering it. **A crate goes into `members` and
   `default-members` in the same commit.**
-- Naming the macOS host in `default-members` is safe on every platform only because its
-  Objective-C dependencies sit under a `[target.'cfg(target_os = "macos")'.dependencies]` table. A
-  plain `[dependencies]` entry would make the Linux and Windows `cargo check` rows build AppKit
-  bindings.
 - **`workspace.exclude` matches paths, not globs.** `tools/*` there excludes nothing, which is why
   it is spelled out.
 
@@ -156,12 +147,10 @@ are the ones to copy before reaching for anything cleverer:
 
 ### Platform gates survive the move, and the move is when to check them
 
-115 platform attributes came across with the input method. Eleven of them only *selected a value*
-and are now five `cfg!` sites, so both arms type-check from a Mac — the four `MODIFIER_*`
-glyph/word constants, the backend radio group's two rows, and the tray call above. The other 104
-declare or use a platform-only type, call a platform-only function, or gate a struct field or a
-`mod` line, none of which `cfg!` can express, so they stay. **A gate that picks a value becomes
-`cfg!`; a gate in front of a platform API stays an attribute.**
+Value choices use `cfg!` so every answer type-checks from a Mac — the modifier glyphs and the tool's
+host availability are the visible examples. Platform API calls and platform-only types still need
+attributes. **A gate that picks a value becomes `cfg!`; a gate in front of a platform API stays an
+attribute.**
 
 ## Extracting a crate does not make the build faster
 

@@ -7,8 +7,7 @@ that is actually worth.
 > them. Release run `31655518790` produced and verified macOS arm64/x64, Linux
 > x64 and Windows x64 artifacts and published v0.1.12. That proves native
 > compilation, archive layout and the headless `--build-info` path; it does not
-> prove GUI behaviour, Windows TSF registration/typing, or an in-app update on
-> Windows. Experimental matrix flags remain evidence labels, not permission for
+> prove GUI behavior, global input listeners, or an in-app update on Windows. Experimental matrix flags remain evidence labels, not permission for
 > a release to omit a platform: the publish gate requires all four.
 >
 > Those job names are from the old CI shape. `ci.yml`'s release matrix has since
@@ -183,10 +182,8 @@ it, and checks, in order:
 4. the binary **runs** — `dodo --build-info` exits 0;
 5. the embedded metadata is real: version equals the tag, the commit is not
    `unknown` and does not end in `-dirty`, `build_time` and `target` are set;
-6. macOS app archives contain the executable input method at
-   `dodo.app/Contents/Helpers/Dodo Vietnamese.app/Contents/MacOS/DodoVietnamese`,
-   with a valid plist and nested/outer signatures on macOS; Windows ZIPs contain
-   `input-method/dodo_ime_windows.dll` at that exact archive-relative path;
+6. app and Windows archives contain their executable at the exact package path,
+   and macOS signatures still verify;
 7. archive and binary sizes are reported.
 
 **What step 4 does and does not prove.** dodo is a GUI application and a CI
@@ -273,26 +270,13 @@ Three things about that which are deliberate:
   — the previous best-effort `for doc in README.md LICENSE LICENSE.md ...` glob
   would have shipped a binary with no notice and said nothing.
 - **`verify-release.sh` re-checks it after the fact**, by `find`ing both names
-  in the unpacked archive (which is why the bundle's nested layout needs no
-  special case) and asserting they are non-empty. Packaging and verification
+  in the unpacked archive (which is why the bundle layout needs no special
+  case) and asserting they are non-empty. Packaging and verification
   failing independently is the point.
 
 Neither file is embedded in the binary: `src/assets.rs`'s `#[include]` filters
 cover only `icons/**/*.svg` and `themes/**/*.json`, so these cost zero bytes.
 `dodo --build-info` does not print licence information.
-
-### Windows TSF artifact
-
-`scripts/package.ps1` treats `input-method/dodo_ime_windows.dll` as a required
-release artifact beside `dodo.exe`; it fails rather than publishing a ZIP whose
-Native TSF button cannot work. Both the matrix verifier and the post-download
-publish gate require that exact path, so a recursively found same-name DLL does
-not pass. The updater replaces the packaged sidecar with the executable and
-rolls both back if either replacement fails; it deliberately does not touch the
-registered `%APPDATA%` copy. `cargo build` reaches the DLL through the workspace
-`default-members`, and CI explicitly compiles and runs the TSF host's
-class-factory harness on Windows. User installation, recovery, and the manual
-runtime matrix are in [`windows-input-method.md`](windows-input-method.md).
 
 ### Checking a Windows fix without a Windows machine
 
@@ -661,11 +645,10 @@ has its own `Cargo.lock` and four dependencies (`serde`, `serde_json`, `sha2`,
 the workspace that `crates/dodo-ime-core` joined. It costs the shipped binary
 **zero bytes** and the app's test and clippy runs zero time.
 
-`cargo metadata --no-deps` at the repo root listed exactly one package when that
-was written; it lists two now — `dodo` and `dodo-ime-core` — and still not
-`update-manifest`. The difference is the point: dodo *links* the engine crate and
-does not link the generator, so the engine shares dodo's `Cargo.lock` and the
-generator keeps its own. See the `[workspace]` comment in the root `Cargo.toml`.
+`cargo metadata --no-deps` at the repo root lists fifteen workspace packages and
+still not `update-manifest`. The difference is the point: linked crates share
+dodo's `Cargo.lock`; the generator keeps its own. See the `[workspace]` comment
+in the root `Cargo.toml`.
 
 The publish job runs it *before* creating the release:
 

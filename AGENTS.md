@@ -93,9 +93,7 @@ One index, covering the skills (`.claude/skills/<name>/SKILL.md`, invoked by nam
 | Touching `crates/dodo-updater/`, `.github/workflows/`, `Cargo.toml`'s dependencies, `scripts/`, `tools/update-manifest/`, `deny.toml` or `THIRD-PARTY-NOTICES.md`; preparing or debugging a release; the application-icon pipeline; the CI platform matrix and its cross-check traps | skill `dodo-build-release-internals` |
 | Touching `crates/dodo-cleaner/` | `crates/dodo-cleaner/AGENTS.md` |
 | Touching `crates/dodo-ime-core/` — the Vietnamese engine and the shared key vocabulary | `crates/dodo-ime-core/AGENTS.md` |
-| Touching `crates/dodo-input-method/` — dodo's own end of the input methods | `crates/dodo-input-method/AGENTS.md` |
-| Touching `crates/dodo-ime-macos/`, installing or enabling the bundle, or the two files the two processes exchange | `docs/macos-input-method.md` |
-| Touching `crates/dodo-ime-windows/` or the Keyboard Hook fallback | `docs/windows-input-method.md` |
+| Touching `crates/dodo-input-method/` — Event Tap on macOS or Keyboard Hook on Windows | `crates/dodo-input-method/AGENTS.md` |
 | Signing or notarisation, on any platform | `docs/macos-signing.md` |
 | Cleaner scanner, safety, privacy or limitation detail beyond the crate file | `docs/cleaner/` |
 | Startup, app lifecycle, window close/quit, or the shape of `src/` itself | `docs/architecture/app-shell.md` |

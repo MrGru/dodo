@@ -89,8 +89,8 @@ row means and on the two rules that outrank tidiness (a `code:` is a compatibili
      from any machine, using rows whose `hosts:` is `all()` (true everywhere) and `any()` (false
      everywhere).
 
-     Use `hosts:` only when the tool genuinely cannot work elsewhere (it installs an
-     InputMethodKit bundle); a tool that is merely *unfinished* on a platform shows a "Coming
+     Use `hosts:` only when the tool genuinely cannot work elsewhere (the Input method has
+     implementations only on macOS and Windows); a tool that is merely *unfinished* on a platform shows a "Coming
      later" pane instead, which is what `crates/dodo-cleaner/src/` does. Nothing else breaks:
      `Features::resolve` drops a stored tool the running build does not have and hands it back
      beside its default neighbour on a build that does, so one `session.json` moves between

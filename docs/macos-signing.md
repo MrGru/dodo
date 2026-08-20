@@ -4,8 +4,8 @@
 holds an individual Apple Developer Program membership, the six secrets in §2
 exist on `MrGru/dodo`, and the plumbing is in the tree:
 `.github/workflows/release.yml` sets up the keychain, `scripts/package.sh` signs
-and notarises the plain binary, and `scripts/macos-app-bundle.sh` signs the
-bundle inside-out, notarises it and staples the ticket. **No release run has
+and notarises the plain binary, and `scripts/macos-app-bundle.sh` signs the app,
+notarises it and staples the ticket. **No release run has
 gone through that path yet.** Everything about the *shape* of the code was
 tested locally; everything that needs the certificate or the notary service was
 not, and is marked accordingly below.
@@ -31,9 +31,8 @@ whole release to discover, so every non-obvious claim below carries one of:
 - **VERIFIED** — run on this machine (macOS 26.6 / build 25G72, Xcode 26.6,
   `notarytool` 1.1.2 (41)) while writing this document, or read out of the local
   `man` page for the tool in question. The command is quoted.
-- **INVESTIGATION** — taken from the `dodo-ime-macos-scout` report (§8
-  "Permissions, signing, notarization", §9 "Packaging"). Those experiments were
-  **not** re-run here.
+- **INVESTIGATION** — recorded from an earlier local experiment and not re-run
+  while this document was written.
 - **READ** — Apple's or GitHub's own documentation, fetched 2026-08-08, not
   executed. The URL is given.
 - **INFERRED** — reasoning from the above. Called out as such every time.
@@ -54,7 +53,7 @@ The implementation round added one more, and it is the important one:
 
 1. [What the repo owner must personally obtain](#1-what-the-repo-owner-must-personally-obtain)
 2. [CI/CD secrets, by exact name](#2-cicd-secrets-by-exact-name)
-3. [Entitlements — including the input method](#3-entitlements--including-the-input-method)
+3. [Entitlements](#3-entitlements)
 4. [What the release workflow does](#4-what-the-release-workflow-does)
 5. [What signing buys, and what it does not](#5-what-signing-buys-and-what-it-does-not)
 6. [What breaks if we get it wrong, and how to verify success](#6-what-breaks-if-we-get-it-wrong-and-how-to-verify-success)
@@ -123,8 +122,7 @@ the sidebar.
 - Found at developer.apple.com/account → **Membership details** → Team ID. It
   also appears in parentheses at the end of every certificate name.
 - **Used for:** `notarytool --team-id`, disambiguating the signing identity, and
-  — the part that matters later — it is the identity that the nested input-method
-  bundle must share with `Dodo.app` (§3, §7).
+  what identifies `Dodo.app` to macOS across updates.
 - Not a secret in the security sense (it is embedded in every signed binary and
   anyone can read it with `codesign -dvvv`), but it goes in CI as a secret
   anyway so the workflow reads uniformly.
@@ -140,10 +138,8 @@ Store. It is the only certificate type dodo needs.
   ever added (`docs/release.md`, "Future readiness" mentions MSI for Windows),
   that is when a second certificate becomes necessary.
 - **You do not need "Apple Development" / "Apple Distribution".** Those are for
-  Xcode-signed development builds and App Store submission. The Mac App Store is
-  closed to us anyway once the input method exists — **INVESTIGATION** §8: an
-  IME must be installed into `~/Library/Input Methods`, which App Store Review
-  Guidelines 2.14/2.15 forbid.
+  Xcode-signed development builds and App Store submission; dodo distributes
+  directly with Developer ID.
 
 **How to create it** — **READ**, from
 [Apple's own steps](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/):
@@ -388,7 +384,7 @@ not a shell.
 
 ---
 
-## 3. Entitlements — including the input method
+## 3. Entitlements
 
 ### 3.1 — Hardened runtime is not optional
 
@@ -420,7 +416,7 @@ list that actually applies to a Rust GPUI app, against
 | `com.apple.security.cs.allow-dyld-environment-variables` | **no** | dodo does not inject anything via `DYLD_*`. |
 | `com.apple.security.cs.disable-executable-page-protection` | **no** | Nothing patches its own text segment. |
 | `com.apple.security.get-task-allow` | **must be ABSENT** | This is the debugger-attach entitlement Xcode adds to debug builds. Its presence is an automatic notarisation rejection. Release builds via `cargo build --release` never set it, but a hand-signed local experiment can. |
-| `com.apple.security.app-sandbox` | **no** | dodo is not sandboxed and cannot be — the Cleaner reads arbitrary paths, the Docker module talks to a unix socket, the Database module opens arbitrary SQLite files. Sandboxing is a Mac App Store requirement and the App Store is closed to us (§1.3). |
+| `com.apple.security.app-sandbox` | **no** | dodo distributes outside the Mac App Store and needs arbitrary filesystem, Docker socket and database access. |
 | network entitlements | **n/a** | Only the sandbox restricts network. Hardened runtime does not. |
 
 So the entitlements file for `Dodo.app` is *empty*, which means **there is no
@@ -443,69 +439,29 @@ here, and **deliberately not changed by this round** — it is a user-visible
 behaviour change unrelated to signing. Flagged so it is not discovered *during*
 a signing rollout.
 
-### 3.3 — The input-method bundle needs nothing beyond the app's
-
-The short answer the brief asks for: **no.** Concretely:
-
-- **It must be signed with the hardened runtime too** (`--options runtime`),
-  because the notary service checks every executable in the submission, not just
-  the outer one.
-- **It must be signed with the same Team ID as `Dodo.app`.** This is forced
-  anyway: `codesign` refuses to seal nested code from a different team.
-- **It needs no entitlement to be an input method.** **INVESTIGATION** §8, and
-  it is the whole architectural argument for InputMethodKit over a
-  `CGEventTap`: the PoC "never linked or called any `AX*` API, never created an
-  event tap, and no TCC prompt appeared across ~20 launches. It received every
-  keystroke anyway." There is no Accessibility permission, no Input Monitoring
-  permission, and therefore no entitlement gating any of it. The user's consent
-  *is* adding the input source in System Settings.
-- **It needs no entitlement to do its IPC.** The design is two single-writer
-  JSON files under `data_dir()` plus an `NSDistributedNotificationCenter` ping
-  (**INVESTIGATION** §7, verified there in both directions with "no app group,
-  no XPC service, no shared team identifier, no entitlement"). None of those is
-  restricted by the hardened runtime. See §7.1 for why signing does not change
-  this design.
-- **The one case where it would need entitlements is sandboxing**, and that case
-  does not exist: an input method cannot ship through the Mac App Store
-  (**INVESTIGATION** §8), which is the only thing that would require the
-  sandbox. If it were ever sandboxed, the file-based IPC would need a
-  `com.apple.security.temporary-exception.files.home-relative-path` entitlement
-  — which is the point at which an App Group would become the tidier answer.
-
-So: one `codesign` invocation for the inner bundle, same flags as the outer, no
-`--entitlements` on either.
-
 ---
 
 ## 4. What the release workflow does
 
 ### 4.1 — The ordering constraint, stated once
 
-There are five orderings, and getting any of them wrong produces a failure that
+There are three orderings, and getting any of them wrong produces a failure that
 looks like something else:
 
-1. **Inner bundle before outer.** `codesign` signs inside-out. Code nested in a
-   bundle must already be signed, or signing the outer bundle fails —
-   **VERIFIED** from the local `man codesign`: *"Code nested within bundle
-   directories must already be signed or the signing operation will fail"*.
-2. **Do not use `--deep` to achieve that.** **VERIFIED**, same man page:
-   *"(DEPRECATED for signing as of macOS 13.0)"*, and *"All signing options will
-   be applied, in turn, to all nested content. This is almost never what you
-   want."* `--deep` remains correct and useful for **verification**.
-3. **Sign before archiving, not after.** `scripts/package.sh` tars the bundle at
+1. **Sign before archiving, not after.** `scripts/package.sh` tars the bundle at
    the moment it is built (line 202) and checksums it immediately (line 204).
    The published SHA-256 and `update.json` entry are computed from that archive,
    so anything done to the bundle after the tar is invisible to the release.
-4. **Notarise after signing, staple after notarising.** The notary service
+2. **Notarise after signing, staple after notarising.** The notary service
    validates the signature; the ticket is issued against it.
-5. **Never sign after stapling.** **VERIFIED** from `man stapler`:
+3. **Never sign after stapling.** **VERIFIED** from `man stapler`:
    *"Code-signing a supported file format invalidates any stapled tickets, so
    `stapler staple` must be run again if this occurs."*
 
 ### 4.2 — Where the steps actually go
 
 An earlier note in `.github/workflows/release.yml` said the sign hook goes
-"between packaging and upload". **That placement is wrong**, per constraint 3
+"between packaging and upload". **That placement is wrong**, per constraint 1
 above: by then the `.tar.gz` and its `.sha256` already exist and contain the
 unsigned bundle.
 
@@ -527,11 +483,8 @@ release.yml  build job (macOS rows only, and only when the secrets exist)
        ├─ checksum
        │
        └─ if --app-bundle:
-            scripts/macos-input-method-bundle.sh --sign <TEAMID>
             scripts/macos-app-bundle.sh --sign <TEAMID> --notary-*
-              ├─ assemble dodo.app, nesting the IME at Contents/Helpers/
-              ├─ codesign  Contents/Helpers/Dodo Vietnamese.app   (inner first)
-              ├─ codesign  dodo.app                               (then outer)
+              ├─ assemble and codesign dodo.app
               ├─ ditto -c -k --keepParent → a TEMPORARY zip
               ├─ xcrun notarytool submit --wait   → assert `status: Accepted`
               ├─ xcrun stapler staple dodo.app
@@ -543,13 +496,6 @@ release.yml  build job (macOS rows only, and only when the secrets exist)
   Verify archives → scripts/verify-release.sh   (§6.2 step 6, on the extract)
   Remove signing credentials                    (if: always())
 ```
-
-The nested input method is notarised **by the outer bundle's submission** and
-does not get one of its own: the notary service checks every executable in the
-submission, not just the outermost. It is signed twice, though — once standalone
-by `macos-input-method-bundle.sh` and again with `--force` once nested — which
-costs one `codesign` call and keeps the standalone bundle in the stage directory
-honest.
 
 **One `notarytool` invocation is not the same as one round trip.** A macOS
 matrix row makes two submissions: the plain binary and the `.app`. Each is a
@@ -617,24 +563,6 @@ stapled, so nobody reads a missing ticket as a broken release.
 
 ## 5. What signing buys, and what it does not
 
-**Be honest about this: for the input method, signing is a user-experience
-purchase, not an enablement one.**
-
-### It does not buy the ability to run
-
-**INVESTIGATION** §8 tested three states — as `cargo build` leaves it
-(`adhoc,linker-signed`), properly ad-hoc signed, and ad-hoc signed *with*
-`com.apple.quarantine` set (the real "downloaded from GitHub" case). All three
-**launched and typed**:
-
-> on macOS 26.6, an unsigned, unnotarized, quarantined input method dropped into
-> `~/Library/Input Methods` does launch and does type. `spctl` says "rejected";
-> that is not the gate that applies here.
-
-That experiment was **not re-run here**. It is the single most important fact in
-this document and it is somebody else's measurement — but it was measured three
-ways on the same OS version this file was written on.
-
 ### The workaround that is still shipped, conditionally
 
 dodo's generated release notes used to tell every user to run
@@ -649,7 +577,7 @@ three commands a suspicious user can check it with.
 `crates/dodo-updater/src/services/installers/macos.rs` still does the `xattr`
 equivalent automatically for in-app updates, and deliberately keeps doing it:
 removing an extended attribute cannot invalidate a signature or a stapled ticket
-(§7.3, §7.4), and a user who obtained the archive some other way still benefits.
+(§7.1, §7.2), and a user who obtained the archive some other way still benefits.
 
 ### What it does buy
 
@@ -658,7 +586,6 @@ removing an extended attribute cannot invalidate a signature or a stapled ticket
 | First launch of a downloaded `dodo.app` | *"…can't be opened because Apple cannot check it for malicious software"*; user must clear quarantine or right-click → Open | opens |
 | App Translocation | a quarantined bundle runs from a randomised read-only path under `/private/var/folders/…/AppTranslocation/` (**INVESTIGATION** §8, verified) | does not happen |
 | `spctl --assess --type execute` | `rejected` | `accepted` |
-| Input method launches and types | **yes** | yes |
 | TCC grants surviving an update | see below | see below |
 
 **The TCC point is the one the investigation did not make, and it is the
@@ -676,9 +603,6 @@ confirm.
 
 ### What it does not buy, beyond the above
 
-- It does not make the Mac App Store possible (§1.3).
-- It does not remove the need for the user to add the input source in System
-  Settings. That step is the consent model, not a permission dialog.
 - It does not sign Windows or Linux artifacts.
 - It does not verify the update manifest. `update.json`'s `signature` field is a
   *different, unrelated* mechanism, still `null`, still unimplemented
@@ -696,7 +620,6 @@ confirm.
 |---|---|
 | `security set-key-partition-list` omitted | `codesign` hangs, then fails with `errSecInternalComponent`. Nothing mentions the keychain. |
 | Keychain not on the search list | `Developer ID Application: …: no identity found` |
-| Outer bundle signed before the inner one | signing fails on the outer bundle; if it somehow succeeds, `codesign --verify --deep` later reports `code object is not signed at all` for the nested path |
 | `--timestamp` omitted | notarisation rejected: *the signature does not include a secure timestamp* |
 | `--options runtime` omitted | notarisation rejected: *the executable does not have the hardened runtime enabled* |
 | `get-task-allow` entitlement present | notarisation rejected outright |
@@ -706,8 +629,6 @@ confirm.
 | `stapler staple` run before notarisation finished | *The staple and validate action failed! Error 65* |
 | Anything re-signed after stapling | ticket silently invalidated; `stapler validate` fails on the shipped archive (**VERIFIED** from `man stapler`) |
 | Archive built before signing | `codesign --verify` passes on `dist/dodo.app` and fails on the extracted copy; the published SHA-256 covers the unsigned bundle |
-| Nested bundle in a directory `codesign` does not treat as nested code | it is sealed as an opaque *resource* rather than as code; `--verify --deep --strict` does not recurse into it and the extracted copy may not validate. See §7.2 — this is a live design decision, not a hypothetical |
-| Team ID mismatch between inner and outer | outer signing fails |
 | `.p12` or `.p8` committed to the repo | revoke immediately; one of five certificate slots is burnt |
 
 ### 6.2 — The verification recipe
@@ -715,27 +636,21 @@ confirm.
 Run all of these; each catches something the others do not.
 
 ```bash
-# 1. Structural + cryptographic validity, recursing into nested code.
-#    --deep is correct here (it is only deprecated for *signing*).
+# 1. Structural + cryptographic validity. --deep remains correct for verification.
 codesign --verify --deep --strict --verbose=2 dist/dodo.app
 
-# 2. The nested input method on its own, as the user will have it after
-#    dodo copies it to ~/Library/Input Methods.
-codesign --verify --deep --strict --verbose=2 \
-    "dist/dodo.app/Contents/Helpers/Dodo Vietnamese.app"
-
-# 3. What was actually claimed: identity, Team ID, hardened runtime
+# 2. What was actually claimed: identity, Team ID, hardened runtime
 #    (look for `flags=0x10000(runtime)`), and that entitlements are empty.
 codesign -dvvv --entitlements - dist/dodo.app
 
-# 4. The Gatekeeper policy check — the one that says `rejected` today.
+# 3. The Gatekeeper policy check — the one that says `rejected` today.
 spctl --assess --type execute --verbose=4 dist/dodo.app
 
-# 5. The notarisation ticket is attached and matches.
+# 4. The notarisation ticket is attached and matches.
 xcrun stapler validate dist/dodo.app
 
-# 6. THE ONE THAT MATTERS: all of the above, on what actually ships.
-#    Steps 1–5 pass on dist/dodo.app trivially; the question is whether the
+# 5. THE ONE THAT MATTERS: all of the above, on what actually ships.
+#    Steps 1–4 pass on dist/dodo.app trivially; the question is whether the
 #    published archive still carries them.
 mkdir -p /tmp/dodo-verify && tar -xzf dist/dodo-v*-macos-*-app.tar.gz -C /tmp/dodo-verify
 codesign --verify --deep --strict --verbose=2 /tmp/dodo-verify/dodo.app
@@ -743,7 +658,7 @@ xcrun stapler validate /tmp/dodo-verify/dodo.app
 spctl --assess --type execute --verbose=4 /tmp/dodo-verify/dodo.app
 ```
 
-**Step 6 is now in `scripts/verify-release.sh`**, which the release workflow runs
+**Step 5 is now in `scripts/verify-release.sh`**, which the release workflow runs
 on every archive it built, so a ticket that did not survive packaging fails the
 release rather than the user. The guard is the bundle's own signature rather
 than a flag — `codesign -dvv` is asked whether the authority is
@@ -773,88 +688,7 @@ undone to get to signing?** The answer was no, and turning signing on did not
 change it — nothing in this section had to be revisited when the plumbing
 landed. It is kept as the record of what was checked and why each answer holds.
 
-### 7.1 — The file-based IPC stays correct, and signing does not make XPC worth revisiting
-
-The input-method design (**INVESTIGATION** §7) rejects XPC, App Groups and a
-shared `NSUserDefaults` suite, "because both require the two bundles to be
-signed by the same team, and dodo signs nothing today". Signing removes that
-particular objection. It does **not** make XPC the better answer, for three
-reasons that have nothing to do with signing:
-
-1. **The IME must work when `Dodo.app` is not running.** macOS launches the
-   input method, not dodo. An XPC connection to a GUI app that is not running,
-   and that is not a registered `launchd` service, simply fails —
-   **INVESTIGATION** §7's comparison table. The file survives; the connection
-   does not. This is the decisive one.
-2. **The file is the durable copy anyway.** Per-app language memory and the
-   config have to be on disk regardless, so XPC would be a *second* mechanism
-   layered on a file that still has to exist.
-3. **It matches every other thing dodo persists.** Nine JSON files under
-   `data_dir()`, single-writer, explicit `"version"`, refuse-if-higher
-   (`AGENTS.md`). A tenth and eleventh are boring in the good way.
-
-**Verdict: no change.** The one scenario that would flip it — sandboxing the IME
-— is not reachable (§3.3). Worth recording so a future session with a
-certificate in hand does not reopen it as free.
-
-There is one *positive* compatibility property here: `data_dir()`
-(`crates/dodo-paths`) builds an absolute path from `$HOME` and is therefore
-unaffected by App Translocation, which is what an unsigned quarantined bundle
-suffers. So the IPC design is correct **both** before and after signing, and the
-transition changes nothing about it.
-
-### 7.2 — The nesting location is a real finding: `Contents/Library/InputMethods/` is not signable as nested code
-
-**INVESTIGATION** §9 recommends nesting the IME at
-`Dodo.app/Contents/Library/InputMethods/`. **VERIFIED here** from `man codesign`
-on this machine, `codesign` discovers nested code content in exactly these
-directories:
-
-```
-Contents                       Contents/XPCServices
-Contents/Frameworks            Contents/Helpers
-Contents/SharedFrameworks      Contents/MacOS
-Contents/PlugIns               Contents/Library/Automator
-Contents/Plug-ins              Contents/Library/Spotlight
-                               Contents/Library/LoginItems
-```
-
-> If any code (Mach-Os, bundles) are located outside the above listed locations
-> they will not be signed by the `--deep` option
-
-`Contents/Library/InputMethods` is **not on that list**. A bundle there is
-sealed by the resource rules as data rather than as nested code, which is the
-shape that produces "a sealed resource is missing or invalid" and a `--deep
---strict` verification that does not actually look inside.
-
-**And nothing requires that path.** macOS looks for input methods in
-`~/Library/Input Methods` and `/Library/Input Methods` only; it never looks
-inside another application. The location *inside* `Dodo.app` is purely dodo's
-own filing choice, read by dodo's own install action and nothing else.
-
-**Recommendation: nest it at `Dodo.app/Contents/Helpers/Dodo Vietnamese.app`.**
-`Helpers` is on the discovery list and is semantically exactly right — a helper
-executable the app carries. This costs nothing to adopt because **the nested
-bundle does not exist yet**: `crates/dodo-ime-core/` is the engine and links
-into nothing but dodo so far, and there is no macOS bundle and no packaging for
-one. Adopting the constraint now is free; adopting it after
-`scripts/macos-input-method-bundle.sh` and the install action are written is a
-packaging change plus a migration for anyone who installed from a release. This
-document is the record of that constraint; §4.2's diagram already uses
-`Contents/Helpers/`.
-
-Two smaller notes for whoever builds the install action:
-
-- **Copy the IME out with `ditto`, not `cp -R`.** `ditto` preserves extended
-  attributes and ACLs; `cp -R` does not. The signature itself lives in the
-  Mach-O and in `_CodeSignature/`, so `cp -R` probably survives, but `ditto` is
-  the documented way to move a signed bundle and removes the question.
-- **Never write into `Dodo.app`.** Anything the install action or the IME writes
-  inside the outer bundle invalidates its signature and its stapled ticket. The
-  design already puts everything mutable in `data_dir()` (§7.1), so this is a
-  property to preserve rather than a bug to fix.
-
-### 7.3 — The `.tar.gz` distribution shape survives signing and stapling
+### 7.1 — The `.tar.gz` distribution shape survives signing and stapling
 
 Worth checking rather than assuming, because Apple's own advice is to distribute
 signed apps in a `.zip` made with `ditto` or in a disk image — and dodo cannot
@@ -880,15 +714,15 @@ change its macOS `.app` artifact name without breaking the in-app updater (§4.2
 **Conclusion: `-app.tar.gz` stays viable.** Neither the artifact name, the
 manifest's exact-filename selection, nor the updater's `tar -xf` needs to change.
 One caveat inherited from `tar`: keep the bundle free of symlinked framework
-`Versions/` trees. dodo has no frameworks and the IME bundle will not either, so
-this is a constraint to preserve rather than a problem to solve.
+`Versions/` trees. dodo has no frameworks, so this is a constraint to preserve
+rather than a problem to solve.
 
-### 7.4 — The updater's `strip_quarantine` stays correct
+### 7.2 — The updater's `strip_quarantine` stays correct
 
 `crates/dodo-updater/src/services/installers/macos.rs` runs
 `xattr -dr com.apple.quarantine` over the extracted bundle before swapping it
 in. Removing an extended attribute does not touch the code signature or the
-stapled ticket (§7.3 part 1: neither lives in an xattr), so this stays correct
+stapled ticket (§7.1 part 1: neither lives in an xattr), so this stays correct
 after signing — it just stops being necessary. Leave it: it is already
 documented as best-effort and non-fatal, and a user who obtained the archive
 some other way still benefits.
@@ -898,15 +732,8 @@ notarised". It now says what is actually true — official macOS builds are
 signed and notarised, builds without the secrets are not, and `strip_quarantine`
 is correct and harmless either way.
 
-### 7.5 — Everything else checked, with nothing to change
+### 7.3 — Everything else checked, with nothing to change
 
-- **`crates/dodo-ime-core/`** — the precondition for the IME bundle existing at
-  all is already met. The engine is a real library crate depending on
-  `unicode-normalization` and nothing else, guarded by its own
-  `src/purity_lint.rs`, so a `platform/macos-input-method` bundle can link it
-  without linking gpui. That is what makes the nested bundle a *separately
-  signable* Mach-O rather than a second copy of dodo. Signing does not interact
-  with any of it.
 - **`CFBundleIdentifier` is already frozen** at `io.github.mrgru.dodo`, and
   `scripts/macos-app-bundle.sh` says why in a comment that already anticipates
   signing: it is the App ID the certificate and the notarisation ticket bind to.
@@ -919,15 +746,11 @@ is correct and harmless either way.
   distribution question (`AGENTS.md`) is untouched by signing. Signing is about
   who built the binary, not about what may be distributed.
 - **Windows.** `scripts/package.ps1`'s equivalent hook signs the `.exe` *before*
-  zipping it, which is the same constraint 3 as above. Nothing here changes it.
+  zipping it, which is the same constraint 1 as above. Nothing here changes it.
 
 **No incompatibility was found, and none appeared when signing was turned on.**
-The three corrections the readiness round made were all to recorded *plans* —
-the deprecated `--deep` recipe in `scripts/macos-app-bundle.sh`'s footer, the
-wrong step placement and the invalid `secrets`-in-`if` guard in
-`.github/workflows/release.yml` — plus the nesting-location constraint in §7.2,
-which cost nothing because it was adopted before the nested bundle existed. All
-four are now the shipped behaviour.
+The release keeps signing inside packaging, before the archive and checksum, and
+keeps the workflow's temporary-keychain setup separate.
 
 ---
 
