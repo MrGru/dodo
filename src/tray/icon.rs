@@ -227,7 +227,7 @@ fn mark_rgba(bgra: &[u8], paint: MarkPaint) -> Vec<u8> {
         MarkPaint::Solid(ink) => ink,
     };
     let mut rgba = Vec::with_capacity(bgra.len());
-    for pixel in bgra.chunks_exact(4) {
+    for pixel in bgra.as_chunks::<4>().0 {
         rgba.extend_from_slice(&[red, green, blue, pixel[3]]);
     }
     rgba

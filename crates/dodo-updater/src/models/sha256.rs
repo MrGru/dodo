@@ -102,14 +102,11 @@ impl Sha256 {
             self.buffered = 0;
         }
 
-        let mut chunks = data.chunks_exact(BLOCK);
-        for block in &mut chunks {
-            let mut fixed = [0u8; BLOCK];
-            fixed.copy_from_slice(block);
-            self.compress(&fixed);
+        let (blocks, rest) = data.as_chunks::<BLOCK>();
+        for block in blocks {
+            self.compress(block);
         }
 
-        let rest = chunks.remainder();
         self.buffer[..rest.len()].copy_from_slice(rest);
         self.buffered = rest.len();
     }
