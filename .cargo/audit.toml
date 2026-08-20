@@ -14,7 +14,9 @@ ignore = [
     # compatible xcb release that depends on a fixed quick-xml. Added 2026-08-20.
     #
     # RUSTSEC-2026-0194: Quadratic runtime when checking start-tag duplicate attributes.
-    { id = "RUSTSEC-2026-0194", reason = "xcb's XML parsing is not reachable from untrusted input in dodo; upgrade blocked on xcb adopting a fixed quick-xml" },
+    # xcb's XML parsing is not reachable from untrusted input in dodo; upgrade blocked on xcb adopting a fixed quick-xml.
+    "RUSTSEC-2026-0194",
     # RUSTSEC-2026-0195: Unbounded namespace-declaration allocation in NsReader.
-    { id = "RUSTSEC-2026-0195", reason = "xcb's XML parsing is not reachable from untrusted input in dodo; upgrade blocked on xcb adopting a fixed quick-xml" },
+    # xcb's XML parsing is not reachable from untrusted input in dodo; upgrade blocked on xcb adopting a fixed quick-xml.
+    "RUSTSEC-2026-0195",
 ]
