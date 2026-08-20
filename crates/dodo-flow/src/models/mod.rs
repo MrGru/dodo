@@ -13,6 +13,9 @@
 //!   compact `u32` runtime indices that are **not**. That asymmetry is
 //!   enforced by the derives: the indices do not implement `Serialize`, so a
 //!   struct that reaches for one in a persisted field does not compile.
+//! - [`image`] — §10's [`image::ImageResource`], the
+//!   [`image::ImageHandle`] that shares one copy of it between elements, and
+//!   the [`image::ImageCrop`] that is metadata rather than a rewrite.
 //! - [`kind`] — [`kind::ElementKind`], the taxonomy from
 //!   requirements §3. Extensible by construction; see its module doc for what
 //!   "not hard-coded around rectangles" cost.
@@ -32,6 +35,7 @@
 
 pub mod document;
 pub mod ids;
+pub mod image;
 pub mod kind;
 pub mod serialization;
 pub mod style;
@@ -41,6 +45,7 @@ pub use document::{
     HandlePlacement, Metadata, handle_world_position,
 };
 pub use ids::{EdgeIndex, ElementId, HandleId, HandleIndex, IdAllocator, NodeIndex};
+pub use image::{ImageCrop, ImageFormat, ImageHandle, ImageResource, NodeImage};
 pub use kind::{CustomKind, ElementKind, GraphNodeKind, LinearKind, ShapeKind};
 pub use serialization::{CURRENT_VERSION, LoadError, SaveError};
 pub use style::{

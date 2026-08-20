@@ -622,6 +622,10 @@ impl FlowEditor {
                     label: cold.label.as_deref().map(str::to_owned),
                     parent: None,
                     link: cold.link.clone(),
+                    // **The handle, not the bytes** — §10's rule, and the
+                    // reason a duplicated photograph costs sixteen bytes. See
+                    // [`GraphWorld::insert_image`](crate::runtime::GraphWorld::insert_image).
+                    image: cold.image,
                     hidden: self.world.nodes().is_hidden(node),
                     locked: self.world.nodes().is_locked(node),
                 };

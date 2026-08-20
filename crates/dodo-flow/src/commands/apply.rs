@@ -294,6 +294,30 @@ pub fn apply(world: &mut GraphWorld, command: EditCommand) -> Result<EditOutcome
             )))
         }
 
+        // **§10's picture, and the crop with it.** The same shape as every
+        // other absolute per-element write: skip what is not live, skip what
+        // would not change, and record what was there. The bytes are nowhere
+        // near this — a `NodeImage` is a handle and four floats, so the undo
+        // stack holds crops rather than photographs.
+        EditCommand::SetNodeImages(items) => {
+            let mut before = Vec::with_capacity(items.len());
+            for (node, image) in items {
+                if !world.node_is_live(node) {
+                    continue;
+                }
+                let was = world.nodes().cold(node).image;
+                if was == image {
+                    continue;
+                }
+                world.set_node_image(node, image);
+                before.push((node, was));
+            }
+
+            Ok(EditOutcome::from_inverse(EditCommand::SetNodeImages(
+                before,
+            )))
+        }
+
         EditCommand::SetEdgeLabels(items) => {
             let mut before = Vec::with_capacity(items.len());
             for (edge, label) in items {

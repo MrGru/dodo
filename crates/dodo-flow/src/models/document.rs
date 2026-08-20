@@ -25,6 +25,8 @@
 //! load, once on save — and clarity beats layout at that frequency. The engine
 //! never iterates it per frame.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -32,6 +34,7 @@ use crate::{
     models::{
         ElementKind,
         ids::{ElementId, HandleId, IdAllocator},
+        image::{ImageHandle, ImageResource, NodeImage},
         style::{EdgeRouting, ElementStyle, RenderQuality, RenderStyle, SketchStyle},
     },
 };
@@ -172,6 +175,20 @@ pub struct FlowNode {
     /// counts as followable is the platform's answer, and `views/` is where a
     /// platform lives.
     pub link: Option<String>,
+    /// **§10's picture, as a handle and a crop** — never as bytes.
+    ///
+    /// `Some` on an [`ElementKind::Image`] and `None` on everything else. The
+    /// two could have been one field — a kind carrying its handle — and are
+    /// deliberately not: [`ElementKind`] is matched on by the renderer, the
+    /// hit-tester and the registry, it is `Copy`-sized by
+    /// `kind_is_not_oversized`, and giving one variant a payload would put a
+    /// document's largest table behind every `match` in the engine.
+    ///
+    /// The bytes are [`FlowDocument::images`]'s, keyed by
+    /// [`NodeImage::handle`]. See [`image`](crate::models::image) for why they
+    /// are shared by content hash and why they are embedded rather than
+    /// referenced.
+    pub image: Option<NodeImage>,
     pub hidden: bool,
     pub locked: bool,
 }
@@ -189,6 +206,7 @@ impl Default for FlowNode {
             handles: Vec::new(),
             style: ElementStyle::default(),
             link: None,
+            image: None,
             hidden: false,
             locked: false,
         }
@@ -344,6 +362,20 @@ pub type Metadata = serde_json::Map<String, serde_json::Value>;
 pub struct FlowDocument {
     pub nodes: Vec<FlowNode>,
     pub edges: Vec<FlowEdge>,
+    /// **§10's pictures, one copy each** (§10: *do not duplicate raw image
+    /// bytes per element*).
+    ///
+    /// Keyed by content hash, so two elements showing one picture — and the
+    /// Duplicate action — share the entry by construction rather than by the
+    /// insert path remembering to look. A `BTreeMap` rather than a `HashMap`
+    /// because the map is written to a file: an iteration order that varies run
+    /// to run would make two saves of one unchanged document differ, which
+    /// turns every diff of a canvas file into noise.
+    ///
+    /// It is the one part of a document whose size is not proportional to the
+    /// diagram, and [`image`](crate::models::image)'s module doc carries the
+    /// argument for embedding it anyway.
+    pub images: BTreeMap<ImageHandle, ImageResource>,
     pub settings: DocumentSettings,
     pub metadata: Metadata,
     /// The id watermark. Serialized so a reopened document never reissues an id
@@ -359,6 +391,22 @@ impl FlowDocument {
 
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty() && self.edges.is_empty()
+    }
+
+    /// The resource an element's [`NodeImage`] names, or `None` for a document
+    /// whose table has lost it — a hand edit, or a merge that took the nodes
+    /// and not the pictures. `None` is drawn as a placeholder rather than
+    /// refused: a diagram with one missing picture is still a diagram.
+    pub fn image(&self, handle: ImageHandle) -> Option<&ImageResource> {
+        self.images.get(&handle)
+    }
+
+    /// Files a resource under its own handle and returns it, leaving an entry
+    /// that is already there alone — **the sharing rule, as the only way in**.
+    pub fn insert_image(&mut self, resource: ImageResource) -> ImageHandle {
+        let handle = resource.handle();
+        self.images.entry(handle).or_insert(resource);
+        handle
     }
 
     /// Issues a fresh id. The only way an element should get one.
@@ -634,7 +682,33 @@ mod tests {
             .collect();
         keys.sort();
 
-        assert_eq!(keys, ["edges", "ids", "metadata", "nodes", "settings"]);
+        assert_eq!(
+            keys,
+            ["edges", "ids", "images", "metadata", "nodes", "settings"]
+        );
+    }
+
+    /// **The sharing rule, at the document level**: one file inserted twice is
+    /// one entry, and two elements naming it are two handles.
+    #[test]
+    fn one_picture_inserted_twice_is_one_resource() {
+        use crate::models::image::{ImageFormat, ImageResource, NodeImage};
+
+        let mut doc = FlowDocument::new();
+        let bytes = vec![137u8, 80, 78, 71, 13, 10, 26, 10];
+        let first = doc.insert_image(ImageResource::new(ImageFormat::Png, 64, 32, bytes.clone()));
+        let second = doc.insert_image(ImageResource::new(ImageFormat::Png, 64, 32, bytes));
+
+        assert_eq!(first, second);
+        assert_eq!(doc.images.len(), 1, "the bytes were stored twice");
+
+        let a = doc.add_node(ElementKind::Image, Vec2::ZERO, Vec2::new(64.0, 32.0));
+        let b = doc.add_node(ElementKind::Image, Vec2::ONE, Vec2::new(64.0, 32.0));
+        doc.node_mut(a).unwrap().image = Some(NodeImage::new(first));
+        doc.node_mut(b).unwrap().image = Some(NodeImage::new(second));
+
+        assert_eq!(doc.images.len(), 1);
+        assert!(doc.image(first).is_some());
     }
 
     #[test]

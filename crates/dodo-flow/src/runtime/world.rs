@@ -53,7 +53,8 @@ use crate::{
     models::{
         DocumentSettings, EdgeIndex, EdgeRouting, ElementId, ElementKind, ElementStyle, Endpoint,
         FlowDocument, FlowEdge, FlowNode, Handle, HandleDirection, HandleId, HandleIndex,
-        HandlePlacement, IdAllocator, Metadata, NodeIndex, handle_world_position,
+        HandlePlacement, IdAllocator, ImageHandle, ImageResource, Metadata, NodeImage, NodeIndex,
+        handle_world_position,
     },
     runtime::{
         AdjacencyIndex, BoxQuery, BoxSelectMode, ConnectionError, ConnectionRules, DirtyState,
@@ -133,6 +134,24 @@ pub struct GraphWorld {
     /// else for a frame. Over-counting keeps the frame in layered mode, which
     /// is the safe direction: it costs paths, never correctness.
     nonzero_z: u32,
+
+    /// **§10's pictures, one `Arc` each** — the runtime half of
+    /// [`FlowDocument::images`](crate::models::FlowDocument::images).
+    ///
+    /// Keyed by content hash, so the sharing rule (*do not duplicate raw image
+    /// bytes per element*) holds here for the same reason it holds in the
+    /// document: there is nowhere to put a second copy. Duplicating an image
+    /// element copies a [`NodeImage`] — a `u64` and four floats — and the
+    /// `Arc` is not even touched.
+    ///
+    /// **Nothing is ever removed from it**, and that is deliberate. A resource
+    /// is not an element: removal is a tombstone precisely so an undo can bring
+    /// an element back, and a store that dropped the bytes when the last
+    /// element referencing them went would make that undo restore a hole.
+    /// [`to_document`](GraphWorld::to_document) writes only the resources live
+    /// elements name, so an orphan costs memory for the session and nothing in
+    /// the file.
+    images: HashMap<ImageHandle, Arc<ImageResource>>,
 }
 
 impl GraphWorld {
@@ -156,6 +175,11 @@ impl GraphWorld {
         world.settings = document.settings.clone();
         world.metadata = document.metadata.clone();
         world.ids = document.ids.clone();
+        world.images = document
+            .images
+            .iter()
+            .map(|(&handle, resource)| (handle, Arc::new(resource.clone())))
+            .collect();
         world.reserve(document.nodes.len(), document.edges.len());
 
         for node in &document.nodes {
@@ -169,6 +193,7 @@ impl GraphWorld {
                 label: node.label.clone(),
                 parent: node.parent,
                 link: node.link.clone(),
+                image: node.image,
                 hidden: node.hidden,
                 locked: node.locked,
             });
@@ -281,9 +306,29 @@ impl GraphWorld {
                     .collect(),
                 style: self.nodes.style(node).clone(),
                 link: cold.link.clone(),
+                image: cold.image,
                 hidden: self.nodes.is_hidden(node),
                 locked: self.nodes.is_locked(node),
             });
+        }
+
+        // **Only the pictures live elements name.** The store keeps every
+        // resource it has ever seen so an undo can restore an element that
+        // still points at one; a *file* has no undo stack, so writing an orphan
+        // would embed a photograph nobody can see and nobody can delete. The
+        // walk is over the saved nodes rather than over the store, so the
+        // question asked is "what does this document need?" rather than "what
+        // is left over?".
+        for node in &document.nodes {
+            let Some(image) = node.image else {
+                continue;
+            };
+            if let Some(resource) = self.images.get(&image.handle) {
+                document
+                    .images
+                    .entry(image.handle)
+                    .or_insert_with(|| resource.as_ref().clone());
+            }
         }
 
         document.edges.reserve(self.edges.len());
@@ -302,6 +347,40 @@ impl GraphWorld {
         }
 
         document
+    }
+
+    // ---- §10's image resources ------------------------------------------
+
+    /// **Files a picture's bytes under their own content hash**, and answers
+    /// the handle an element should carry.
+    ///
+    /// Adding bytes to this table is deliberately **not** an edit and records
+    /// no undo step, which is the one place [`FlowEditor`](crate::commands::FlowEditor)'s
+    /// invariant needs reading carefully. That invariant is about what
+    /// [`to_document`](GraphWorld::to_document) can observe *in a node or an
+    /// edge*, and a resource nothing references is written to no file — so
+    /// registering one changes nothing a document can see, and un-registering
+    /// it would break the redo that is about to name it. The undoable half is
+    /// the element, and it goes through the applier like everything else.
+    pub fn insert_image(&mut self, resource: ImageResource) -> ImageHandle {
+        let handle = resource.handle();
+        self.images
+            .entry(handle)
+            .or_insert_with(|| Arc::new(resource));
+        handle
+    }
+
+    /// The bytes behind a handle, shared. `None` for a handle whose resource is
+    /// missing — a hand-edited file, or a merge that took the nodes and left
+    /// the pictures — which the renderer draws as a placeholder.
+    pub fn image(&self, handle: ImageHandle) -> Option<&Arc<ImageResource>> {
+        self.images.get(&handle)
+    }
+
+    /// How many distinct pictures the world holds. **The sharing rule as a
+    /// number**, and what the tests assert against.
+    pub fn image_count(&self) -> usize {
+        self.images.len()
     }
 
     fn endpoint(&self, end: EdgeEnd) -> Endpoint {
@@ -733,6 +812,24 @@ impl GraphWorld {
 
         self.nodes.set_label(node, label);
         self.dirty.mark_node(node, NodeDirty::TEXT);
+    }
+
+    /// **Replaces the node's picture, or clears it** (§10).
+    ///
+    /// [`NodeDirty::STYLE`] and nothing else — the same flag
+    /// [`set_node_z`](GraphWorld::set_node_z) raises, and for the same reason:
+    /// what is *drawn* changed while the rectangle did not, so there is no
+    /// route to rebuild, no spatial entry to update and no glyph to re-shape.
+    /// The bytes are not here at all — they are the
+    /// [`insert_image`](GraphWorld::insert_image) table's, and this writes the
+    /// handle that names them.
+    pub fn set_node_image(&mut self, node: NodeIndex, image: Option<NodeImage>) {
+        if !self.nodes.contains(node) || self.nodes.cold(node).image == image {
+            return;
+        }
+
+        self.nodes.set_image(node, image);
+        self.dirty.mark_node(node, NodeDirty::STYLE);
     }
 
     /// Replaces an edge's label. No geometry and no spatial entry: the label is

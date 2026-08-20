@@ -311,7 +311,13 @@ pub fn outline_for_node(shape: NodeShape, rect: Rect, corner_radius: f32) -> Opt
         // `None` for the same reason `Other` answers `None`: the caller has to
         // notice, and the caller is the one arm in `plan_nodes` that skips a
         // body entirely.
-        NodeShape::Text | NodeShape::Other => return None,
+        // **An image has no outline either**, for a stronger version of the
+        // same reason: its rectangle is filled by the picture, so a fill under
+        // it would never be seen and a border drawn *by this path* would be
+        // painted before the image rather than around it. What an image's
+        // frame gets is `render::scene`'s own arm. See
+        // [`NodeShape::Image`](crate::runtime::NodeShape::Image).
+        NodeShape::Text | NodeShape::Image | NodeShape::Other => return None,
     })
 }
 

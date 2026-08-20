@@ -56,7 +56,30 @@ use crate::models::FlowDocument;
 /// Version 2 is Phase 10's: text became first-class and
 /// [`FontStyle`](crate::models::FontStyle) stopped carrying a continuous
 /// `size`. See `fonts_became_four_steps` below, this ladder's first rung.
-pub const CURRENT_VERSION: u32 = 2;
+///
+/// **Version 3 is Phase 12's, and it rewrites nothing** — see
+/// `images_arrived`, and the paragraph below for the rule that decides when a
+/// version has to move at all.
+///
+/// # When a new field costs a version, and when it does not
+///
+/// Phase 11 added five style fields and left the version alone; this phase adds
+/// two and moves it. The difference is **what an older build silently does with
+/// the new data**, and it is worth stating as a rule because both answers are
+/// right:
+///
+/// - A build that does not know `fill_style` drops it, writes the document back
+///   without it, and the shape is drawn solid. Something was lost and the user
+///   can put it back with one press.
+/// - A build that does not know `images` drops **the only copy of a
+///   photograph**. Nothing on screen says so, the element stays where it was,
+///   and no press brings it back.
+///
+/// So the version rises when an older build's silent discard would lose
+/// something unrecoverable. Past that line, [`LoadError::FutureVersion`] is the
+/// whole point of the envelope — it is what turns a quiet data loss into a
+/// sentence that names both version numbers.
+pub const CURRENT_VERSION: u32 = 3;
 
 /// One rung of the ladder: rewrites a document body written by version `from`
 /// into the shape version `from + 1` expects.
@@ -73,7 +96,8 @@ pub type MigrationStep = fn(&mut Value) -> Result<(), LoadError>;
 /// 1 rather than promising it: had `from_json` been `serde_json::from_str` all
 /// along, every document written before this phase would now fail to load with
 /// a type error about a float, and there would be nowhere to put the fix.
-pub const MIGRATIONS: &[(u32, MigrationStep)] = &[(1, fonts_became_four_steps)];
+pub const MIGRATIONS: &[(u32, MigrationStep)] =
+    &[(1, fonts_became_four_steps), (2, images_arrived)];
 
 /// **Version 1 ▸ 2**: a font's continuous `size` became one of four steps, and
 /// its `family` stopped being a free font name.
@@ -139,6 +163,25 @@ fn migrate_font(element: &mut Value) {
     // There is no honest mapping from an arbitrary name onto three families, so
     // every one of them becomes the theme's font, which is what `None` meant.
     font.remove("family");
+}
+
+/// **Version 2 ▸ 3**: §10's images arrived, and there is nothing to rewrite.
+///
+/// A version-2 document has no `images` table and no `image` on any node, and
+/// both fields default — an absent map is empty and an absent handle is `None`,
+/// which is exactly what "this diagram has no pictures" means. So this step is
+/// the identity, deliberately, and it is here rather than absent for two
+/// reasons:
+///
+/// 1. [`MIGRATIONS`] is a contiguous ladder and `the_migration_ladder_is_complete`
+///    holds it to that. A gap would be [`LoadError::MissingMigration`] on every
+///    version-2 file in existence.
+/// 2. **The version moved for what it tells an older build, not for what it
+///    changes here** — see [`CURRENT_VERSION`]'s own doc. The rung is where that
+///    decision is recorded, and it is the natural place for the next image
+///    field's rewrite to go.
+fn images_arrived(_value: &mut Value) -> Result<(), LoadError> {
+    Ok(())
 }
 
 /// Why a document could not be loaded.
@@ -560,6 +603,81 @@ mod tests {
 
         let document = FlowDocument::from_json(json).expect("one bad font must not lose the file");
         assert_eq!(document.nodes[0].style.font.size, FontSize::default());
+    }
+
+    /// **§10's picture survives a save and a reload, crop included** — and the
+    /// bytes are written once however many elements show them.
+    ///
+    /// The round trip is the whole assertion, for the reason
+    /// `text_and_every_text_property_survive_a_round_trip` gives: a field added
+    /// to the model and forgotten in the format is silent, and the symptom is a
+    /// diagram that opens with somebody's screenshot gone.
+    #[test]
+    fn an_image_and_its_crop_survive_a_round_trip_without_duplicating_the_bytes() {
+        use crate::models::{ImageCrop, ImageFormat, ImageResource, NodeImage};
+
+        let mut original = FlowDocument::new();
+        let bytes: Vec<u8> = (0..96u8).collect();
+        let handle = original.insert_image(ImageResource::new(
+            ImageFormat::Png,
+            1200,
+            800,
+            bytes.clone(),
+        ));
+
+        let a = original.add_node(
+            ElementKind::Image,
+            Vec2::new(-20.0, 40.0),
+            Vec2::new(300.0, 200.0),
+        );
+        let b = original.add_node(
+            ElementKind::Image,
+            Vec2::new(400.0, 40.0),
+            Vec2::new(150.0, 100.0),
+        );
+        original.node_mut(a).unwrap().image =
+            Some(NodeImage::new(handle).with_crop(ImageCrop::new(0.1, 0.2, 0.5, 0.4)));
+        original.node_mut(b).unwrap().image = Some(NodeImage::new(handle));
+
+        let json = original.to_json().expect("serializes");
+        let loaded = FlowDocument::from_json(&json).expect("loads");
+        assert_eq!(loaded, original);
+
+        let crop = loaded.nodes[0].image.unwrap().crop;
+        assert!((crop.width - 0.5).abs() < 1e-6, "{crop:?}");
+        assert_eq!(loaded.images.len(), 1, "the bytes were written twice");
+        assert_eq!(loaded.image(handle).unwrap().bytes.as_ref(), &bytes[..]);
+
+        // And the file says what it says: a table of resources beside the
+        // elements, keyed by a handle, with the bytes in exactly one of them.
+        let value: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["version"], json!(CURRENT_VERSION));
+        assert_eq!(
+            value["images"].as_object().map(|it| it.len()),
+            Some(1),
+            "one entry per distinct picture"
+        );
+        assert!(value["nodes"][0]["image"]["handle"].is_string());
+        assert!(
+            value["nodes"][0]["image"].get("bytes").is_none(),
+            "an element must never carry the bytes"
+        );
+    }
+
+    /// A version-2 document — everything written before this phase — still
+    /// opens, and opens as a diagram with no pictures rather than as an error.
+    #[test]
+    fn a_version_two_document_loads_with_no_images() {
+        let json = r#"{
+            "version": 2,
+            "nodes": [{"id": 1, "position": {"x": 0.0, "y": 0.0}}],
+            "edges": []
+        }"#;
+
+        let document = FlowDocument::from_json(json).expect("a version-2 document still opens");
+
+        assert!(document.images.is_empty());
+        assert_eq!(document.nodes[0].image, None);
     }
 
     #[test]

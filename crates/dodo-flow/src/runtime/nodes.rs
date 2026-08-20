@@ -57,8 +57,8 @@ use std::sync::Arc;
 use crate::{
     geometry::{Rect, Vec2},
     models::{
-        ElementId, ElementKind, ElementStyle, GraphNodeKind, HandleIndex, LinearKind, NodeIndex,
-        ShapeKind,
+        ElementId, ElementKind, ElementStyle, GraphNodeKind, HandleIndex, LinearKind, NodeImage,
+        NodeIndex, ShapeKind,
     },
     runtime::CompactList,
 };
@@ -141,10 +141,22 @@ pub enum NodeShape {
     /// index stores, what the selection ring is drawn around and what the text
     /// is laid out into — it is simply never painted.
     Text,
-    /// An image, a frame, a freehand stroke, an embed, a custom kind —
-    /// everything whose painter is a later phase's. Deliberately **not** drawn
-    /// as a rectangle: a kind that silently paints as something else is a
-    /// missing feature that looks implemented.
+    /// §10's embedded raster image: **a rectangle whose interior is a
+    /// picture**, painted from
+    /// [`FlowNode::image`](crate::models::FlowNode::image)'s handle.
+    ///
+    /// Like [`Text`](NodeShape::Text) it has **no outline** — an image is its
+    /// pixels, and a fill under it would never be seen — so
+    /// [`outline_for_node`](crate::render::shapes::outline_for_node) answers
+    /// `None` and the fill/stroke path is skipped. Unlike text it is *not*
+    /// harmless to fall through to the quad rung: a quad would paint a solid
+    /// box in the picture's place at the moment a user zoomed out. It is its
+    /// own arm in the plan for that reason.
+    Image,
+    /// A frame, a freehand stroke, an embed, a custom kind — everything whose
+    /// painter is a later phase's. Deliberately **not** drawn as a rectangle: a
+    /// kind that silently paints as something else is a missing feature that
+    /// looks implemented.
     Other,
 }
 
@@ -163,6 +175,7 @@ impl NodeShape {
             ElementKind::Linear(LinearKind::Line) => NodeShape::Line,
             ElementKind::Linear(LinearKind::Arrow) => NodeShape::Arrow,
             ElementKind::Text => NodeShape::Text,
+            ElementKind::Image => NodeShape::Image,
             // **An elbow is not a diagonal.** Its legs need waypoints, and a
             // node stores a rectangle; drawing it as a straight line would be
             // a different element wearing its name.
@@ -205,6 +218,16 @@ pub struct NodeCold {
     /// either — the label's `Arc` is there because a `TextPrimitive` carries a
     /// clone of it every frame, and nothing carries this.
     pub link: Option<String>,
+    /// **§10's picture, as a handle and a crop** — see
+    /// [`FlowNode::image`](crate::models::FlowNode::image).
+    ///
+    /// Cold rather than hot, and it is worth saying why given that it is read
+    /// every frame an image is on screen: a hot array is for a value the *whole
+    /// visible set* is walked for, and this is read once per visible image
+    /// rather than once per visible node. Sixteen bytes in the cold row against
+    /// sixteen bytes per node in a hot one, on a document where almost no node
+    /// is a picture.
+    pub image: Option<NodeImage>,
 }
 
 /// What a node needs to exist.
@@ -219,6 +242,8 @@ pub struct NodeSpec {
     pub label: Option<String>,
     pub parent: Option<ElementId>,
     pub link: Option<String>,
+    /// §10's picture. `None` for every kind but [`ElementKind::Image`].
+    pub image: Option<NodeImage>,
     pub hidden: bool,
     pub locked: bool,
 }
@@ -235,6 +260,7 @@ impl NodeSpec {
             label: None,
             parent: None,
             link: None,
+            image: None,
             hidden: false,
             locked: false,
         }
@@ -351,6 +377,7 @@ impl NodeStore {
             label: spec.label.map(Arc::from),
             parent: spec.parent,
             link: spec.link,
+            image: spec.image,
         });
 
         index
@@ -536,6 +563,17 @@ impl NodeStore {
     /// link changes nothing that is drawn.
     pub fn set_link(&mut self, node: NodeIndex, link: Option<String>) {
         self.cold[node.index()].link = link;
+    }
+
+    /// **Replaces the node's picture, or clears it** (§10).
+    ///
+    /// `touch` because a crop changes what is drawn inside the same rectangle —
+    /// the frame is identical and the pixels are not — and **no `touch_text`**,
+    /// because an image has no glyphs and a document full of labelled shapes
+    /// must not re-shape when somebody crops a screenshot.
+    pub fn set_image(&mut self, node: NodeIndex, image: Option<NodeImage>) {
+        self.cold[node.index()].image = image;
+        self.touch(node);
     }
 
     /// Records that this node's appearance changed. See the `versions` field.
@@ -751,8 +789,9 @@ mod tests {
         // Text left `Other` in Phase 10, and it left it the only way anything
         // may: a painter first, then the projection, then the tool.
         assert_eq!(NodeShape::of(&ElementKind::Text), NodeShape::Text);
+        // And an image left it the same way in Phase 12.
+        assert_eq!(NodeShape::of(&ElementKind::Image), NodeShape::Image);
         assert_eq!(NodeShape::of(&ElementKind::Frame), NodeShape::Other);
-        assert_eq!(NodeShape::of(&ElementKind::Image), NodeShape::Other);
     }
 
     #[test]

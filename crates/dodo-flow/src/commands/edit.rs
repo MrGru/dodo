@@ -52,7 +52,7 @@
 
 use crate::{
     geometry::Vec2,
-    models::{EdgeIndex, EdgeRouting, ElementStyle, NodeIndex},
+    models::{EdgeIndex, EdgeRouting, ElementStyle, NodeImage, NodeIndex},
     runtime::{ConnectionError, EdgeSpec, HandleSpec, NodeSpec},
 };
 
@@ -166,6 +166,23 @@ pub enum EditCommand {
     /// The same, for edges.
     SetEdgeZ(Vec<(EdgeIndex, i32)>),
 
+    /// **§10's picture on an element**: which image, and which part of it.
+    /// `None` clears it, leaving an image element with nothing to show.
+    ///
+    /// **The crop travels in here rather than in a command of its own**, and
+    /// that is the decision worth arguing about. A `CropNodes` variant would
+    /// have been one more thing the history, the merge rules and the applier
+    /// each have to know, for a payload that differs from this one by four
+    /// floats — and the two can never be applied independently anyway, because
+    /// a crop is meaningless without the handle it is a crop *of*.
+    ///
+    /// Absolute rather than a delta, like every other per-element write here,
+    /// so the inverse is the same command holding what was there and a crop
+    /// applied twice and undone once does not leave the picture half trimmed.
+    /// **The bytes are never in it** — a handle is a `u64` — so an undo stack
+    /// full of crops costs bytes rather than megabytes.
+    SetNodeImages(Vec<(NodeIndex, Option<NodeImage>)>),
+
     /// **A hyperlink on an element.** `None` clears it.
     SetNodeLinks(Vec<(NodeIndex, Option<String>)>),
 
@@ -248,6 +265,7 @@ impl EditCommand {
             EditCommand::SetEdgeLabels(_) => "label-edges",
             EditCommand::SetNodeZ(_) => "depth-nodes",
             EditCommand::SetEdgeZ(_) => "depth-edges",
+            EditCommand::SetNodeImages(_) => "image-nodes",
             EditCommand::SetNodeLinks(_) => "link-nodes",
             EditCommand::SetEdgeLinks(_) => "link-edges",
         }
@@ -273,6 +291,7 @@ impl EditCommand {
             EditCommand::SetEdgeLabels(items) => items.is_empty(),
             EditCommand::SetNodeZ(items) => items.is_empty(),
             EditCommand::SetEdgeZ(items) => items.is_empty(),
+            EditCommand::SetNodeImages(items) => items.is_empty(),
             EditCommand::SetNodeLinks(items) => items.is_empty(),
             EditCommand::SetEdgeLinks(items) => items.is_empty(),
         }
@@ -367,6 +386,9 @@ impl EditCommand {
                 same_keys(first, later)
             }
             (EditCommand::SetEdgeLabels(first), EditCommand::SetEdgeLabels(later)) => {
+                same_keys(first, later)
+            }
+            (EditCommand::SetNodeImages(first), EditCommand::SetNodeImages(later)) => {
                 same_keys(first, later)
             }
             (EditCommand::SetNodeLinks(first), EditCommand::SetNodeLinks(later)) => {

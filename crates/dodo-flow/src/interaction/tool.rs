@@ -25,20 +25,28 @@
 //!
 //! # Which tools are here, and why the obvious three are not
 //!
-//! Every variant below creates something the engine can *draw*. [`Frame`],
-//! [`Image`] and freehand are deliberately absent: their [`ElementKind`]s exist
-//! and their painters do not, so
-//! [`NodeShape::of`](crate::runtime::NodeShape::of) maps them to
-//! `NodeShape::Other` and
+//! Every variant below creates something the engine can *draw*. [`Frame`] and
+//! freehand are deliberately absent: their [`ElementKind`]s exist and their
+//! painters do not, so [`NodeShape::of`](crate::runtime::NodeShape::of) maps
+//! them to `NodeShape::Other` and
 //! [`RenderSnapshot`](crate::render::RenderSnapshot) counts them as
 //! `unsupported_nodes` rather than drawing them. A palette button for one would
 //! create an element the canvas then refuses to paint — **a control that
 //! appears to work and produces nothing**, which is strictly worse than an
 //! absent one and much harder to notice.
 //!
-//! [`Text`] was the fourth until Phase 10, and it left the list the only way
-//! anything may: [`NodeShape::Text`](crate::runtime::NodeShape::Text) and a
+//! [`Text`] was one of the four until Phase 10, and it left the list the only
+//! way anything may: [`NodeShape::Text`](crate::runtime::NodeShape::Text) and a
 //! painter arrived first, and the tool followed.
+//!
+//! **[`Image`] is the one that has a painter and still has no tool**, and that
+//! is a decision rather than an omission. A tool answers "what does the next
+//! press mean?"; inserting a picture answers nothing about the next press. There
+//! is no rectangle to drag out — the size comes from the file's own dimensions,
+//! and letting a drag choose it would mean the first thing a user does to every
+//! photograph is squash it. So it is an *action* beside the tools, like Delete:
+//! it opens a file picker and drops the element in the middle of the view. See
+//! [`views::palette`](crate::views::palette).
 //!
 //! [`Text`]: crate::models::ElementKind::Text
 //! [`Frame`]: crate::models::ElementKind::Frame
@@ -414,18 +422,21 @@ mod tests {
         }
     }
 
-    /// The four kinds deliberately left out, stated as a test so that adding a
-    /// tool for one without adding its painter fails here rather than on
-    /// screen.
+    /// The kinds deliberately left out, stated as a test so that adding a tool
+    /// for one without adding its painter fails here rather than on screen.
+    ///
+    /// **[`ElementKind::Image`] left this list in Phase 12 and did not join
+    /// [`CanvasTool`]**, which is the interesting case: it has a painter now,
+    /// and it still has no tool, because inserting a picture is not a drawing
+    /// gesture — there is no rectangle to drag out, the size comes from the
+    /// file, and §45's rule is that a tool changes what the *next press*
+    /// means. It is an action beside the tools instead. See
+    /// [`views::palette`](crate::views::palette).
     #[test]
     fn the_kinds_without_painters_have_no_tool() {
         use crate::runtime::NodeShape;
 
-        for kind in [
-            ElementKind::Frame,
-            ElementKind::Image,
-            ElementKind::FreeDraw,
-        ] {
+        for kind in [ElementKind::Frame, ElementKind::FreeDraw] {
             assert_eq!(NodeShape::of(&kind), NodeShape::Other);
             assert!(
                 !CanvasTool::ALL
@@ -434,6 +445,13 @@ mod tests {
                 "{kind:?} has a tool but no painter"
             );
         }
+
+        assert!(
+            !CanvasTool::ALL
+                .iter()
+                .any(|tool| tool.element_kind() == Some(ElementKind::Image)),
+            "an image is inserted by an action, not drawn by a tool"
+        );
     }
 
     #[test]
