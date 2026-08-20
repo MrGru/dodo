@@ -174,6 +174,47 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
             GestureReport::changed(false)
         }
 
+        // ---- §12's resize, the same four arms a drag has ----
+        //
+        // **The selection is replaced by the element being resized**, and not
+        // extended: a grip belongs to one element, so a press on it is
+        // unambiguous about which element the user means.
+        InteractionEffect::BeginResize { node } => {
+            editor.begin_gesture();
+            editor.select_only(Some(node));
+            GestureReport::changed(true)
+        }
+
+        // **Two commands, one gesture, one undo step.** A corner drag moves the
+        // origin as well as the size, and the two are separate variants because
+        // their coalescing rules are different — `SetNodePositions` keeps the
+        // *earliest* value (see `EditCommand::merge`) and `ResizeNodes` is
+        // superseded by the *latest* (see `EditCommand::supersedes`). Sixty
+        // ticks of a drag are two history entries in total, whichever corner is
+        // being pulled.
+        InteractionEffect::ResizeNodeTo { node, rect } => {
+            let rect = rect.normalized();
+            GestureReport::changed(editor.in_one_step(|editor| {
+                let mut changed = editor
+                    .apply(EditCommand::SetNodePositions(vec![(node, rect.origin)]))
+                    .is_ok_and(|summary| summary.changed);
+                changed |= editor
+                    .apply(EditCommand::resize_node(node, rect.size))
+                    .is_ok_and(|summary| summary.changed);
+                changed
+            }))
+        }
+
+        InteractionEffect::EndResize { .. } => {
+            editor.end_gesture();
+            GestureReport::changed(false)
+        }
+
+        // Abandoned exactly as a drag is, and for the same reason: the entries
+        // the gesture recorded carry where the element was, and putting it back
+        // by applying them in reverse leaves nothing on the stack.
+        InteractionEffect::CancelResize { .. } => GestureReport::changed(editor.abandon_gesture()),
+
         // **An abandoned drag is not an undo step**, so its entries are
         // discarded rather than reversed by another edit — a "move back" left
         // on the stack is a step the user never took, and the next undo would
@@ -206,7 +247,13 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
                 // An edge is not a connection target: §8 connects nodes, and
                 // dropping one edge on another has no meaning to give it. Same
                 // answer as empty canvas — the connection is abandoned.
-                PointerTarget::Empty | PointerTarget::Edge(_) => {
+                // Neither is an edge nor a grip: §8 connects nodes, and
+                // dropping a connection on a corner of the selection ring has
+                // no meaning to give it. Same answer as empty canvas — the
+                // connection is abandoned.
+                PointerTarget::Empty
+                | PointerTarget::Edge(_)
+                | PointerTarget::ResizeGrip { .. } => {
                     return GestureReport::default();
                 }
             };

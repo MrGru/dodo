@@ -173,6 +173,130 @@ impl Rect {
     }
 }
 
+/// **Which corner of a rectangle a resize is being dragged by.**
+///
+/// Four corners and no edges, deliberately. An edge grip resizes one axis,
+/// which is the same gesture with one component of the pointer ignored — it is
+/// four more grips to hit-test and draw for a case a corner already covers, and
+/// it is the first thing to add if anybody asks. The four are here rather than
+/// in `interaction/` because the arithmetic below is geometry, and geometry is
+/// the layer both the hit test and the state machine may name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResizeCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl ResizeCorner {
+    pub const ALL: &'static [ResizeCorner] = &[
+        ResizeCorner::TopLeft,
+        ResizeCorner::TopRight,
+        ResizeCorner::BottomLeft,
+        ResizeCorner::BottomRight,
+    ];
+
+    /// Where this corner sits on a rectangle.
+    pub fn of(self, rect: Rect) -> Vec2 {
+        let rect = rect.normalized();
+        let (min, max) = (rect.min(), rect.max());
+        match self {
+            ResizeCorner::TopLeft => min,
+            ResizeCorner::TopRight => Vec2::new(max.x, min.y),
+            ResizeCorner::BottomLeft => Vec2::new(min.x, max.y),
+            ResizeCorner::BottomRight => max,
+        }
+    }
+
+    /// **The corner that stays still** while this one is dragged.
+    pub fn opposite(self) -> ResizeCorner {
+        match self {
+            ResizeCorner::TopLeft => ResizeCorner::BottomRight,
+            ResizeCorner::TopRight => ResizeCorner::BottomLeft,
+            ResizeCorner::BottomLeft => ResizeCorner::TopRight,
+            ResizeCorner::BottomRight => ResizeCorner::TopLeft,
+        }
+    }
+
+    /// A short stable name, for a test or an element id. **Not user-facing.**
+    pub const fn name(self) -> &'static str {
+        match self {
+            ResizeCorner::TopLeft => "top-left",
+            ResizeCorner::TopRight => "top-right",
+            ResizeCorner::BottomLeft => "bottom-left",
+            ResizeCorner::BottomRight => "bottom-right",
+        }
+    }
+}
+
+/// The smallest an element may be dragged to, in **world** units.
+///
+/// A resize that reached zero would produce a node with no bounds: nothing to
+/// hit-test, nothing to grab a grip on, and — for an image — a division by zero
+/// in the crop's scale factor. Small enough that it never gets in the way, and
+/// non-zero, which is the whole job.
+pub const MIN_RESIZE_EXTENT: f32 = 1.0;
+
+/// **The rectangle a corner drag produces**, and the whole of the aspect lock.
+///
+/// `frame` is where the element was when the gesture started, `corner` is the
+/// grip being dragged, and `pointer` is where it is now, in world units. The
+/// corner diagonally opposite stays exactly where it was — which is what makes
+/// a resize feel like dragging that corner rather than like scaling the whole
+/// element about its middle.
+///
+/// `aspect` is `Some(width / height)` when the element's proportions are being
+/// kept and `None` when they are not. **An image passes `Some` by default and a
+/// shape passes `None`**, because the two want opposite things: squashing a
+/// photograph is almost always a mistake and squashing a rectangle is the
+/// normal use of the gesture. Which one a modifier asks for is
+/// [`interaction`](crate::interaction)'s decision; this function only obeys.
+///
+/// With a lock, the axis that travelled further **in proportion to its own
+/// side** wins, so the element follows the pointer along whichever direction
+/// the hand is actually moving and does not flip about when the drag is nearly
+/// diagonal.
+pub fn resize_from_corner(
+    frame: Rect,
+    corner: ResizeCorner,
+    pointer: Vec2,
+    aspect: Option<f32>,
+) -> Rect {
+    let frame = frame.normalized();
+    let anchor = corner.opposite().of(frame);
+
+    // The extents are distances from the anchor, so dragging a corner past the
+    // opposite one flips the element — which is what every canvas editor does,
+    // and which `Rect::from_corners` normalises on the way out.
+    let mut width = (pointer.x - anchor.x).abs().max(MIN_RESIZE_EXTENT);
+    let mut height = (pointer.y - anchor.y).abs().max(MIN_RESIZE_EXTENT);
+
+    if let Some(aspect) = aspect.filter(|it| it.is_finite() && *it > 0.0) {
+        // Proportional travel, so a mostly-horizontal drag is driven by x and a
+        // mostly-vertical one by y. Measured against the *start* frame, which
+        // is the only stable reference during a drag — measuring against the
+        // rectangle being produced would feed the choice back into itself.
+        let by_width = width / frame.width().max(MIN_RESIZE_EXTENT);
+        let by_height = height / frame.height().max(MIN_RESIZE_EXTENT);
+        if by_width >= by_height {
+            height = (width / aspect).max(MIN_RESIZE_EXTENT);
+        } else {
+            width = (height * aspect).max(MIN_RESIZE_EXTENT);
+        }
+    }
+
+    let toward = Vec2::new(
+        if pointer.x >= anchor.x { 1.0 } else { -1.0 },
+        if pointer.y >= anchor.y { 1.0 } else { -1.0 },
+    );
+
+    Rect::from_corners(
+        anchor,
+        anchor + Vec2::new(width * toward.x, height * toward.y),
+    )
+}
+
 /// Whether the segment `a`→`b` touches `rect`, exactly.
 ///
 /// §28's box selection needs it (an edge crossing the rectangle is selected
@@ -230,7 +354,9 @@ pub fn segment_intersects_rect(a: Vec2, b: Vec2, rect: Rect) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Rect, segment_intersects_rect};
+    use super::{
+        MIN_RESIZE_EXTENT, Rect, ResizeCorner, resize_from_corner, segment_intersects_rect,
+    };
     use crate::geometry::Vec2;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
@@ -459,5 +585,108 @@ mod tests {
             Vec2::new(15.0, 5.0),
             backwards
         ));
+    }
+
+    /// **The anchor stays still**, which is the whole feel of a corner drag.
+    #[test]
+    fn resizing_holds_the_opposite_corner() {
+        let frame = Rect::new(Vec2::new(10.0, 20.0), Vec2::new(100.0, 50.0));
+
+        for corner in ResizeCorner::ALL.iter().copied() {
+            let anchor = corner.opposite().of(frame);
+            let resized = resize_from_corner(
+                frame,
+                corner,
+                corner.of(frame) + Vec2::new(30.0, -12.0),
+                None,
+            );
+
+            let moved = ResizeCorner::ALL
+                .iter()
+                .map(|it| it.of(resized))
+                .any(|point| (point - anchor).length() < 1e-4);
+            assert!(
+                moved,
+                "{}: the anchor {anchor:?} left {resized:?}",
+                corner.name()
+            );
+        }
+    }
+
+    #[test]
+    fn resizing_follows_the_pointer_when_nothing_is_locked() {
+        let frame = Rect::new(Vec2::ZERO, Vec2::new(100.0, 50.0));
+
+        let resized = resize_from_corner(
+            frame,
+            ResizeCorner::BottomRight,
+            Vec2::new(220.0, 60.0),
+            None,
+        );
+
+        assert_eq!(resized.min(), Vec2::ZERO);
+        assert!((resized.width() - 220.0).abs() < 1e-4, "{resized:?}");
+        assert!((resized.height() - 60.0).abs() < 1e-4, "{resized:?}");
+    }
+
+    /// **The aspect lock**, which is what an image resize uses: the pointer
+    /// chooses one axis and the other follows from the ratio.
+    #[test]
+    fn a_locked_resize_keeps_the_ratio_whichever_way_the_drag_goes() {
+        let frame = Rect::new(Vec2::new(5.0, 5.0), Vec2::new(200.0, 100.0));
+        let aspect = 2.0;
+
+        // Mostly horizontal: width leads.
+        let wide = resize_from_corner(
+            frame,
+            ResizeCorner::BottomRight,
+            Vec2::new(405.0, 60.0),
+            Some(aspect),
+        );
+        assert!(
+            (wide.width() / wide.height() - aspect).abs() < 1e-4,
+            "{wide:?}"
+        );
+        assert!((wide.width() - 400.0).abs() < 1e-3, "{wide:?}");
+
+        // Mostly vertical: height leads.
+        let tall = resize_from_corner(
+            frame,
+            ResizeCorner::BottomRight,
+            Vec2::new(210.0, 305.0),
+            Some(aspect),
+        );
+        assert!(
+            (tall.width() / tall.height() - aspect).abs() < 1e-4,
+            "{tall:?}"
+        );
+        assert!((tall.height() - 300.0).abs() < 1e-3, "{tall:?}");
+    }
+
+    #[test]
+    fn a_resize_dragged_past_the_anchor_flips_rather_than_collapsing() {
+        let frame = Rect::new(Vec2::new(100.0, 100.0), Vec2::new(50.0, 50.0));
+
+        let resized = resize_from_corner(
+            frame,
+            ResizeCorner::BottomRight,
+            Vec2::new(20.0, 30.0),
+            None,
+        );
+
+        assert_eq!(resized.min(), Vec2::new(20.0, 30.0));
+        assert_eq!(resized.max(), Vec2::new(100.0, 100.0));
+    }
+
+    /// Nothing can be dragged to nothing: a zero-extent node has no grip to
+    /// grab back, and an image would divide by its own width.
+    #[test]
+    fn a_resize_cannot_reach_zero() {
+        let frame = Rect::new(Vec2::ZERO, Vec2::new(100.0, 100.0));
+
+        let collapsed = resize_from_corner(frame, ResizeCorner::BottomRight, Vec2::ZERO, Some(1.0));
+
+        assert!(collapsed.width() >= MIN_RESIZE_EXTENT);
+        assert!(collapsed.height() >= MIN_RESIZE_EXTENT);
     }
 }

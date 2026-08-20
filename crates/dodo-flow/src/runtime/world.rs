@@ -49,7 +49,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{
-    geometry::{Attachment, EdgeRoute, Rect, RouteOptions, Side, Vec2},
+    geometry::{Attachment, EdgeRoute, Rect, ResizeCorner, RouteOptions, Side, Vec2},
     models::{
         DocumentSettings, EdgeIndex, EdgeRouting, ElementId, ElementKind, ElementStyle, Endpoint,
         FlowDocument, FlowEdge, FlowNode, Handle, HandleDirection, HandleId, HandleIndex,
@@ -1354,6 +1354,45 @@ impl GraphWorld {
         }
     }
 
+    /// **§29's narrow phase for a resize grip** (Phase 12): which corner of
+    /// `node`'s frame is within [`HitTolerance::grip_radius`] of `point`, or
+    /// `None`.
+    ///
+    /// A third ranked call rather than a branch inside
+    /// [`hit_test`](GraphWorld::hit_test), and the ranking is the *opposite*
+    /// end from [`hit_test_edge`](GraphWorld::hit_test_edge)'s: a caller asks
+    /// this **first**, because a grip is drawn on top of everything and is the
+    /// smallest target on the canvas. Fused into `hit_test` it would also have
+    /// had to learn something that is not the world's business — **whether the
+    /// grips are on screen at all**. They are drawn only for the element the
+    /// selection ring is around, and only at a zoom where the ring itself is
+    /// drawn; a hit test that answered `ResizeGrip` on a frame that drew none
+    /// would be an invisible control stealing every press near a corner.
+    ///
+    /// So the caller passes the node whose grips it actually drew, and gets
+    /// back the corner or nothing.
+    pub fn hit_test_grip(
+        &self,
+        point: Vec2,
+        node: NodeIndex,
+        tolerance: HitTolerance,
+    ) -> Option<ResizeCorner> {
+        if !self.node_is_live(node) || self.nodes.is_hidden(node) || self.nodes.is_locked(node) {
+            return None;
+        }
+
+        let frame = self.nodes.bounds(node);
+        let radius_squared = tolerance.grip_radius * tolerance.grip_radius;
+
+        ResizeCorner::ALL
+            .iter()
+            .copied()
+            .map(|corner| (corner, (corner.of(frame) - point).length_squared()))
+            .filter(|&(_, distance)| distance <= radius_squared)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(corner, _)| corner)
+    }
+
     /// **§29's narrow phase for an edge**: the nearest edge whose drawn line
     /// passes within [`HitTolerance::edge_radius`] of `point`, or `None`.
     ///
@@ -1449,6 +1488,132 @@ mod tests {
             HitTolerance, NodeDirty, NodeFlags, PointerTarget,
         },
     };
+
+    /// **§10's rule, as a count**: the bytes exist once however many elements
+    /// name them, and the document written back holds one copy.
+    #[test]
+    fn two_elements_showing_one_picture_hold_one_copy_of_it() {
+        use crate::models::{ImageFormat, ImageResource, NodeImage};
+
+        let mut world = GraphWorld::new();
+        let bytes: Vec<u8> = (0..64u8).collect();
+        let first =
+            world.insert_image(ImageResource::new(ImageFormat::Png, 120, 80, bytes.clone()));
+        // The same file again — a second insert, not a second copy.
+        let second = world.insert_image(ImageResource::new(ImageFormat::Png, 120, 80, bytes));
+
+        assert_eq!(first, second);
+        assert_eq!(world.image_count(), 1);
+
+        let a = world.create_node(ElementKind::Image, Vec2::ZERO, Vec2::new(120.0, 80.0));
+        let b = world.create_node(
+            ElementKind::Image,
+            Vec2::new(200.0, 0.0),
+            Vec2::new(60.0, 40.0),
+        );
+        world.set_node_image(a, Some(NodeImage::new(first)));
+        world.set_node_image(b, Some(NodeImage::new(second)));
+
+        // The `Arc` is the proof that "shared" means shared rather than equal.
+        let left = world.image(first).expect("the resource is there");
+        let right = world.image(second).expect("the resource is there");
+        assert!(std::sync::Arc::ptr_eq(left, right));
+
+        let document = world.to_document();
+        assert_eq!(document.images.len(), 1);
+        assert_eq!(document.nodes.len(), 2);
+    }
+
+    /// A picture nothing shows any more is kept in memory — an undo may want it
+    /// — and written to no file.
+    #[test]
+    fn a_document_carries_only_the_pictures_its_elements_name() {
+        use crate::models::{ImageFormat, ImageResource, NodeImage};
+
+        let mut world = GraphWorld::new();
+        let used = world.insert_image(ImageResource::new(ImageFormat::Png, 10, 10, vec![1, 2, 3]));
+        let orphan = world.insert_image(ImageResource::new(ImageFormat::Png, 10, 10, vec![9, 9]));
+
+        let node = world.create_node(ElementKind::Image, Vec2::ZERO, Vec2::new(10.0, 10.0));
+        world.set_node_image(node, Some(NodeImage::new(used)));
+
+        assert_eq!(world.image_count(), 2, "the store keeps both");
+        let document = world.to_document();
+        assert_eq!(document.images.len(), 1, "the file keeps one");
+        assert!(document.image(used).is_some());
+        assert!(document.image(orphan).is_none());
+
+        // And a removed element takes its picture out of the file while leaving
+        // it in the store, so an undo has something to restore.
+        world.remove_node(node, &mut Vec::new());
+        assert!(world.to_document().images.is_empty());
+        assert_eq!(world.image_count(), 2);
+    }
+
+    /// **The whole of §10 through a load and a save**, including the crop,
+    /// because a round trip that lost it would be a picture that reopens
+    /// uncropped with nothing to say why.
+    #[test]
+    fn an_image_element_survives_the_world_round_trip() {
+        use crate::models::{ImageCrop, ImageFormat, ImageResource, NodeImage};
+
+        let mut document = FlowDocument::new();
+        let handle =
+            document.insert_image(ImageResource::new(ImageFormat::Jpeg, 640, 480, vec![7; 32]));
+        let id = document.add_node(
+            ElementKind::Image,
+            Vec2::new(12.0, 34.0),
+            Vec2::new(200.0, 150.0),
+        );
+        document.node_mut(id).unwrap().image =
+            Some(NodeImage::new(handle).with_crop(ImageCrop::new(0.2, 0.1, 0.5, 0.5)));
+
+        let (world, report) = GraphWorld::from_document(&document);
+        assert!(report.is_clean());
+        assert_eq!(world.image_count(), 1);
+
+        let back = world.to_document();
+        assert_eq!(back.nodes[0].image, document.nodes[0].image);
+        assert_eq!(back.images, document.images);
+    }
+
+    /// **Every corner of the selected element is grabbable**, and nothing else
+    /// is — a grip on an element nobody selected would be a resize starting
+    /// from a press the user meant as a drag.
+    #[test]
+    fn a_resize_grip_is_found_at_each_corner_of_one_element() {
+        use crate::geometry::ResizeCorner;
+
+        let mut world = GraphWorld::new();
+        let node = world.create_node(
+            ElementKind::Shape(ShapeKind::Rectangle),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(200.0, 80.0),
+        );
+        let tolerance = HitTolerance::at_zoom(1.0);
+        let frame = world.nodes().bounds(node);
+
+        for corner in ResizeCorner::ALL.iter().copied() {
+            assert_eq!(
+                world.hit_test_grip(corner.of(frame), node, tolerance),
+                Some(corner),
+                "{}",
+                corner.name()
+            );
+        }
+
+        // The middle of the element is the body, not a grip.
+        assert_eq!(world.hit_test_grip(frame.center(), node, tolerance), None);
+
+        // A locked element cannot be resized, for the same reason it cannot be
+        // dragged: §26's lock is about the whole element, not about one gesture.
+        world.nodes.set_flag(node, NodeFlags::LOCKED, true);
+        assert_eq!(
+            world.hit_test_grip(frame.min(), node, tolerance),
+            None,
+            "a locked element offered a grip"
+        );
+    }
 
     fn graph_node(world: &mut GraphWorld, x: f32, y: f32) -> NodeIndex {
         let node = world.create_node(

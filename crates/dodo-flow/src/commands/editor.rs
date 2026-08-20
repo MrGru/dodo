@@ -71,8 +71,9 @@ use crate::{
     interaction::TextTarget,
     models::{
         DocumentSettings, EdgeIndex, EdgeRouting, ElementId, ElementKind, ElementStyle,
-        FlowDocument, NodeIndex, RenderStyle, SketchStyle,
+        FlowDocument, ImageCrop, ImageResource, NodeImage, NodeIndex, RenderStyle, SketchStyle,
     },
+    properties::{CropChoice, crop_choice},
     runtime::{
         BoxQuery, ConnectionRules, DirtyState, EdgeSpec, GraphWorld, LoadReport, NodeSpec,
         PointerTarget,
@@ -336,6 +337,159 @@ impl FlowEditor {
                 summary.changed
             }
         }
+    }
+
+    /// **Inserts §10's picture**, centred on `center`, sized to fit `room`, and
+    /// selects it.
+    ///
+    /// Two things happen and only one of them is an edit, which is the part
+    /// worth reading carefully:
+    ///
+    /// - **The bytes are registered on the world and recorded nowhere.** See
+    ///   [`GraphWorld::insert_image`](crate::runtime::GraphWorld::insert_image):
+    ///   a resource nothing references is written to no file, so registering
+    ///   one changes nothing [`to_document`](FlowEditor::to_document) can
+    ///   observe — and un-registering it on undo would break the redo that is
+    ///   about to name it.
+    /// - **The element is an ordinary `AddNodes`.** So one press of undo
+    ///   removes the picture, one press of redo brings it back at its own
+    ///   index, and neither line here knows that a file picker exists.
+    ///
+    /// Inserting the *same file* twice produces two elements sharing one
+    /// resource, because the handle is a content hash — see
+    /// [`image`](crate::models::image).
+    ///
+    /// Answers the new element, or `None` if the applier refused it.
+    pub fn insert_image(
+        &mut self,
+        resource: ImageResource,
+        center: Vec2,
+        room: Vec2,
+    ) -> Option<NodeIndex> {
+        let size = resource.placed_size(room);
+        let handle = self.world.insert_image(resource);
+
+        let mut spec = NodeSpec::new(
+            ElementId::NONE,
+            ElementKind::Image,
+            center - Vec2::new(size.x * 0.5, size.y * 0.5),
+            size,
+        );
+        spec.image = Some(NodeImage::new(handle));
+        spec.style = self.world.settings().default_style.clone();
+
+        let summary = self
+            .apply(EditCommand::AddNodes(vec![NodeDraft::new(spec)]))
+            .ok()?;
+        let node = summary.added_nodes.first().copied()?;
+        // Selecting what was just inserted is not an edit — the same rule
+        // `commit_text` and `commands::gesture` follow — so the insertion stays
+        // one undo step.
+        self.select_only(Some(node));
+        Some(node)
+    }
+
+    /// The picture an element is showing, if it is showing one. **Liveness, not
+    /// presence**, for the reason [`text_of`](FlowEditor::text_of) gives.
+    pub fn image_of(&self, node: NodeIndex) -> Option<NodeImage> {
+        self.world
+            .node_is_live(node)
+            .then(|| self.world.nodes().cold(node).image)
+            .flatten()
+    }
+
+    /// **What the panel's Crop button would do**, or `None` when it would do
+    /// nothing and the panel should mute it.
+    ///
+    /// Read off the *leading* selected image, which is the same answer every
+    /// other row on a mixed selection gives — see `properties`' decision 3. A
+    /// press still applies to every selected image, each on its own terms.
+    pub fn selection_crop(&self) -> Option<CropChoice> {
+        self.world
+            .selection()
+            .nodes()
+            .iter()
+            .copied()
+            .find_map(|node| self.crop_choice_for(node))
+            .map(|(_, choice)| choice)
+    }
+
+    /// One element's Crop decision, with the source aspect the caller needs to
+    /// carry out.
+    fn crop_choice_for(&self, node: NodeIndex) -> Option<(f32, CropChoice)> {
+        let image = self.image_of(node)?;
+        let source = self.world.image(image.handle)?.aspect();
+        let size = self.world.nodes().size(node);
+        let frame = size.x / size.y;
+        crop_choice(source, frame, image.crop).map(|choice| (source, choice))
+    }
+
+    /// **§10's crop, through the one door** — the panel's Crop action.
+    ///
+    /// Every selected image decides for itself
+    /// ([`crop_choice`](crate::properties::crop_choice)), because a selection
+    /// holding a stretched picture and a cropped one has no single honest
+    /// answer and each of them has an obvious one. One gesture, so however many
+    /// pictures were selected, one press of undo puts them all back.
+    ///
+    /// **No pixels are touched and no resource is written.** A crop is four
+    /// numbers on the element; the bytes it is a window on are shared, and a
+    /// second element showing the same picture is unaffected.
+    pub fn crop_selection(&mut self) -> bool {
+        let decisions: Vec<(NodeIndex, f32, CropChoice)> = self
+            .world
+            .selection()
+            .nodes()
+            .iter()
+            .copied()
+            .filter_map(|node| {
+                self.crop_choice_for(node)
+                    .map(|(source, choice)| (node, source, choice))
+            })
+            .collect();
+
+        if decisions.is_empty() {
+            return false;
+        }
+
+        let mut images: Vec<(NodeIndex, Option<NodeImage>)> = Vec::new();
+        let mut sizes: Vec<(NodeIndex, Vec2)> = Vec::new();
+
+        for (node, source, choice) in decisions {
+            let Some(image) = self.image_of(node) else {
+                continue;
+            };
+            let size = self.world.nodes().size(node);
+
+            match choice {
+                CropChoice::ToFrame => {
+                    let frame = size.x / size.y;
+                    images.push((
+                        node,
+                        Some(image.with_crop(image.crop.cropped_to_aspect(source, frame))),
+                    ));
+                }
+                // **The frame follows the picture back.** Restoring the whole
+                // source into a frame shaped like the crop would un-stretch
+                // nothing — it would stretch the picture the other way — so the
+                // height is recomputed from the source's own ratio and the
+                // width, which is the dimension the user placed, is kept.
+                CropChoice::Reset => {
+                    images.push((node, Some(image.with_crop(ImageCrop::FULL))));
+                    sizes.push((node, Vec2::new(size.x, size.x / source.max(f32::EPSILON))));
+                }
+            }
+        }
+
+        self.in_one_step(|editor| {
+            let mut changed = editor
+                .apply(EditCommand::SetNodeImages(images))
+                .is_ok_and(|summary| summary.changed);
+            changed |= editor
+                .apply(EditCommand::ResizeNodes(sizes))
+                .is_ok_and(|summary| summary.changed);
+            changed
+        })
     }
 
     /// **Restyles whatever is selected, through the one door** — every control
@@ -713,7 +867,7 @@ impl FlowEditor {
 
     /// Runs `body` inside one gesture, so everything it applies undoes together.
     ///
-    /// A private helper rather than a pattern each method repeats: the pairing
+    /// A shared helper rather than a pattern each method repeats: the pairing
     /// is the whole correctness of "one press, one undo", and a method that
     /// returned early between the two calls would leave a gesture open for the
     /// next unrelated edit to join.
@@ -727,7 +881,7 @@ impl FlowEditor {
     /// without this the first tick would close the drag and the other
     /// fifty-nine would each become an undo step of their own. It was found by
     /// counting the entries in a test rather than by reading this.
-    fn in_one_step(&mut self, body: impl FnOnce(&mut FlowEditor) -> bool) -> bool {
+    pub(crate) fn in_one_step(&mut self, body: impl FnOnce(&mut FlowEditor) -> bool) -> bool {
         let outer = self.history.open_gesture();
         self.begin_gesture();
         let changed = body(self);

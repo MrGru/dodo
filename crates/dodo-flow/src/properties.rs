@@ -74,7 +74,7 @@
 use crate::{
     models::{
         ArrowMarker, Color, DashPattern, EdgeRouting, ElementKind, ElementStyle, FillStyle,
-        FontFamily, FontSize, Sloppiness, TextAlign,
+        FontFamily, FontSize, ImageCrop, Sloppiness, TextAlign,
     },
     runtime::NodeShape,
 };
@@ -585,21 +585,31 @@ pub enum ElementAction {
 impl ElementAction {
     /// The actions a panel shows, left to right: duplicate, delete, link.
     ///
-    /// **`EditPoints` and `Crop` are not here**, and their absence is the
-    /// honest kind. An edge in this engine stores two endpoints and a routing,
-    /// never a point list — §7's waypoints are a change to the document model,
-    /// which `render::shapes::line`'s doc already records as the same gap that
-    /// makes a free arrow point down its own diagonal. A button that opened
-    /// nothing would be the "control that produces nothing" failure Phase 7.5
-    /// caught. `Crop` is Phase 12's for the same reason: there is no image to
-    /// crop.
+    /// **`EditPoints` is not here**, and its absence is the honest kind. An
+    /// edge in this engine stores two endpoints and a routing, never a point
+    /// list — §7's waypoints are a change to the document model, which
+    /// `render::shapes::line`'s doc already records as the same gap that makes
+    /// a free arrow point down its own diagonal. A button that opened nothing
+    /// would be the "control that produces nothing" failure Phase 7.5 caught.
+    ///
+    /// **`Crop` joined the image's row in Phase 12**, which is what that phase
+    /// had to be true before: it is the fourth button on an image panel and on
+    /// no other, because it is the one action whose meaning is a property of
+    /// the kind rather than of the element.
     pub fn for_kind(kind: SelectionKind) -> &'static [ElementAction] {
-        let _ = kind;
-        &[
-            ElementAction::Duplicate,
-            ElementAction::Delete,
-            ElementAction::Link,
-        ]
+        match kind {
+            SelectionKind::Image => &[
+                ElementAction::Duplicate,
+                ElementAction::Delete,
+                ElementAction::Link,
+                ElementAction::Crop,
+            ],
+            _ => &[
+                ElementAction::Duplicate,
+                ElementAction::Delete,
+                ElementAction::Link,
+            ],
+        }
     }
 
     pub const fn name(self) -> &'static str {
@@ -611,6 +621,81 @@ impl ElementAction {
             ElementAction::Crop => "crop",
         }
     }
+}
+
+/// **What one press of the Crop button does**, given the picture, the crop and
+/// the frame it is shown in (§10).
+///
+/// # Why crop is an action and not a mode
+///
+/// The brief asks for crop *metadata* rather than a rewrite of the pixels, and
+/// the panel gives it one button. A modal crop editor — grips inside the
+/// picture, a dimmed surround, a confirm — is a second interaction model on a
+/// canvas that already has one, for an operation the existing resize gesture
+/// can express completely:
+///
+/// 1. **Shift-drag a corner.** An image resize keeps its proportions by
+///    default, so shift is what asks for a free one, and the picture visibly
+///    stretches into the frame the user is drawing.
+/// 2. **Press Crop.** The stretch becomes a *window* on the source: the frame
+///    stays exactly where it was drawn, the picture inside it is no longer
+///    distorted, and the bytes are untouched.
+///
+/// So the button's meaning depends on what the element is showing, and this is
+/// the whole of that rule. It is a pure function of three numbers and it names
+/// no UI framework, so the panel's label, the editor's edit and the test all
+/// read the same answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CropChoice {
+    /// The frame is a different shape from the picture in it, so the picture is
+    /// stretched: crop to the frame, keeping the middle.
+    ToFrame,
+    /// The frame already matches, and part of the picture is hidden: show the
+    /// whole of it again.
+    ///
+    /// **The frame's height changes with it**, because a full picture in a
+    /// cropped frame would simply be stretched the other way. The width is what
+    /// is kept — a user who has placed an image has chosen how much horizontal
+    /// room it takes.
+    Reset,
+}
+
+impl CropChoice {
+    /// A short stable name, for a test or an element id. **Not user-facing.**
+    pub const fn name(self) -> &'static str {
+        match self {
+            CropChoice::ToFrame => "crop-to-frame",
+            CropChoice::Reset => "crop-reset",
+        }
+    }
+}
+
+/// How far a frame's aspect may differ from the picture's before the picture
+/// counts as stretched — a fraction of the ratio itself.
+///
+/// Not zero, and that matters: a frame produced by an aspect-locked resize
+/// lands within a rounding error of the ratio it was locked to, and an exact
+/// comparison would offer to "crop" it to a window a hundredth of a percent
+/// narrower. One per cent is far below what an eye reads as a distortion and
+/// far above `f32`'s noise over a drag.
+pub const CROP_ASPECT_TOLERANCE: f32 = 0.01;
+
+/// **What the Crop button would do**, or `None` when it would do nothing — in
+/// which case the panel draws it muted with a tooltip, exactly as it does for
+/// Sloppiness in clean mode and Delete with nothing selected.
+///
+/// `source` is the resource's own width/height, `frame` is the element's, and
+/// `crop` is what it is showing now.
+pub fn crop_choice(source: f32, frame: f32, crop: ImageCrop) -> Option<CropChoice> {
+    if !(source.is_finite() && source > 0.0) || !(frame.is_finite() && frame > 0.0) {
+        return None;
+    }
+
+    let shown = crop.aspect(source);
+    if ((shown / frame) - 1.0).abs() > CROP_ASPECT_TOLERANCE {
+        return Some(CropChoice::ToFrame);
+    }
+    (!crop.is_full()).then_some(CropChoice::Reset)
 }
 
 // ---- colour ---------------------------------------------------------------
@@ -1030,14 +1115,90 @@ mod tests {
             .chain(ArrowKind::ALL.iter().map(|it| it.name()))
             .chain(ArrowEnd::ALL.iter().map(|it| it.name()))
             .chain(
-                ElementAction::for_kind(SelectionKind::Node)
+                SelectionKind::ALL
                     .iter()
+                    .flat_map(|kind| ElementAction::for_kind(*kind))
                     .map(|it| it.name()),
             )
             .collect();
-        let count = buttons.len();
         buttons.sort_unstable();
         buttons.dedup();
+        // The action rows of two kinds share their first three buttons, so the
+        // list is deduplicated before it is counted; what must be unique is a
+        // name meaning two different things, and `ElementAction::name` is one
+        // function over one enum.
+        let count = buttons.len();
+        buttons.dedup();
         assert_eq!(buttons.len(), count, "two buttons share a name");
+    }
+
+    /// **The image row's fourth button**, stated on its own: Crop is an image's
+    /// and nobody else's, and the three every panel has are still there.
+    #[test]
+    fn only_an_image_offers_crop() {
+        assert_eq!(
+            ElementAction::for_kind(SelectionKind::Image),
+            &[
+                ElementAction::Duplicate,
+                ElementAction::Delete,
+                ElementAction::Link,
+                ElementAction::Crop,
+            ]
+        );
+
+        for kind in [
+            SelectionKind::Node,
+            SelectionKind::Edge,
+            SelectionKind::Text,
+        ] {
+            assert!(
+                !ElementAction::for_kind(kind).contains(&ElementAction::Crop),
+                "{kind:?} offers Crop"
+            );
+        }
+
+        // And Edit points is still absent everywhere, because an edge still has
+        // no waypoints — see `ElementAction::for_kind`.
+        for kind in SelectionKind::ALL {
+            assert!(!ElementAction::for_kind(*kind).contains(&ElementAction::EditPoints));
+        }
+    }
+
+    /// **The Crop button's three states**, which are the whole of what "an
+    /// action, not a mode" means here.
+    #[test]
+    fn crop_offers_the_frame_then_the_whole_picture_then_nothing() {
+        // A 2:1 picture in a 2:1 frame, uncropped: there is nothing to do, and
+        // the panel mutes the button rather than pretending.
+        assert_eq!(crop_choice(2.0, 2.0, ImageCrop::FULL), None);
+
+        // Stretched into a square frame: crop to it.
+        assert_eq!(
+            crop_choice(2.0, 1.0, ImageCrop::FULL),
+            Some(CropChoice::ToFrame)
+        );
+
+        // Once cropped, the frame matches and the picture is partly hidden, so
+        // the same button offers the whole picture back.
+        let cropped = ImageCrop::FULL.cropped_to_aspect(2.0, 1.0);
+        assert_eq!(
+            crop_choice(2.0, 1.0, cropped),
+            Some(CropChoice::Reset),
+            "{cropped:?}"
+        );
+
+        // A frame within the tolerance of the shown aspect is not "stretched".
+        // Without this, every aspect-locked drag would leave the button
+        // offering to crop away a hundredth of a percent.
+        assert_eq!(crop_choice(2.0, 2.0 * 1.001, ImageCrop::FULL), None);
+    }
+
+    /// A resource with no usable dimensions cannot be cropped, and answering
+    /// `Some` would divide by it.
+    #[test]
+    fn crop_refuses_a_ratio_it_cannot_use() {
+        assert_eq!(crop_choice(0.0, 1.0, ImageCrop::FULL), None);
+        assert_eq!(crop_choice(f32::NAN, 1.0, ImageCrop::FULL), None);
+        assert_eq!(crop_choice(1.0, f32::INFINITY, ImageCrop::FULL), None);
     }
 }

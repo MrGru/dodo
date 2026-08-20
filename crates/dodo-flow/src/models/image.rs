@@ -71,6 +71,8 @@ use std::{fmt, sync::Arc};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::geometry::Vec2;
+
 /// The encodings dodo will hand to a decoder.
 ///
 /// One variant per format GPUI's own image path decodes — see
@@ -239,6 +241,33 @@ impl ImageResource {
     /// This resource's handle — the hash of its own bytes.
     pub fn handle(&self) -> ImageHandle {
         ImageHandle::of(&self.bytes)
+    }
+
+    /// **The size a freshly inserted picture is given**, in world units:
+    /// its own pixel dimensions, shrunk to fit inside `room` and never grown.
+    ///
+    /// One pixel is one world unit at 100 % zoom, so a screenshot arrives at
+    /// the size it was taken — which is the only size that is not a guess. The
+    /// fit is what stops a 6,000-pixel photograph arriving ten screens wide,
+    /// and *never grown* is what stops a 16-pixel icon being blown up into a
+    /// blurry rectangle nobody asked for.
+    ///
+    /// `room` is normally the viewport in world units, scaled down a little so
+    /// the picture lands inside the view with its grips reachable.
+    pub fn placed_size(&self, room: Vec2) -> Vec2 {
+        let natural = Vec2::new(
+            (self.width.max(1) as f32).min(f32::MAX),
+            self.height.max(1) as f32,
+        );
+        let room = Vec2::new(room.x.max(1.0), room.y.max(1.0));
+
+        let scale = (room.x / natural.x).min(room.y / natural.y).min(1.0);
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        Vec2::new(natural.x * scale, natural.y * scale)
     }
 
     /// The source's width divided by its height, or `1.0` for a resource whose
@@ -572,6 +601,29 @@ mod tests {
         // infinity and put a node's size past every clamp in the engine.
         let resource = ImageResource::new(ImageFormat::Png, 0, 0, vec![1]);
         assert_eq!(resource.aspect(), 1.0);
+    }
+
+    #[test]
+    fn a_big_picture_is_shrunk_to_fit_and_a_small_one_is_left_alone() {
+        use crate::geometry::Vec2;
+
+        let room = Vec2::new(800.0, 600.0);
+
+        // Four thousand pixels wide, in an 800-unit view: it fits the width and
+        // keeps its shape.
+        let big = ImageResource::new(ImageFormat::Png, 4000, 2000, vec![1]);
+        let size = big.placed_size(room);
+        assert!((size.x - 800.0).abs() < 1e-3, "{size:?}");
+        assert!((size.y - 400.0).abs() < 1e-3, "{size:?}");
+
+        // A small one arrives at its own size rather than being blown up.
+        let small = ImageResource::new(ImageFormat::Png, 64, 64, vec![1]);
+        assert_eq!(small.placed_size(room), Vec2::new(64.0, 64.0));
+
+        // And a resource with no dimensions still produces something placeable.
+        let broken = ImageResource::new(ImageFormat::Png, 0, 0, vec![1]);
+        let size = broken.placed_size(room);
+        assert!(size.x > 0.0 && size.y > 0.0, "{size:?}");
     }
 
     #[test]

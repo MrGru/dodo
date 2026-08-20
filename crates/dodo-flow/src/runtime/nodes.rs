@@ -183,6 +183,22 @@ impl NodeShape {
         }
     }
 
+    /// **Whether a resize of this body keeps its proportions by default**
+    /// (§10's aspect-ratio lock).
+    ///
+    /// True for an image and false for everything else, and the asymmetry is
+    /// the specification rather than a preference: a picture has a shape of its
+    /// own that the document did not choose, and stretching it is a mistake
+    /// nobody makes on purpose. A rectangle has no such shape, so the ordinary
+    /// free resize is right for it.
+    ///
+    /// The modifier that asks for the other answer is
+    /// [`resize_keeps_aspect`](crate::interaction::resize_keeps_aspect)'s, one
+    /// layer up: this is the *default*, not the whole rule.
+    pub fn keeps_aspect_on_resize(self) -> bool {
+        matches!(self, NodeShape::Image)
+    }
+
     /// Whether edges may attach to this node. §4's whole-node connection mode
     /// applies to graph nodes; a drawn shape is decoration until §8's free
     /// linear elements arrive.

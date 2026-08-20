@@ -72,6 +72,7 @@
 use crate::{
     geometry::{Rect, Vec2},
     models::{EdgeIndex, ElementKind, GraphNodeKind, LinearKind, NodeIndex, ShapeKind},
+    runtime::NodeShape,
 };
 
 /// How far the pointer must travel, **in screen pixels**, before a press is a
@@ -228,6 +229,22 @@ impl CanvasTool {
     pub fn honours_square_constraint(self) -> bool {
         self.creates() && !self.edits_text_on_release()
     }
+}
+
+/// **Whether a resize keeps the element's proportions**, folding the element's
+/// own default together with the modifier (Phase 12).
+///
+/// The two kinds want opposite defaults and both are right: squashing a
+/// photograph is almost always a mistake, and squashing a rectangle is the
+/// ordinary use of the gesture. So the default is the *kind's*
+/// ([`NodeShape::keeps_aspect_on_resize`]) and **shift asks for the other
+/// one** — which reads as "shift constrains" on a shape and "shift releases" on
+/// an image, and is one rule rather than two.
+///
+/// A pure function over the shape and one `bool`, here rather than in
+/// `views::flow`, so both halves of the sentence above are a test.
+pub fn resize_keeps_aspect(shape: NodeShape, shift: bool) -> bool {
+    shape.keeps_aspect_on_resize() != shift
 }
 
 /// **What a text edit is about to change** (§9).

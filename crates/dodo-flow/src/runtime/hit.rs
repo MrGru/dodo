@@ -82,7 +82,10 @@
 //!
 //! **This file names no UI framework.**
 
-use crate::models::{EdgeIndex, HandleIndex, NodeIndex};
+use crate::{
+    geometry::ResizeCorner,
+    models::{EdgeIndex, HandleIndex, NodeIndex},
+};
 
 /// What a press landed on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -110,6 +113,22 @@ pub enum PointerTarget {
     /// label. Neither is a rubber band: the band belongs to
     /// [`Empty`](PointerTarget::Empty) alone.
     Edge(EdgeIndex),
+    /// **A resize grip on the selected element** (Phase 12), and the only
+    /// target that is not a document element at all.
+    ///
+    /// Ranked **above** everything, which is the opposite end of the order from
+    /// [`Edge`](PointerTarget::Edge) and for the same kind of reason: a grip is
+    /// drawn on top of the element it belongs to, it is small, and a press
+    /// inside its dot means the resize rather than the drag underneath it. Get
+    /// this ranking wrong and the grips are simply dead — every press on one
+    /// starts a move instead, and nothing reports it.
+    ///
+    /// It exists only for the element the selection ring is drawn around, so a
+    /// document with nothing selected can never produce one.
+    ResizeGrip {
+        node: NodeIndex,
+        corner: ResizeCorner,
+    },
 }
 
 impl PointerTarget {
@@ -118,6 +137,15 @@ impl PointerTarget {
             PointerTarget::Empty | PointerTarget::Edge(_) => None,
             PointerTarget::Node(node) => Some(node),
             PointerTarget::Handle { node, .. } => Some(node),
+            PointerTarget::ResizeGrip { node, .. } => Some(node),
+        }
+    }
+
+    /// The grip this press landed on, if it landed on one.
+    pub fn resize_grip(self) -> Option<(NodeIndex, ResizeCorner)> {
+        match self {
+            PointerTarget::ResizeGrip { node, corner } => Some((node, corner)),
+            _ => None,
         }
     }
 
@@ -160,6 +188,14 @@ pub struct HitTolerance {
     /// a line you aim *across*. A generous handle radius that also widened
     /// every edge would make an edge under a handle unhittable.
     pub edge_radius: f32,
+    /// How far from a resize grip's centre still counts as hitting it
+    /// (Phase 12).
+    ///
+    /// Its own field for the same reason `edge_radius` is one: a grip sits at a
+    /// corner of the selection ring, a handle sits on the middle of a side, and
+    /// on a small element the two are a few pixels apart. Sharing a radius
+    /// would make whichever was tested first swallow the other.
+    pub grip_radius: f32,
 }
 
 impl HitTolerance {
@@ -174,6 +210,11 @@ impl HitTolerance {
     /// generous band covers a great deal of canvas, and everything it covers is
     /// canvas a rubber band can no longer be started in.
     pub const EDGE_SCREEN_RADIUS: f32 = 6.0;
+
+    /// The screen-pixel radius of a resize grip's target. Matched to the grip
+    /// `views::nodes` draws, plus a little margin — a corner is aimed at
+    /// deliberately, so it needs less generosity than a handle.
+    pub const GRIP_SCREEN_RADIUS: f32 = 7.0;
 
     /// **The tolerance at a zoom level** — §29's *"tolerance in screen-space
     /// pixels"* as one function of one number.
@@ -199,6 +240,8 @@ impl HitTolerance {
             handle_radius,
             edge_radius: handle_radius
                 * (HitTolerance::EDGE_SCREEN_RADIUS / HitTolerance::HANDLE_SCREEN_RADIUS),
+            grip_radius: handle_radius
+                * (HitTolerance::GRIP_SCREEN_RADIUS / HitTolerance::HANDLE_SCREEN_RADIUS),
         }
     }
 }
@@ -212,7 +255,46 @@ impl Default for HitTolerance {
 #[cfg(test)]
 mod tests {
     use super::{HitTolerance, PointerTarget};
-    use crate::models::{EdgeIndex, HandleIndex, NodeIndex};
+    use crate::{
+        geometry::ResizeCorner,
+        models::{EdgeIndex, HandleIndex, NodeIndex},
+    };
+
+    /// A grip belongs to its element, so every question a caller asks about
+    /// "what node is this press about?" answers the same for it as for a body.
+    #[test]
+    fn a_grip_reports_its_node_and_its_corner() {
+        let node = NodeIndex::new(7);
+        let target = PointerTarget::ResizeGrip {
+            node,
+            corner: ResizeCorner::TopRight,
+        };
+
+        assert_eq!(target.node(), Some(node));
+        assert_eq!(
+            target.resize_grip(),
+            Some((node, ResizeCorner::TopRight)),
+            "a grip that cannot say which corner it is resizes nothing"
+        );
+        assert_eq!(PointerTarget::Node(node).resize_grip(), None);
+        assert!(!target.is_empty());
+    }
+
+    /// A grip's target is smaller than a handle's and larger than an edge's,
+    /// and every one of them is a *screen* distance — so the three keep their
+    /// proportions at any zoom.
+    #[test]
+    fn the_three_radii_keep_their_order_at_every_zoom() {
+        for zoom in [0.05f32, 0.5, 1.0, 4.0, 20.0] {
+            let tolerance = HitTolerance::at_zoom(zoom);
+            assert!(tolerance.edge_radius < tolerance.grip_radius, "at {zoom}");
+            assert!(tolerance.grip_radius < tolerance.handle_radius, "at {zoom}");
+            assert!(
+                (tolerance.grip_radius * zoom - HitTolerance::GRIP_SCREEN_RADIUS).abs() < 1e-3,
+                "a grip is not the same size on screen at {zoom}"
+            );
+        }
+    }
 
     #[test]
     fn a_target_reports_the_node_it_belongs_to_however_it_was_hit() {

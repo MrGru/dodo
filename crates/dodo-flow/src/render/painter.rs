@@ -54,17 +54,19 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, Background, BorderStyle, Bounds, Corners, Edges, FillOptions, Font, Hsla, Path,
-    PathBuilder, PathStyle, Pixels, Point, Rgba, StrokeOptions, TextAlign, TextRun, Window,
+    AnyElement, App, Background, BorderStyle, Bounds, Corners, Edges, FillOptions, Font, Hsla,
+    Path, PathBuilder, PathStyle, Pixels, Point, Rgba, StrokeOptions, TextAlign, TextRun, Window,
     WrappedLine, point, px,
 };
 
 use crate::{
     geometry::{Rect, Vec2},
-    models::{Color, FontFamily},
+    models::{Color, FontFamily, NodeIndex},
     render::{
         cache::{CachedGeometry, GeometryCache, ScreenAnchor, ShapedLineCache},
-        plan::{PathPaint, PathPrimitive, PrimitiveSink, QuadPrimitive, TextPrimitive},
+        plan::{
+            ImagePrimitive, PathPaint, PathPrimitive, PrimitiveSink, QuadPrimitive, TextPrimitive,
+        },
         shapes::{Outline, SubpathCommand},
     },
 };
@@ -250,6 +252,32 @@ pub type TextCache = ShapedLineCache<Arc<WrappedText>>;
 ///
 /// Borrows the window for the length of one frame, so it is constructed inside
 /// the canvas paint closure and dropped there.
+/// **One image element's picture, already laid out** — the bridge between
+/// §10's plan and GPUI's element tree.
+///
+/// A picture is the one primitive this crate paints as an *element* rather than
+/// through a `Window::paint_*` call, and the reason is per-element opacity:
+/// `Window::paint_image` reads its alpha from `Window::element_opacity`, which
+/// is `pub(crate)` in GPUI and is written by exactly one thing — a styled
+/// element's own paint. So the Opacity row the property panel gives every kind
+/// would have been a control that writes a field no painter reads, which is the
+/// failure this crate has now met three times (Phase 7's dead bindings, Phase
+/// 7.5's absent palette, Phase 11's unread `fill_style`).
+///
+/// The element is built and **prepainted** by `views::images` during the
+/// canvas's prepaint, and painted here at the point in
+/// [`PaintPlan::paint_into`](crate::render::PaintPlan::paint_into)'s order that
+/// the image run occupies. That split is what lets a picture keep its place in
+/// the paint order *and* carry an opacity, a crop clip and a corner radius,
+/// none of which the raw call offers.
+pub struct PictureElement {
+    /// Which element this picture belongs to. Matched against
+    /// [`ImagePrimitive::node`], rather than trusting two independently built
+    /// lists to be in the same order.
+    pub node: NodeIndex,
+    pub element: AnyElement,
+}
+
 pub struct WindowPainter<'a> {
     window: &'a mut Window,
     /// The canvas element's top-left in window coordinates.
@@ -261,6 +289,11 @@ pub struct WindowPainter<'a> {
     geometry: &'a mut GeometryCache<Path<Pixels>>,
     text: &'a mut TextCache,
     fonts: FontSet,
+    /// §10's prepainted pictures, one per visible image element. Empty on a
+    /// painter nobody gave any — a test, or a frame with no pictures on it —
+    /// and an image primitive with no entry paints nothing and says so through
+    /// [`PaintStats::images`](crate::render::PaintStats::images).
+    pictures: &'a mut [PictureElement],
 }
 
 /// **The three faces §9's [`FontFamily`] resolves to**, chosen once per frame
@@ -342,7 +375,18 @@ impl<'a> WindowPainter<'a> {
             geometry,
             text,
             fonts,
+            pictures: &mut [],
         }
+    }
+
+    /// Hands the painter this frame's prepainted pictures (§10).
+    ///
+    /// A builder rather than a seventh constructor argument because almost
+    /// nothing has any: a document with no images, and every test in this
+    /// crate, passes none.
+    pub fn with_pictures(mut self, pictures: &'a mut [PictureElement]) -> WindowPainter<'a> {
+        self.pictures = pictures;
+        self
     }
 
     /// The anchor a frame's caches should be started at: the camera, with the
@@ -394,6 +438,30 @@ impl PrimitiveSink for WindowPainter<'_> {
             border_color: to_hsla(quad.border_color),
             border_style: BorderStyle::Solid,
         });
+    }
+
+    /// **Paints one picture** — by painting the element `views::images`
+    /// prepainted for it, at this point in the paint order.
+    ///
+    /// The lookup is by [`NodeIndex`] rather than by position, because the two
+    /// lists are built by different passes: the prepaint walks the snapshot and
+    /// the plan walks it again in *depth* order. Trusting them to agree would
+    /// be a picture drawn in another picture's frame the first time somebody
+    /// pressed a Layers button.
+    ///
+    /// Answers `0` when there is no entry, which is the honest report of a
+    /// resource that could not be decoded — see [`PictureElement`].
+    fn image(&mut self, image: &ImagePrimitive) -> u32 {
+        let Some(entry) = self
+            .pictures
+            .iter_mut()
+            .find(|picture| picture.node == image.node)
+        else {
+            return 0;
+        };
+
+        entry.element.paint(self.window, self.cx);
+        1
     }
 
     /// **Paints one path, through §23's cache.**

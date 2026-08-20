@@ -53,7 +53,9 @@ use dodo_flow::{
         cache::{CacheStats, GeometryCache, ScreenAnchor},
         lod::LodPlan,
         painter::build_path,
-        plan::{PathPaint, PathPrimitive, PrimitiveSink, QuadPrimitive, TextPrimitive},
+        plan::{
+            ImagePrimitive, PathPaint, PathPrimitive, PrimitiveSink, QuadPrimitive, TextPrimitive,
+        },
         registry::NodeRendererRegistry,
         scene, shapes, sketch,
         snapshot::SnapshotCounts,
@@ -108,6 +110,10 @@ impl PrimitiveSink for HeadlessPainter {
 
     fn text(&mut self, _text: &TextPrimitive) -> u32 {
         0
+    }
+
+    fn image(&mut self, _image: &ImagePrimitive) -> u32 {
+        1
     }
 }
 
@@ -1351,5 +1357,9 @@ impl PrimitiveSink for CachingSink<'_> {
 
     fn text(&mut self, _text: &TextPrimitive) -> u32 {
         0
+    }
+
+    fn image(&mut self, _image: &ImagePrimitive) -> u32 {
+        1
     }
 }

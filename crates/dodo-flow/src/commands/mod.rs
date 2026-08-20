@@ -102,6 +102,10 @@ mod tests {
         quads: Vec<QuadPrimitive>,
         paths: Vec<PaintedPath>,
         texts: Vec<TextPrimitive>,
+        /// §10's pictures, as the painter is handed them: a frame, a handle
+        /// and a crop. Part of the equality below, so an undone crop that
+        /// restored the document and not the frame would fail there.
+        images: Vec<crate::render::plan::ImagePrimitive>,
         /// The §23 cache versions this frame filed its geometry under, in
         /// order. Collected but **not** part of the equality — see
         /// [`PaintedPath`].
@@ -136,7 +140,10 @@ mod tests {
     /// an undo while the geometry filed under it is expected not to.
     impl PartialEq for Painted {
         fn eq(&self, other: &Painted) -> bool {
-            self.quads == other.quads && self.paths == other.paths && self.texts == other.texts
+            self.quads == other.quads
+                && self.paths == other.paths
+                && self.texts == other.texts
+                && self.images == other.images
         }
     }
 
@@ -161,6 +168,11 @@ mod tests {
         fn text(&mut self, text: &TextPrimitive) -> u32 {
             self.texts.push(text.clone());
             0
+        }
+
+        fn image(&mut self, image: &crate::render::plan::ImagePrimitive) -> u32 {
+            self.images.push(*image);
+            1
         }
     }
 

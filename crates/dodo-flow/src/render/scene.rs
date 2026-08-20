@@ -73,7 +73,7 @@ use crate::{
         cache::{CLEAN, GeometryKey, GeometryPart, TextKey},
         edges, hatch,
         lod::{HandleDetail, LodPlan},
-        plan::{DashSpec, PathPrimitive, QuadPrimitive, TextPrimitive},
+        plan::{DashSpec, ImagePrimitive, PathPrimitive, QuadPrimitive, TextPrimitive},
         shapes, sketch,
         snapshot::{CanvasNode, PlannedEdge, RenderSnapshot},
     },
@@ -181,8 +181,13 @@ pub struct SceneStats {
     /// scene culling cannot bound.
     pub skipped_edges: u32,
     /// Visible nodes skipped because their kind has no representation yet —
-    /// text, images, frames. **Not** a culling number; a not-implemented one.
+    /// frames, freehand, an unregistered custom kind. **Not** a culling number;
+    /// a not-implemented one.
     pub unsupported_nodes: u32,
+    /// §10's pictures that reached the plan this frame. They cost no path
+    /// vertices and no path batch — see [`render::plan`](crate::render::plan)
+    /// for what they do cost.
+    pub images: u32,
     /// Node bodies drawn by §13's hand this frame, rich ones included.
     ///
     /// Reported rather than inferred from the style, because the ladder may
@@ -383,6 +388,15 @@ fn plan_one_node(
             return;
         }
 
+        // **A picture is its pixels**, and it is skipped here for a stronger
+        // version of the same reason: the fall-through would paint a solid box
+        // over the photograph at the first rung down. `plan_image` is what
+        // draws it.
+        if canvas.body == NodeShape::Image {
+            plan_image(plan, world, canvas, viewport, ink, quality, stats);
+            return;
+        }
+
         let style = nodes.style(canvas.node);
         let screen = canvas.screen;
 
@@ -532,6 +546,86 @@ fn plan_one_node(
 
         stats.nodes += 1;
     }
+}
+
+/// **§10's picture, and the ring that has to be drawn over it.**
+///
+/// Three decisions, and the second and third are the ones that would be got
+/// wrong by writing the obvious thing:
+///
+/// 1. **No `detailed` gate.** [`min_detailed_node_px`](crate::budgets::LodThresholds::min_detailed_node_px)
+///    asks whether a body has room for a border and a line of label *inside*
+///    it. A picture's legibility question is not that one — a thumbnail is
+///    still a thumbnail — so the gate does not apply, exactly as Phase 10 found
+///    for a standalone text element. It is the same threshold silently
+///    excluding a kind that did not exist when it was written, and the crate
+///    doc predicted this one.
+/// 2. **The selection ring is a stroked path, not the body's border.** Every
+///    other kind shows selection by painting its own outline in the accent
+///    colour; a picture has no outline, and a *quad* border would be painted
+///    before the image run and therefore underneath the photograph. A path is
+///    the one primitive that is emitted after the pictures.
+/// 3. **A missing resource is an empty frame, not nothing.** An element whose
+///    handle names no resource — a hand-edited file, a merge that took the
+///    nodes and left the pictures — still occupies its rectangle and is still
+///    selectable and deletable. Drawing nothing would leave something that can
+///    be clicked and cannot be seen.
+#[allow(clippy::too_many_arguments)]
+fn plan_image(
+    plan: &mut PaintPlan,
+    world: &GraphWorld,
+    canvas: &CanvasNode,
+    viewport: &Viewport,
+    ink: SceneInk,
+    quality: crate::models::RenderQuality,
+    stats: &mut SceneStats,
+) {
+    let nodes = world.nodes();
+    let style = nodes.style(canvas.node);
+    let screen = canvas.screen;
+    let radius = viewport.world_to_screen_length(style.corner_radius);
+
+    match nodes.cold(canvas.node).image {
+        Some(image) => {
+            plan.push_image(ImagePrimitive {
+                bounds: screen,
+                node: canvas.node,
+                image,
+                opacity: style.opacity.clamp(0.0, 1.0),
+                corner_radius: radius,
+            });
+            stats.images += 1;
+        }
+        None => {
+            plan.push_quad(
+                QuadPrimitive::filled(screen, Color::TRANSPARENT)
+                    .with_corner_radius(radius)
+                    .with_border(1.0, fade(ink.stroke, style.opacity)),
+            );
+        }
+    }
+
+    if canvas.selected
+        && let Some(outline) = shapes::outline_for_node(
+            NodeShape::RoundedRectangle,
+            screen.inflate(SELECTED_STROKE_PIXELS),
+            radius,
+        )
+    {
+        plan.push_path(
+            PathPrimitive::stroke(outline, ink.accent, SELECTED_STROKE_PIXELS, quality).keyed(
+                GeometryKey::node(
+                    canvas.node,
+                    GeometryPart::Stroke,
+                    canvas.version,
+                    quality,
+                    CLEAN,
+                ),
+            ),
+        );
+    }
+
+    stats.nodes += 1;
 }
 
 /// **The document's hand, pressed as hard as one element asks.**
@@ -1188,6 +1282,10 @@ mod tests {
         fn text(&mut self, _text: &crate::render::plan::TextPrimitive) -> u32 {
             0
         }
+
+        fn image(&mut self, _image: &crate::render::plan::ImagePrimitive) -> u32 {
+            1
+        }
     }
 
     /// A snapshot for one already-queried visible set.
@@ -1262,6 +1360,14 @@ mod tests {
         fn text(&mut self, _text: &crate::render::plan::TextPrimitive) -> u32 {
             self.rows.push(("text", None));
             0
+        }
+
+        fn image(&mut self, image: &crate::render::plan::ImagePrimitive) -> u32 {
+            self.rows.push((
+                "image",
+                Some(crate::render::cache::GeometryOwner::Node(image.node)),
+            ));
+            1
         }
     }
 
@@ -1969,6 +2075,10 @@ mod tests {
                 .push((text.key, text.origin, std::sync::Arc::clone(&text.text)));
             1
         }
+
+        fn image(&mut self, _image: &crate::render::plan::ImagePrimitive) -> u32 {
+            1
+        }
     }
 
     fn labels_of(
@@ -2001,6 +2111,10 @@ mod tests {
                     text.max_width,
                     text.wrap_width,
                 ));
+                1
+            }
+
+            fn image(&mut self, _image: &crate::render::plan::ImagePrimitive) -> u32 {
                 1
             }
         }

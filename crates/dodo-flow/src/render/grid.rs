@@ -718,5 +718,9 @@ mod tests {
         fn text(&mut self, _text: &crate::render::plan::TextPrimitive) -> u32 {
             unreachable!("the grid never pushes text")
         }
+
+        fn image(&mut self, _image: &crate::render::plan::ImagePrimitive) -> u32 {
+            unreachable!("the grid never pushes an image")
+        }
     }
 }

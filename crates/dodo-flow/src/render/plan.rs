@@ -21,10 +21,38 @@
 //! **only** thing that ever emits them:
 //!
 //! ```text
-//! push_quad ─┐                    ┌─ every quad ─┐
-//! push_path ─┼─> PaintPlan ─ paint_into ─> every path ─┼─> PrimitiveSink
-//! push_text ─┘                    └─ every text ─┘
+//! push_quad ──┐                     ┌─ every quad ──┐
+//! push_image ─┤                     ├─ every image ─┤
+//! push_path ──┼─> PaintPlan ─ paint_into ─> every path ──┼─> PrimitiveSink
+//! push_text ──┘                     └─ every text ──┘
 //! ```
+//!
+//! # Where §10's images sit in that order, and what it costs
+//!
+//! **Between the quads and the paths**, one contiguous run of their own, and the
+//! position is a decision rather than an accident. A picture is a *body*: its
+//! neighbours in the paint order are the other bodies, and the two orderings a
+//! user actually asks for are "put my annotations on top of this screenshot" and
+//! "put this screenshot behind my diagram". Both work from here — a quad-bodied
+//! shape that a depth order needs *above* an image is promoted into the path run
+//! by [`render::scene`](crate::render::scene)'s `promotes_to_path`, which is the
+//! same mechanism Phase 11 built for quads against paths.
+//!
+//! What does not work is the mirror image, and it is recorded rather than
+//! hidden: **an image cannot be brought in front of a path-bodied element** — an
+//! ellipse, a diamond, a triangle, anything drawn by §13's hand — because there
+//! is no promotion available in that direction. A picture has no outline form,
+//! exactly as a glyph run has none, so this is text's limitation from Phase 11
+//! arriving for the same reason on a second kind.
+//!
+//! An image is **cheap**: no tessellation, no path batch and no path vertices at
+//! all. It is a textured quad, and its batching cost is one sprite batch per
+//! *atlas texture* rather than one per picture — small images share an atlas
+//! page, a large one gets a page to itself. A sprite batch is a draw call with a
+//! texture bind, not the full-viewport intermediate pass with a clear that a
+//! path batch costs, which is why the budget this run spends is
+//! [`RenderBudgets::max_rich_elements`](crate::budgets::RenderBudgets::max_rich_elements)-shaped
+//! rather than vertex-shaped.
 //!
 //! There is no accessor that hands the primitives back in insertion order, no
 //! iterator over a mixed sequence, and the sink never sees the plan. A painter
@@ -119,7 +147,7 @@ use crate::render::shapes::Outline;
 use crate::{
     budgets::RenderBudgets,
     geometry::{Rect, Vec2},
-    models::{Color, FontFamily, RenderQuality, TextAlign},
+    models::{Color, FontFamily, NodeImage, NodeIndex, RenderQuality, TextAlign},
     render::cache::{GeometryKey, TextKey},
 };
 
@@ -407,6 +435,30 @@ impl TextPrimitive {
     }
 }
 
+/// **§10's picture**, as the plan sees it: a rectangle, a handle and a crop.
+///
+/// It carries no pixels and no decoded image, which is what keeps this file
+/// below the UI-framework line. Which bytes the handle names is the world's
+/// answer; turning them into something a GPU can sample is the painter's, and
+/// the two meet at [`PrimitiveSink::image`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImagePrimitive {
+    /// Pane-relative screen pixels: the element's whole frame. **The crop does
+    /// not shrink it** — a crop chooses what is shown *inside* this rectangle,
+    /// so the frame is where the picture is drawn either way.
+    pub bounds: Rect,
+    /// Which element this is. The painter's only way to find the picture it
+    /// laid out for this frame, and the reason it is here rather than an
+    /// `Arc<RenderImage>`: a decoded image is a GPUI type.
+    pub node: NodeIndex,
+    /// The handle and the crop, straight from the document.
+    pub image: NodeImage,
+    /// `0.0..=1.0`, from the element's style — the panel's Opacity row.
+    pub opacity: f32,
+    /// The frame's corner radius in **screen** pixels — the panel's Edges row.
+    pub corner_radius: f32,
+}
+
 /// What one frame actually painted.
 ///
 /// `path_vertices` is the field that matters: it is measured against
@@ -438,6 +490,15 @@ pub struct PaintStats {
     /// Quads the clip rejected. A quad is cheap, so this is a diagnostic
     /// rather than a budget.
     pub culled_quads: u32,
+
+    /// **Pictures the sink actually painted** (§10). Fewer than were planned
+    /// means a picture the painter had nothing decoded for — a broken file, or
+    /// a document whose resource table lost an entry — and the difference is
+    /// what makes that visible as a number rather than as a hole on screen.
+    pub images: u32,
+
+    /// Images the clip rejected. Diagnostic, like [`culled_quads`](PaintStats::culled_quads).
+    pub culled_images: u32,
 }
 
 impl PaintStats {
@@ -469,6 +530,9 @@ impl PaintStats {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PrimitiveKind {
     Quad,
+    /// §10's pictures, between the quads and the paths — see the module doc for
+    /// why there, and what it costs.
+    Image,
     Path,
     Text,
 }
@@ -485,6 +549,11 @@ pub trait PrimitiveSink {
     /// declined the path (degenerate outline, failed tessellation).
     fn path(&mut self, path: &PathPrimitive) -> u32;
 
+    /// Paints one picture, and answers whether it could — zero for a sink with
+    /// nothing decoded for this element, which is the honest report of a broken
+    /// or missing resource.
+    fn image(&mut self, image: &ImagePrimitive) -> u32;
+
     /// Returns the number of glyphs actually painted.
     fn text(&mut self, text: &TextPrimitive) -> u32;
 }
@@ -497,6 +566,7 @@ pub trait PrimitiveSink {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PaintPlan {
     quads: Vec<QuadPrimitive>,
+    images: Vec<ImagePrimitive>,
     paths: Vec<PathPrimitive>,
     texts: Vec<TextPrimitive>,
     /// The pane, in the same pane-relative screen pixels the primitives use.
@@ -504,17 +574,20 @@ pub struct PaintPlan {
     clip: Rect,
     culled_paths: u32,
     culled_quads: u32,
+    culled_images: u32,
 }
 
 impl Default for PaintPlan {
     fn default() -> PaintPlan {
         PaintPlan {
             quads: Vec::new(),
+            images: Vec::new(),
             paths: Vec::new(),
             texts: Vec::new(),
             clip: PaintPlan::UNBOUNDED,
             culled_paths: 0,
             culled_quads: 0,
+            culled_images: 0,
         }
     }
 }
@@ -543,11 +616,13 @@ impl PaintPlan {
     /// `Rect::new(Vec2::ZERO, pane_size)`.
     pub fn clear(&mut self, clip: Rect) {
         self.quads.clear();
+        self.images.clear();
         self.paths.clear();
         self.texts.clear();
         self.clip = clip.normalized();
         self.culled_paths = 0;
         self.culled_quads = 0;
+        self.culled_images = 0;
     }
 
     /// The pane this frame is clipped against.
@@ -584,6 +659,17 @@ impl PaintPlan {
         }
     }
 
+    /// Adds a picture, unless its frame misses the clip. Culled like a quad
+    /// and for the same reason: the frame is the whole painted extent, because
+    /// the picture is drawn inside it and clipped to it.
+    pub fn push_image(&mut self, image: ImagePrimitive) {
+        if !image.bounds.normalized().intersects(self.clip) {
+            self.culled_images += 1;
+            return;
+        }
+        self.images.push(image);
+    }
+
     pub fn push_text(&mut self, text: TextPrimitive) {
         self.texts.push(text);
     }
@@ -610,8 +696,19 @@ impl PaintPlan {
         self.texts.len() as u32
     }
 
+    pub fn image_count(&self) -> u32 {
+        self.images.len() as u32
+    }
+
+    pub fn culled_images(&self) -> u32 {
+        self.culled_images
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.quads.is_empty() && self.paths.is_empty() && self.texts.is_empty()
+        self.quads.is_empty()
+            && self.images.is_empty()
+            && self.paths.is_empty()
+            && self.texts.is_empty()
     }
 
     /// The planned paths, **for tests only**.
@@ -632,6 +729,13 @@ impl PaintPlan {
     #[cfg(test)]
     pub(crate) fn quads(&self) -> &[QuadPrimitive] {
         &self.quads
+    }
+
+    /// The planned images. Test-only, for the same reason as
+    /// [`PaintPlan::paths`].
+    #[cfg(test)]
+    pub(crate) fn images(&self) -> &[ImagePrimitive] {
+        &self.images
     }
 
     /// The upper bound on the path vertices this frame will paint, available
@@ -682,8 +786,9 @@ impl PaintPlan {
     /// **Emits every primitive, grouped by kind, in the contract's order.**
     ///
     /// The only method in the crate that hands primitives to anything. All
-    /// quads, then all paths, then all text — one contiguous run each, so the
-    /// scene sees at most one path batch from the canvas layer.
+    /// quads, then all images, then all paths, then all text — one contiguous
+    /// run each, so the scene sees at most one path batch from the canvas
+    /// layer.
     pub fn paint_into<S: PrimitiveSink + ?Sized>(&self, sink: &mut S) -> PaintStats {
         let mut stats = PaintStats {
             culled_paths: self.culled_paths,
@@ -695,6 +800,13 @@ impl PaintPlan {
             sink.quad(quad);
             stats.quads += 1;
         }
+
+        // §10's pictures, between the bodies that are quads and the bodies
+        // that are paths. See the module doc for why here.
+        for image in &self.images {
+            stats.images = stats.images.saturating_add(sink.image(image));
+        }
+        stats.culled_images = self.culled_images;
 
         for path in &self.paths {
             let vertices = sink.path(path);
@@ -744,6 +856,11 @@ mod tests {
             self.log.push(PrimitiveKind::Text);
             text.text.chars().count() as u32
         }
+
+        fn image(&mut self, _image: &ImagePrimitive) -> u32 {
+            self.log.push(PrimitiveKind::Image);
+            1
+        }
     }
 
     fn rect(x: f32, y: f32) -> Rect {
@@ -772,7 +889,7 @@ mod tests {
         TextPrimitive {
             origin: Vec2::ZERO,
             text: "abc".into(),
-            key: TextKey::node(crate::models::NodeIndex::new(0), 1, 12.0, 100.0),
+            key: TextKey::node(NodeIndex::new(0), 1, 12.0, 100.0),
             max_width: 100.0,
             wrap_width: 100.0,
             font_size: 12.0,

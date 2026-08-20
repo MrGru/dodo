@@ -81,7 +81,7 @@
 //! **This file names no UI framework.**
 
 use crate::{
-    geometry::{Rect, Vec2},
+    geometry::{Rect, ResizeCorner, Vec2, resize_from_corner},
     interaction::tool::{CanvasTool, CreationGesture, TextTarget, creation_rect},
     models::{EdgeIndex, HandleIndex, NodeIndex},
     runtime::PointerTarget,
@@ -186,6 +186,31 @@ pub enum InteractionState {
         /// Where the pointer is, in world units — the loose end of the preview.
         current_world: Vec2,
     },
+    /// **§25's `Resizing`** (Phase 12): a corner grip is being dragged.
+    ///
+    /// The whole gesture is in the variant, exactly as a creation's is: the
+    /// frame the drag started from, which corner is moving, and whether the
+    /// proportions are being kept. Nothing is read back out of the world
+    /// mid-drag, so a resize is arithmetic on numbers captured at the press —
+    /// which is what makes every rule below assertable with no world at all.
+    ///
+    /// `aspect` is captured at press time rather than recomputed per move for
+    /// the same reason `additive` is: it is the ratio of the frame the user
+    /// grabbed, and recomputing it from the rectangle being produced would feed
+    /// the lock into itself and let the shape drift.
+    Resizing {
+        node: NodeIndex,
+        corner: ResizeCorner,
+        /// Where the element was when the grip was pressed. The anchor corner
+        /// comes from this, and so does [`InteractionEvent::Cancel`]'s exact
+        /// restore.
+        start: Rect,
+        /// `Some(width / height)` while the proportions are locked.
+        aspect: Option<f32>,
+        /// The rectangle the last move produced, so the release can say whether
+        /// anything actually changed.
+        current: Rect,
+    },
     /// §25's `EditingText` (§9): a caret is in something.
     ///
     /// **Not a drag**, which is why it is the only state a `PointerUp` does not
@@ -241,6 +266,29 @@ pub enum InteractionEvent {
         /// What was under the pointer at the release. A connection lands on
         /// this; every other gesture ignores it.
         target: PointerTarget,
+    },
+    /// **A resize grip was pressed** (Phase 12).
+    ///
+    /// An event of its own rather than an arm of
+    /// [`PointerDown`](InteractionEvent::PointerDown), because a resize needs
+    /// one thing the machine deliberately cannot reach: **the element's current
+    /// rectangle**. `PointerDown` already carries a `target` the caller
+    /// resolved against the world, and this carries the frame for the same
+    /// reason and by the same rule — the machine stays world-free, and what it
+    /// cannot look up is handed to it.
+    ///
+    /// The caller raises this *instead of* the press, having seen
+    /// [`PointerTarget::ResizeGrip`]; sending both would start a drag and a
+    /// resize on one press.
+    BeginResize {
+        node: NodeIndex,
+        corner: ResizeCorner,
+        /// The element's rectangle right now, in world units.
+        frame: Rect,
+        /// Whether this drag keeps the element's proportions —
+        /// [`resize_keeps_aspect`](super::resize_keeps_aspect)'s answer, which
+        /// folds the element's own default together with the modifier.
+        keeps_aspect: bool,
     },
     /// **§45's tool activation**, from the palette or from a key binding.
     ///
@@ -343,6 +391,33 @@ pub enum InteractionEffect {
     CancelNodeDrag {
         node: NodeIndex,
         revert: Vec2,
+    },
+
+    /// A resize started. The view captures the pointer, exactly as it does for
+    /// a node drag, so the gesture survives the pointer leaving the pane.
+    BeginResize {
+        node: NodeIndex,
+    },
+    /// **Put this node in this rectangle** — position and size together, in
+    /// world units.
+    ///
+    /// Both halves, because dragging a top-left grip moves the origin as well
+    /// as changing the size, and splitting them would be two commands whose
+    /// intermediate state is an element in a place it was never in.
+    ResizeNodeTo {
+        node: NodeIndex,
+        rect: Rect,
+    },
+    /// The resize finished. `changed` is false for a press and release that
+    /// never travelled, which must not become an undo entry.
+    EndResize {
+        node: NodeIndex,
+        changed: bool,
+    },
+    /// The resize was abandoned; put the node back in exactly this rectangle.
+    CancelResize {
+        node: NodeIndex,
+        rect: Rect,
     },
 
     /// **An edge was clicked** (Phase 10.5): make it the selection, or add it
@@ -637,6 +712,12 @@ impl InteractionMachine {
                         edge,
                         additive: modifiers.is_additive(),
                     },
+                    // A grip press arrives as `BeginResize`, not as this —
+                    // see that event. Reaching here means the caller resolved
+                    // a grip and then sent the press anyway, and starting a
+                    // rubber band from a corner of the selection would be the
+                    // worst of the available guesses.
+                    PointerTarget::ResizeGrip { .. } => InteractionEffect::None,
                     PointerTarget::Empty => {
                         self.state = InteractionState::BoxSelecting {
                             anchor_world: world,
@@ -651,6 +732,85 @@ impl InteractionMachine {
                 // match — which is the point of it being explicit.
                 PointerButton::Right => InteractionEffect::None,
             },
+
+            // ---- §12's resize ----
+            //
+            // From rest only, like every other gesture that opens a state. A
+            // grip press that arrives mid-drag is a stray event and starting a
+            // second gesture under a moving hand is the mode-switch this enum
+            // exists to prevent.
+            (
+                InteractionState::Idle,
+                InteractionEvent::BeginResize {
+                    node,
+                    corner,
+                    frame,
+                    keeps_aspect,
+                },
+            ) => {
+                let frame = frame.normalized();
+                let aspect = keeps_aspect
+                    .then(|| frame.width() / frame.height())
+                    .filter(|it| it.is_finite() && *it > 0.0);
+                self.state = InteractionState::Resizing {
+                    node,
+                    corner,
+                    start: frame,
+                    aspect,
+                    current: frame,
+                };
+                InteractionEffect::BeginResize { node }
+            }
+            (_, InteractionEvent::BeginResize { .. }) => InteractionEffect::None,
+
+            (
+                InteractionState::Resizing {
+                    node,
+                    corner,
+                    start,
+                    aspect,
+                    ..
+                },
+                InteractionEvent::PointerMove { world, .. },
+            ) => {
+                let rect = resize_from_corner(start, corner, world, aspect);
+                self.state = InteractionState::Resizing {
+                    node,
+                    corner,
+                    start,
+                    aspect,
+                    current: rect,
+                };
+                InteractionEffect::ResizeNodeTo { node, rect }
+            }
+
+            (
+                InteractionState::Resizing {
+                    node,
+                    start,
+                    current,
+                    ..
+                },
+                InteractionEvent::PointerUp { button, .. },
+            ) => {
+                if button == PointerButton::Left {
+                    self.state = InteractionState::Idle;
+                    InteractionEffect::EndResize {
+                        node,
+                        // A press and release that never travelled is a click
+                        // on a corner, not a zero-length resize — and the undo
+                        // history must not gain an entry for it.
+                        changed: current != start,
+                    }
+                } else {
+                    InteractionEffect::None
+                }
+            }
+
+            (InteractionState::Resizing { node, start, .. }, InteractionEvent::Cancel) => {
+                self.state = InteractionState::Idle;
+                InteractionEffect::CancelResize { node, rect: start }
+            }
 
             // ---- a press while a caret is out ----
             //
@@ -688,6 +848,10 @@ impl InteractionMachine {
                         TextTarget::Node(node)
                     }
                     PointerTarget::Edge(edge) => TextTarget::Edge(edge),
+                    // A double-click on a grip is two presses on a corner, and
+                    // it means the resize the first one started rather than a
+                    // caret on whatever is underneath.
+                    PointerTarget::ResizeGrip { node, .. } => TextTarget::Node(node),
                     // **Empty canvas creates text**, centred on the pointer,
                     // exactly as a click with the Text tool does — one rule,
                     // through `creation_rect`, so the two cannot disagree about

@@ -38,7 +38,9 @@ pub mod transform;
 pub mod vec;
 
 pub use arrow::{ArrowGeometry, ArrowPolygon};
-pub use bounds::{Rect, segment_intersects_rect};
+pub use bounds::{
+    MIN_RESIZE_EXTENT, Rect, ResizeCorner, resize_from_corner, segment_intersects_rect,
+};
 pub use curve::{cubic_point, cubic_segments, flatten_cubic};
 pub use route::{Attachment, EdgeRoute, RouteOptions, RouteSegment, Side};
 pub use transform::Viewport;
