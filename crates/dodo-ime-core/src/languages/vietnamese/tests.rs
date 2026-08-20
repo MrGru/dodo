@@ -96,9 +96,16 @@ fn telex_rewrites_each_intermediate_state() {
     let mut incremental = engine();
     assert_eq!(
         action_stream(&mut incremental, "thuow"),
-        ["t", "th", "thu", "thuo", "thươ"].map(composition)
+        ["t", "th", "thu", "thuo", "thuơ"].map(composition)
     );
-    assert_eq!(action_stream(&mut incremental, "w"), [composition("thưow")]);
+    assert_eq!(action_stream(&mut incremental, "n"), [composition("thươn")]);
+    assert_eq!(action_stream(&mut incremental, "g"), [composition("thương")]);
+
+    let mut coda_first = engine();
+    assert_eq!(
+        action_stream(&mut coda_first, "thuonw"),
+        ["t", "th", "thu", "thuo", "thuon", "thươn"].map(composition)
+    );
 }
 
 /// The reported failure, key by key.
@@ -112,7 +119,7 @@ fn telex_puts_an_earlier_w_back_where_it_stands() {
     let mut typed = engine();
     assert_eq!(
         action_stream(&mut typed, "window"),
-        ["ư", "ưi", "ưin", "ưind", "ưindo", "window"].map(composition)
+        ["ư", "ưi", "ưin", "wind", "windo", "window"].map(composition)
     );
 
     // The same recovery reached from the other side. `ww` settles the leading
@@ -402,6 +409,25 @@ fn a_repeated_standalone_w_takes_back_the_letter_it_made_wherever_it_is() {
 /// because a `w` made that letter outright; `uwiw` keeps the `u` the user
 /// actually typed and only loses the horn, exactly as `uww` does. Nothing that
 /// read the rendered string could tell the two apart.
+#[test]
+fn one_horn_command_on_uo_undoes_the_whole_pair() {
+    check(
+        &[
+            ("uoww", "uow"),
+            ("dduoww", "đuow"),
+            ("thuoww", "thuow"),
+            ("uo77", "uo7"),
+        ],
+        |keys| {
+            if keys.contains('7') {
+                vni(keys)
+            } else {
+                telex(keys)
+            }
+        },
+    );
+}
+
 #[test]
 fn a_typed_u_and_a_w_that_rendered_u_horn_undo_differently() {
     let mut made_by_w = engine();
@@ -1020,6 +1046,66 @@ fn non_vietnamese_words_fall_through_as_typed() {
             ("http", "http"),
             ("stack", "stack"),
             ("crash", "crash"),
+            // A `w` after a nucleus is not automatically a standalone `ư`.
+            ("new", "new"),
+            ("view", "view"),
+            ("few", "few"),
+            // An impossible onset disables later Telex controls for this run.
+            ("window", "window"),
+            ("framework", "framework"),
+            ("software", "software"),
+            ("browser", "browser"),
+            ("wrong", "wrong"),
+        ],
+        telex,
+    );
+
+    let mut new = engine();
+    assert_eq!(
+        action_stream(&mut new, "new"),
+        ["n", "ne", "new"].map(composition)
+    );
+
+    let mut software = engine();
+    assert_eq!(
+        action_stream(&mut software, "software"),
+        ["s", "so", "sof", "soft", "softw", "softwa", "softwar", "software"]
+            .map(composition)
+    );
+}
+
+/// A checked Vietnamese syllable ending in a stop coda can carry only sắc or
+/// nặng. Other tone keys remain literal, whichever side of the coda they were
+/// typed on.
+#[test]
+fn stop_codas_reject_incompatible_tones() {
+    check(
+        &[
+            ("cats", "cát"),
+            ("catj", "cạt"),
+            ("catf", "catf"),
+            ("catr", "catr"),
+            ("catx", "catx"),
+            ("cas t", "cá t"),
+            ("cast", "cát"),
+            ("caft", "caft"),
+        ],
+        telex,
+    );
+}
+
+#[test]
+fn required_normal_words_still_converge() {
+    check(
+        &[
+            ("dduwowcj", "được"),
+            ("thuwowng", "thương"),
+            ("thuowng", "thương"),
+            ("nguwowif", "người"),
+            ("nuwowcs", "nước"),
+            ("truwowngf", "trường"),
+            ("tuwowngr", "tưởng"),
+            ("huwowngr", "hưởng"),
         ],
         telex,
     );
