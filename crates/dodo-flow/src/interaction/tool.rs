@@ -413,6 +413,75 @@ mod tests {
         }
     }
 
+    /// **The eight directions, at the level that decides them.** A connector's
+    /// direction used to be its bounding box's diagonal, so four of these eight
+    /// came out reversed; `creation_rect` is now derived from this pair rather
+    /// than the other way round, which is what makes the preview, the committed
+    /// bounds and the committed segment one answer.
+    #[test]
+    fn a_creation_gesture_keeps_pointer_down_as_start_in_every_direction() {
+        let cases = [
+            (Vec2::new(10.0, 10.0), Vec2::new(90.0, 10.0)),
+            (Vec2::new(90.0, 10.0), Vec2::new(10.0, 10.0)),
+            (Vec2::new(10.0, 10.0), Vec2::new(10.0, 90.0)),
+            (Vec2::new(10.0, 90.0), Vec2::new(10.0, 10.0)),
+            (Vec2::new(10.0, 10.0), Vec2::new(90.0, 90.0)),
+            (Vec2::new(90.0, 90.0), Vec2::new(10.0, 10.0)),
+            (Vec2::new(10.0, 90.0), Vec2::new(90.0, 10.0)),
+            (Vec2::new(90.0, 10.0), Vec2::new(10.0, 90.0)),
+        ];
+
+        for tool in [CanvasTool::Line, CanvasTool::Arrow] {
+            for (from, to) in cases {
+                let gesture = drag(from, to, false);
+                assert_eq!(
+                    connector_endpoints(tool, gesture),
+                    (from, to),
+                    "{tool:?} {from:?} -> {to:?}"
+                );
+                assert_eq!(
+                    creation_rect(tool, gesture),
+                    Rect::from_corners(from, to),
+                    "the derived box disagrees with the segment"
+                );
+            }
+        }
+    }
+
+    /// A click has no direction to keep, so rule 1 gives it the tool's default
+    /// extent centred on the press — ordered, so a clicked arrow points right
+    /// instead of collapsing to a dot at the pointer.
+    #[test]
+    fn a_clicked_connector_gets_the_default_extent_ordered_around_the_press() {
+        let press = Vec2::new(200.0, 120.0);
+        let gesture = drag(press, press, false);
+        let (start, end) = connector_endpoints(CanvasTool::Arrow, gesture);
+        let half = CanvasTool::Arrow.default_size() * 0.5;
+
+        assert_eq!(start, press - half);
+        assert_eq!(end, press + half);
+        assert!(end.x > start.x, "a clicked arrow points right");
+        assert_eq!(
+            creation_rect(CanvasTool::Arrow, gesture),
+            Rect::from_corners(start, end)
+        );
+    }
+
+    /// The constraint squares the *travel* and keeps its sign, so a constrained
+    /// connector still ends where the pointer went — up-left stays up-left.
+    #[test]
+    fn a_constrained_connector_keeps_the_direction_it_was_dragged() {
+        let gesture = drag(Vec2::new(300.0, 300.0), Vec2::new(200.0, 260.0), true);
+        let (start, end) = connector_endpoints(CanvasTool::Line, gesture);
+
+        assert_eq!(start, Vec2::new(300.0, 300.0));
+        assert!(end.x < start.x && end.y < start.y, "{end:?}");
+        assert_eq!(
+            creation_rect(CanvasTool::Line, gesture),
+            Rect::from_corners(start, end)
+        );
+    }
+
     /// The palette and the enum must not drift: every tool is offered, once.
     #[test]
     fn every_tool_appears_exactly_once_in_the_palette_order() {

@@ -3382,6 +3382,75 @@ mod tests {
         );
     }
 
+    /// **§9's caret opens on a straight connector, so its label has to come
+    /// back out** — and on the segment, not on a rectangle it does not have.
+    ///
+    /// Two failures met here at once, and both looked identical from the
+    /// canvas — the words vanished on commit. `render::registry` answered
+    /// `shows_label: false` for every `Linear` kind, so a committed label was
+    /// written to the document and read by no painter; and the generic path
+    /// insets the node's box by `LABEL_PADDING_PIXELS`, which for an
+    /// axis-aligned connector is a box of zero height and a `continue`.
+    #[test]
+    fn a_connector_label_is_drawn_on_its_true_segment_midpoint() {
+        // Right-to-left and bottom-to-top, so a normalised rectangle would
+        // disagree with the ordered segment about everything but the midpoint.
+        for (start, end) in [
+            (Vec2::new(420.0, 360.0), Vec2::new(120.0, 100.0)),
+            // Horizontal: the zero-height box the inset used to throw away.
+            (Vec2::new(420.0, 240.0), Vec2::new(120.0, 240.0)),
+        ] {
+            let mut world = GraphWorld::new();
+            let node = world.create_node(
+                ElementKind::Linear(crate::models::LinearKind::Arrow),
+                start,
+                end - start,
+            );
+            world.set_node_connector(node, crate::models::Connector::new(start, end));
+            world.set_node_label(node, Some("weighs 3".into()));
+            world.rebuild_all_geometry();
+            world.clear_spatial_updates();
+
+            let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+            let (plan, stats) = frame_without_grid(&world, &viewport);
+
+            assert_eq!(stats.labels, 1, "{start:?} -> {end:?} lost its label");
+            let text = plan.texts().first().expect("one run");
+            let midpoint = viewport.world_to_screen((start + end) * 0.5);
+            assert!(
+                (text.origin.x + text.max_width * 0.5 - midpoint.x).abs() < 1e-3,
+                "{start:?} -> {end:?}: {text:?} is not centred on {midpoint:?}",
+            );
+            assert!(
+                (text.origin.y + text.font_size * 0.5 - midpoint.y).abs() < 1e-3,
+                "{start:?} -> {end:?}: {text:?} is not centred on {midpoint:?}",
+            );
+        }
+    }
+
+    /// The same registry row cost a *drawn shape* its label, and a drawn shape
+    /// is what most people type into. Asserted on an ellipse so the answer
+    /// cannot come from the rich half — only `NodeShape::Rectangle` and friends
+    /// become elements.
+    #[test]
+    fn a_drawn_shapes_label_reaches_the_canvas() {
+        let mut world = GraphWorld::new();
+        let node = world.create_node(
+            ElementKind::Shape(crate::models::ShapeKind::Ellipse),
+            Vec2::new(120.0, 120.0),
+            Vec2::new(220.0, 120.0),
+        );
+        world.set_node_label(node, Some("decision".into()));
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let (plan, stats) = frame_without_grid(&world, &viewport);
+
+        assert_eq!(stats.labels, 1, "a drawn shape's label was never laid out");
+        assert_eq!(plan.texts().len(), 1);
+    }
+
     /// The snapshot a frame is planned from, for the tests that need to know
     /// which half of the renderer took a node.
     fn extracted(world: &GraphWorld, viewport: &Viewport) -> RenderSnapshot {

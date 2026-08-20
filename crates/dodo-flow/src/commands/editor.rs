@@ -1235,7 +1235,235 @@ mod tests {
         assert_eq!(editor.revision(), sketch, "an identical write is a no-op");
     }
 
+    // ---- straight connectors -------------------------------------------
+
+    /// Two boxes and an arrow between them, both ends bound, through the same
+    /// calls the view makes.
+    fn editor_with_a_bound_arrow() -> (FlowEditor, NodeIndex, NodeIndex) {
+        let mut editor = FlowEditor::new();
+        let mut box_at = |x: f32| {
+            editor
+                .apply(EditCommand::AddNodes(vec![NodeDraft::new(NodeSpec::new(
+                    ElementId::NONE,
+                    ElementKind::Shape(ShapeKind::Rectangle),
+                    Vec2::new(x, 0.0),
+                    Vec2::new(100.0, 100.0),
+                ))]))
+                .expect("adding a node cannot fail")
+                .added_nodes[0]
+        };
+        let a = box_at(0.0);
+        let b = box_at(300.0);
+        let c = box_at(600.0);
+
+        let connector = editor.connector_between(
+            Vec2::new(100.0, 50.0),
+            Vec2::new(300.0, 50.0),
+            Some(a),
+            Some(b),
+        );
+        let mut spec = NodeSpec::new(
+            ElementId::NONE,
+            ElementKind::Linear(crate::models::LinearKind::Arrow),
+            Vec2::ZERO,
+            Vec2::ZERO,
+        );
+        spec.connector = Some(connector);
+        let arrow = editor
+            .apply(EditCommand::AddNodes(vec![NodeDraft::new(spec)]))
+            .expect("adding a node cannot fail")
+            .added_nodes[0];
+        (editor, arrow, c)
+    }
+
+    fn connector_of(editor: &FlowEditor, node: NodeIndex) -> crate::models::Connector {
+        editor
+            .world()
+            .nodes()
+            .connector(node)
+            .expect("a linear element carries ordered endpoints")
+    }
+
+    /// **Rebinding one end leaves the other exactly where it was.**
+    ///
+    /// The rectangle representation could not express this at all: moving
+    /// either end rewrote an origin and a size, so the opposite end moved with
+    /// it. Both directions are asserted because `start` and `end` are ordered
+    /// and must not be interchangeable.
+    #[test]
+    fn reconnecting_one_endpoint_never_moves_the_other() {
+        for end in [
+            crate::models::ConnectorEnd::Start,
+            crate::models::ConnectorEnd::End,
+        ] {
+            let (mut editor, arrow, elsewhere) = editor_with_a_bound_arrow();
+            let before = connector_of(&editor, arrow);
+
+            assert!(editor.set_connector_endpoint(
+                arrow,
+                end,
+                Vec2::new(650.0, 50.0),
+                Some(elsewhere),
+            ));
+
+            let after = connector_of(&editor, arrow);
+            assert_eq!(
+                after.opposite(end),
+                before.opposite(end),
+                "{end:?} rebinding disturbed the opposite endpoint"
+            );
+            let moved = after.endpoint(end);
+            assert_eq!(
+                moved.attachment.map(|it| it.element),
+                Some(editor.world().nodes().id(elsewhere)),
+                "{end:?} did not rebind"
+            );
+            assert_eq!(
+                moved.point,
+                Vec2::new(600.0, 50.0),
+                "{end:?} did not land on the direction-appropriate edge"
+            );
+        }
+    }
+
+    /// Dragging an endpoint onto empty canvas detaches it and leaves it exactly
+    /// where the pointer let go — and, again, does not touch the other end.
+    #[test]
+    fn detaching_one_endpoint_frees_only_that_endpoint() {
+        for end in [
+            crate::models::ConnectorEnd::Start,
+            crate::models::ConnectorEnd::End,
+        ] {
+            let (mut editor, arrow, _) = editor_with_a_bound_arrow();
+            let before = connector_of(&editor, arrow);
+            let dropped = Vec2::new(180.0, -260.0);
+
+            assert!(editor.set_connector_endpoint(arrow, end, dropped, None));
+
+            let after = connector_of(&editor, arrow);
+            assert_eq!(after.opposite(end), before.opposite(end));
+            assert_eq!(after.endpoint(end).point, dropped);
+            assert!(after.endpoint(end).attachment.is_none(), "{end:?}");
+        }
+    }
+
+    /// A bound endpoint follows its element through a save and a reload, and an
+    /// endpoint drag is one undo step that restores the geometry the gesture
+    /// opened with — the two halves of "no geometry lives only in the gesture".
+    #[test]
+    fn a_bound_connector_survives_a_round_trip_and_an_undo() {
+        let (mut editor, arrow, elsewhere) = editor_with_a_bound_arrow();
+        let before = connector_of(&editor, arrow);
+
+        editor.begin_gesture();
+        for x in [500.0, 600.0, 640.0] {
+            editor.set_connector_endpoint(
+                arrow,
+                crate::models::ConnectorEnd::End,
+                Vec2::new(x, 50.0),
+                (x > 610.0).then_some(elsewhere),
+            );
+        }
+        editor.end_gesture();
+        let rebound = connector_of(&editor, arrow);
+        assert_eq!(
+            rebound.end.attachment.map(|it| it.element),
+            Some(editor.world().nodes().id(elsewhere))
+        );
+
+        let mut reloaded = FlowEditor::new();
+        let report = reloaded.load_document(editor.to_document());
+        assert!(report.is_clean(), "{report:?}");
+        assert_eq!(connector_of(&reloaded, arrow), rebound);
+        // And it is still *bound*, not merely coincident: moving the target
+        // takes the endpoint with it.
+        reloaded
+            .apply(EditCommand::move_node(elsewhere, Vec2::new(0.0, 120.0)))
+            .unwrap();
+        assert_eq!(
+            connector_of(&reloaded, arrow).end.point,
+            Vec2::new(600.0, 170.0)
+        );
+
+        assert!(editor.undo(), "the whole endpoint drag is one step");
+        assert_eq!(connector_of(&editor, arrow), before);
+        assert!(editor.redo());
+        assert_eq!(connector_of(&editor, arrow), rebound);
+        // The opposite end never entered any of it.
+        assert_eq!(connector_of(&editor, arrow).start, before.start);
+    }
+
+    /// A whole-connector body drag translates the free ends and leaves a bound
+    /// one on its element — and the ordered identity survives, so an arrow that
+    /// pointed left still points left afterwards.
+    #[test]
+    fn translating_a_connector_keeps_bound_ends_and_endpoint_order() {
+        let (mut editor, arrow, _) = editor_with_a_bound_arrow();
+        // Detach the end and point it back leftwards past its own start, so the
+        // derived rectangle and the ordered segment disagree.
+        assert!(editor.set_connector_endpoint(
+            arrow,
+            crate::models::ConnectorEnd::End,
+            Vec2::new(-140.0, 260.0),
+            None,
+        ));
+        let before = connector_of(&editor, arrow);
+
+        assert!(editor.translate_connector(arrow, Vec2::new(10.0, -20.0)));
+
+        let moved = connector_of(&editor, arrow);
+        assert_eq!(moved.start, before.start, "a bound end does not translate");
+        assert_eq!(moved.end.point, before.end.point + Vec2::new(10.0, -20.0));
+        assert!(moved.end.point.x < moved.start.point.x, "still points left");
+        assert_eq!(
+            editor.world().nodes().bounds(arrow),
+            moved.bounds(),
+            "the derived rectangle drifted from the segment"
+        );
+    }
+
     // ---- §9's text -----------------------------------------------------
+
+    /// **A committed label lives in the document, not in the editor.**
+    ///
+    /// Asserted on the two kinds whose labels were being dropped — a drawn
+    /// shape and a straight connector — end to end: commit, read it back, save
+    /// and reload, then undo and redo. Nothing here holds an `InputState`, so
+    /// a label that survives this cannot be living in transient editor state.
+    #[test]
+    fn a_label_typed_onto_a_shape_or_a_connector_outlives_the_editor() {
+        let (mut editor, arrow, shape) = editor_with_a_bound_arrow();
+
+        assert!(editor.commit_text(TextTarget::Node(shape), "  step one  "));
+        assert!(editor.commit_text(TextTarget::Node(arrow), "yes"));
+        assert_eq!(editor.text_of(TextTarget::Node(shape)), Some("step one"));
+        assert_eq!(editor.text_of(TextTarget::Node(arrow)), Some("yes"));
+
+        let mut reloaded = FlowEditor::new();
+        assert!(reloaded.load_document(editor.to_document()).is_clean());
+        assert_eq!(reloaded.text_of(TextTarget::Node(shape)), Some("step one"));
+        assert_eq!(reloaded.text_of(TextTarget::Node(arrow)), Some("yes"));
+
+        assert!(editor.undo());
+        assert_eq!(editor.text_of(TextTarget::Node(arrow)), None);
+        assert_eq!(
+            editor.text_of(TextTarget::Node(shape)),
+            Some("step one"),
+            "one commit is one step"
+        );
+        assert!(editor.redo());
+        assert_eq!(editor.text_of(TextTarget::Node(arrow)), Some("yes"));
+
+        // A move and a resize are geometry, not text: the label rides along.
+        editor
+            .apply(EditCommand::move_node(shape, Vec2::new(30.0, 12.0)))
+            .unwrap();
+        editor
+            .apply(EditCommand::resize_node(shape, Vec2::new(180.0, 60.0)))
+            .unwrap();
+        assert_eq!(editor.text_of(TextTarget::Node(shape)), Some("step one"));
+        assert_eq!(editor.text_of(TextTarget::Node(arrow)), Some("yes"));
+    }
 
     /// **Existing text is editable again, not merely replaceable.**
     ///
