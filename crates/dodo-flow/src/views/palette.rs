@@ -90,7 +90,7 @@ use crate::{
     views::{
         FlowView,
         flow::KEY_CONTEXT,
-        keymap::{Delete, SelectTool, ToggleToolLock},
+        keymap::{Delete, InsertImage, SelectTool, ToggleToolLock},
     },
 };
 
@@ -127,13 +127,22 @@ pub enum Glyph {
     /// The tool lock, in either state — see the module doc for why one glyph
     /// covers both.
     Lock,
+    /// **§10's Insert image action.**
+    ///
+    /// Beside the tools rather than among them, because it is not one: picking
+    /// it opens a file dialog and drops an element in the middle of the view,
+    /// and it changes nothing about what the next press means. §45's rule is
+    /// what makes that distinction load-bearing — see
+    /// [`CanvasTool`](crate::interaction::CanvasTool)'s own doc for why an
+    /// image has no tool.
+    Picture,
 }
 
 impl Glyph {
     /// The glyphs that are not a tool's, for the tests. Every *tool's* comes
     /// from [`CanvasTool::ALL`], so there is no second list of the eight.
     #[cfg(test)]
-    const ACTIONS: &'static [Glyph] = &[Glyph::Lock, Glyph::Trash];
+    const ACTIONS: &'static [Glyph] = &[Glyph::Lock, Glyph::Trash, Glyph::Picture];
 
     /// A short stable name, for the element id. **Not user-facing** — the
     /// labels are `dodo_i18n::flow`'s.
@@ -142,6 +151,7 @@ impl Glyph {
             Glyph::Tool(tool) => tool.name(),
             Glyph::Trash => "delete",
             Glyph::Lock => "tool-lock",
+            Glyph::Picture => "insert-image",
         }
     }
 }
@@ -181,6 +191,7 @@ pub fn palette(view: Entity<FlowView>, state: PaletteState, cx: &App) -> impl In
                 .map(|tool| tool_button(*tool, state.tool, view.clone(), cx)),
         )
         .child(divider(cx))
+        .child(image_button(view.clone(), cx))
         .child(lock_button(state.tool_locked, view.clone(), cx))
         .child(delete_button(state.can_delete, view, cx))
 }
@@ -213,6 +224,23 @@ fn tool_button(
         // canvas underneath it.
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             view.update(cx, |this, cx| this.set_tool(tool, window, cx));
+        })
+}
+
+/// **§10's Insert image action**: opens the platform's file picker.
+///
+/// Never muted, unlike Delete — there is no state in which inserting a picture
+/// means nothing. A user who changes their mind cancels the dialog, which
+/// `views::flow`'s picker treats as no outcome at all rather than as a failure.
+fn image_button(view: Entity<FlowView>, cx: &App) -> impl IntoElement {
+    shell(Glyph::Picture, false, true, cx)
+        .tooltip(move |window, cx| {
+            Tooltip::new(t(flow::Text::ActionInsertImage, cx))
+                .action(&InsertImage, Some(KEY_CONTEXT))
+                .build(window, cx)
+        })
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            view.update(cx, |this, cx| this.insert_image(window, cx));
         })
 }
 
@@ -347,6 +375,20 @@ fn strokes(glyph: Glyph, box_: Rect, ink: Color) -> Vec<(Outline, PathPaint)> {
         Glyph::Tool(tool) => tool,
         Glyph::Trash => return trash_glyph(box_).map(|outline| (outline, stroke)).collect(),
         Glyph::Lock => return lock_glyph(box_).map(|outline| (outline, stroke)).collect(),
+        Glyph::Picture => {
+            // The frame is the canvas's own rectangle builder, for the module
+            // doc's reason: it is the shape the action creates. What the frame
+            // *contains* is hand-built, because a picture's contents are the
+            // one thing this crate cannot borrow from a painter.
+            let mut paths = Vec::with_capacity(3);
+            if let Some(outline) = shapes::outline_for_node(NodeShape::Rectangle, box_, 2.0) {
+                paths.push((outline, stroke));
+            }
+            let (hill, sun) = picture_glyph(box_);
+            paths.push((hill, stroke));
+            paths.push((sun, fill));
+            return paths;
+        }
     };
 
     match tool {
@@ -438,6 +480,29 @@ pub fn trash_glyph(box_: Rect) -> impl Iterator<Item = Outline> {
         .line_to(at(0.57, 0.84));
 
     [lid, body, ribs].into_iter()
+}
+
+/// **The Insert image glyph's contents**: a hill and a sun, inside the frame
+/// the caller draws.
+///
+/// The two-shape picture every icon set uses for "image", because the frame
+/// alone is the rectangle tool's glyph and a button that draws what another
+/// button draws is worse than no button. Fractions of the box, like every other
+/// hand-built glyph here, so it is crisp at any button size.
+pub fn picture_glyph(box_: Rect) -> (Outline, Outline) {
+    let (o, s) = (box_.origin, box_.size);
+    let at = move |x: f32, y: f32| Vec2::new(o.x + s.x * x, o.y + s.y * y);
+
+    let mut hill = Outline::with_capacity(4);
+    hill.move_to(at(0.08, 0.78))
+        .line_to(at(0.36, 0.44))
+        .line_to(at(0.62, 0.78))
+        .line_to(at(0.74, 0.64))
+        .line_to(at(0.92, 0.84));
+
+    let sun = shapes::ellipse(Rect::new(at(0.62, 0.16), Vec2::new(s.x * 0.16, s.y * 0.16)));
+
+    (hill, sun)
 }
 
 /// The tool lock's glyph: a padlock, stroked.

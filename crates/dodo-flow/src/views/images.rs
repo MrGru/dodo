@@ -159,6 +159,28 @@ impl ImageCache {
         image
     }
 
+    /// **Files an already-decoded picture**, for the insert path.
+    ///
+    /// The insert decodes before the resource exists — it is where the pixel
+    /// dimensions come from — and this is what stops that work being thrown
+    /// away and repeated on the very next frame.
+    pub fn prime(&mut self, handle: ImageHandle, image: Arc<RenderImage>) {
+        self.clock += 1;
+        let bytes = decoded_bytes(&image);
+        if let Some(previous) = self.entries.insert(
+            handle,
+            Entry {
+                image: Some(image),
+                bytes,
+                used: self.clock,
+            },
+        ) {
+            self.bytes = self.bytes.saturating_sub(previous.bytes);
+        }
+        self.bytes += bytes;
+        self.evict();
+    }
+
     /// Drops least-recently-used entries until the cache is back under
     /// [`EVICT_TO_FRACTION`](crate::render::cache::EVICT_TO_FRACTION) of its
     /// bound.
@@ -211,7 +233,18 @@ fn decoded_bytes(image: &RenderImage) -> usize {
 /// format tag to GPUI's, which is one `match` and is here rather than in
 /// `models/` because `models/` may not name a UI framework.
 fn decode(resource: &ImageResource, cx: &App) -> Option<Arc<RenderImage>> {
-    let format = match resource.format {
+    decode_bytes(resource.format, &resource.bytes, cx)
+}
+
+/// The same decode, before there is a resource to hold the bytes.
+///
+/// The insert path needs it in that order: a resource carries its pixel
+/// dimensions, and the only thing that knows them is a decoder. So the file is
+/// decoded once, its size is read off the result, and the resource is built
+/// from both — with the decoded image [`primed`](ImageCache::prime) into the
+/// cache so the frame that follows does not decode it a second time.
+pub fn decode_bytes(format: ImageFormat, bytes: &[u8], cx: &App) -> Option<Arc<RenderImage>> {
+    let format = match format {
         ImageFormat::Png => GpuiImageFormat::Png,
         ImageFormat::Jpeg => GpuiImageFormat::Jpeg,
         ImageFormat::Gif => GpuiImageFormat::Gif,
@@ -221,9 +254,15 @@ fn decode(resource: &ImageResource, cx: &App) -> Option<Arc<RenderImage>> {
         ImageFormat::Tiff => GpuiImageFormat::Tiff,
     };
 
-    gpui::Image::from_bytes(format, resource.bytes.to_vec())
+    gpui::Image::from_bytes(format, bytes.to_vec())
         .to_image_data(cx.svg_renderer())
         .ok()
+}
+
+/// The pixel size of a decoded picture, as two plain numbers.
+pub fn decoded_size(image: &RenderImage) -> (u32, u32) {
+    let size = image.size(0);
+    (size.width.0.max(0) as u32, size.height.0.max(0) as u32)
 }
 
 /// **The child's box, for a crop** — the whole of "a crop is metadata".

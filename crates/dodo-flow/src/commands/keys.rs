@@ -74,6 +74,15 @@ pub enum EditAction {
     /// to Select. Like [`EditAction::Tool`] it is not an edit — it changes what
     /// the *next* gesture means and touches no document.
     ToggleToolLock,
+    /// **§10's Insert image**, from the palette or from the keyboard.
+    ///
+    /// An action rather than a tool, for the reason
+    /// [`CanvasTool`](crate::interaction::CanvasTool)'s doc gives: it opens a
+    /// file dialog and inserts an element, and it changes nothing about what
+    /// the next press means. It is in *this* table anyway, because this is the
+    /// binding table and a second one for one row would be a second place a
+    /// keystroke collision could hide.
+    InsertImage,
     /// §45's tool activation. **Not an edit**, despite the type's name: picking
     /// a tool changes what the next press means and touches no document. It is
     /// here because this is the binding table, and a second table for one kind
@@ -92,6 +101,7 @@ impl EditAction {
             EditAction::Redo => "redo",
             EditAction::Delete => "delete",
             EditAction::ToggleToolLock => "toggle-tool-lock",
+            EditAction::InsertImage => "insert-image",
             EditAction::Tool(tool) => tool.name(),
         }
     }
@@ -139,6 +149,13 @@ const UNIVERSAL: &[Binding] = &[
     Binding {
         keystroke: "q",
         action: EditAction::ToggleToolLock,
+    },
+    // `i` for image, and free on every host: the tool letters take v, h, r, d,
+    // o, a, l, n and t, and `no_keystroke_is_bound_to_two_actions` is what says
+    // so rather than this comment.
+    Binding {
+        keystroke: "i",
+        action: EditAction::InsertImage,
     },
 ];
 

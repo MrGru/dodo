@@ -88,13 +88,14 @@ use dodo_i18n::{flow, t};
 use gpui::{
     App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior,
     InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Path, PinchEvent, Pixels, Point, Render,
-    ScrollWheelEvent, SharedString, Styled, Window, canvas, div, px,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Path, PathPromptOptions, PinchEvent, Pixels,
+    Point, Render, ScrollWheelEvent, SharedString, Styled, Window, canvas, div, px,
 };
 use gpui::{AppContext as _, Div};
 use gpui_component::{
-    ActiveTheme,
+    ActiveTheme, WindowExt as _,
     input::{Input, InputState},
+    notification::Notification,
     slider::{SliderEvent, SliderState},
 };
 
@@ -108,10 +109,10 @@ use crate::{
         InteractionMachine, PointerButton, TextTarget, resize_keeps_aspect,
     },
     models::{
-        Color, EdgeIndex, EdgeRouting, FlowDocument, FontFamily, NodeIndex, RenderQuality,
-        RenderStyle, SketchStyle,
+        Color, EdgeIndex, EdgeRouting, FlowDocument, FontFamily, ImageFormat, ImageResource,
+        NodeIndex, RenderQuality, RenderStyle, SketchStyle,
     },
-    properties::{ArrowKind, Availability, ControlState},
+    properties::{ArrowKind, Availability, ControlState, SelectionKind},
     render::{
         GridLevel, GridLimits, GridSettings, PaintPlan, PaintStats, SceneInk, SceneOptions,
         SceneStats, WindowPainter,
@@ -130,10 +131,35 @@ use crate::{
     spatial::{SpatialIndex, SyncReport, VisibleSet},
     views::{
         images::{self, ImageCache},
-        keymap::{Delete, Redo, SelectTool, ToggleToolLock, Undo},
+        keymap::{Delete, InsertImage, Redo, SelectTool, ToggleToolLock, Undo},
         nodes, palette, properties,
     },
 };
+
+/// **One image file, read** — the whole of what happens off the UI thread when
+/// a picker returns.
+///
+/// `None` covers an extension dodo has no decoder for and a file that cannot be
+/// read, and the two are deliberately one answer: they mean the same thing to a
+/// user, and the caller says it once.
+///
+/// The *dimensions* are not here, and that is the interesting half. They are the
+/// decoder's answer and the decoder is `gpui`'s — reachable only with an `App`,
+/// which a background task does not have. **No new package was worth the
+/// difference**: `image` is already in the graph under `gpui`, but naming it
+/// here would be a new direct edge in `Cargo.lock` and a line in
+/// `THIRD-PARTY-NOTICES.md` to save one decode per inserted picture, on a path
+/// that has just waited for a human to click through a file dialog. So the
+/// insert decodes once on the UI thread, reads the size off the result, and
+/// primes [`ImageCache`] with it so the next frame does not decode it again.
+fn read_image_bytes(path: &std::path::Path) -> Option<(ImageFormat, Vec<u8>)> {
+    let format = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(ImageFormat::of_extension)?;
+
+    Some((format, std::fs::read(path).ok()?))
+}
 
 /// The key-binding context the canvas establishes on its root, so canvas
 /// bindings fire only while it holds focus and never leak into another tool —
@@ -812,10 +838,20 @@ impl FlowView {
             return None;
         }
 
-        let sections = crate::properties::sections_for(&crate::properties::selection_kinds(world));
+        let kinds = crate::properties::selection_kinds(world);
+        let sections = crate::properties::sections_for(&kinds);
         if sections.is_empty() {
             return None;
         }
+
+        // The Actions row's list is the *leading* kind's, which is the same
+        // rule every other control on a mixed selection follows — see
+        // `crate::properties`' decision 3. A selection holding an image and a
+        // shape has no Crop, because `sections_for` intersects and the two
+        // kinds' action lists differ.
+        let actions = crate::properties::ElementAction::for_kind(
+            kinds.first().copied().unwrap_or(SelectionKind::Node),
+        );
 
         let style = nodes
             .iter()
@@ -842,6 +878,8 @@ impl FlowView {
                 world.settings().render_style == RenderStyle::Sketch,
             ),
             has_link: self.editor.selection_link().is_some(),
+            crop: self.editor.selection_crop(),
+            actions,
         })
     }
 
@@ -868,6 +906,13 @@ impl FlowView {
             properties::Change::Action(action) => match action {
                 crate::properties::ElementAction::Duplicate => self.editor.duplicate_selection(),
                 crate::properties::ElementAction::Delete => self.editor.delete_selection(),
+                // **§10's crop, and the whole of it is one call.** What a press
+                // means is decided per element by
+                // `properties::crop_choice`, and a press when it would mean
+                // nothing changes nothing — the button is drawn muted for
+                // exactly that case, so this arm is also the answer if somebody
+                // reaches it another way.
+                crate::properties::ElementAction::Crop => self.editor.crop_selection(),
                 _ => {
                     self.open_prompt(properties::PromptKind::Link, window, cx);
                     false
@@ -1955,6 +2000,134 @@ impl FlowView {
         self.delete_selection(window, cx);
     }
 
+    /// `i`, and the palette's Insert image button.
+    fn on_insert_image(&mut self, _: &InsertImage, window: &mut Window, cx: &mut Context<Self>) {
+        self.insert_image(window, cx);
+    }
+
+    /// **§10's Insert image**, from the palette or from `i`.
+    ///
+    /// Opens the platform's picker and does nothing else on this frame: the
+    /// read, the decode and the edit all happen when the user has chosen, which
+    /// may be a minute later or never. Cancelling is not an outcome anybody has
+    /// to handle — the continuation simply does not run, which is the same
+    /// shape `dodo-api-explorer`'s file picker uses.
+    ///
+    /// **The bytes are read and measured off the UI thread.** A photograph is
+    /// tens of megabytes and `image`'s dimension probe is a decode of the
+    /// header; doing either on the main thread would drop frames on a canvas
+    /// that is deliberately repainted only when something changed.
+    pub fn insert_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The palette is a sibling element, so clicking it moves the focus off
+        // the canvas and every binding scoped to `KEY_CONTEXT` would go dead —
+        // the same fix `set_tool` makes and for the same reason.
+        self.focus_handle.clone().focus(window, cx);
+
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+
+        cx.spawn_in(window, async move |view, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { read_image_bytes(&path) })
+                .await;
+
+            let _ = view.update_in(cx, |this, window, cx| {
+                if this.place_read_image(loaded, cx) {
+                    return;
+                }
+                // **Said out loud rather than swallowed.** A picker that
+                // accepted a file and then did nothing is the "control that
+                // produces nothing" failure this crate keeps meeting; the
+                // message is the honest half of a format dodo cannot read.
+                window.push_notification(
+                    Notification::error(t(flow::Text::ImageNotReadable, cx)),
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    /// **Decodes what the picker returned and places it**, answering whether it
+    /// could.
+    ///
+    /// The decode is here rather than in the background task because it is
+    /// `gpui`'s and needs an `App` — see [`read_image_bytes`] — and its result
+    /// is kept twice on purpose: the pixel dimensions go into the document,
+    /// where every later question about the picture's shape reads them without
+    /// touching a byte, and the decoded image is primed into the cache so the
+    /// frame after this one does not repeat the work.
+    fn place_read_image(
+        &mut self,
+        loaded: Option<(ImageFormat, Vec<u8>)>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((format, bytes)) = loaded else {
+            return false;
+        };
+        let Some(decoded) = images::decode_bytes(format, &bytes, cx) else {
+            return false;
+        };
+
+        let (width, height) = images::decoded_size(&decoded);
+        let resource = ImageResource::new(format, width, height, bytes);
+        self.image_cache.prime(resource.handle(), decoded);
+        self.place_image(resource, cx);
+        true
+    }
+
+    /// **Puts a read picture on the canvas**, centred on the view.
+    ///
+    /// Centred rather than placed under the pointer, because the pointer is
+    /// wherever it was left while a modal file dialog was open — which is
+    /// nowhere in particular, and often outside the window. The middle of what
+    /// the user is looking at is the one position that is never a surprise.
+    ///
+    /// `room` is three quarters of the visible world, so the picture lands
+    /// inside the view with its grips reachable rather than filling it edge to
+    /// edge.
+    fn place_image(&mut self, resource: ImageResource, cx: &mut Context<Self>) {
+        let visible = self.viewport.visible_world_rect();
+        let room = Vec2::new(visible.size.x * 0.75, visible.size.y * 0.75);
+
+        if self
+            .editor
+            .insert_image(resource, visible.center(), room)
+            .is_some()
+        {
+            self.refresh_snapshot();
+            cx.notify();
+        }
+    }
+
+    /// **§10's Crop action**, from the property panel.
+    ///
+    /// One press, one undo step, whatever the selection holds — the decision
+    /// per element and the edit are both
+    /// [`FlowEditor::crop_selection`](crate::commands::FlowEditor::crop_selection)'s,
+    /// so this is the focus and the repaint and nothing else. See
+    /// [`crop_choice`](crate::properties::crop_choice) for what a press means.
+    pub fn crop_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.clone().focus(window, cx);
+
+        if self.editor.crop_selection() {
+            self.refresh_snapshot();
+            cx.notify();
+        }
+    }
+
     /// `q`, and the palette's toggle.
     fn on_toggle_tool_lock(
         &mut self,
@@ -2299,6 +2472,7 @@ impl Render for FlowView {
             .on_action(cx.listener(Self::on_redo))
             .on_action(cx.listener(Self::on_select_tool))
             .on_action(cx.listener(Self::on_delete))
+            .on_action(cx.listener(Self::on_insert_image))
             .on_action(cx.listener(Self::on_toggle_tool_lock))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))

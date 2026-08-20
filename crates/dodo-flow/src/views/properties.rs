@@ -65,7 +65,8 @@ use crate::{
     },
     properties::{
         ArrowEnd, ArrowKind, Availability, BACKGROUND_SWATCHES, ControlState, CornerStyle,
-        ElementAction, PanelSection, STROKE_SWATCHES, StrokeDashStep, StrokeWidthStep, hex,
+        CropChoice, ElementAction, PanelSection, STROKE_SWATCHES, StrokeDashStep, StrokeWidthStep,
+        hex,
     },
     render::{
         hatch,
@@ -143,6 +144,19 @@ pub struct PanelState {
     /// Whether the selection carries a hyperlink, which is what fills the Link
     /// button.
     pub has_link: bool,
+    /// **What the Crop button would do** (§10), or `None` when it would do
+    /// nothing — in which case it is drawn muted with a tooltip that says why,
+    /// exactly as Sloppiness is in clean mode. See
+    /// [`crop_choice`](crate::properties::crop_choice).
+    pub crop: Option<CropChoice>,
+    /// **The Actions row's buttons**, from
+    /// [`ElementAction::for_kind`](crate::properties::ElementAction::for_kind).
+    ///
+    /// Carried rather than recomputed in the render body, because it is the one
+    /// row whose *list* depends on what is selected — an image gets Crop and
+    /// nothing else does — and deciding that in a `render` is precisely what
+    /// `crate::properties` exists to prevent.
+    pub actions: &'static [ElementAction],
 }
 
 impl PanelState {
@@ -412,22 +426,47 @@ fn row(
             view,
             cx,
         ),
+        // **The one row whose button list depends on the selection's kind**
+        // (Phase 12): an image gets a fourth, Crop. The list is
+        // `ElementAction::for_kind`'s and is not restated here, for the reason
+        // the whole of `crate::properties` exists.
         PanelSection::Actions => {
             let linked = state.has_link;
-            choices(
-                ElementAction::for_kind(crate::properties::SelectionKind::Node),
-                move |it| linked && *it == ElementAction::Link,
-                |it| PanelGlyph::Action(*it),
-                |it| match it {
-                    ElementAction::Duplicate => flow::Text::ActionDuplicate,
-                    ElementAction::Delete => flow::Text::Delete,
-                    _ => flow::Text::ActionLink,
-                },
-                |it| Change::Action(*it),
-                Availability::Live,
-                view,
-                cx,
-            )
+            let crop = state.crop;
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .children(state.actions.iter().map(|action| {
+                    let (label, availability) = match action {
+                        ElementAction::Duplicate => {
+                            (flow::Text::ActionDuplicate, Availability::Live)
+                        }
+                        ElementAction::Delete => (flow::Text::Delete, Availability::Live),
+                        // Two labels and a muted third state, all from one
+                        // pure answer — see `properties::crop_choice`.
+                        ElementAction::Crop => match crop {
+                            Some(CropChoice::ToFrame) => {
+                                (flow::Text::ActionCropToFrame, Availability::Live)
+                            }
+                            Some(CropChoice::Reset) => {
+                                (flow::Text::ActionCropWhole, Availability::Live)
+                            }
+                            None => (flow::Text::CropNeedsFrame, Availability::NeedsSketchMode),
+                        },
+                        _ => (flow::Text::ActionLink, Availability::Live),
+                    };
+                    button(
+                        PanelGlyph::Action(*action),
+                        linked && *action == ElementAction::Link,
+                        availability,
+                        label,
+                        Change::Action(*action),
+                        view.clone(),
+                        cx,
+                    )
+                }))
+                .into_any_element()
         }
     };
 

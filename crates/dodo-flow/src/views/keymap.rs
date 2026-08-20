@@ -72,7 +72,15 @@ actions!(
         /// rebind changes the hint and nothing has to be kept in step.
         Delete,
         /// §45's tool lock.
-        ToggleToolLock
+        ToggleToolLock,
+        /// **§10's Insert image**: opens the platform's file picker and drops
+        /// the chosen picture in the middle of the view.
+        ///
+        /// An action rather than a tool — see
+        /// [`keys::EditAction::InsertImage`](crate::commands::keys::EditAction::InsertImage)
+        /// — and, like Delete, it is what the palette button names in its
+        /// tooltip so the keystroke beside the label is the real binding.
+        InsertImage
     ]
 );
 
@@ -96,6 +104,9 @@ fn binding(row: keys::Binding) -> KeyBinding {
         keys::EditAction::Delete => KeyBinding::new(row.keystroke, Delete, Some(KEY_CONTEXT)),
         keys::EditAction::ToggleToolLock => {
             KeyBinding::new(row.keystroke, ToggleToolLock, Some(KEY_CONTEXT))
+        }
+        keys::EditAction::InsertImage => {
+            KeyBinding::new(row.keystroke, InsertImage, Some(KEY_CONTEXT))
         }
         keys::EditAction::Tool(tool) => {
             KeyBinding::new(row.keystroke, SelectTool { tool }, Some(KEY_CONTEXT))
