@@ -140,6 +140,7 @@ pub struct EdgeSpec {
     pub routing: EdgeRouting,
     pub style: ElementStyle,
     pub label: Option<String>,
+    pub link: Option<String>,
     pub z: i32,
     pub hidden: bool,
 }
@@ -153,6 +154,7 @@ impl EdgeSpec {
             routing: EdgeRouting::default(),
             style: ElementStyle::default(),
             label: None,
+            link: None,
             z: 0,
             hidden: false,
         }
@@ -191,6 +193,10 @@ pub struct EdgeStore {
     /// frame. An `Arc` clone is a refcount bump; a `String` clone is an
     /// allocation, which is what §40 rule 10 is about.
     labels: Vec<Option<Arc<str>>>,
+    /// The edge's hyperlink. A `String` rather than an `Arc<str>` for the
+    /// reason [`NodeCold::link`](crate::runtime::NodeCold::link) gives: nothing
+    /// per frame carries a clone of it.
+    links: Vec<Option<String>>,
 }
 
 impl EdgeStore {
@@ -226,6 +232,7 @@ impl EdgeStore {
         self.z.reserve(additional);
         self.styles.reserve(additional);
         self.labels.reserve(additional);
+        self.links.reserve(additional);
     }
 
     pub fn push(&mut self, spec: EdgeSpec) -> EdgeIndex {
@@ -244,6 +251,7 @@ impl EdgeStore {
         self.z.push(spec.z);
         self.styles.push(spec.style);
         self.labels.push(spec.label.map(Arc::from));
+        self.links.push(spec.link);
 
         index
     }
@@ -337,6 +345,20 @@ impl EdgeStore {
 
     pub fn set_style(&mut self, edge: EdgeIndex, style: ElementStyle) {
         self.styles[edge.index()] = style;
+    }
+
+    /// **The edge's place in the paint order.** See
+    /// [`NodeStore::set_z`](crate::runtime::NodeStore::set_z).
+    pub fn set_z(&mut self, edge: EdgeIndex, z: i32) {
+        self.z[edge.index()] = z;
+    }
+
+    pub fn link(&self, edge: EdgeIndex) -> Option<&str> {
+        self.links[edge.index()].as_deref()
+    }
+
+    pub fn set_link(&mut self, edge: EdgeIndex, link: Option<String>) {
+        self.links[edge.index()] = link;
     }
 
     pub fn set_label(&mut self, edge: EdgeIndex, label: Option<String>) {

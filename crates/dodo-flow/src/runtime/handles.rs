@@ -213,6 +213,22 @@ impl HandleStore {
         &self.ids[handle.index()]
     }
 
+    /// **One handle as the spec that would recreate it**, for a duplicate.
+    ///
+    /// Here rather than assembled at the call site because the store holds a
+    /// handle in six parallel arrays and a caller that read five of them would
+    /// produce a copy that differs from its original in the one it forgot.
+    pub fn spec(&self, handle: HandleIndex) -> HandleSpec {
+        HandleSpec {
+            id: self.id(handle).clone(),
+            placement: self.placement(handle),
+            direction: self.direction(handle),
+            offset: self.offset(handle),
+            max_connections: self.limit(handle),
+            hidden: self.is_hidden(handle),
+        }
+    }
+
     pub fn contains(&self, handle: HandleIndex) -> bool {
         handle.index() < self.owners.len()
     }

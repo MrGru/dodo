@@ -892,6 +892,7 @@ mod tests {
         ("commands/gesture.rs", include_str!("commands/gesture.rs")),
         ("commands/history.rs", include_str!("commands/history.rs")),
         ("commands/keys.rs", include_str!("commands/keys.rs")),
+        ("commands/layers.rs", include_str!("commands/layers.rs")),
         ("geometry/mod.rs", include_str!("geometry/mod.rs")),
         ("geometry/arrow.rs", include_str!("geometry/arrow.rs")),
         ("geometry/bounds.rs", include_str!("geometry/bounds.rs")),

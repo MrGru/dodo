@@ -152,6 +152,25 @@ pub enum EditCommand {
 
     /// §30's `EditText`, for an edge's label.
     SetEdgeLabels(Vec<(EdgeIndex, Option<String>)>),
+
+    /// **§32's z, as the property panel's Layers row writes it.**
+    ///
+    /// Not on §30's list under any name, and it is an edit for the same reason
+    /// [`SetEdgeRouting`](EditCommand::SetEdgeRouting) is: it is document data a
+    /// user changes, it survives a save, and it has to survive an undo.
+    /// Absolute rather than a nudge, so the inverse is the same command with the
+    /// old depths — a "send backward" applied twice and undone once must not
+    /// leave the element one step out.
+    SetNodeZ(Vec<(NodeIndex, i32)>),
+
+    /// The same, for edges.
+    SetEdgeZ(Vec<(EdgeIndex, i32)>),
+
+    /// **A hyperlink on an element.** `None` clears it.
+    SetNodeLinks(Vec<(NodeIndex, Option<String>)>),
+
+    /// The same, for edges.
+    SetEdgeLinks(Vec<(EdgeIndex, Option<String>)>),
 }
 
 impl EditCommand {
@@ -201,6 +220,14 @@ impl EditCommand {
         EditCommand::SetNodeLabels(vec![(node, label)])
     }
 
+    pub fn depth_node(node: NodeIndex, z: i32) -> EditCommand {
+        EditCommand::SetNodeZ(vec![(node, z)])
+    }
+
+    pub fn link_node(node: NodeIndex, link: Option<String>) -> EditCommand {
+        EditCommand::SetNodeLinks(vec![(node, link)])
+    }
+
     /// A short, stable name for this kind of edit. For tests and for a debug
     /// overlay; **not** a user-facing string — nothing here goes through
     /// `dodo-i18n`, and nothing here reaches a user until Phase 8 gives it a
@@ -219,6 +246,10 @@ impl EditCommand {
             EditCommand::SetEdgeRouting(_) => "route-edges",
             EditCommand::SetNodeLabels(_) => "label-nodes",
             EditCommand::SetEdgeLabels(_) => "label-edges",
+            EditCommand::SetNodeZ(_) => "depth-nodes",
+            EditCommand::SetEdgeZ(_) => "depth-edges",
+            EditCommand::SetNodeLinks(_) => "link-nodes",
+            EditCommand::SetEdgeLinks(_) => "link-edges",
         }
     }
 
@@ -240,6 +271,10 @@ impl EditCommand {
             EditCommand::SetEdgeRouting(items) => items.is_empty(),
             EditCommand::SetNodeLabels(items) => items.is_empty(),
             EditCommand::SetEdgeLabels(items) => items.is_empty(),
+            EditCommand::SetNodeZ(items) => items.is_empty(),
+            EditCommand::SetEdgeZ(items) => items.is_empty(),
+            EditCommand::SetNodeLinks(items) => items.is_empty(),
+            EditCommand::SetEdgeLinks(items) => items.is_empty(),
         }
     }
 
@@ -283,6 +318,76 @@ impl EditCommand {
             _ => false,
         }
     }
+}
+
+impl EditCommand {
+    /// **The second coalescing rule, for a control that is dragged rather than
+    /// clicked** — the opacity slider, and any continuous property after it.
+    ///
+    /// [`merge`](EditCommand::merge) cannot serve this and the reason is worth
+    /// stating, because it is not obvious and it is where an hour goes.
+    /// [`super::history`] folds *both* halves of an entry with `merge`, so one
+    /// rule has to be right for the forward command and for its inverse. A
+    /// coalesced drag wants the **latest** forward value and the **earliest**
+    /// before-value, which are opposite folds of the same variant — a
+    /// contradiction `MoveNodes`/`SetNodePositions` avoids only by being two
+    /// variants. A style change's inverse genuinely *is* a style change, so
+    /// that trick is not available.
+    ///
+    /// So this is a different question, asked only of the forward half:
+    /// *"does `next` say the same thing as I do, about the same elements, more
+    /// recently?"* When it does, the history **replaces** the forward command
+    /// and leaves the inverse exactly as it was — which is the earliest
+    /// before-state, which is where one undo has to land.
+    ///
+    /// Only absolute per-element assignments answer `true`, and only when they
+    /// name the same elements in the same order. A command that *creates*,
+    /// *removes* or *translates* is not idempotent and must not be replaced.
+    /// [`SetNodePositions`] is deliberately excluded even though it qualifies:
+    /// it already has a `merge` rule, `merge` is tried first, and two rules for
+    /// one variant is how they drift apart.
+    pub fn supersedes(&self, next: &EditCommand) -> bool {
+        match (self, next) {
+            (EditCommand::ResizeNodes(first), EditCommand::ResizeNodes(later)) => {
+                same_keys(first, later)
+            }
+            (EditCommand::SetNodeStyles(first), EditCommand::SetNodeStyles(later)) => {
+                same_keys(first, later)
+            }
+            (EditCommand::SetEdgeStyles(first), EditCommand::SetEdgeStyles(later)) => {
+                same_keys(first, later)
+            }
+            (EditCommand::SetEdgeRouting(first), EditCommand::SetEdgeRouting(later)) => {
+                same_keys(first, later)
+            }
+            (EditCommand::SetNodeZ(first), EditCommand::SetNodeZ(later)) => same_keys(first, later),
+            (EditCommand::SetEdgeZ(first), EditCommand::SetEdgeZ(later)) => same_keys(first, later),
+            (EditCommand::SetNodeLabels(first), EditCommand::SetNodeLabels(later)) => {
+                same_keys(first, later)
+            }
+            (EditCommand::SetEdgeLabels(first), EditCommand::SetEdgeLabels(later)) => {
+                same_keys(first, later)
+            }
+            (EditCommand::SetNodeLinks(first), EditCommand::SetNodeLinks(later)) => {
+                same_keys(first, later)
+            }
+            (EditCommand::SetEdgeLinks(first), EditCommand::SetEdgeLinks(later)) => {
+                same_keys(first, later)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Whether two per-element payloads name the same elements in the same order.
+/// Only the keys are compared — the values are exactly what differs.
+fn same_keys<K: PartialEq, V>(first: &[(K, V)], later: &[(K, V)]) -> bool {
+    !first.is_empty()
+        && first.len() == later.len()
+        && first
+            .iter()
+            .zip(later)
+            .all(|((key, _), (other, _))| key == other)
 }
 
 /// Whether two positional payloads name the same nodes in the same order.

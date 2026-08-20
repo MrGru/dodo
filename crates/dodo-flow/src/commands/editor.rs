@@ -65,15 +65,25 @@ use crate::{
         apply::{EditOutcome, apply},
         edit::{EditCommand, EditError, NodeDraft},
         history::{CommandHistory, GestureId},
+        layers::{DepthSpan, LayerAction},
     },
-    geometry::RouteOptions,
+    geometry::{RouteOptions, Vec2},
     interaction::TextTarget,
     models::{
-        DocumentSettings, EdgeIndex, ElementId, ElementKind, FlowDocument, NodeIndex, RenderStyle,
-        SketchStyle,
+        DocumentSettings, EdgeIndex, EdgeRouting, ElementId, ElementKind, ElementStyle,
+        FlowDocument, NodeIndex, RenderStyle, SketchStyle,
     },
-    runtime::{BoxQuery, ConnectionRules, DirtyState, GraphWorld, LoadReport, NodeSpec},
+    runtime::{BoxQuery, ConnectionRules, DirtyState, EdgeSpec, GraphWorld, LoadReport, NodeSpec},
 };
+
+/// How far a duplicate lands from what it copied, in world units.
+///
+/// Down and to the right, and far enough that the copy is visibly a second
+/// object rather than a smear on the first — a duplicate placed exactly on top
+/// of its original is indistinguishable from nothing having happened, which is
+/// how somebody presses the button four times and then deletes what they think
+/// is one shape.
+const DUPLICATE_OFFSET: Vec2 = Vec2::new(12.0, 12.0);
 
 /// What an applied edit tells its caller.
 ///
@@ -323,6 +333,361 @@ impl FlowEditor {
                 summary.changed
             }
         }
+    }
+
+    /// **Restyles whatever is selected, through the one door** — every control
+    /// on the property panel's style rows.
+    ///
+    /// The panel hands in a closure over an [`ElementStyle`] rather than a
+    /// finished style, and that is the whole reason a fifteen-row panel needs
+    /// no fifteen methods here: a row knows one field, the editor knows the
+    /// selection and the history, and neither has to learn the other's job.
+    ///
+    /// **One gesture, and therefore one undo step**, however many elements are
+    /// selected and however the selection splits between nodes and edges —
+    /// otherwise a mixed selection restyled once would take two presses of undo
+    /// to put back, which is the sort of thing nobody notices until they are
+    /// annoyed by it.
+    ///
+    /// Answers whether the document changed, so a caller can decide about
+    /// repainting without diffing. A control set to the value it already holds
+    /// changes nothing, records nothing and consumes no undo.
+    pub fn restyle_selection(&mut self, mut edit: impl FnMut(&mut ElementStyle)) -> bool {
+        let nodes: Vec<(NodeIndex, ElementStyle)> = self
+            .world
+            .selection()
+            .nodes()
+            .iter()
+            .filter(|&&node| self.world.node_is_live(node))
+            .map(|&node| {
+                let mut style = self.world.nodes().style(node).clone();
+                edit(&mut style);
+                (node, style)
+            })
+            .collect();
+
+        let edges: Vec<(EdgeIndex, ElementStyle)> = self
+            .world
+            .selection()
+            .edges()
+            .iter()
+            .filter(|&&edge| self.world.edge_is_live(edge))
+            .map(|&edge| {
+                let mut style = self.world.edges().style(edge).clone();
+                edit(&mut style);
+                (edge, style)
+            })
+            .collect();
+
+        self.in_one_step(|editor| {
+            let mut changed = editor
+                .apply(EditCommand::SetNodeStyles(nodes))
+                .is_ok_and(|summary| summary.changed);
+            changed |= editor
+                .apply(EditCommand::SetEdgeStyles(edges))
+                .is_ok_and(|summary| summary.changed);
+            changed
+        })
+    }
+
+    /// **§8's routing, for the panel's Arrow type row.** Edges only — a node
+    /// has no route — so a selection with no edge in it changes nothing.
+    pub fn reroute_selection(&mut self, routing: EdgeRouting) -> bool {
+        let edges: Vec<(EdgeIndex, EdgeRouting)> = self
+            .world
+            .selection()
+            .edges()
+            .iter()
+            .filter(|&&edge| self.world.edge_is_live(edge))
+            .map(|&edge| (edge, routing))
+            .collect();
+
+        self.apply(EditCommand::SetEdgeRouting(edges))
+            .is_ok_and(|summary| summary.changed)
+    }
+
+    /// **Moves the selection through the paint order** — the panel's Layers
+    /// row, and the one genuinely new thing this phase adds to the document.
+    ///
+    /// The arithmetic is [`LayerAction::shift`]'s and is asserted with no world
+    /// at all; what is here is the part that needs one. It walks the **live**
+    /// elements once, folding two [`DepthSpan`]s — the selection's depths and
+    /// everything else's, the latter measured against the former's interval —
+    /// and then shifts every selected element by the one number that falls out.
+    ///
+    /// **One walk of the document per press, and none per frame.** That is the
+    /// trade this is written around: §40 rule 1 forbids a per-frame scan, and a
+    /// button press is not a frame. The alternative — keeping a sorted depth
+    /// index up to date — would be a second structure to invalidate on every
+    /// edit, for a question asked four times a session.
+    ///
+    /// One gesture, so a multiple selection is one undo step.
+    pub fn reorder_selection(&mut self, action: LayerAction) -> bool {
+        let selected_nodes: Vec<NodeIndex> = self
+            .world
+            .selection()
+            .nodes()
+            .iter()
+            .copied()
+            .filter(|&node| self.world.node_is_live(node))
+            .collect();
+        let selected_edges: Vec<EdgeIndex> = self
+            .world
+            .selection()
+            .edges()
+            .iter()
+            .copied()
+            .filter(|&edge| self.world.edge_is_live(edge))
+            .collect();
+
+        if selected_nodes.is_empty() && selected_edges.is_empty() {
+            return false;
+        }
+
+        // Pass one: the selection's own interval, which pass two is measured
+        // against. Two passes rather than one because `observe` needs the
+        // interval up front and the interval is what the first pass computes.
+        let mut selection = DepthSpan::EMPTY;
+        for &node in &selected_nodes {
+            selection.observe(self.world.nodes().z(node), i32::MAX, i32::MIN);
+        }
+        for &edge in &selected_edges {
+            selection.observe(self.world.edges().z(edge), i32::MAX, i32::MIN);
+        }
+        let (Some(low), Some(high)) = (selection.min, selection.max) else {
+            return false;
+        };
+
+        let mut others = DepthSpan::EMPTY;
+        for node in self.world.nodes().live_indices() {
+            if !selected_nodes.contains(&node) {
+                others.observe(self.world.nodes().z(node), low, high);
+            }
+        }
+        for edge in self.world.edges().live_indices() {
+            if !selected_edges.contains(&edge) {
+                others.observe(self.world.edges().z(edge), low, high);
+            }
+        }
+
+        let shift = action.shift(selection, others);
+        if shift == 0 {
+            return false;
+        }
+
+        let nodes: Vec<(NodeIndex, i32)> = selected_nodes
+            .iter()
+            .map(|&node| (node, self.world.nodes().z(node).saturating_add(shift)))
+            .collect();
+        let edges: Vec<(EdgeIndex, i32)> = selected_edges
+            .iter()
+            .map(|&edge| (edge, self.world.edges().z(edge).saturating_add(shift)))
+            .collect();
+
+        self.in_one_step(|editor| {
+            let mut changed = editor
+                .apply(EditCommand::SetNodeZ(nodes))
+                .is_ok_and(|summary| summary.changed);
+            changed |= editor
+                .apply(EditCommand::SetEdgeZ(edges))
+                .is_ok_and(|summary| summary.changed);
+            changed
+        })
+    }
+
+    /// **The hyperlink on whatever is selected**, or `None` when the selection
+    /// is empty, holds more than one element, or holds one with no link.
+    ///
+    /// One element rather than a set, because a link is a value a control shows
+    /// and edits — and there is no honest thing to show for two elements with
+    /// two different links. The panel's Link button is drawn as "set" from this.
+    pub fn selection_link(&self) -> Option<&str> {
+        let selection = self.world.selection();
+        match (selection.nodes(), selection.edges()) {
+            ([node], []) if self.world.node_is_live(*node) => {
+                self.world.nodes().cold(*node).link.as_deref()
+            }
+            ([], [edge]) if self.world.edge_is_live(*edge) => self.world.edges().link(*edge),
+            _ => None,
+        }
+    }
+
+    /// Sets or clears the hyperlink on every selected element. An empty string
+    /// clears, exactly as an empty text commit does — see
+    /// [`commit_text`](FlowEditor::commit_text) for why "empty" is a decision
+    /// this type makes rather than the view.
+    pub fn set_selection_link(&mut self, link: &str) -> bool {
+        let link = link.trim();
+        let link = (!link.is_empty()).then(|| link.to_owned());
+
+        let nodes: Vec<(NodeIndex, Option<String>)> = self
+            .world
+            .selection()
+            .nodes()
+            .iter()
+            .filter(|&&node| self.world.node_is_live(node))
+            .map(|&node| (node, link.clone()))
+            .collect();
+        let edges: Vec<(EdgeIndex, Option<String>)> = self
+            .world
+            .selection()
+            .edges()
+            .iter()
+            .filter(|&&edge| self.world.edge_is_live(edge))
+            .map(|&edge| (edge, link.clone()))
+            .collect();
+
+        self.in_one_step(|editor| {
+            let mut changed = editor
+                .apply(EditCommand::SetNodeLinks(nodes))
+                .is_ok_and(|summary| summary.changed);
+            changed |= editor
+                .apply(EditCommand::SetEdgeLinks(edges))
+                .is_ok_and(|summary| summary.changed);
+            changed
+        })
+    }
+
+    /// **Duplicates the selection**, offset by [`DUPLICATE_OFFSET`], and
+    /// selects the copies.
+    ///
+    /// Three decisions, each of which is visible the first time somebody uses
+    /// it:
+    ///
+    /// - **An edge is copied only when both of its endpoints are.** A duplicate
+    ///   of one end of a connection is not a copy of anything; it would attach
+    ///   the new edge to the *original* node and leave two edges converging on
+    ///   it, which is never what the button meant.
+    /// - **Handles are copied with their node**, so a duplicated graph node is
+    ///   connectable in the same places the original is. Without them the copy
+    ///   looks identical and cannot be wired up.
+    /// - **The copies become the selection**, so a second press duplicates the
+    ///   copy and walks the offset across the canvas, which is what every
+    ///   editor with this button does. Selecting is not an edit — see
+    ///   `commands::gesture` — so the duplication stays one undo step.
+    pub fn duplicate_selection(&mut self) -> bool {
+        let sources: Vec<NodeIndex> = self
+            .world
+            .selection()
+            .nodes()
+            .iter()
+            .copied()
+            .filter(|&node| self.world.node_is_live(node))
+            .collect();
+        if sources.is_empty() {
+            return false;
+        }
+
+        let drafts: Vec<NodeDraft> = sources
+            .iter()
+            .map(|&node| {
+                let cold = self.world.nodes().cold(node);
+                let spec = NodeSpec {
+                    id: ElementId::NONE,
+                    kind: cold.kind.clone(),
+                    position: self.world.nodes().position(node) + DUPLICATE_OFFSET,
+                    size: self.world.nodes().size(node),
+                    z: self.world.nodes().z(node),
+                    style: self.world.nodes().style(node).clone(),
+                    label: cold.label.as_deref().map(str::to_owned),
+                    parent: None,
+                    link: cold.link.clone(),
+                    hidden: self.world.nodes().is_hidden(node),
+                    locked: self.world.nodes().is_locked(node),
+                };
+                NodeDraft::new(spec).with_handles(
+                    self.world
+                        .nodes()
+                        .handles(node)
+                        .map(|handle| self.world.handles().spec(handle))
+                        .collect(),
+                )
+            })
+            .collect();
+
+        // Every edge whose *both* ends are being copied, with the ends
+        // remembered as offsets into `sources` — the new indices are not known
+        // until the nodes have been added.
+        let joins: Vec<(usize, usize, EdgeIndex)> = self
+            .world
+            .edges()
+            .live_indices()
+            .filter_map(|edge| {
+                let source = self.world.edges().source(edge).node;
+                let target = self.world.edges().target(edge).node;
+                let from = sources.iter().position(|&node| node == source)?;
+                let to = sources.iter().position(|&node| node == target)?;
+                Some((from, to, edge))
+            })
+            .collect();
+
+        self.in_one_step(|editor| {
+            let Ok(summary) = editor.apply(EditCommand::AddNodes(drafts)) else {
+                return false;
+            };
+            let added = summary.added_nodes;
+            if added.len() != sources.len() {
+                // A partial add cannot happen through `AddNodes`, but the copy
+                // below indexes into `added` and a wrong length would panic.
+                return summary.changed;
+            }
+
+            let specs: Vec<EdgeSpec> = joins
+                .iter()
+                .map(|&(from, to, edge)| EdgeSpec {
+                    id: ElementId::NONE,
+                    source: editor.copied_end(editor.world.edges().source(edge), added[from]),
+                    target: editor.copied_end(editor.world.edges().target(edge), added[to]),
+                    routing: editor.world.edges().routing(edge),
+                    style: editor.world.edges().style(edge).clone(),
+                    label: editor.world.edges().label(edge).map(|it| it.to_string()),
+                    link: editor.world.edges().link(edge).map(str::to_owned),
+                    z: editor.world.edges().z(edge),
+                    hidden: editor.world.edges().is_hidden(edge),
+                })
+                .collect();
+            let _ = editor.apply(EditCommand::Connect(specs));
+
+            editor.world.clear_selection();
+            for node in added {
+                editor.world.set_node_selected(node, true);
+            }
+            true
+        })
+    }
+
+    /// One end of a copied edge: the same handle *slot* on the copied node.
+    ///
+    /// A handle is identified by index in the world's arena, so the original's
+    /// index means nothing on the copy; the position in the node's own handle
+    /// list is what carries over, and a duplicated node's handles were pushed
+    /// in the same order.
+    fn copied_end(&self, end: crate::runtime::EdgeEnd, node: NodeIndex) -> crate::runtime::EdgeEnd {
+        let Some(handle) = end.handle.get() else {
+            return crate::runtime::EdgeEnd::node(node);
+        };
+        let slot = self
+            .world
+            .nodes()
+            .handles(end.node)
+            .position(|it| it == handle);
+        match slot.and_then(|slot| self.world.nodes().handles(node).nth(slot)) {
+            Some(copied) => crate::runtime::EdgeEnd::handle(node, copied),
+            None => crate::runtime::EdgeEnd::node(node),
+        }
+    }
+
+    /// Runs `body` inside one gesture, so everything it applies undoes together.
+    ///
+    /// A private helper rather than a pattern each method repeats: the pairing
+    /// is the whole correctness of "one press, one undo", and a method that
+    /// returned early between the two calls would leave a gesture open for the
+    /// next unrelated edit to join.
+    fn in_one_step(&mut self, body: impl FnOnce(&mut FlowEditor) -> bool) -> bool {
+        self.begin_gesture();
+        let changed = body(self);
+        self.end_gesture();
+        changed
     }
 
     /// Opens a gesture: every edit until [`end_gesture`](FlowEditor::end_gesture)

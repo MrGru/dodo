@@ -163,6 +163,15 @@ pub struct FlowNode {
     pub label: Option<String>,
     pub handles: Vec<Handle>,
     pub style: ElementStyle,
+    /// **A hyperlink on the element** — the property panel's Link action.
+    ///
+    /// A field of its own rather than a key in [`Metadata`], because the panel
+    /// edits it and every edit in this engine is a typed command over a typed
+    /// field; a free-form map would put one user-facing property outside the
+    /// undo vocabulary. It is stored verbatim and **not validated here**: what
+    /// counts as followable is the platform's answer, and `views/` is where a
+    /// platform lives.
+    pub link: Option<String>,
     pub hidden: bool,
     pub locked: bool,
 }
@@ -179,6 +188,7 @@ impl Default for FlowNode {
             label: None,
             handles: Vec::new(),
             style: ElementStyle::default(),
+            link: None,
             hidden: false,
             locked: false,
         }
@@ -246,6 +256,8 @@ pub struct FlowEdge {
     pub routing: EdgeRouting,
     pub label: Option<String>,
     pub style: ElementStyle,
+    /// A hyperlink on the edge. See [`FlowNode::link`].
+    pub link: Option<String>,
     pub z: i32,
     pub hidden: bool,
 }
@@ -259,6 +271,7 @@ impl Default for FlowEdge {
             routing: EdgeRouting::default(),
             label: None,
             style: ElementStyle::default(),
+            link: None,
             z: 0,
             hidden: false,
         }

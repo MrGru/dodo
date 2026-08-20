@@ -114,6 +114,25 @@ pub struct GraphWorld {
     ids: IdAllocator,
     settings: DocumentSettings,
     metadata: Metadata,
+
+    /// **How many elements sit off the default layer**, nodes and edges
+    /// together — the one question [`GraphWorld::is_layered`] answers, and the
+    /// reason it is a counter rather than a scan.
+    ///
+    /// Every frame asks whether z-order is in play (see
+    /// [`render::scene`](crate::render::scene)), and the answer decides both
+    /// whether the planning walk is sorted and whether a quad-bodied element
+    /// has to be promoted to a path to take its place in the order. A scan of
+    /// the document per frame is exactly what §40 rule 1 forbids; a counter
+    /// maintained by the two writers that can change a `z` costs one branch per
+    /// edit.
+    ///
+    /// **Tombstoned elements are counted too**, deliberately. A removed element
+    /// keeps its `z`, an undo can bring it back, and counting only live ones
+    /// would mean deleting the front-most shape silently reordered everything
+    /// else for a frame. Over-counting keeps the frame in layered mode, which
+    /// is the safe direction: it costs paths, never correctness.
+    nonzero_z: u32,
 }
 
 impl GraphWorld {
@@ -149,6 +168,7 @@ impl GraphWorld {
                 style: node.style.clone(),
                 label: node.label.clone(),
                 parent: node.parent,
+                link: node.link.clone(),
                 hidden: node.hidden,
                 locked: node.locked,
             });
@@ -194,6 +214,7 @@ impl GraphWorld {
                 routing: edge.routing,
                 style: edge.style.clone(),
                 label: edge.label.clone(),
+                link: edge.link.clone(),
                 z: edge.z,
                 hidden: edge.hidden,
             };
@@ -208,6 +229,13 @@ impl GraphWorld {
         }
 
         world.rules = rules;
+        world.nonzero_z = document
+            .nodes
+            .iter()
+            .filter(|node| node.z != 0)
+            .count()
+            .saturating_add(document.edges.iter().filter(|edge| edge.z != 0).count())
+            as u32;
         (world, report)
     }
 
@@ -252,6 +280,7 @@ impl GraphWorld {
                     })
                     .collect(),
                 style: self.nodes.style(node).clone(),
+                link: cold.link.clone(),
                 hidden: self.nodes.is_hidden(node),
                 locked: self.nodes.is_locked(node),
             });
@@ -266,6 +295,7 @@ impl GraphWorld {
                 routing: self.edges.routing(edge),
                 label: self.edges.label(edge).map(|it| it.to_string()),
                 style: self.edges.style(edge).clone(),
+                link: self.edges.link(edge).map(str::to_owned),
                 z: self.edges.z(edge),
                 hidden: self.edges.is_hidden(edge),
             });
@@ -715,6 +745,76 @@ impl GraphWorld {
 
         self.edges.set_label(edge, label);
         self.dirty.mark_edge(edge, EdgeDirty::LABEL);
+    }
+
+    /// **Whether anything in this world has left the default layer.**
+    ///
+    /// The frame's fast path. `false` means every element shares one `z`, so
+    /// nobody has expressed an order and the planner is free to use the one the
+    /// batching prefers; `true` means somebody pressed a Layers button and the
+    /// frame owes them the order they asked for. See
+    /// [`nonzero_z`](GraphWorld::nonzero_z) for why it is a counter and why it
+    /// counts tombstones.
+    pub fn is_layered(&self) -> bool {
+        self.nonzero_z > 0
+    }
+
+    /// Moves a node in the paint order (§32's z, and the property panel's
+    /// Layers row).
+    ///
+    /// No geometry and no spatial entry: depth changes nothing about where the
+    /// node is or how big it is. What it does change is the *frame*, so the
+    /// node's appearance version bumps — see
+    /// [`NodeStore::set_z`](crate::runtime::NodeStore::set_z).
+    pub fn set_node_z(&mut self, node: NodeIndex, z: i32) {
+        if !self.nodes.contains(node) || self.nodes.z(node) == z {
+            return;
+        }
+
+        self.count_z(self.nodes.z(node), z);
+        self.nodes.set_z(node, z);
+        self.dirty.mark_node(node, NodeDirty::STYLE);
+    }
+
+    /// Moves an edge in the paint order. See [`set_node_z`](GraphWorld::set_node_z).
+    pub fn set_edge_z(&mut self, edge: EdgeIndex, z: i32) {
+        if !self.edges.contains(edge) || self.edges.z(edge) == z {
+            return;
+        }
+
+        self.count_z(self.edges.z(edge), z);
+        self.edges.set_z(edge, z);
+        self.dirty.mark_edge(edge, EdgeDirty::STYLE);
+    }
+
+    /// Keeps [`nonzero_z`](GraphWorld::nonzero_z) exact across one `z` write —
+    /// including the write that undoes it, which is what makes the counter
+    /// symmetric rather than sticky.
+    fn count_z(&mut self, was: i32, now: i32) {
+        match (was == 0, now == 0) {
+            (true, false) => self.nonzero_z += 1,
+            (false, true) => self.nonzero_z = self.nonzero_z.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    /// Replaces a node's hyperlink. Marks nothing dirty: a link is never
+    /// painted, so no cache and no index can be stale because of it.
+    pub fn set_node_link(&mut self, node: NodeIndex, link: Option<String>) {
+        if !self.nodes.contains(node) || self.nodes.cold(node).link == link {
+            return;
+        }
+
+        self.nodes.set_link(node, link);
+    }
+
+    /// Replaces an edge's hyperlink. See [`set_node_link`](GraphWorld::set_node_link).
+    pub fn set_edge_link(&mut self, edge: EdgeIndex, link: Option<String>) {
+        if !self.edges.contains(edge) || self.edges.link(edge) == link.as_deref() {
+            return;
+        }
+
+        self.edges.set_link(edge, link);
     }
 
     // ---- removal, as a tombstone (§30) -----------------------------------

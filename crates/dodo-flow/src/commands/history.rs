@@ -222,6 +222,20 @@ impl CommandHistory {
             return;
         }
 
+        // **The second rule, for a dragged control.** See
+        // `EditCommand::supersedes`: an absolute per-element write inside one
+        // gesture replaces the forward command and leaves the inverse alone,
+        // because the inverse already holds the earliest before-state. That is
+        // what keeps a slider drag at one entry as well as at one step.
+        if let Some(gesture) = self.gesture
+            && let Some(top) = self.undos.back_mut()
+            && top.gesture == Some(gesture)
+            && top.redo.supersedes(&redo)
+        {
+            top.redo = redo;
+            return;
+        }
+
         if self.undos.len() >= self.limit {
             self.undos.pop_front();
         }

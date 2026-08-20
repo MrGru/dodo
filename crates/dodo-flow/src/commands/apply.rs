@@ -312,6 +312,74 @@ pub fn apply(world: &mut GraphWorld, command: EditCommand) -> Result<EditOutcome
                 before,
             )))
         }
+
+        EditCommand::SetNodeZ(items) => {
+            let mut before = Vec::with_capacity(items.len());
+            for (node, z) in items {
+                if !world.node_is_live(node) {
+                    continue;
+                }
+                let was = world.nodes().z(node);
+                if was == z {
+                    continue;
+                }
+                world.set_node_z(node, z);
+                before.push((node, was));
+            }
+
+            Ok(EditOutcome::from_inverse(EditCommand::SetNodeZ(before)))
+        }
+
+        EditCommand::SetEdgeZ(items) => {
+            let mut before = Vec::with_capacity(items.len());
+            for (edge, z) in items {
+                if !world.edge_is_live(edge) {
+                    continue;
+                }
+                let was = world.edges().z(edge);
+                if was == z {
+                    continue;
+                }
+                world.set_edge_z(edge, z);
+                before.push((edge, was));
+            }
+
+            Ok(EditOutcome::from_inverse(EditCommand::SetEdgeZ(before)))
+        }
+
+        EditCommand::SetNodeLinks(items) => {
+            let mut before = Vec::with_capacity(items.len());
+            for (node, link) in items {
+                if !world.node_is_live(node) {
+                    continue;
+                }
+                let was = world.nodes().cold(node).link.clone();
+                if was == link {
+                    continue;
+                }
+                world.set_node_link(node, link);
+                before.push((node, was));
+            }
+
+            Ok(EditOutcome::from_inverse(EditCommand::SetNodeLinks(before)))
+        }
+
+        EditCommand::SetEdgeLinks(items) => {
+            let mut before = Vec::with_capacity(items.len());
+            for (edge, link) in items {
+                if !world.edge_is_live(edge) {
+                    continue;
+                }
+                let was = world.edges().link(edge).map(str::to_owned);
+                if was == link {
+                    continue;
+                }
+                world.set_edge_link(edge, link);
+                before.push((edge, was));
+            }
+
+            Ok(EditOutcome::from_inverse(EditCommand::SetEdgeLinks(before)))
+        }
     }
 }
 

@@ -197,6 +197,14 @@ pub struct NodeCold {
     /// [`NodeIndex`] because the hierarchy index that resolves it is a later
     /// phase's, and a half-built index is worse than none.
     pub parent: Option<ElementId>,
+    /// The element's hyperlink — see [`FlowNode::link`](crate::models::FlowNode::link).
+    ///
+    /// Cold, and it stays cold: a link is read when the panel draws, when a
+    /// press follows one and when the document is saved. Nothing per frame
+    /// asks, so it does not earn a hot array and it does not earn an `Arc`
+    /// either — the label's `Arc` is there because a `TextPrimitive` carries a
+    /// clone of it every frame, and nothing carries this.
+    pub link: Option<String>,
 }
 
 /// What a node needs to exist.
@@ -210,6 +218,7 @@ pub struct NodeSpec {
     pub style: ElementStyle,
     pub label: Option<String>,
     pub parent: Option<ElementId>,
+    pub link: Option<String>,
     pub hidden: bool,
     pub locked: bool,
 }
@@ -225,6 +234,7 @@ impl NodeSpec {
             style: ElementStyle::default(),
             label: None,
             parent: None,
+            link: None,
             hidden: false,
             locked: false,
         }
@@ -340,6 +350,7 @@ impl NodeStore {
             kind: spec.kind,
             label: spec.label.map(Arc::from),
             parent: spec.parent,
+            link: spec.link,
         });
 
         index
@@ -509,6 +520,22 @@ impl NodeStore {
         self.cold[node.index()].label = label.map(Arc::from);
         self.touch(node);
         self.touch_text(node);
+    }
+
+    /// **The node's place in the paint order.**
+    ///
+    /// `touch` because the *frame* changes — [`render::scene`](crate::render::scene)
+    /// orders its walk by this — while the node's own geometry does not, and no
+    /// `touch_text`, because glyphs do not depend on depth.
+    pub fn set_z(&mut self, node: NodeIndex, z: i32) {
+        self.z[node.index()] = z;
+        self.touch(node);
+    }
+
+    /// Replaces the node's hyperlink. Cold, and not part of any cache key: a
+    /// link changes nothing that is drawn.
+    pub fn set_link(&mut self, node: NodeIndex, link: Option<String>) {
+        self.cold[node.index()].link = link;
     }
 
     /// Records that this node's appearance changed. See the `versions` field.

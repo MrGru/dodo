@@ -36,6 +36,7 @@ pub mod editor;
 pub mod gesture;
 pub mod history;
 pub mod keys;
+pub mod layers;
 
 pub use apply::{EditOutcome, apply};
 pub use edit::{EditCommand, EditError, NodeDraft};
@@ -43,6 +44,7 @@ pub use editor::{EditSummary, FlowEditor};
 pub use gesture::{GestureReport, apply_gesture};
 pub use history::{CommandHistory, GestureId, HistoryEntry};
 pub use keys::{Binding, EditAction};
+pub use layers::{DepthSpan, LayerAction};
 
 #[cfg(test)]
 mod tests {

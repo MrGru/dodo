@@ -157,6 +157,104 @@ impl StrokeStyle {
     }
 }
 
+/// **How a closed shape's interior is filled** (§32).
+///
+/// Three answers rather than a boolean, because the captain's property-panel
+/// reference fixes the control as hachure / cross-hatch / solid and each of the
+/// three is a genuinely different picture: a solid fill is one quad or one
+/// tessellated body, and the other two are *line sets* clipped to the shape —
+/// see [`render::hatch`](crate::render::hatch).
+///
+/// **[`Solid`](FillStyle::Solid) is the default, and that is a compatibility
+/// decision rather than a taste one.** Excalidraw defaults to hachure; every
+/// document dodo has written so far was drawn solid, and a default that changed
+/// how existing files look is the migration bug `ElementStyle`'s hand-written
+/// [`Default`] already exists to avoid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum FillStyle {
+    /// Parallel strokes at a fixed angle.
+    Hachure,
+    /// Two hachure sets at right angles.
+    CrossHatch,
+    #[default]
+    Solid,
+}
+
+impl FillStyle {
+    pub const ALL: &'static [FillStyle] =
+        &[FillStyle::Hachure, FillStyle::CrossHatch, FillStyle::Solid];
+
+    /// Whether this fill is drawn as a line set rather than as a filled body.
+    /// The one question the painter asks, so a fourth pattern is an arm here
+    /// rather than a comparison at three paint sites.
+    pub const fn is_hatched(self) -> bool {
+        matches!(self, FillStyle::Hachure | FillStyle::CrossHatch)
+    }
+
+    /// A short, stable name. **Not user-facing** — the panel's labels are
+    /// `dodo_i18n::flow`'s.
+    pub const fn name(self) -> &'static str {
+        match self {
+            FillStyle::Hachure => "hachure",
+            FillStyle::CrossHatch => "cross-hatch",
+            FillStyle::Solid => "solid",
+        }
+    }
+}
+
+/// **How wobbly one element is drawn by §13's hand.**
+///
+/// Three steps, not a number, for the same reason [`FontSize`] has four: the
+/// property panel's control is three buttons, and a discrete field means there
+/// is no second answer to "how rough is this shape?".
+///
+/// It multiplies [`SketchStyle::roughness`], which is the *document's* hand —
+/// so the document still decides what a hand looks like and each element says
+/// how hard it presses. [`Artist`](Sloppiness::Artist) is `1.0` and therefore
+/// the identity, which is what makes this field free to add to a format that
+/// already has documents in it.
+///
+/// **It means nothing in [`RenderStyle::Clean`]**, and the panel says so rather
+/// than storing a choice nobody can see — see `crate::properties`.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
+pub enum Sloppiness {
+    /// A steady hand: half the document's roughness.
+    Architect,
+    /// The document's hand, unmodified.
+    #[default]
+    Artist,
+    /// Twice the document's roughness.
+    Cartoonist,
+}
+
+impl Sloppiness {
+    pub const ALL: &'static [Sloppiness] = &[
+        Sloppiness::Architect,
+        Sloppiness::Artist,
+        Sloppiness::Cartoonist,
+    ];
+
+    /// What this step multiplies [`SketchStyle::roughness`] by.
+    pub const fn roughness_scale(self) -> f32 {
+        match self {
+            Sloppiness::Architect => 0.5,
+            Sloppiness::Artist => 1.0,
+            Sloppiness::Cartoonist => 2.0,
+        }
+    }
+
+    /// A short, stable name. **Not user-facing.**
+    pub const fn name(self) -> &'static str {
+        match self {
+            Sloppiness::Architect => "architect",
+            Sloppiness::Artist => "artist",
+            Sloppiness::Cartoonist => "cartoonist",
+        }
+    }
+}
+
 /// Arrow markers on a linear element or an edge (§32, §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ArrowMarker {
@@ -403,6 +501,12 @@ pub struct ElementStyle {
     pub opacity: f32,
     /// In world units. Ignored by kinds that are not rectangular.
     pub corner_radius: f32,
+    /// How [`fill`](ElementStyle::fill) is drawn: solid, or as one of two line
+    /// sets. Ignored by open shapes, which have no interior.
+    pub fill_style: FillStyle,
+    /// How hard §13's hand presses on this element. The identity in
+    /// [`Sloppiness::Artist`], and inert outside [`RenderStyle::Sketch`].
+    pub sloppiness: Sloppiness,
     pub font: FontStyle,
     pub start_marker: ArrowMarker,
     pub end_marker: ArrowMarker,
@@ -415,6 +519,8 @@ impl Default for ElementStyle {
             fill: None,
             opacity: 1.0,
             corner_radius: 0.0,
+            fill_style: FillStyle::default(),
+            sloppiness: Sloppiness::default(),
             font: FontStyle::default(),
             start_marker: ArrowMarker::None,
             end_marker: ArrowMarker::None,
