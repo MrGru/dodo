@@ -45,7 +45,9 @@ pub use document::{
     HandlePlacement, Metadata, handle_world_position,
 };
 pub use ids::{EdgeIndex, ElementId, HandleId, HandleIndex, IdAllocator, NodeIndex};
-pub use image::{ImageCrop, ImageFormat, ImageHandle, ImageResource, NodeImage};
+pub use image::{
+    ImageCrop, ImageFormat, ImageHandle, ImageResource, NodeImage, decode_base64, encode_base64,
+};
 pub use kind::{CustomKind, ElementKind, GraphNodeKind, LinearKind, ShapeKind};
 pub use serialization::{CURRENT_VERSION, LoadError, SaveError};
 pub use style::{

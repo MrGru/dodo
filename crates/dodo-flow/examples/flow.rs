@@ -151,15 +151,59 @@
 //! `DODO_FLOW_REPORT=1` prints the first frame's batch count, which should
 //! still be **1**.
 //!
+//! # §10's pictures, and the seven things only a person can check
+//!
+//! **Two of them are already in the document**, at the bottom of the left-hand
+//! column below the labelled edge — pan down, or press the zoom-to-fit button
+//! and look at the lower left. They show **one** picture: the left element
+//! whole, the right one squashed, at 65 % opacity with rounded corners. That
+//! pairing is the phase's own rule made visible — the document holds one copy of
+//! the bytes however many elements show it.
+//!
+//! 1. **Insert one.** The picture button in the palette, or `i`. Pick a PNG or a
+//!    JPEG; it lands in the middle of the view at its own pixel size, shrunk to
+//!    fit if it is large, and already selected. Pick the *same file* twice: two
+//!    elements, one copy of the bytes. Pick something that is not an image and
+//!    dodo has to say so rather than doing nothing.
+//! 2. **Drag a corner.** An image resizes with its proportions kept, whatever
+//!    the pointer does — that is §10's aspect lock, and it is the opposite
+//!    default from a shape. **Hold shift and the lock comes off**, which is the
+//!    one place shift means "release" rather than "constrain" and is worth
+//!    feeling once. The grips are the four small squares on the selection ring;
+//!    they appear only for a single selection and only when the element is big
+//!    enough for a toolbar.
+//! 3. **Crop it.** Squash the frame with a shift-drag, then press Crop in the
+//!    panel's Actions row: the picture stops being stretched and what you see is
+//!    a window on the middle of it. Press it again and the whole picture comes
+//!    back, with the frame's height following. With nothing to do the button is
+//!    muted and its tooltip says which gesture makes something — the same
+//!    answer Sloppiness gives in clean mode.
+//! 4. **Send it behind a shape.** Draw an ellipse over a picture: it is over it
+//!    already, because everything drawn as a path is. Now press Bring to front
+//!    on the picture — **the whole image layer moves**, so it goes over the
+//!    ellipse. *Expected to look odd*: with two pictures on opposite sides of
+//!    one ellipse, only the lower one is honoured, because the layer moves as a
+//!    whole. `render::plan`'s doc carries it.
+//! 5. **Duplicate it, then delete it, then undo everything.** Each of these is
+//!    one press of `Cmd+Z` — the insert, the move, the resize, the crop, the
+//!    duplicate and the delete — and the picture has to come back with its crop.
+//! 6. **Drag the opacity slider on a picture.** It has to fade as you drag, and
+//!    come back in one press of undo.
+//! 7. **Set Edges to Round on the uncropped picture and on the cropped one.**
+//!    *Expected to look odd, and recorded*: the uncropped one gets rounded
+//!    corners and the **cropped one does not**. A crop is a clip, and GPUI's
+//!    clip is a rectangle with no radii; `views::images` says so where it is
+//!    caused.
+//!
 //! **Hover a palette button and it tells you what it is and which key it
 //! answers to.** The label comes from `dodo_i18n::flow`, in whichever language
 //! dodo is set to; the keystroke beside it is looked up from the real binding
 //! table, so it is right by construction rather than by being kept in step.
 //! The letters, for reference:
 //!
-//! | `v` | `h` | `r` | `d` | `o` | `a` | `l` | `n` | `t` | `q` |
-//! |---|---|---|---|---|---|---|---|---|---|
-//! | select | hand | rectangle | diamond | ellipse | arrow | line | node | text | lock |
+//! | `v` | `h` | `r` | `d` | `o` | `a` | `l` | `n` | `t` | `q` | `i` |
+//! |---|---|---|---|---|---|---|---|---|---|---|
+//! | select | hand | rectangle | diamond | ellipse | arrow | line | node | text | lock | image |
 //!
 //! ## Everything else, which is the Select tool's
 //!
@@ -261,7 +305,8 @@ use dodo_flow::{
     models::{
         ArrowMarker, Color, DashPattern, EdgeRouting, ElementId, ElementKind, Endpoint,
         FlowDocument, FontFamily, FontSize, GraphNodeKind, Handle, HandleDirection,
-        HandlePlacement, NodeIndex, RenderStyle, ShapeKind, StrokeStyle, TextAlign,
+        HandlePlacement, ImageFormat, ImageResource, NodeImage, NodeIndex, RenderStyle, ShapeKind,
+        StrokeStyle, TextAlign, decode_base64,
     },
     render::registry::GenericKind,
 };
@@ -498,6 +543,42 @@ fn demo_document(nodes: usize) -> FlowDocument {
         }
     }
 
+    // ---- §10's picture, so the visual pass has one to work on ------------
+    //
+    // Two elements showing **one** resource, which is the phase's own rule made
+    // visible: crop one, move the other, and the document still holds one copy
+    // of the bytes. The second is deliberately squashed, so the Crop button
+    // starts in its "crop to the frame" state and the aspect lock has something
+    // to undo.
+    if let Some(bytes) = decode_base64(DEMO_PICTURE) {
+        let handle = document.insert_image(ImageResource::new(
+            ImageFormat::Png,
+            DEMO_PICTURE_SIZE.0,
+            DEMO_PICTURE_SIZE.1,
+            bytes,
+        ));
+
+        let whole = document.add_node(
+            ElementKind::Image,
+            Vec2::new(60.0, 1_540.0),
+            Vec2::new(256.0, 192.0),
+        );
+        if let Some(node) = document.node_mut(whole) {
+            node.image = Some(NodeImage::new(handle));
+        }
+
+        let squashed = document.add_node(
+            ElementKind::Image,
+            Vec2::new(360.0, 1_540.0),
+            Vec2::new(140.0, 192.0),
+        );
+        if let Some(node) = document.node_mut(squashed) {
+            node.image = Some(NodeImage::new(handle));
+            node.style.opacity = 0.65;
+            node.style.corner_radius = 10.0;
+        }
+    }
+
     // ---- the field: connected graph nodes, laid out on a grid ------------
     //
     // Every node is wired to the one after it and to the one a row below, so
@@ -532,6 +613,43 @@ fn demo_document(nodes: usize) -> FlowDocument {
 
     document
 }
+
+/// **The demo picture**, as the text a document would hold it as.
+///
+/// A 64×48 PNG — a diagonal ramp with a bright band across it, which is the
+/// pattern that makes a *crop* obvious at a glance: whichever part of the band
+/// is showing tells you which part of the source the element is a window on.
+///
+/// Carried as base64 rather than as a file next to this one, and that is worth
+/// a sentence: an example that read an asset from disk would be an example that
+/// stops working when the repository is not the working directory, and a binary
+/// blob checked in for one launcher is a binary blob nobody can review. The
+/// string below is exactly what
+/// [`FlowDocument::images`](dodo_flow::models::FlowDocument::images) writes for
+/// this picture, through the same [`decode_base64`] the loader uses.
+const DEMO_PICTURE: &str = concat!(
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAYAAAChS3wfAAACyUlEQVR42uXSW0iUQRjG8W8h",
+    "u4ioEKEIE7EDYvVgJdFBrESKxEokKRI7iVHYScQirERMooOIlRSJWIlRSGIlRiRWYkVhJduR",
+    "EImK6EIiIrpYAvMlh5R5lXX3O8w3O/BnmJu5+PF4fD5fnzFwwsfCGNN/B1uYCX/Y9adnMIA4",
+    "U8chtAHoRE1EaAAYE2L76PG71yshxEQgBADC/wFQP795uTEYcVOgMcDk/wDU9888AqZBU4DI",
+    "oQCirz0yxPwYaAgQzQNQnz7wa1gyCxoBzBwegOp5wyMkzYYmAHEjA4jedskQyfHQAAD+AVDe",
+    "Tn4NqQlwMcAC/wGoF094hLWL4VKARaMDED1ulyEykuBCgMTAAKj2Nn4NWclwEcCKwAGotrs8",
+    "wpZVcAnAyuAARC3NMkROGlwAkGoOAHWriV9DXjoUBlhnHgDV2MAj7MuEogDrzQUQH9dflSEK",
+    "NkFBgI3WANB9+Qq/hqLNUAgg2zoAqqaGRyjOgSIA260FEFVdkCFKd0IBgB32AFCV5/g1nNoN",
+    "BwHy7AOgyit4hIp8OASw314AUdlJGeLsATgAUOgMAFVSxq+hugg2AhxyDoA6UsIj1BbDJoCj",
+    "zgKICg/LEHXHYANAqRoAVP5Bfg0NJ2AhwHF1AKg9BTxCUzksAjitFoAod68M0XwGFgBUqglA",
+    "bdvFr6H1PEwEqFIXgMrO5REeVMMkgItqA4gyt8oQHZdgAkCtOwDoz/Qsfg2d9QgCoM49AHSn",
+    "beARuq4jQIBr7gIQpWTIEK8bEQDADXcCUMvX8Gvovo1RANx0LwCVuJpH+HgHfgK0uBtAlJAi",
+    "Q3xphR8A9/QAoOKX8WvofYgRAO7rA0DNWcoj/HiEYQA69AIQzVgoQ/x6BgbgqZ4AVPQ8fg1/",
+    "XmIQwHN9AajIuTyC8QoDAF69AUQRsTJE2Hv0A7wLDQBq0nQZwWN0hw4ANT5qKMJf56YFxBnh",
+    "DKcAAAAASUVORK5CYII=",
+);
+
+/// The demo picture's pixel dimensions. Stated rather than decoded, because a
+/// resource carries its own size — see
+/// [`ImageResource`](dodo_flow::models::ImageResource) — and this file is the
+/// one place that knows what it made.
+const DEMO_PICTURE_SIZE: (u32, u32) = (64, 48);
 
 /// One graph node with an output on its right and an input on its left.
 ///
@@ -740,6 +858,19 @@ fn main() {
                         // only by test.
                         if let Some(zoom) = env_zoom() {
                             flow.viewport_mut().zoom_around(Vec2::ZERO, zoom);
+                        }
+                        // **`DODO_FLOW_PICTURES=1` opens onto §10's row.** An
+                        // unattended window presents one frame and stops, so
+                        // the only way to see the picture path run — decode,
+                        // prepaint, paint — in a report is to open the camera
+                        // on it. It is a switch rather than the default because
+                        // the first thing to look at is still the panel.
+                        if std::env::var_os("DODO_FLOW_PICTURES").is_some() {
+                            let pane = flow.viewport().size();
+                            flow.viewport_mut().center_world_on_screen(
+                                Vec2::new(280.0, 1_640.0),
+                                Vec2::new(pane.x * 0.5, pane.y * 0.5),
+                            );
                         }
                         if std::env::var_os("DODO_FLOW_SKETCH").is_some() {
                             flow.editor_mut().set_render_style(RenderStyle::Sketch);

@@ -442,6 +442,23 @@ impl NodeImage {
     }
 }
 
+/// **A picture's bytes as text**, and the inverse — the encoding this format
+/// writes.
+///
+/// Public because the format is: a document's image table is base64, so reading
+/// one is part of the model rather than a private detail of the serializer. The
+/// launcher carries its demo picture as a string through this pair, which is
+/// also what keeps a binary asset out of the repository for one example.
+pub fn encode_base64(bytes: &[u8]) -> String {
+    base64_bytes::encode(bytes)
+}
+
+/// The inverse. `None` for anything that is not valid base64 — see
+/// [`encode_base64`].
+pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    base64_bytes::decode(text)
+}
+
 /// Base64, for the one field in this format that is not text.
 ///
 /// Hand-written rather than a dependency, and the reason is dodo's own: every

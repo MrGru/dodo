@@ -1289,7 +1289,6 @@ impl FlowView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let pane = Vec2::new(bounds.size.width.as_f32(), bounds.size.height.as_f32());
         let ink = self.sync_theme(cx);
 
         // A shaped line bakes its colour at shape time and dodo applies a
@@ -1301,16 +1300,14 @@ impl FlowView {
             self.text_ink = Some(ink.text);
         }
 
-        if self.pane != pane {
-            // **The one case `render` cannot have got right.** It extracted
-            // against the previous pane, so the snapshot is for the wrong size
-            // and the frame after this one has to redo it. A `cx.notify()` here
-            // would record the dirty view and schedule nothing —
-            // `WindowInvalidator::invalidate_view` only acts in
+        // Normally already done by `prepaint_pictures`, one phase earlier —
+        // see there for why it moved. This is kept because a paint can happen
+        // with no prepaint before it in the same frame only if the canvas
+        // element is ever built differently, and a stale pane is silent.
+        if self.sync_pane(bounds) {
+            // A `cx.notify()` here would record the dirty view and schedule
+            // nothing — `WindowInvalidator::invalidate_view` only acts in
             // `DrawPhase::None` — so this asks for a frame the supported way.
-            self.pane = pane;
-            self.viewport.set_size(pane);
-            self.refresh_snapshot();
             window.request_animation_frame();
         }
 
@@ -1374,6 +1371,26 @@ impl FlowView {
         self.install_input(bounds, hitbox, window, cx);
     }
 
+    /// **Brings the viewport and §24's snapshot up to the pane's real size**,
+    /// and answers whether anything had to change.
+    ///
+    /// `render` cannot do it: GPUI hands an element its bounds during layout,
+    /// which is after the tree was built, so `render` always extracts against
+    /// the *previous* frame's pane. This is the one place that notices, and it
+    /// runs in prepaint so that everything built from the snapshot — the
+    /// pictures — and everything built from the plan agree about the frame.
+    fn sync_pane(&mut self, bounds: Bounds<Pixels>) -> bool {
+        let pane = Vec2::new(bounds.size.width.as_f32(), bounds.size.height.as_f32());
+        if self.pane == pane {
+            return false;
+        }
+
+        self.pane = pane;
+        self.viewport.set_size(pane);
+        self.refresh_snapshot();
+        true
+    }
+
     /// **§10's pictures, laid out for this frame.**
     ///
     /// Runs in the canvas's prepaint, which is where it has to run: an element
@@ -1391,6 +1408,18 @@ impl FlowView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<PictureElement> {
+        // **The pane is measured here now, not in paint**, and that is a fix
+        // rather than a tidy-up. `render` extracts against the *previous*
+        // pane — it has no bounds — so on the first frame and on the frame
+        // after a resize the snapshot is for the wrong size. Paint used to
+        // notice and re-extract, which was fine while everything it fed was
+        // built in paint; a picture is laid out one phase earlier, so the
+        // prepaint would have used the stale set and the plan the fresh one,
+        // and a picture that had just come on screen would be planned and not
+        // painted for one frame. The launcher's first-frame report is what
+        // showed it: two pictures planned, one painted.
+        self.sync_pane(bounds);
+
         if self.snapshot.canvas().is_empty() {
             return Vec::new();
         }
@@ -1448,6 +1477,19 @@ impl FlowView {
             },
             self.last_scene.sketched_bodies,
         );
+        // §10's pictures: how many the frame planned, how many the painter
+        // could actually draw, and what the decode cache is holding. The two
+        // counts differ exactly when a resource could not be decoded, which is
+        // otherwise a hole on screen with nothing to say why.
+        if self.last_scene.images > 0 || self.image_cache.len() > 0 {
+            println!(
+                "  §10  {} pictures planned, {} painted, {} decoded ({:.1} MB)",
+                self.last_scene.images,
+                self.last_paint.images,
+                self.image_cache.len(),
+                self.image_cache.bytes() as f32 / (1024.0 * 1024.0),
+            );
+        }
         println!(
             "  §23  geometry cache {} lookups / {} misses, {:.1} KB; text {} shaped",
             cache.lookups(),
