@@ -1279,11 +1279,8 @@ impl FlowView {
     /// selection instead of a drag that would be refused — §26's behaviour, and
     /// cheaper to answer here than to explain after the fact.
     fn target_at(&self, world: Vec2) -> PointerTarget {
-        let radius = self
-            .viewport
-            .screen_to_world_length(HitTolerance::HANDLE_SCREEN_RADIUS);
-
-        let tolerance = HitTolerance::new(radius);
+        let tolerance = HitTolerance::at_zoom(self.viewport.zoom());
+        let radius = tolerance.handle_radius;
 
         let mut candidates = Vec::new();
         self.spatial.nodes_at(world, radius, &mut candidates);

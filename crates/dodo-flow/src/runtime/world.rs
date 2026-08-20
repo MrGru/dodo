@@ -2148,6 +2148,47 @@ mod tests {
         let _ = b;
     }
 
+    /// **The tolerance holds in screen pixels at every zoom** (§29), through
+    /// the real narrow phase rather than only through the arithmetic.
+    ///
+    /// A thin line is the hardest thing on the canvas to aim at, and the
+    /// world-space band it is grabbed by has to shrink as the camera comes in
+    /// and grow as it goes out, or an edge is unclickable at one end of the
+    /// zoom range and swallows the canvas at the other. Four screen pixels off
+    /// the line is a hit at every camera; twelve is a miss at every camera —
+    /// both stated in *screen* pixels and converted per zoom, which is the
+    /// point.
+    #[test]
+    fn an_edge_stays_clickable_at_every_zoom() {
+        let (world, a, _) = pair();
+        let edge = world.incident_edges(a).next().expect("the pair is joined");
+        let route = world.route(edge).expect("geometry was rebuilt");
+
+        for zoom in [0.1_f32, 0.5, 1.0, 2.0, 10.0] {
+            let tolerance = HitTolerance::at_zoom(zoom);
+            // One screen pixel in world units, exactly what `views::flow`
+            // passes as the flattening step.
+            let flatten = 1.0 / zoom;
+
+            // Straight down from the midpoint: the route runs left to right
+            // between two nodes on the same row, so this is across the line.
+            let midpoint = route.midpoint(flatten);
+            let near = midpoint + Vec2::new(0.0, 4.0 / zoom);
+            let far = midpoint + Vec2::new(0.0, 12.0 / zoom);
+
+            assert_eq!(
+                world.hit_test_edge(near, world.edges().indices(), tolerance, flatten),
+                Some(edge),
+                "four screen pixels off the line missed at zoom {zoom}"
+            );
+            assert_eq!(
+                world.hit_test_edge(far, world.edges().indices(), tolerance, flatten),
+                None,
+                "twelve screen pixels off the line hit at zoom {zoom}"
+            );
+        }
+    }
+
     /// A removed edge is not hit. Removal is a tombstone, so its row and its
     /// route survive — and a hit test that read them would let a user label an
     /// edge that is not there.

@@ -48,6 +48,21 @@
 //! `Rotating`, …) arrive with the phases that can implement them; the enum is
 //! where they will go. `EditingText` is Phase 10's and is now here.
 //!
+//! # A press that selects and starts nothing
+//!
+//! Every other left press opens a state: a pan, a band, a drag, a connection, a
+//! creation. A press on an edge does not, and that is the design rather than an
+//! omission — an edge has no drag gesture, so the moves that follow such a
+//! press mean nothing, and [`InteractionState::Idle`] already answers every
+//! event with `None`. A variant entered only to ignore things is a variant to
+//! keep correct for no behaviour; the phase that gives an edge a drag adds one
+//! then, and does not touch the arm that selects.
+//!
+//! The cost is stated where it is paid, in
+//! [`HitTolerance::EDGE_SCREEN_RADIUS`](crate::runtime::HitTolerance::EDGE_SCREEN_RADIUS):
+//! canvas within six screen pixels of a route is canvas a rubber band can no
+//! longer be started in.
+//!
 //! # Editing text is a state, and the text itself is deliberately not in it
 //!
 //! [`InteractionState::EditingText`] holds a
@@ -68,7 +83,7 @@
 use crate::{
     geometry::{Rect, Vec2},
     interaction::tool::{CanvasTool, CreationGesture, TextTarget, creation_rect},
-    models::{HandleIndex, NodeIndex},
+    models::{EdgeIndex, HandleIndex, NodeIndex},
     runtime::PointerTarget,
 };
 
@@ -299,9 +314,17 @@ pub enum InteractionEffect {
     /// The drag was abandoned; stop drawing the rectangle.
     CancelBoxSelect,
 
-    /// A node drag started. The view captures the pointer and may mark the node
-    /// selected.
-    BeginNodeDrag(NodeIndex),
+    /// A node drag started. The view captures the pointer and marks the node
+    /// selected — replacing the selection, or adding to it under shift.
+    ///
+    /// `additive` is captured at press time rather than read at release, for
+    /// the same reason [`InteractionState::BoxSelecting`] captures it: a user
+    /// who lets go of shift before the mouse button still meant an additive
+    /// select.
+    BeginNodeDrag {
+        node: NodeIndex,
+        additive: bool,
+    },
     /// Move this node by this **world** delta — [`GraphWorld::move_node`](crate::runtime::GraphWorld::move_node),
     /// and nothing else in the graph.
     DragNodeBy {
@@ -320,6 +343,18 @@ pub enum InteractionEffect {
     CancelNodeDrag {
         node: NodeIndex,
         revert: Vec2,
+    },
+
+    /// **An edge was clicked** (Phase 10.5): make it the selection, or add it
+    /// to the selection under shift.
+    ///
+    /// No matching `End`, because there is no gesture to end — the press
+    /// selects and the machine never leaves [`InteractionState::Idle`]. That is
+    /// the difference between this and [`BeginNodeDrag`](InteractionEffect::BeginNodeDrag),
+    /// which selects *and* opens a drag.
+    SelectEdge {
+        edge: EdgeIndex,
+        additive: bool,
     },
 
     /// A connection started being dragged out of a handle.
@@ -408,7 +443,7 @@ impl InteractionEffect {
             self,
             InteractionEffect::BeginPan
                 | InteractionEffect::BeginBoxSelect(_)
-                | InteractionEffect::BeginNodeDrag(_)
+                | InteractionEffect::BeginNodeDrag { .. }
                 | InteractionEffect::BeginConnect(_)
                 | InteractionEffect::BeginCreate { .. }
         )
@@ -586,13 +621,23 @@ impl InteractionMachine {
                             last_world: world,
                             total: Vec2::ZERO,
                         };
-                        InteractionEffect::BeginNodeDrag(node)
+                        InteractionEffect::BeginNodeDrag {
+                            node,
+                            additive: modifiers.is_additive(),
+                        }
                     }
-                    // **An edge reads as canvas here** — see
-                    // [`PointerTarget::starts_a_band`]. Edges are not
-                    // draggable, so a press on one starting nothing at all
-                    // would read as a canvas that had stopped responding.
-                    PointerTarget::Empty | PointerTarget::Edge(_) => {
+                    // **An edge is selected and no gesture is started**
+                    // (Phase 10.5). The machine stays `Idle` on purpose rather
+                    // than entering a state that would do nothing: an edge has
+                    // no drag, so the moves after this press mean nothing, and
+                    // `Idle` already says that for every event without a single
+                    // arm to maintain. A phase that gives an edge a drag adds
+                    // its own state here and does not touch this line.
+                    PointerTarget::Edge(edge) => InteractionEffect::SelectEdge {
+                        edge,
+                        additive: modifiers.is_additive(),
+                    },
+                    PointerTarget::Empty => {
                         self.state = InteractionState::BoxSelecting {
                             anchor_world: world,
                             current_world: world,
@@ -979,7 +1024,13 @@ mod tests {
         let mut machine = InteractionMachine::new();
 
         let begin = machine.handle(down_on(PointerButton::Left, PointerTarget::Node(NODE)));
-        assert_eq!(begin, InteractionEffect::BeginNodeDrag(NODE));
+        assert_eq!(
+            begin,
+            InteractionEffect::BeginNodeDrag {
+                node: NODE,
+                additive: false
+            }
+        );
         assert_eq!(machine.dragging_node(), Some(NODE));
         assert!(begin.starts_a_drag(), "the pointer has to be captured");
 
@@ -2186,23 +2237,123 @@ mod tests {
         assert!(machine.dragging_node().is_some());
     }
 
-    /// **A press on an edge starts a rubber band**, exactly as one on empty
-    /// canvas does. Adding the variant made three `== PointerTarget::Empty`
-    /// comparisons silently wrong, and a press that started *nothing* reads as
-    /// a canvas that has stopped responding.
+    /// **A press on an edge selects it** (Phase 10.5) and starts no gesture.
+    ///
+    /// Staying `Idle` is the assertion that matters: an edge has no drag, so
+    /// the moves after this press must mean nothing, and `Idle` already says
+    /// that for every event. A state entered only to ignore everything would be
+    /// a state to keep correct for no behaviour.
     #[test]
-    fn a_press_on_an_edge_behaves_like_a_press_on_the_canvas() {
+    fn a_press_on_an_edge_selects_it_and_starts_no_gesture() {
         let mut machine = InteractionMachine::new();
-        let effect = machine.handle(down_on(
-            PointerButton::Left,
-            PointerTarget::Edge(EdgeIndex::new(1)),
-        ));
+        let edge = EdgeIndex::new(1);
+
+        let effect = machine.handle(down_on(PointerButton::Left, PointerTarget::Edge(edge)));
+
+        assert_eq!(
+            effect,
+            InteractionEffect::SelectEdge {
+                edge,
+                additive: false
+            }
+        );
+        assert!(machine.is_idle(), "an edge press opened a gesture");
+        assert!(!effect.starts_a_drag(), "there is nothing to capture for");
+        assert!(effect.needs_repaint(), "the selection ring has to be drawn");
+
+        // The moves and the release after it are ordinary `Idle` events.
+        assert_eq!(
+            machine.handle(move_to(Vec2::splat(50.0), Vec2::splat(50.0))),
+            InteractionEffect::None
+        );
+        assert_eq!(
+            machine.handle(up(PointerButton::Left)),
+            InteractionEffect::None
+        );
+    }
+
+    /// **A press on empty canvas still starts a band**, which is the half of
+    /// this that is easy to trade away: the edge arm was carved out of the arm
+    /// that does this.
+    #[test]
+    fn a_press_on_empty_canvas_still_starts_a_band() {
+        let mut machine = InteractionMachine::new();
+
+        let effect = machine.handle(down_on(PointerButton::Left, PointerTarget::Empty));
 
         assert!(matches!(effect, InteractionEffect::BeginBoxSelect(_)));
         assert!(matches!(
             machine.state(),
             InteractionState::BoxSelecting { .. }
         ));
+    }
+
+    /// **Shift extends, for an edge and for a node alike.**
+    ///
+    /// One test over both because the requirement is that they agree — a canvas
+    /// where shift means "add" on one kind of element and "replace" on another
+    /// is worse than one where it never worked.
+    #[test]
+    fn shift_makes_a_press_additive_for_both_kinds() {
+        for target in [
+            PointerTarget::Edge(EdgeIndex::new(1)),
+            PointerTarget::Node(NODE),
+        ] {
+            let mut machine = InteractionMachine::new();
+            let effect = machine.handle(InteractionEvent::PointerDown {
+                screen: Vec2::splat(100.0),
+                world: Vec2::splat(10.0),
+                button: PointerButton::Left,
+                modifiers: InputModifiers::shift(),
+                pan_key_held: false,
+                target,
+            });
+
+            let additive = match effect {
+                InteractionEffect::SelectEdge { additive, .. } => additive,
+                InteractionEffect::BeginNodeDrag { additive, .. } => additive,
+                other => panic!("{target:?} produced {other:?}"),
+            };
+            assert!(additive, "{target:?} lost the shift modifier");
+        }
+
+        // And the command modifier means the same thing, because
+        // `InputModifiers::is_additive` is the one place that decides.
+        let mut machine = InteractionMachine::new();
+        let effect = machine.handle(InteractionEvent::PointerDown {
+            screen: Vec2::splat(100.0),
+            world: Vec2::splat(10.0),
+            button: PointerButton::Left,
+            modifiers: InputModifiers {
+                command: true,
+                ..InputModifiers::NONE
+            },
+            pan_key_held: false,
+            target: PointerTarget::Edge(EdgeIndex::new(2)),
+        });
+        assert_eq!(
+            effect,
+            InteractionEffect::SelectEdge {
+                edge: EdgeIndex::new(2),
+                additive: true
+            }
+        );
+    }
+
+    /// A creating tool still draws over an edge. §45's rule is that the tool
+    /// decides first, and the new arm sits *inside* the `Select` branch — an
+    /// easy place to break that by accident.
+    #[test]
+    fn a_creating_tool_draws_over_an_edge_rather_than_selecting_it() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::SelectTool(CanvasTool::Rectangle));
+
+        let effect = machine.handle(down_on(
+            PointerButton::Left,
+            PointerTarget::Edge(EdgeIndex::new(1)),
+        ));
+
+        assert!(matches!(effect, InteractionEffect::BeginCreate { .. }));
     }
 
     /// The middle button still pans under every tool. A creating tool that

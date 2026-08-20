@@ -143,9 +143,29 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
                 .is_ok_and(|summary| summary.changed),
         ),
 
-        InteractionEffect::BeginNodeDrag(node) => {
+        // **A press selects, and shift extends** (Phase 10.5). Before it, this
+        // arm was an unconditional `select_only` — so shift-clicking a second
+        // node replaced the selection with it, and the multi-select the box
+        // band already produced could not be built up a node at a time.
+        InteractionEffect::BeginNodeDrag { node, additive } => {
             editor.begin_gesture();
-            editor.select_only(Some(node));
+            if additive {
+                editor.set_node_selected(node, true);
+            } else {
+                editor.select_only(Some(node));
+            }
+            GestureReport::changed(true)
+        }
+
+        // **The gesture Phase 10 left out, in one arm** — `runtime::hit`'s doc
+        // has why it waited and why waiting was wrong. Additive *adds*, never
+        // toggles: the same meaning `BoxQuery::additive` gives the word, so
+        // shift means one thing on this canvas rather than two.
+        InteractionEffect::SelectEdge { edge, additive } => {
+            if !additive {
+                editor.clear_selection();
+            }
+            editor.set_edge_selected(edge, true);
             GestureReport::changed(true)
         }
 
@@ -415,6 +435,176 @@ mod tests {
         assert!(!editor.world().edge_is_live(summary.added_edges[0]));
         assert!(editor.redo());
         assert!(editor.world().edge_is_live(summary.added_edges[0]));
+    }
+
+    // ---- Phase 10.5: an edge is clickable -------------------------------
+
+    /// A permissive edge between the fixture's two nodes, built directly —
+    /// whole-node mode, since the fixture carries no handles for the connect
+    /// gesture to start at.
+    fn edge_between(
+        editor: &mut FlowEditor,
+        a: NodeIndex,
+        b: NodeIndex,
+    ) -> crate::models::EdgeIndex {
+        editor
+            .apply(EditCommand::Connect(vec![crate::runtime::EdgeSpec::new(
+                ElementId::NONE,
+                crate::runtime::EdgeEnd::node(a),
+                crate::runtime::EdgeEnd::node(b),
+            )]))
+            .unwrap()
+            .added_edges[0]
+    }
+
+    fn press_with(target: PointerTarget, at: Vec2, modifiers: InputModifiers) -> InteractionEvent {
+        InteractionEvent::PointerDown {
+            screen: at,
+            world: at,
+            button: PointerButton::Left,
+            modifiers,
+            pan_key_held: false,
+            target,
+        }
+    }
+
+    /// **What Phase 10 could not do**, driven through the real machine and the
+    /// real applier: press an edge, delete it, undo.
+    ///
+    /// Before Phase 10.5 the press started a rubber band, so an edge could only
+    /// be selected by banding over it and `Delete` could reach one no other
+    /// way.
+    #[test]
+    fn a_press_on_an_edge_selects_it_so_delete_can_reach_it() {
+        let (mut editor, a, b) = editor_with_two_nodes();
+        let edge = edge_between(&mut editor, a, b);
+        let mut machine = InteractionMachine::new();
+
+        let report = apply_gesture(
+            &mut editor,
+            machine.handle(press(PointerTarget::Edge(edge), Vec2::new(200.0, 40.0))),
+        );
+
+        assert!(report.changed, "the selection ring has to be repainted");
+        assert_eq!(editor.world().selection().edges(), [edge]);
+        assert!(
+            editor.world().selection().nodes().is_empty(),
+            "clicking an edge selected a node as well"
+        );
+
+        assert!(editor.delete_selection());
+        assert!(!editor.world().edge_is_live(edge));
+
+        assert!(editor.undo());
+        assert!(
+            editor.world().edge_is_live(edge),
+            "one undo did not bring the edge back"
+        );
+    }
+
+    /// A press on an edge replaces whatever was selected, and shift adds to it
+    /// — the same two answers a node press gives, which is the point.
+    #[test]
+    fn shift_extends_the_selection_and_a_plain_press_replaces_it() {
+        let (mut editor, a, b) = editor_with_two_nodes();
+        let edge = edge_between(&mut editor, a, b);
+        let mut machine = InteractionMachine::new();
+        let at = Vec2::new(200.0, 40.0);
+
+        // A node, then the edge with shift: both are selected.
+        apply_gesture(
+            &mut editor,
+            machine.handle(press(PointerTarget::Node(a), at)),
+        );
+        apply_gesture(
+            &mut editor,
+            machine.handle(InteractionEvent::PointerUp {
+                button: PointerButton::Left,
+                world: at,
+                target: PointerTarget::Node(a),
+            }),
+        );
+        apply_gesture(
+            &mut editor,
+            machine.handle(press_with(
+                PointerTarget::Edge(edge),
+                at,
+                InputModifiers::shift(),
+            )),
+        );
+
+        assert_eq!(editor.world().selection().nodes(), [a]);
+        assert_eq!(editor.world().selection().edges(), [edge]);
+
+        // And the second node with shift: a selection built up one press at a
+        // time, which a plain `select_only` could never produce.
+        apply_gesture(
+            &mut editor,
+            machine.handle(press_with(
+                PointerTarget::Node(b),
+                at,
+                InputModifiers::shift(),
+            )),
+        );
+        assert_eq!(editor.world().selection().nodes(), [a, b]);
+        assert_eq!(editor.world().selection().edges(), [edge]);
+
+        // That press opened a node drag; release it, or the machine is busy and
+        // ignores everything after.
+        apply_gesture(
+            &mut editor,
+            machine.handle(InteractionEvent::PointerUp {
+                button: PointerButton::Left,
+                world: at,
+                target: PointerTarget::Node(b),
+            }),
+        );
+
+        // Deleting that mixed selection is one undo step, and the undo restores
+        // all of it — the property `delete_selection` was written for and the
+        // reason the edge arm needed no change there.
+        let depth = editor.history().undo_depth();
+        assert!(editor.delete_selection());
+        assert_eq!(editor.history().undo_depth(), depth + 1);
+        assert!(editor.undo());
+        assert!(editor.world().node_is_live(a) && editor.world().node_is_live(b));
+        assert!(editor.world().edge_is_live(edge));
+
+        // A plain press then replaces the lot.
+        apply_gesture(
+            &mut editor,
+            machine.handle(press(PointerTarget::Edge(edge), at)),
+        );
+        assert_eq!(editor.world().selection().edges(), [edge]);
+        assert!(editor.world().selection().nodes().is_empty());
+    }
+
+    /// **A press on empty canvas still clears and still bands.** The edge arm
+    /// was carved out of this one, and trading the band for the click would be
+    /// the easiest way to make this phase a regression.
+    #[test]
+    fn a_press_on_empty_canvas_still_clears_the_selection_and_bands() {
+        let (mut editor, a, b) = editor_with_two_nodes();
+        let edge = edge_between(&mut editor, a, b);
+        let mut machine = InteractionMachine::new();
+        let at = Vec2::new(200.0, 40.0);
+
+        apply_gesture(
+            &mut editor,
+            machine.handle(press(PointerTarget::Edge(edge), at)),
+        );
+        assert_eq!(editor.world().selection().edges(), [edge]);
+
+        let effect = machine.handle(press(PointerTarget::Empty, Vec2::new(900.0, 900.0)));
+        assert!(
+            matches!(
+                effect,
+                crate::interaction::InteractionEffect::BeginBoxSelect(_)
+            ),
+            "empty canvas stopped starting a band"
+        );
+        apply_gesture(&mut editor, effect);
+        assert!(editor.world().selection().is_empty());
     }
 
     /// The two effects this file deliberately does not handle must fall through

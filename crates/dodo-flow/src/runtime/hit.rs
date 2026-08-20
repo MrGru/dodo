@@ -55,23 +55,30 @@
 //! node's *bounds* against a segment, not an edge's route — and this phase did
 //! not need it.
 //!
-//! ## The limitation a user meets: an edge cannot be *clicked*
+//! ## And Phase 10.5 gave the gesture in front of it
 //!
-//! [`PointerTarget::Edge`] is resolved, and then
-//! [`InteractionMachine`](crate::interaction::InteractionMachine) treats it
-//! exactly as empty canvas: a press starts a rubber band. So **the only way to
-//! select an edge is to band over it**, and `Delete` cannot reach one any other
-//! way. Double-clicking it works, because that is a different event.
+//! Phase 10 recorded that a press on an edge started a rubber band, so the only
+//! way to select one was to band over it and `Delete` could reach one no other
+//! way. That is closed:
+//! [`InteractionEffect::SelectEdge`](crate::interaction::InteractionEffect::SelectEdge)
+//! is what a press on this variant now raises, additively under shift, and the
+//! band is left to [`PointerTarget::Empty`] alone.
 //!
-//! That is deliberate for one phase rather than an oversight, and the reason is
-//! worth the next person's attention: making a press *select* an edge is not
-//! one arm. A press that selects has to decide what a press-and-drag on the
-//! same edge means — nothing, today, since an edge has no drag gesture — and
-//! §28's selection is a set two other things already read. The narrow phase is
-//! the expensive half and it is done; adding the gesture is
-//! `interaction::state`'s work and it should arrive with whatever makes an
-//! edge draggable, so the two are designed together rather than one being
-//! retrofitted around the other.
+//! Phase 10 argued the gesture should wait for whatever makes an edge
+//! *draggable*, so the two would be designed together. **That was the wrong
+//! call and it is worth saying why**: the two are not one design. Selecting is
+//! a press that ends where it started; dragging is what the *following* moves
+//! mean, and an edge has no drag gesture at all — so the press stays in
+//! [`InteractionState::Idle`](crate::interaction::InteractionState::Idle), the
+//! moves after it mean nothing, and a later phase that gives an edge a drag
+//! adds a state without touching the arm that selects. Waiting cost a user the
+//! only way to delete an edge for a whole phase, and bought nothing.
+//!
+//! The one thing a press on an edge does **not** do is start a band, and that
+//! is a real trade rather than a free win: everywhere within
+//! [`HitTolerance::EDGE_SCREEN_RADIUS`] of a route is canvas a rubber band can
+//! no longer be started in. Six screen pixels is the number that keeps it small
+//! — see that constant.
 //!
 //! **This file names no UI framework.**
 
@@ -98,12 +105,10 @@ pub enum PointerTarget {
     /// overlap means the node. [`GraphWorld::hit_test`](crate::runtime::GraphWorld::hit_test)
     /// only asks about edges once it has decided nothing else was there.
     ///
-    /// **A press on one behaves exactly like a press on empty canvas** in
-    /// [`InteractionMachine`](crate::interaction::InteractionMachine) —
-    /// see [`PointerTarget::starts_a_band`]. Edges are not draggable and not
-    /// yet click-selectable; what this arm exists for is §9's double-click,
-    /// which is the one gesture that has to tell an edge from the canvas
-    /// behind it.
+    /// **A press on one selects it** (Phase 10.5), additively under shift, and
+    /// starts no gesture — an edge has no drag. A double-click on one opens its
+    /// label. Neither is a rubber band: the band belongs to
+    /// [`Empty`](PointerTarget::Empty) alone.
     Edge(EdgeIndex),
 }
 
@@ -121,18 +126,6 @@ impl PointerTarget {
             PointerTarget::Edge(edge) => Some(edge),
             _ => None,
         }
-    }
-
-    /// **Whether a press here starts a rubber band rather than grabbing
-    /// something.**
-    ///
-    /// True for empty canvas *and* for an edge, and that is the whole reason
-    /// this is a named question rather than `== PointerTarget::Empty` at three
-    /// call sites. Adding [`Edge`](PointerTarget::Edge) made every one of those
-    /// comparisons silently wrong — a press on an edge would have started
-    /// nothing at all, which reads as a canvas that has stopped responding.
-    pub fn starts_a_band(self) -> bool {
-        matches!(self, PointerTarget::Empty | PointerTarget::Edge(_))
     }
 
     pub fn handle(self) -> Option<HandleIndex> {
@@ -181,6 +174,23 @@ impl HitTolerance {
     /// generous band covers a great deal of canvas, and everything it covers is
     /// canvas a rubber band can no longer be started in.
     pub const EDGE_SCREEN_RADIUS: f32 = 6.0;
+
+    /// **The tolerance at a zoom level** — §29's *"tolerance in screen-space
+    /// pixels"* as one function of one number.
+    ///
+    /// The conversion used to be two lines in `views::flow`, which put the only
+    /// statement of "a thin edge stays clickable at any zoom" in the one file
+    /// that needs a `Window` to build. Here it is a pure function, and
+    /// `an_edges_target_is_the_same_width_on_screen_at_every_zoom` asserts the
+    /// property at seven zoom levels with no window anywhere.
+    ///
+    /// A zoom at or below zero is not a camera anybody can be looking through;
+    /// it answers the unzoomed tolerance rather than an infinity that would
+    /// make every element on the canvas the nearest one.
+    pub fn at_zoom(zoom: f32) -> HitTolerance {
+        let zoom = if zoom > 0.0 { zoom } else { 1.0 };
+        HitTolerance::new(HitTolerance::HANDLE_SCREEN_RADIUS / zoom)
+    }
 
     /// Both radii from one world-space handle radius, keeping their screen
     /// proportion. The view has a zoom and converts once.
@@ -236,31 +246,19 @@ mod tests {
         assert!(PointerTarget::Empty.is_empty());
     }
 
-    /// **The arm every `== PointerTarget::Empty` in the machine had to become.**
+    /// An edge is a target in its own right: it belongs to no node, and it is
+    /// not the canvas.
     ///
-    /// Adding an `Edge` variant made three comparisons silently wrong: a press
-    /// on an edge would have matched none of them and started no gesture at
-    /// all, which reads as a canvas that has stopped responding. The named
-    /// question is what makes that a compile-time choice rather than a
-    /// behaviour nobody notices.
+    /// `is_empty` is the question the band is started from (Phase 10.5), so an
+    /// edge answering `true` to it would put the band back over every route.
     #[test]
-    fn a_press_on_an_edge_starts_a_band_exactly_as_empty_canvas_does() {
+    fn an_edge_is_neither_a_node_nor_the_canvas() {
         let edge = PointerTarget::Edge(EdgeIndex::new(2));
-
-        assert!(PointerTarget::Empty.starts_a_band());
-        assert!(edge.starts_a_band());
-        assert!(!PointerTarget::Node(NodeIndex::new(0)).starts_a_band());
-        assert!(
-            !PointerTarget::Handle {
-                node: NodeIndex::new(0),
-                handle: HandleIndex::new(0)
-            }
-            .starts_a_band()
-        );
 
         // An edge belongs to no node, so §44's hover and every "which node?"
         // question answer `None` rather than picking one of its ends.
         assert_eq!(edge.node(), None);
+        assert_eq!(edge.handle(), None);
         assert_eq!(edge.edge(), Some(EdgeIndex::new(2)));
         assert_eq!(PointerTarget::Node(NodeIndex::new(0)).edge(), None);
         assert!(
@@ -283,6 +281,37 @@ mod tests {
             tolerance.edge_radius,
             18.0 * (HitTolerance::EDGE_SCREEN_RADIUS / HitTolerance::HANDLE_SCREEN_RADIUS)
         );
+    }
+
+    /// **§29's requirement, stated as a number at seven cameras.**
+    ///
+    /// A hit tolerance in world units would shrink to nothing when zoomed in
+    /// and swallow the canvas when zoomed out; the whole point of converting
+    /// from screen pixels is that the target a person aims at is the same size
+    /// on the glass however far the camera is. `1e-3` is float slop on a
+    /// division and a multiplication, not a tolerance on the tolerance.
+    #[test]
+    fn an_edges_target_is_the_same_width_on_screen_at_every_zoom() {
+        for zoom in [0.05_f32, 0.25, 0.5, 1.0, 2.0, 8.0, 40.0] {
+            let tolerance = HitTolerance::at_zoom(zoom);
+
+            assert!(
+                (tolerance.edge_radius * zoom - HitTolerance::EDGE_SCREEN_RADIUS).abs() < 1e-3,
+                "at zoom {zoom} an edge's band is {} screen pixels",
+                tolerance.edge_radius * zoom
+            );
+            assert!(
+                (tolerance.handle_radius * zoom - HitTolerance::HANDLE_SCREEN_RADIUS).abs() < 1e-3,
+                "at zoom {zoom} a handle's radius is {} screen pixels",
+                tolerance.handle_radius * zoom
+            );
+        }
+
+        // A camera nobody can look through answers the unzoomed tolerance
+        // rather than an infinite one, which would make every edge in the
+        // document a candidate for the nearest.
+        assert_eq!(HitTolerance::at_zoom(0.0), HitTolerance::default());
+        assert_eq!(HitTolerance::at_zoom(-1.0), HitTolerance::default());
     }
 
     #[test]
