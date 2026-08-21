@@ -195,6 +195,40 @@
 //!    clip is a rectangle with no radii; `views::images` says so where it is
 //!    caused.
 //!
+//! # Straight connectors, and the six things only a person can check
+//!
+//! A line and an arrow now carry two ordered endpoints instead of a rectangle,
+//! and either end can be *attached* to an element. Everything below is checked
+//! by tests except how it feels, which is what this list is for.
+//!
+//! 1. **Draw an arrow in all eight directions** (`a`, then drag). Right-to-left
+//!    and bottom-to-top too, and diagonally both ways. **The head has to be
+//!    where you let go**, every time — it used to always point down-right,
+//!    because the direction was the bounding box's diagonal.
+//! 2. **Draw from one box to another.** Start the drag near a shape and end it
+//!    near another: both ends highlight as you approach and the arrow snaps
+//!    onto the facing edges. Then drag either box around — the arrow follows,
+//!    and the attachment **walks round to the side facing the other end**
+//!    rather than staying pinned to one face. Resize a box and it follows that
+//!    too.
+//! 3. **Select the arrow and look at its handles.** Exactly **two**, one per
+//!    end, not four corners of a box. Drag one onto a third element: only that
+//!    end rebinds. Drag it out to empty canvas: only that end detaches, and it
+//!    stays where you dropped it. The other end must not move in either case.
+//! 4. **Press `Esc` mid-endpoint-drag**, and the end goes back exactly where it
+//!    started with nothing on the undo stack. Then do the drag properly and
+//!    press `Cmd+Z` once — the *whole* drag is one step.
+//! 5. **Double-click the arrow's line and type.** The caret has to be live
+//!    immediately — type without clicking again — the field opens over the
+//!    middle of the *segment*, and existing text opens selected. Click away and
+//!    **the words have to still be there.** Do the same on a drawn rectangle
+//!    and on an ellipse; those were losing their labels too. Then move it,
+//!    resize it, save, reopen and undo/redo: the label rides along.
+//! 6. **Open a diagram saved before this slice.** Its lines and arrows have to
+//!    load pointing the way they were drawn on screen — the migration writes
+//!    the diagonal those files displayed, because the direction they were
+//!    *drawn* was never stored and cannot be recovered.
+//!
 //! **Hover a palette button and it tells you what it is and which key it
 //! answers to.** The label comes from `dodo_i18n::flow`, in whichever language
 //! dodo is set to; the keystroke beside it is looked up from the real binding
@@ -222,7 +256,9 @@
 //! | **shift-click a node or an edge** | add it to the selection instead of replacing it |
 //! | drag on empty space with the left button | rubber band — **it selects on release** |
 //! | shift + drag on empty space | add the band's contents to the selection |
-//! | **double-click a node** | edit its text, seeded with whatever is already there |
+//! | **drag a line or arrow's endpoint handle** | move that end alone — it snaps onto a nearby element, or detaches on empty canvas |
+//! | **drag a line or arrow's body** | move it — a bound end stays on its element and only the free ends travel |
+//! | **double-click a node, a shape, a line or an arrow** | edit its text, seeded with whatever is already there and selected, ready to type |
 //! | **double-click an edge** | edit its label — aim at the line, not at the space around it |
 //! | **double-click empty canvas** | place text under the pointer and start typing |
 //! | **`t`, then click or drag** | the same, with a box you chose |
