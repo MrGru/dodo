@@ -122,9 +122,10 @@ use std::sync::{Arc, OnceLock};
 use dodo_i18n::{flow, t};
 use gpui::{
     App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior,
-    InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
+    Hsla, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Path, PathPromptOptions, PinchEvent, Pixels,
-    Point, Render, ScrollWheelEvent, SharedString, Styled, Window, canvas, div, px,
+    Point, Render, ScrollWheelEvent, SharedString, Styled, Window, canvas, div,
+    prelude::FluentBuilder as _, px,
 };
 use gpui::{AppContext as _, Div};
 use gpui_component::{
@@ -145,7 +146,8 @@ use crate::{
     },
     models::{
         Color, EdgeIndex, EdgeRouting, ElementKind, FlowDocument, FontFamily, ImageFormat,
-        ImageResource, NodeIndex, RenderQuality, RenderStyle, SketchStyle, VerticalAlign,
+        ImageResource, NodeIndex, RenderQuality, RenderStyle, SketchStyle, TextAlign,
+        VerticalAlign,
     },
     properties::{ArrowKind, Availability, ControlState, SelectionKind},
     render::{
@@ -154,7 +156,7 @@ use crate::{
         cache::{CacheStats, GeometryCache},
         edges,
         lod::LodPlan,
-        painter::{self, PictureElement, TextCache, from_hsla},
+        painter::{self, FontSet, PictureElement, TextCache, from_hsla, to_hsla},
         plan::{PathPrimitive, QuadPrimitive},
         registry::NodeRendererRegistry,
         scene,
@@ -322,6 +324,14 @@ const CONNECTOR_SNAP_PIXELS: f32 = 12.0;
 /// while it is open the field is a control, and a control is measured in
 /// pixels.
 const EDIT_LINE_PIXELS: f32 = 26.0;
+
+/// How tall one line of the inline editor is, as a multiple of its text size.
+///
+/// The same 1.25 `gpui-component`'s `Input` uses, kept as a factor rather than
+/// as its `1.25rem`: a rem is a constant 20 px and a label is drawn at whatever
+/// the zoom makes it, so the widget's own line height clipped a label the
+/// moment somebody zoomed in.
+const EDIT_LINE_FACTOR: f32 = 1.25;
 
 /// The narrowest §9's text editor is drawn, in screen pixels. Same argument as
 /// [`EDIT_LINE_PIXELS`], on the other axis.
@@ -2774,29 +2784,82 @@ impl FlowView {
         Rect::new(center - size * 0.5, size)
     }
 
-    /// Where inside its box the thing being edited puts its text — so the
-    /// one-line field opens on the line the label is actually drawn on.
+    /// **How the thing being edited draws its own label**, so the field can
+    /// draw it the same way.
     ///
-    /// `Middle` for a target that no longer exists and for a text element that
-    /// does not exist yet, which is the value both of those draw with.
-    fn text_edit_vertical_align(&self, target: TextTarget) -> VerticalAlign {
+    /// The editor used to be a control: a bordered box on the theme's
+    /// background, with the theme's face at the widget's size. That is four
+    /// ways for the words to move the instant a caret opens or closes — a
+    /// different size, a different face, a different colour and a plate behind
+    /// them — on top of the box itself, which is the thing the captain asked to
+    /// be rid of. Reading the label's own style here is what makes the field
+    /// invisible: what is left on screen is the label, plus a caret.
+    ///
+    /// The style comes from the document; the *size* comes from the snapshot,
+    /// because that is the one property the frame changes. `render::lod`
+    /// quantises a label onto the ladder before it is shaped, so the authored
+    /// size times the zoom is **not** what is on screen — see
+    /// [`crate::render::lod`]. The scan is over what is visible, which is tens
+    /// of rows, and it only runs while somebody is typing.
+    ///
+    /// The default style answers for a text element that does not exist yet,
+    /// which is exactly what `commit_text` is about to seed it with.
+    fn text_edit_ink(&self, target: TextTarget, cx: &App) -> EditorInk {
         let world = self.editor.world();
-        match target {
-            TextTarget::New(_) => world.settings().default_style.font.vertical_align,
+        let theme = cx.theme();
+        let (style, drawn) = match target {
+            TextTarget::New(_) => (&world.settings().default_style, None),
             TextTarget::Node(node) => {
                 if world.nodes().contains(node) && world.node_is_live(node) {
-                    world.nodes().style(node).font.vertical_align
+                    let drawn = self
+                        .snapshot
+                        .rich()
+                        .iter()
+                        .find(|rich| rich.node == node)
+                        .and_then(|rich| rich.label_font_size)
+                        .or_else(|| {
+                            self.snapshot
+                                .canvas()
+                                .iter()
+                                .find(|canvas| canvas.node == node)
+                                .and_then(|canvas| canvas.label_font_size)
+                        });
+                    (world.nodes().style(node), drawn)
                 } else {
-                    VerticalAlign::default()
+                    (&world.settings().default_style, None)
                 }
             }
             TextTarget::Edge(edge) => {
                 if world.edges().contains(edge) && world.edge_is_live(edge) {
-                    world.edges().style(edge).font.vertical_align
+                    let drawn = self
+                        .snapshot
+                        .edges()
+                        .iter()
+                        .find(|planned| planned.edge == edge)
+                        .and_then(|planned| planned.label_font_size);
+                    (world.edges().style(edge), drawn)
                 } else {
-                    VerticalAlign::default()
+                    (&world.settings().default_style, None)
                 }
             }
+        };
+
+        EditorInk {
+            // A label with no shaped size this frame — a brand-new element, or
+            // one the ladder dropped the label of — is typed at the size it
+            // will be drawn at once it has one.
+            font_size: drawn.unwrap_or_else(|| {
+                self.viewport
+                    .world_to_screen_length(style.font.world_size())
+            }),
+            color: style
+                .text_color()
+                .map(to_hsla)
+                .unwrap_or(theme.foreground)
+                .opacity(style.opacity.clamp(0.0, 1.0)),
+            family: style.font.family,
+            align: style.font.align,
+            vertical_align: style.font.vertical_align,
         }
     }
 
@@ -2804,7 +2867,7 @@ impl FlowView {
     ///
     /// Projected from world units **every frame**, which is what keeps the
     /// field on its node while the canvas is panned or zoomed underneath it.
-    /// The height is a screen constant rather than the element's: a text field
+    /// The height is a screen floor rather than the element's: a text field
     /// three pixels tall is not an editor, whatever the thing it is editing
     /// looks like at that zoom.
     /// Returns a concrete `Div` rather than an `impl IntoElement`, and that is
@@ -2812,16 +2875,36 @@ impl FlowView {
     /// for as long as the element lives, and this one is built at the top of
     /// `render` and consumed at the bottom — with every other builder reading
     /// `self` in between.
-    fn text_editor_element(&self, cx: &App) -> Option<Div> {
+    ///
+    /// # Nothing here draws anything
+    ///
+    /// **There is no box.** No border, no fill, no corner, no plate — the whole
+    /// element is a position, a key context, a hitbox and the label's own text
+    /// style. What a user sees while editing is the words and a caret, sitting
+    /// where the finished label sits: `Input::appearance(false)` drops
+    /// `gpui-component`'s own border and background, and the padding it lays
+    /// out with goes at the same time, because a box that is invisible and
+    /// still six pixels wide moves the text exactly as far as a visible one
+    /// did. The face, the size, the ink and both alignments come from
+    /// [`FlowView::text_edit_ink`], which reads them from the element being
+    /// edited — the same four values `render::scene`'s `plan_labels` and
+    /// `views::nodes` paint the committed label with.
+    ///
+    /// The one thing left that a label does not have is the caret, and that is
+    /// the point of the reference the captain drew.
+    fn text_editor_element(&self, fonts: &FontSet, cx: &App) -> Option<Div> {
         let editing = self.editing.as_ref()?;
         // A live element may have moved since the caret opened — an undo, a
         // resize — so the world rectangle is re-read rather than remembered.
         let world = self
             .text_edit_bounds(editing.target)
             .unwrap_or(editing.world);
+        let ink = self.text_edit_ink(editing.target, cx);
+        let line = editor_line_height(ink.font_size);
         let band = editor_band(
             self.viewport.world_rect_to_screen(world),
-            self.text_edit_vertical_align(editing.target),
+            ink.vertical_align,
+            line,
         );
 
         Some(
@@ -2835,20 +2918,73 @@ impl FlowView {
                 // **Chrome, so the press that places the caret is not also a
                 // press on the canvas** — see `chrome`. Without it a click
                 // inside the field reaches `EditingText + PointerDown`, which
-                // commits and closes the editor a user was aiming into.
+                // commits and closes the editor a user was aiming into. It is
+                // the one thing here that survives from the old box, and it is
+                // behaviour rather than paint.
                 .occlude()
                 .absolute()
                 .left(px(band.origin.x))
                 .top(px(band.origin.y))
                 .w(px(band.size.x))
                 .h(px(band.size.y))
-                .rounded(cx.theme().radius)
-                .border_1()
-                .border_color(cx.theme().primary)
-                .bg(cx.theme().background)
-                .child(Input::new(&editing.input).size_full()),
+                .child(
+                    Input::new(&editing.input)
+                        // No border, no background, no shadow, no corner.
+                        .appearance(false)
+                        .size_full()
+                        // **Layout, not decoration.** `Input` pads itself by
+                        // its size step, which is a control's padding and not a
+                        // label's: left in, the first letter starts several
+                        // pixels right of where the committed label starts.
+                        .p_0()
+                        .text_size(px(ink.font_size))
+                        .text_color(ink.color)
+                        .font(fonts.face(ink.family).clone())
+                        // The band is at least [`EDIT_LINE_PIXELS`] tall so a
+                        // tiny element still gets a usable field; the *text*
+                        // inside it is placed by the label's own vertical
+                        // alignment, so the words do not drift to the middle of
+                        // a band that is taller than they are.
+                        .map(|it| match ink.vertical_align {
+                            VerticalAlign::Top => it.items_start(),
+                            VerticalAlign::Middle => it.items_center(),
+                            VerticalAlign::Bottom => it.items_end(),
+                        })
+                        .map(|it| match ink.align {
+                            TextAlign::Left => it.text_left(),
+                            TextAlign::Center => it.text_center(),
+                            TextAlign::Right => it.text_right(),
+                        })
+                        .line_height(px(line)),
+                ),
         )
     }
+}
+
+/// **The label's own text style, for the frame the caret is open on.**
+///
+/// Four values and a size, all of them read from the element being edited
+/// rather than from the theme — see [`FlowView::text_edit_ink`] for why every
+/// one of them had to be.
+#[derive(Debug, Clone, Copy)]
+struct EditorInk {
+    /// Screen pixels, quantised onto the LOD ladder wherever the frame has an
+    /// answer for this element.
+    font_size: f32,
+    color: Hsla,
+    family: FontFamily,
+    align: TextAlign,
+    vertical_align: VerticalAlign,
+}
+
+/// One line of label text, in screen pixels.
+///
+/// `gpui-component`'s `Input` lays out at `1.25rem`, which is a constant 20 px
+/// whatever the text size is — fine for a control and wrong for a label, which
+/// is drawn at whatever the zoom makes it. Pure, and the same multiplier the
+/// element tree's own labels flow at.
+fn editor_line_height(font_size: f32) -> f32 {
+    (font_size * EDIT_LINE_FACTOR).max(1.0)
 }
 
 /// **Where the one-line editor sits over the thing it is editing**, in
@@ -2867,14 +3003,20 @@ impl FlowView {
 /// field where the words will be. It is passed in rather than read here for the
 /// reason everything in this half of the file is pure — one arithmetic offset,
 /// asserted with no window.
-fn editor_band(screen: Rect, align: VerticalAlign) -> Rect {
+///
+/// **`line` is the label's own line height**, floored at [`EDIT_LINE_PIXELS`].
+/// A fixed band was right while the field was a control at the widget's text
+/// size; now that it types in the label's face at the label's size, a band
+/// shorter than the line would clip a label the zoom has made large.
+fn editor_band(screen: Rect, align: VerticalAlign, line: f32) -> Rect {
     let screen = screen.normalized();
+    let height = line.max(EDIT_LINE_PIXELS);
     Rect::new(
         Vec2::new(
             screen.origin.x,
-            screen.origin.y + align.offset(screen.size.y, EDIT_LINE_PIXELS),
+            screen.origin.y + align.offset(screen.size.y, height),
         ),
-        Vec2::new(screen.size.x.max(MIN_EDITOR_PIXELS), EDIT_LINE_PIXELS),
+        Vec2::new(screen.size.x.max(MIN_EDITOR_PIXELS), height),
     )
 }
 
@@ -2911,10 +3053,6 @@ impl Render for FlowView {
         // document-sized.
         self.refresh_snapshot();
 
-        // Built before the tree, because it reads the viewport and the world
-        // and both are `&mut self` borrows the builder below already holds.
-        let editor = self.text_editor_element(cx);
-
         // **The panel is a view of the document and the slider is a widget with
         // state of its own**, so the selection's opacity has to be pushed into
         // it. Guarded on the value rather than done every frame: `set_value`
@@ -2937,6 +3075,13 @@ impl Render for FlowView {
         // cached `self.fonts` is what keeps the *first* frame right — the cache
         // is filled by paint, which has not run yet.
         let fonts = self.sync_fonts(window, cx);
+
+        // Built before the tree, because it reads the viewport and the world
+        // and both are `&mut self` borrows the builder below already holds —
+        // and after `sync_fonts`, because the caret now types in the label's own
+        // face and that is where a face comes from.
+        let editor = self.text_editor_element(&fonts, cx);
+
         let nodes = nodes::nodes(&self.snapshot, self.editor.world(), &fonts, cx);
         let handles = nodes::handles(&self.snapshot, cx);
         let grips = nodes::resize_grips(&self.snapshot, cx);
@@ -3053,6 +3198,11 @@ mod tests {
         (view, cx)
     }
 
+    /// One line of a label at a readable size, for the placement tests below.
+    /// Small enough that [`EDIT_LINE_PIXELS`]'s floor is what decides the band,
+    /// which is the case those tests were written against.
+    const SMALL_LINE: f32 = 15.0;
+
     /// **The caret sits where the label will be**, which for a label nobody has
     /// moved means the middle rather than the top. The editor is one line tall
     /// whatever it is editing, so a top-anchored field put the words a user
@@ -3061,14 +3211,14 @@ mod tests {
     fn the_inline_editor_is_centred_on_whatever_it_is_editing() {
         // A tall body: the band is centred and keeps its one-line height.
         let body = Rect::new(Vec2::new(40.0, 100.0), Vec2::new(300.0, 90.0));
-        let band = editor_band(body, VerticalAlign::Middle);
+        let band = editor_band(body, VerticalAlign::Middle, SMALL_LINE);
         assert_eq!(band.origin.x, body.origin.x);
         assert_eq!(band.size.y, EDIT_LINE_PIXELS);
         assert!((band.center().y - body.center().y).abs() < 1e-3);
 
         // A box already exactly one line tall is left where it is.
         let line = Rect::new(Vec2::new(0.0, 200.0), Vec2::new(240.0, EDIT_LINE_PIXELS));
-        assert_eq!(editor_band(line, VerticalAlign::Middle), line);
+        assert_eq!(editor_band(line, VerticalAlign::Middle, SMALL_LINE), line);
 
         // A sliver still gets a usable field rather than a three-pixel one. It
         // starts at the sliver's top rather than straddling it, because a box
@@ -3076,9 +3226,41 @@ mod tests {
         // `VerticalAlign::offset` applies to the label itself, so the field and
         // the words still land on the same line.
         let sliver = Rect::new(Vec2::new(10.0, 10.0), Vec2::new(4.0, 3.0));
-        let band = editor_band(sliver, VerticalAlign::Middle);
+        let band = editor_band(sliver, VerticalAlign::Middle, SMALL_LINE);
         assert_eq!(band.size, Vec2::new(MIN_EDITOR_PIXELS, EDIT_LINE_PIXELS));
         assert_eq!(band.origin.y, sliver.origin.y);
+    }
+
+    /// **And it grows with the label rather than clipping it.**
+    ///
+    /// The band was a screen constant while the field was a control at the
+    /// widget's own text size. It now types in the label's face at the label's
+    /// size, so a zoom that makes a label 40 px tall has to make the band at
+    /// least that: a fixed 26 px band would have cut the words the caret is in
+    /// half. The floor is unchanged, and it is what a tiny element still gets.
+    #[test]
+    fn the_inline_editor_is_never_shorter_than_the_line_it_holds() {
+        let body = Rect::new(Vec2::new(40.0, 100.0), Vec2::new(300.0, 400.0));
+
+        // Below the floor, the floor wins — that is `EDIT_LINE_PIXELS`'s whole
+        // argument, and a zoomed-out label must still be typeable.
+        assert_eq!(
+            editor_band(body, VerticalAlign::Middle, 4.0).size.y,
+            EDIT_LINE_PIXELS
+        );
+
+        // Above it, the line wins.
+        let tall = editor_line_height(48.0);
+        assert!(tall > EDIT_LINE_PIXELS);
+        let band = editor_band(body, VerticalAlign::Middle, tall);
+        assert_eq!(band.size.y, tall);
+        // And it is still centred on the same box, so growing the band did not
+        // move the words.
+        assert!((band.center().y - body.center().y).abs() < 1e-3);
+
+        // The line height is the text size, not a rem: it tracks the zoom.
+        assert!(editor_line_height(40.0) > editor_line_height(10.0));
+        assert!(editor_line_height(0.0) > 0.0);
     }
 
     /// **And it follows the label off the middle**, which is what this phase's
@@ -3090,17 +3272,17 @@ mod tests {
     fn the_inline_editor_follows_a_label_that_is_not_in_the_middle() {
         let body = Rect::new(Vec2::new(40.0, 100.0), Vec2::new(300.0, 90.0));
 
-        let top = editor_band(body, VerticalAlign::Top);
+        let top = editor_band(body, VerticalAlign::Top, SMALL_LINE);
         assert_eq!(top.origin.y, body.origin.y);
 
-        let bottom = editor_band(body, VerticalAlign::Bottom);
+        let bottom = editor_band(body, VerticalAlign::Bottom, SMALL_LINE);
         assert_eq!(bottom.origin.y, body.max().y - EDIT_LINE_PIXELS);
 
         // The three agree with the painter's own placement of one line: the
         // scene puts a label's first line at exactly this offset inside the
         // same box. One function, two callers — see `render::scene`.
         for align in VerticalAlign::ALL {
-            let band = editor_band(body, *align);
+            let band = editor_band(body, *align, SMALL_LINE);
             assert_eq!(
                 band.origin.y - body.origin.y,
                 align.offset(body.size.y, EDIT_LINE_PIXELS),
@@ -3517,6 +3699,157 @@ mod tests {
                  you zoom out — see this test's doc"
             );
         }
+    }
+
+    /// **The inline editor is not a control, and must not paint like one.**
+    ///
+    /// The captain's reference is a diamond with the word in it and a caret
+    /// after the word — nothing else. What was there was a bordered box on the
+    /// theme's background with the theme's corner radius, so every label a
+    /// person edited grew an input frame around it, and the frame's padding
+    /// moved the words as well as covering them.
+    ///
+    /// **A source assertion, for the reason
+    /// [`every_overlay_the_canvas_draws_over_itself_blocks_the_press`] gives**:
+    /// whether a pixel was painted is a fact about a frame, and this crate buys
+    /// no windowed harness to read one. What is checkable with no window is
+    /// whether the element still *asks* for a box — which is exactly the set of
+    /// lines that were there. The two positive needles matter as much as the
+    /// five negative ones: `gpui-component`'s `Input` paints its own border and
+    /// background unless `appearance(false)` says otherwise, and pads itself by
+    /// its size step unless the style overrides it, so dropping the wrapper's
+    /// chrome alone would have left the widget's.
+    #[test]
+    fn the_inline_editor_draws_no_box_around_the_label() {
+        let body = body_of(include_str!("flow.rs"), "fn text_editor_element(");
+
+        for (chrome, needle) in [
+            ("a background", ".bg("),
+            ("a border", ".border_1()"),
+            ("a border colour", ".border_color("),
+            ("a corner radius", ".rounded("),
+            ("a shadow", ".shadow"),
+        ] {
+            assert!(
+                !body.contains(needle),
+                "the inline editor draws {chrome} (`{needle}`) around the label —                  while editing there must be nothing on screen but the words and                  a caret, in the label's own ink"
+            );
+        }
+
+        for (reason, needle) in [
+            (
+                "gpui-component's own border and background",
+                ".appearance(false)",
+            ),
+            ("the widget's padding, which moves the words", ".p_0()"),
+        ] {
+            assert!(
+                body.contains(needle),
+                "the inline editor does not turn off {reason} (`{needle}`), so the                  box is only half gone — see this test's doc"
+            );
+        }
+    }
+
+    /// **And it types in the label's own ink, face, size and alignment.**
+    ///
+    /// The other half of the same defect. A box that has been made invisible
+    /// still moves the text if the text is a different size, a different face
+    /// or a different colour from the label underneath it — "no chrome" and
+    /// "nothing jumps when editing starts" are one requirement, not two.
+    ///
+    /// Driven on a real window because the ink is read from the theme as well
+    /// as from the document, and asserted against the same five values
+    /// `views::nodes` and `render::scene`'s `plan_labels` paint a committed
+    /// label with.
+    #[gpui::test]
+    fn the_caret_types_in_the_labels_own_ink(cx: &mut TestAppContext) {
+        let (view, mut cx) = mount(cx);
+
+        let mut style = crate::models::ElementStyle::default();
+        style.stroke.color = Some(Color::rgba(0.9, 0.55, 0.1, 1.0));
+        style.font.family = FontFamily::HandDrawn;
+        style.font.size = crate::models::FontSize::Large;
+        style.font.align = TextAlign::Center;
+        style.font.vertical_align = VerticalAlign::Bottom;
+
+        view.update_in(&mut cx, |this, _window, cx| {
+            let mut spec = crate::runtime::NodeSpec::new(
+                crate::models::ElementId::NONE,
+                ElementKind::Shape(crate::models::ShapeKind::Diamond),
+                Vec2::new(400.0, 300.0),
+                Vec2::new(220.0, 140.0),
+            );
+            spec.style = style.clone();
+            let node = this
+                .editor
+                .apply(crate::commands::EditCommand::AddNodes(vec![
+                    crate::commands::NodeDraft::new(spec),
+                ]))
+                .expect("adding a node cannot fail")
+                .added_nodes[0];
+            this.editor.commit_text(TextTarget::Node(node), "Duan");
+            // A *first* label is centred on the element it labels, so the two
+            // alignment rows are set afterwards — the way the panel sets them,
+            // through the one applier — rather than seeded and overwritten.
+            this.editor.select_only(Some(node));
+            assert!(this.editor.restyle_selection(|style| {
+                style.font.align = TextAlign::Center;
+                style.font.vertical_align = VerticalAlign::Bottom;
+            }));
+            this.refresh_snapshot();
+
+            let ink = this.text_edit_ink(TextTarget::Node(node), cx);
+            assert_eq!(ink.family, FontFamily::HandDrawn);
+            assert_eq!(ink.align, TextAlign::Center);
+            assert_eq!(ink.vertical_align, VerticalAlign::Bottom);
+            assert_eq!(
+                ink.color,
+                to_hsla(style.stroke.color.expect("a stroke colour")),
+                "the caret would type in the theme's foreground rather than the                  label's ink",
+            );
+
+            // **The size the frame shaped the label at**, not the authored one
+            // times the zoom: `render::lod` quantises a label onto the ladder,
+            // so those two are different numbers at most zooms.
+            let drawn = this
+                .snapshot
+                .rich()
+                .iter()
+                .find(|rich| rich.node == node)
+                .and_then(|rich| rich.label_font_size)
+                .or_else(|| {
+                    this.snapshot
+                        .canvas()
+                        .iter()
+                        .find(|canvas| canvas.node == node)
+                        .and_then(|canvas| canvas.label_font_size)
+                })
+                .expect("a labelled node on screen is shaped at some size");
+            assert_eq!(ink.font_size, drawn);
+
+            // A label the frame has not shaped falls back to the authored size
+            // at this zoom, which is what it will be drawn at once it has one.
+            let bare = this
+                .editor
+                .apply(crate::commands::EditCommand::AddNodes(vec![
+                    crate::commands::NodeDraft::new(crate::runtime::NodeSpec::new(
+                        crate::models::ElementId::NONE,
+                        ElementKind::Shape(crate::models::ShapeKind::Rectangle),
+                        Vec2::new(900.0, 300.0),
+                        Vec2::new(120.0, 60.0),
+                    )),
+                ]))
+                .expect("adding a node cannot fail")
+                .added_nodes[0];
+            this.refresh_snapshot();
+            let ink = this.text_edit_ink(TextTarget::Node(bare), cx);
+            assert_eq!(
+                ink.font_size,
+                this.viewport.world_to_screen_length(
+                    this.editor.world().nodes().style(bare).font.world_size()
+                )
+            );
+        });
     }
 
     /// **Every text field the canvas opens must establish [`TYPING_CONTEXT`].**
