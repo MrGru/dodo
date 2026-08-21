@@ -261,15 +261,40 @@
 //!    the words. Then save, reopen, undo and redo.
 //! 6. **Double-click a label you have aligned to the top or the bottom.** The
 //!    caret opens on the line the words are drawn on, not in the middle of the
-//!    element, and committing must not make them jump. *Known and not fixed*:
-//!    the field itself lays its text out from its left edge, so a centred or
-//!    right-aligned label slides into place on commit — the field spans the same
-//!    box, so it is a shift within the box rather than a jump out of it.
+//!    element, and committing must not make them jump. A centred or
+//!    right-aligned label must not slide either: the field takes the label's
+//!    own horizontal alignment as well as its vertical one.
 //! 7. **Open a diagram saved before this slice.** Every label on a shape, an
 //!    arrow or an edge has to come back **centred**, and a standalone text
 //!    element has to come back exactly where it was. That is the format's
 //!    version-5 rung; `models::serialization`'s `labels_centred_on_their_element`
 //!    carries the argument for why moving them is safe.
+//!
+//! # Three things the captain found by using the canvas, and what to look at
+//!
+//! All three are behaviour rather than style, and all three are asserted as far
+//! as a windowless crate can assert them — what is left is what a screen says.
+//!
+//! 1. **Double-click a node and type immediately.** The very next keystroke has
+//!    to enter text, with no second click anywhere. Do it on a shape, on an
+//!    arrow and on an edge. The failure looks like nothing happening, or like a
+//!    letter arming a tool in the palette. See `views::flow`'s
+//!    `the_press_that_opens_a_caret_does_not_hand_the_keyboard_back` for the
+//!    mechanism.
+//! 2. **Look at the node while you are typing in it.** There must be **no box**
+//!    — no border, no frame, no fill, no plate behind the words, no highlight —
+//!    only the label and a caret, in the element's own colour, face and size,
+//!    sitting exactly where the finished label sits. Click away and back: the
+//!    words must not move, resize or re-centre in either direction. Then zoom
+//!    in two rungs and do it again, which is where a fixed-height field used to
+//!    clip the line.
+//! 3. **Select one node and watch its border.** It must not change colour or
+//!    thickness — the bounding box and its grips are the only thing that says
+//!    "selected", which is what makes the Stroke row in the panel usable. Then
+//!    check the two cases that deliberately still take the accent: a rubber
+//!    band over several shapes, which has no bounding box, and the pointer
+//!    resting on an unselected shape. A selected *edge* also still takes it,
+//!    for the same reason — there is no bounding box for one.
 //!
 //! **Hover a palette button and it tells you what it is and which key it
 //! answers to.** The label comes from `dodo_i18n::flow`, in whichever language

@@ -1321,7 +1321,7 @@
 //! `begin_text_edit` focused the field *before* storing it on the view and
 //! never set its selection, so a double-click left an empty caret at offset
 //! zero and the first keystrokes reached the canvas — where a bare letter is a
-//! tool binding. The fix is two lines in the right order; the interesting part
+//! tool binding. Those are two lines in the right order; the interesting part
 //! is that it is the first thing in this crate asserted on a **real test
 //! window**. `views::flow`'s
 //! `a_double_click_opens_an_editor_that_already_owns_the_keyboard` drives the
@@ -1329,6 +1329,29 @@
 //! because "does this element hold the keyboard?" is a window question and the
 //! twelfth-and-a-half slice's trade — source assertions rather than a windowed
 //! harness — buys nothing once the harness is one dev-dependency feature away.
+//!
+//! **Corrected later: those two lines were necessary and not sufficient, and
+//! the test above could not see why.** It calls the effect handler directly, so
+//! nothing else on the press runs — and what was undoing it was a listener
+//! nobody in this crate registered. The canvas root carries `track_focus`, and
+//! GPUI answers that by registering a bubble-phase `MouseDownEvent` listener
+//! which focuses the tracked handle unless the default is prevented. Bubble
+//! listeners run in **reverse** registration order and a parent registers
+//! before its children paint, so that listener is the *last* thing to touch the
+//! focus on the very press that opened the caret: the field was focused and the
+//! canvas took it back a moment later, on the same event. `begin_text_edit`
+//! now calls `Window::prevent_default`, which is the flag that listener reads.
+//!
+//! The transferable part is the same shape as the twelfth-and-a-half slice's:
+//! a symptom that looks like "focus is being lost" is almost never the widget
+//! losing it, and the way to tell is to drive the **real event** rather than
+//! the handler.
+//! `the_press_that_opens_a_caret_does_not_hand_the_keyboard_back` does, with
+//! one wrinkle worth knowing: a *focused* `gpui_component::Input` cannot be
+//! painted on a GPUI test window at all — its render asks the platform window
+//! for an `NSView` and the test window answers `unimplemented!` — so the
+//! assertion happens on the dispatch and the caret is closed again before the
+//! frame that follows it.
 //!
 //! ## What only a person can confirm
 //!
@@ -1447,9 +1470,12 @@
 //!
 //! That a centred label reads as belonging to its shape, that a label crossing
 //! the rich/canvas rung does not visibly change, and that the vertical row's
-//! three glyphs are legible at 16 px. `examples/flow.rs` lists the seven, and
-//! flags the one known cosmetic gap: the inline editor lays its own text out
-//! from the left, so a centred label slides into place on commit.
+//! three glyphs are legible at 16 px. `examples/flow.rs` lists the seven.
+//!
+//! The gap that used to be flagged here — the inline editor laying its own text
+//! out from the left, so a centred label slid into place on commit — is closed:
+//! `views::flow`'s `text_editor_element` reads the label's own face, size, ink
+//! and both alignments, and draws no box at all.
 //!
 //! # Where the budget numbers come from, and what they are not
 //!
