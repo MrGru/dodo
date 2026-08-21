@@ -444,6 +444,64 @@ impl TextAlign {
     }
 }
 
+/// **Vertical alignment within the element's box** — [`TextAlign`]'s twin, and
+/// deliberately its exact twin.
+///
+/// The property panel's fourth text row (the reference screenshot's unlabelled
+/// one): top, middle, bottom. It is a separate enum rather than a second use of
+/// [`TextAlign`] because "left" and "top" are different words for a reader and
+/// because a single `Align` shared by both axes is how a control ends up
+/// writing the wrong one.
+///
+/// [`Middle`](VerticalAlign::Middle) is the default because it is what every
+/// label in every document already displayed: `render::scene`'s `plan_labels`
+/// has centred a label on its body's vertical centre since §9. So a document
+/// written before this field existed loads with the field missing,
+/// `#[serde(default)]` answers `Middle`, and nothing on screen moves — which is
+/// why this field costs no format version of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum VerticalAlign {
+    Top,
+    #[default]
+    Middle,
+    Bottom,
+}
+
+impl VerticalAlign {
+    pub const ALL: &'static [VerticalAlign] = &[
+        VerticalAlign::Top,
+        VerticalAlign::Middle,
+        VerticalAlign::Bottom,
+    ];
+
+    /// Where a block of `height` starts inside a box of `available`, measured
+    /// from the box's top edge.
+    ///
+    /// Arithmetic, asserted with no window, for exactly the reasons
+    /// [`TextAlign::offset`] is — including the clamp: a block taller than its
+    /// box starts at the top edge and overflows **downwards**, rather than
+    /// being centred into whatever is above it. That is the limitation
+    /// [`crate::render::painter`] already records for a paragraph that outgrows
+    /// its element, stated once as a number instead of twice as prose.
+    pub fn offset(self, available: f32, height: f32) -> f32 {
+        let slack = (available - height).max(0.0);
+        match self {
+            VerticalAlign::Top => 0.0,
+            VerticalAlign::Middle => slack * 0.5,
+            VerticalAlign::Bottom => slack,
+        }
+    }
+
+    /// A short stable name, for an element id or a test. **Not user-facing.**
+    pub const fn name(self) -> &'static str {
+        match self {
+            VerticalAlign::Top => "top",
+            VerticalAlign::Middle => "middle",
+            VerticalAlign::Bottom => "bottom",
+        }
+    }
+}
+
 /// Font properties (§32). **The whole text vocabulary the property panel
 /// edits**, and deliberately no more: stroke colour, opacity and layer order
 /// are the element's, not the font's, which is why they are not here.
@@ -460,10 +518,19 @@ impl TextAlign {
 #[serde(default)]
 pub struct FontStyle {
     pub size: FontSize,
-    /// `None` resolves to the theme's foreground colour at render time.
+    /// **An override, and nothing writes one today.** A label takes its
+    /// element's *stroke* colour — see
+    /// [`ElementStyle::text_color`](ElementStyle::text_color), which is the one
+    /// answer every text painter reads. This stays because a file may carry it
+    /// and dropping a field silently is how a colour disappears; `None`, which
+    /// is every dodo-written document, means "ask the element".
     pub color: Option<Color>,
     pub family: FontFamily,
     pub align: TextAlign,
+    /// [`TextAlign`]'s twin — the panel's fourth text row. See
+    /// [`VerticalAlign`] for why `Middle` is the default and why that costs no
+    /// format version.
+    pub vertical_align: VerticalAlign,
     pub bold: bool,
     pub italic: bool,
 }
@@ -474,6 +541,26 @@ impl FontStyle {
     /// site**, so a future per-element scale has one place to land.
     pub fn world_size(&self) -> f32 {
         self.size.world_size()
+    }
+
+    /// **Where a label belongs on the thing it labels: the middle of it.**
+    ///
+    /// A label has no position of its own in this engine — it is laid into its
+    /// carrier's box every frame and there is no offset, no anchor and nothing
+    /// persisted about where it sits. Its placement *is* these two alignments,
+    /// so "a label defaults to the centre of its element" is this pair of
+    /// values and nothing else.
+    ///
+    /// Applied where a label is **born** — `FlowEditor::commit_text` — rather
+    /// than baked into [`Default`], because [`TextAlign::default`] is also the
+    /// default for a *standalone* text element, which reads from its left edge
+    /// like any other block of prose. A label centres; a paragraph does not.
+    /// Once a label exists the two rows own these fields and nothing re-centres
+    /// them, which is what "a label the user has moved keeps its position"
+    /// means here.
+    pub fn centre_on_element(&mut self) {
+        self.align = TextAlign::Center;
+        self.vertical_align = VerticalAlign::Middle;
     }
 }
 
@@ -524,6 +611,27 @@ impl Default for ElementStyle {
             start_marker: ArrowMarker::None,
             end_marker: ArrowMarker::None,
         }
+    }
+}
+
+impl ElementStyle {
+    /// **The colour text on this element is drawn in**, or `None` for "the
+    /// theme's ink".
+    ///
+    /// One function because there was one bug: §32 gives an element a Stroke
+    /// row and no separate text colour, and every text painter read
+    /// `font.color` — which no control writes. A text element was the first
+    /// costume of that (`properties`' module doc, item 3) and it was fixed
+    /// *there*, in one painter, for one kind; a label on a node or an edge kept
+    /// drawing in the theme's foreground and changing the element's stroke did
+    /// nothing to it.
+    ///
+    /// So the answer lives on the style rather than at three call sites: a
+    /// label is part of the element it labels, it takes the element's ink, and
+    /// a stroke change moves it with no second press and nothing to remember.
+    /// [`FontStyle::color`] still wins where a file carries one.
+    pub fn text_color(&self) -> Option<Color> {
+        self.font.color.or(self.stroke.color)
     }
 }
 
@@ -786,7 +894,7 @@ impl RenderQuality {
 mod tests {
     use super::{
         ArrowMarker, Color, DashPattern, EdgeRouting, ElementStyle, FontFamily, FontSize,
-        RenderQuality, RenderStyle, StrokeStyle, TextAlign,
+        FontStyle, RenderQuality, RenderStyle, StrokeStyle, TextAlign, VerticalAlign,
     };
 
     #[test]
@@ -944,9 +1052,96 @@ mod tests {
         }
     }
 
-    /// The three families and the four sizes are enum variants a panel maps
-    /// over, so a duplicate id would collide two buttons — the same failure the
-    /// palette's `no_two_buttons_share_an_id` guards.
+    /// The vertical twin, asserted the same way and with the same overflow
+    /// rule: a block taller than its box starts at the top and overflows
+    /// downwards, which is the limitation `render::painter` records.
+    #[test]
+    fn vertical_alignment_places_a_block_inside_its_box_and_never_outside_it() {
+        assert_eq!(VerticalAlign::Top.offset(100.0, 40.0), 0.0);
+        assert_eq!(VerticalAlign::Middle.offset(100.0, 40.0), 30.0);
+        assert_eq!(VerticalAlign::Bottom.offset(100.0, 40.0), 60.0);
+
+        for align in VerticalAlign::ALL {
+            assert_eq!(
+                align.offset(40.0, 100.0),
+                0.0,
+                "{} must not push an over-tall block out of its box",
+                align.name()
+            );
+        }
+    }
+
+    /// **`Middle` is what every label already displayed**, so a document
+    /// written before the field existed must load unchanged. `#[serde(default)]`
+    /// is what answers, and this is the assertion that the answer is the one
+    /// the renderer was already drawing.
+    #[test]
+    fn a_font_with_no_vertical_alignment_loads_middle() {
+        let font: FontStyle = serde_json::from_str(r#"{"size":"Large"}"#).unwrap();
+        assert_eq!(font.vertical_align, VerticalAlign::Middle);
+        assert_eq!(font.size, FontSize::Large);
+        assert_eq!(
+            font.align,
+            TextAlign::Left,
+            "the horizontal default is prose's, not a label's — see \
+             FontStyle::centre_on_element"
+        );
+    }
+
+    /// **The whole of "a label defaults to the centre of its element".** There
+    /// is no other placement state; these two fields are it.
+    #[test]
+    fn centring_a_label_is_the_two_alignments_and_nothing_else() {
+        let mut font = FontStyle {
+            size: FontSize::Large,
+            family: FontFamily::Code,
+            bold: true,
+            ..FontStyle::default()
+        };
+        let before = font.clone();
+        font.centre_on_element();
+
+        assert_eq!(font.align, TextAlign::Center);
+        assert_eq!(font.vertical_align, VerticalAlign::Middle);
+        assert_eq!(
+            FontStyle {
+                align: before.align,
+                vertical_align: before.vertical_align,
+                ..font.clone()
+            },
+            before,
+            "centring a label must touch nothing but where it sits"
+        );
+    }
+
+    /// **A label takes its element's ink.** The Stroke row is the only colour
+    /// control a label's element has, so a stroke change has to move the label
+    /// with it — with no second press, and for a node and an edge alike.
+    #[test]
+    fn a_label_takes_the_elements_stroke_colour() {
+        let mut style = ElementStyle::default();
+        assert_eq!(
+            style.text_color(),
+            None,
+            "an unstyled element defers to the theme's ink"
+        );
+
+        let red = Color::from_rgba8(224, 49, 49, 255);
+        style.stroke.color = Some(red);
+        assert_eq!(style.text_color(), Some(red));
+
+        let blue = Color::from_rgba8(25, 113, 194, 255);
+        style.font.color = Some(blue);
+        assert_eq!(
+            style.text_color(),
+            Some(blue),
+            "an explicit font colour from a file still wins"
+        );
+    }
+
+    /// The three families, the four sizes and the two alignments are enum
+    /// variants a panel maps over, so a duplicate id would collide two buttons
+    /// — the same failure the palette's `no_two_buttons_share_an_id` guards.
     #[test]
     fn every_font_choice_has_its_own_stable_name() {
         let names: Vec<&str> = FontSize::ALL
@@ -954,6 +1149,7 @@ mod tests {
             .map(|it| it.name())
             .chain(FontFamily::ALL.iter().map(|it| it.name()))
             .chain(TextAlign::ALL.iter().map(|it| it.name()))
+            .chain(VerticalAlign::ALL.iter().map(|it| it.name()))
             .collect();
         for (index, name) in names.iter().enumerate() {
             assert!(!names[index + 1..].contains(name), "{name} appears twice");

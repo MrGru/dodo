@@ -1236,7 +1236,7 @@ mod tests {
     /// that a real selection of a real element reaches the right column of it.
     #[test]
     fn selecting_each_kind_in_turn_changes_the_rows_the_panel_draws() {
-        use crate::properties::{PanelSection, sections_for, selection_kinds};
+        use crate::properties::{PanelSection, sections_for, selection_items};
 
         let (mut editor, nodes) = panel_editor();
         let text = editor
@@ -1253,7 +1253,7 @@ mod tests {
             .unwrap()
             .added_nodes[0];
 
-        let rows = |editor: &FlowEditor| sections_for(&selection_kinds(editor.world()));
+        let rows = |editor: &FlowEditor| sections_for(&selection_items(editor.world()));
 
         // Nothing selected: no panel at all, rather than a card of labels over
         // nothing.
@@ -1294,20 +1294,151 @@ mod tests {
         }
     }
 
+    /// **The four text rows appear when the selection has a label**, driven
+    /// through a real caret commit rather than by writing the field.
+    ///
+    /// The chain the phase adds, end to end: type into a shape, and the panel
+    /// grows Font family, Font size, Text align and vertical align — clear the
+    /// words and it loses them again. `properties`'s own test states the table;
+    /// this asserts that a real element's real content reaches the right column
+    /// of it.
+    #[test]
+    fn the_text_rows_appear_when_the_selection_has_a_label() {
+        use crate::{
+            interaction::TextTarget,
+            properties::{PanelSection, sections_for, selection_items},
+        };
+
+        const TEXT_ROWS: [PanelSection; 4] = [
+            PanelSection::FontFamilyRow,
+            PanelSection::FontSizeRow,
+            PanelSection::TextAlignRow,
+            PanelSection::VerticalAlignRow,
+        ];
+
+        let (mut editor, nodes) = panel_editor();
+        let rows = |editor: &FlowEditor| sections_for(&selection_items(editor.world()));
+
+        editor.select_only(Some(nodes[0]));
+        for row in TEXT_ROWS {
+            assert!(
+                !rows(&editor).contains(&row),
+                "an unlabelled shape offers {}",
+                row.name()
+            );
+        }
+
+        assert!(editor.commit_text(TextTarget::Node(nodes[0]), "step one"));
+        for row in TEXT_ROWS {
+            assert!(
+                rows(&editor).contains(&row),
+                "a labelled shape does not offer {}",
+                row.name()
+            );
+        }
+
+        // A second, unlabelled shape beside it: the panel's intersection rule
+        // takes the rows away rather than offering a control that would apply
+        // to half of what is selected.
+        editor.set_node_selected(nodes[1], true);
+        for row in TEXT_ROWS {
+            assert!(
+                !rows(&editor).contains(&row),
+                "a half-labelled selection offers {}",
+                row.name()
+            );
+        }
+
+        // And an edge earns them the same way.
+        editor.clear_selection();
+        editor.set_edge_selected(EdgeIndex::new(0), true);
+        assert!(!rows(&editor).contains(&PanelSection::FontSizeRow));
+        assert!(editor.commit_text(TextTarget::Edge(EdgeIndex::new(0)), "carries"));
+        for row in TEXT_ROWS {
+            assert!(
+                rows(&editor).contains(&row),
+                "a labelled edge does not offer {}",
+                row.name()
+            );
+        }
+
+        // Clearing the words takes the rows with them: an empty label is no
+        // label, and a Font size row over nothing is a control that does
+        // nothing.
+        assert!(editor.commit_text(TextTarget::Edge(EdgeIndex::new(0)), "   "));
+        for row in TEXT_ROWS {
+            assert!(
+                !rows(&editor).contains(&row),
+                "an emptied edge label left {} behind",
+                row.name()
+            );
+        }
+    }
+
+    /// **The rows survive save, reopen, undo and redo** — because what they
+    /// edit is ordinary style, written through the ordinary applier and
+    /// serialized with everything else.
+    ///
+    /// Asserted as the round trip rather than as four separate claims: a field
+    /// added to the model and forgotten in the format is silent, and the
+    /// symptom is a diagram that opens with every label back in the middle.
+    #[test]
+    fn a_moved_label_survives_a_round_trip_and_an_undo() {
+        use crate::{
+            interaction::TextTarget,
+            models::{FlowDocument, TextAlign, VerticalAlign},
+        };
+
+        let (mut editor, nodes) = panel_editor();
+        editor.select_only(Some(nodes[0]));
+        editor.commit_text(TextTarget::Node(nodes[0]), "step one");
+
+        assert!(editor.restyle_selection(|style| {
+            style.font.align = TextAlign::Right;
+            style.font.vertical_align = VerticalAlign::Bottom;
+            style.font.size = crate::models::FontSize::ExtraLarge;
+        }));
+
+        let font = |editor: &FlowEditor| editor.world().nodes().style(nodes[0]).font.clone();
+        let moved = font(&editor);
+        assert_eq!(moved.vertical_align, VerticalAlign::Bottom);
+
+        // Undo puts it back where the label was born, and redo returns it.
+        assert!(editor.undo());
+        assert_eq!(font(&editor).vertical_align, VerticalAlign::Middle);
+        assert_eq!(font(&editor).align, TextAlign::Center);
+        assert!(editor.redo());
+        assert_eq!(font(&editor), moved);
+
+        // And a save/reopen keeps it: the same node, by id, out of the file.
+        let document = editor.world().to_document();
+        let json = document.to_json().expect("serializes");
+        let reopened = FlowDocument::from_json(&json).expect("reopens");
+        let id = editor.world().nodes().id(nodes[0]);
+        let node = reopened
+            .nodes
+            .iter()
+            .find(|it| it.id == id)
+            .expect("the shape is still there");
+        assert_eq!(node.style.font.align, TextAlign::Right);
+        assert_eq!(node.style.font.vertical_align, VerticalAlign::Bottom);
+        assert_eq!(node.style.font.size, crate::models::FontSize::ExtraLarge);
+    }
+
     /// A deleted element must not keep offering its properties. It stays in the
     /// selection set until something clears it — `delete_selection` deliberately
     /// does not — so this is the guard that keeps the panel from editing a
     /// tombstone.
     #[test]
     fn a_deleted_element_draws_no_panel() {
-        use crate::properties::{sections_for, selection_kinds};
+        use crate::properties::{sections_for, selection_items};
 
         let (mut editor, nodes) = panel_editor();
         editor.select_only(Some(nodes[0]));
-        assert!(!sections_for(&selection_kinds(editor.world())).is_empty());
+        assert!(!sections_for(&selection_items(editor.world())).is_empty());
 
         assert!(editor.delete_selection());
-        assert!(sections_for(&selection_kinds(editor.world())).is_empty());
+        assert!(sections_for(&selection_items(editor.world())).is_empty());
     }
 
     /// **What "followed" means for a link**, up to the one call that needs a

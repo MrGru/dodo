@@ -330,7 +330,10 @@ impl FontSet {
         }
     }
 
-    fn face(&self, family: FontFamily) -> &Font {
+    /// The face one family resolves to. `pub` because the rich half of the
+    /// hybrid renderer draws its own labels and has to draw them in the same
+    /// face this painter would — see `views::nodes`.
+    pub fn face(&self, family: FontFamily) -> &Font {
         match family {
             FontFamily::Normal => &self.normal,
             FontFamily::HandDrawn => &self.hand_drawn,

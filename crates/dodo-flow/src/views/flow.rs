@@ -144,8 +144,8 @@ use crate::{
         InteractionMachine, PointerButton, TextTarget, resize_keeps_aspect,
     },
     models::{
-        Color, EdgeIndex, EdgeRouting, FlowDocument, FontFamily, ImageFormat, ImageResource,
-        NodeIndex, RenderQuality, RenderStyle, SketchStyle,
+        Color, EdgeIndex, EdgeRouting, ElementKind, FlowDocument, FontFamily, ImageFormat,
+        ImageResource, NodeIndex, RenderQuality, RenderStyle, SketchStyle, VerticalAlign,
     },
     properties::{ArrowKind, Availability, ControlState, SelectionKind},
     render::{
@@ -1033,8 +1033,8 @@ impl FlowView {
             return None;
         }
 
-        let kinds = crate::properties::selection_kinds(world);
-        let sections = crate::properties::sections_for(&kinds);
+        let items = crate::properties::selection_items(world);
+        let sections = crate::properties::sections_for(&items);
         if sections.is_empty() {
             return None;
         }
@@ -1045,7 +1045,10 @@ impl FlowView {
         // shape has no Crop, because `sections_for` intersects and the two
         // kinds' action lists differ.
         let actions = crate::properties::ElementAction::for_kind(
-            kinds.first().copied().unwrap_or(SelectionKind::Node),
+            items
+                .first()
+                .map(|item| item.kind)
+                .unwrap_or(SelectionKind::Node),
         );
 
         let style = nodes
@@ -2707,14 +2710,17 @@ impl FlowView {
                     return None;
                 }
                 if let Some(connector) = nodes.connector(node) {
-                    let size = Vec2::new(
-                        self.viewport
-                            .screen_to_world_length(scene::EDGE_LABEL_MAX_PIXELS),
-                        self.viewport.screen_to_world_length(EDIT_LINE_PIXELS),
-                    );
-                    Some(Rect::new(connector.midpoint() - size * 0.5, size))
-                } else {
+                    Some(self.boxless_label_bounds(connector.midpoint()))
+                } else if *nodes.kind(node) == ElementKind::Text {
+                    // A text element has no border to keep clear of, so its
+                    // label is laid into its whole box — `plan_labels` says so
+                    // where it is drawn and this is the same sentence.
                     Some(nodes.bounds(node))
+                } else {
+                    let padding = self
+                        .viewport
+                        .screen_to_world_length(scene::LABEL_PADDING_PIXELS);
+                    Some(nodes.bounds(node).inflate(-padding))
                 }
             }
             TextTarget::Edge(edge) => {
@@ -2723,16 +2729,50 @@ impl FlowView {
                     .viewport
                     .screen_to_world_length(1.0)
                     .max(f32::MIN_POSITIVE);
-                let center = route.midpoint(flatten);
-                // The editor is a box centred on the route, the same width the
-                // painter lays an edge label into — so what is typed is the
-                // width of what will be drawn.
-                let size = Vec2::new(
-                    self.viewport
-                        .screen_to_world_length(scene::EDGE_LABEL_MAX_PIXELS),
-                    self.viewport.screen_to_world_length(EDIT_LINE_PIXELS),
-                );
-                Some(Rect::new(center - size * 0.5, size))
+                Some(self.boxless_label_bounds(route.midpoint(flatten)))
+            }
+        }
+    }
+
+    /// **The world-space twin of [`scene::boxless_label_box`]** — the box an
+    /// edge's or a connector's label is laid into, projected back so the editor
+    /// opens over the same rectangle the painter will use.
+    ///
+    /// The two are a screen constant each, so this is the only place they have
+    /// to be turned back into world units, and it is why the caret and the label
+    /// cannot disagree about where the words go.
+    fn boxless_label_bounds(&self, center: Vec2) -> Rect {
+        let size = Vec2::new(
+            self.viewport
+                .screen_to_world_length(scene::EDGE_LABEL_MAX_PIXELS),
+            self.viewport
+                .screen_to_world_length(scene::EDGE_LABEL_BAND_PIXELS),
+        );
+        Rect::new(center - size * 0.5, size)
+    }
+
+    /// Where inside its box the thing being edited puts its text — so the
+    /// one-line field opens on the line the label is actually drawn on.
+    ///
+    /// `Middle` for a target that no longer exists and for a text element that
+    /// does not exist yet, which is the value both of those draw with.
+    fn text_edit_vertical_align(&self, target: TextTarget) -> VerticalAlign {
+        let world = self.editor.world();
+        match target {
+            TextTarget::New(_) => world.settings().default_style.font.vertical_align,
+            TextTarget::Node(node) => {
+                if world.nodes().contains(node) && world.node_is_live(node) {
+                    world.nodes().style(node).font.vertical_align
+                } else {
+                    VerticalAlign::default()
+                }
+            }
+            TextTarget::Edge(edge) => {
+                if world.edges().contains(edge) && world.edge_is_live(edge) {
+                    world.edges().style(edge).font.vertical_align
+                } else {
+                    VerticalAlign::default()
+                }
             }
         }
     }
@@ -2756,7 +2796,10 @@ impl FlowView {
         let world = self
             .text_edit_bounds(editing.target)
             .unwrap_or(editing.world);
-        let band = editor_band(self.viewport.world_rect_to_screen(world));
+        let band = editor_band(
+            self.viewport.world_rect_to_screen(world),
+            self.text_edit_vertical_align(editing.target),
+        );
 
         Some(
             div()
@@ -2788,18 +2831,26 @@ impl FlowView {
 /// **Where the one-line editor sits over the thing it is editing**, in
 /// pane-relative screen pixels.
 ///
-/// Pure, so the one rule it carries is assertable with no window. **Vertically
-/// centred, because that is where the label is painted** — the field is one
-/// line tall whatever it is editing (see [`FlowView::text_editor_element`]),
-/// so anchoring it at the element's top put the caret in a band above text
-/// that `render::scene`'s `plan_labels` centres, and what you typed appeared
-/// to jump the moment you committed it. An edge label's box and a connector's
-/// already arrive exactly this tall, so for those the two agree by
-/// construction and this is the identity.
-fn editor_band(screen: Rect) -> Rect {
+/// Pure, so the one rule it carries is assertable with no window. **On the line
+/// the label is painted on**, because the field is one line tall whatever it is
+/// editing (see [`FlowView::text_editor_element`]): anchoring it at the
+/// element's top put the caret in a band above text that `render::scene`'s
+/// `plan_labels` centres, and what you typed appeared to jump the moment you
+/// committed it.
+///
+/// **`align` is the same `VerticalAlign` the painter places the label with**,
+/// which is what keeps that fix true now that a label can be moved off the
+/// middle: `Middle` is the previous behaviour exactly, and the other two put the
+/// field where the words will be. It is passed in rather than read here for the
+/// reason everything in this half of the file is pure — one arithmetic offset,
+/// asserted with no window.
+fn editor_band(screen: Rect, align: VerticalAlign) -> Rect {
     let screen = screen.normalized();
     Rect::new(
-        Vec2::new(screen.origin.x, screen.center().y - EDIT_LINE_PIXELS * 0.5),
+        Vec2::new(
+            screen.origin.x,
+            screen.origin.y + align.offset(screen.size.y, EDIT_LINE_PIXELS),
+        ),
         Vec2::new(screen.size.x.max(MIN_EDITOR_PIXELS), EDIT_LINE_PIXELS),
     )
 }
@@ -2857,7 +2908,13 @@ impl Render for FlowView {
             }
         }
 
-        let nodes = nodes::nodes(&self.snapshot, self.editor.world(), cx);
+        // **Resolved here as well as in paint**, and cheap the second time: the
+        // rich half draws its own labels, so it needs the same three faces the
+        // painter shapes with. Doing it in `render` rather than reading the
+        // cached `self.fonts` is what keeps the *first* frame right — the cache
+        // is filled by paint, which has not run yet.
+        let fonts = self.sync_fonts(window, cx);
+        let nodes = nodes::nodes(&self.snapshot, self.editor.world(), &fonts, cx);
         let handles = nodes::handles(&self.snapshot, cx);
         let grips = nodes::resize_grips(&self.snapshot, cx);
         let selection = nodes::selection_box(&self.snapshot, cx);
@@ -2973,29 +3030,61 @@ mod tests {
         (view, cx)
     }
 
-    /// **The caret sits where the label will be**, which for every element but
-    /// a text box means the middle rather than the top. The editor is one line
-    /// tall whatever it is editing, so a top-anchored field put the words a
-    /// user typed above where `render::scene` was about to paint them.
+    /// **The caret sits where the label will be**, which for a label nobody has
+    /// moved means the middle rather than the top. The editor is one line tall
+    /// whatever it is editing, so a top-anchored field put the words a user
+    /// typed above where `render::scene` was about to paint them.
     #[test]
     fn the_inline_editor_is_centred_on_whatever_it_is_editing() {
         // A tall body: the band is centred and keeps its one-line height.
         let body = Rect::new(Vec2::new(40.0, 100.0), Vec2::new(300.0, 90.0));
-        let band = editor_band(body);
+        let band = editor_band(body, VerticalAlign::Middle);
         assert_eq!(band.origin.x, body.origin.x);
         assert_eq!(band.size.y, EDIT_LINE_PIXELS);
         assert!((band.center().y - body.center().y).abs() < 1e-3);
 
-        // A box already exactly one line tall — an edge label's, and a
-        // connector's — is left where it is.
+        // A box already exactly one line tall is left where it is.
         let line = Rect::new(Vec2::new(0.0, 200.0), Vec2::new(240.0, EDIT_LINE_PIXELS));
-        assert_eq!(editor_band(line), line);
+        assert_eq!(editor_band(line, VerticalAlign::Middle), line);
 
-        // A sliver still gets a usable field rather than a three-pixel one.
+        // A sliver still gets a usable field rather than a three-pixel one. It
+        // starts at the sliver's top rather than straddling it, because a box
+        // shorter than one line has no slack to centre in — the same clamp
+        // `VerticalAlign::offset` applies to the label itself, so the field and
+        // the words still land on the same line.
         let sliver = Rect::new(Vec2::new(10.0, 10.0), Vec2::new(4.0, 3.0));
-        let band = editor_band(sliver);
+        let band = editor_band(sliver, VerticalAlign::Middle);
         assert_eq!(band.size, Vec2::new(MIN_EDITOR_PIXELS, EDIT_LINE_PIXELS));
-        assert!((band.center().y - sliver.center().y).abs() < 1e-3);
+        assert_eq!(band.origin.y, sliver.origin.y);
+    }
+
+    /// **And it follows the label off the middle**, which is what this phase's
+    /// fourth text row can do to one. `editor_band` and `plan_labels` place a
+    /// single line by the same arithmetic — `VerticalAlign::offset` — so a
+    /// `Top`-aligned label is typed on the line it will be painted on rather
+    /// than one the field picked.
+    #[test]
+    fn the_inline_editor_follows_a_label_that_is_not_in_the_middle() {
+        let body = Rect::new(Vec2::new(40.0, 100.0), Vec2::new(300.0, 90.0));
+
+        let top = editor_band(body, VerticalAlign::Top);
+        assert_eq!(top.origin.y, body.origin.y);
+
+        let bottom = editor_band(body, VerticalAlign::Bottom);
+        assert_eq!(bottom.origin.y, body.max().y - EDIT_LINE_PIXELS);
+
+        // The three agree with the painter's own placement of one line: the
+        // scene puts a label's first line at exactly this offset inside the
+        // same box. One function, two callers — see `render::scene`.
+        for align in VerticalAlign::ALL {
+            let band = editor_band(body, *align);
+            assert_eq!(
+                band.origin.y - body.origin.y,
+                align.offset(body.size.y, EDIT_LINE_PIXELS),
+                "{} disagreed with the arithmetic the painter uses",
+                align.name()
+            );
+        }
     }
 
     /// **§9's caret has to arrive holding the keyboard, with a selection.**
@@ -3234,6 +3323,46 @@ mod tests {
                 "{path}'s `{builder}` builds an overlay over the canvas without \
                  `.occlude()`, so one press on it is also delivered to the canvas \
                  underneath — see this module's doc"
+            );
+        }
+    }
+
+    /// **The rich half draws its own labels, and must read every text
+    /// property the canvas half reads.**
+    ///
+    /// A rectangle at working zoom is a `RichNode` — a GPUI element — so this
+    /// is the renderer a person is looking at while they use the four text
+    /// rows. Phase 12.5 caught exactly this shape once already: the element
+    /// painted its body from the *theme*, so the whole property panel wrote
+    /// fields nothing on screen read, and the report came back as "the
+    /// properties only work in sketch mode". A label is the same trap with a
+    /// second renderer.
+    ///
+    /// **A source assertion, for the reason
+    /// [`every_overlay_the_canvas_draws_over_itself_blocks_the_press`] gives**:
+    /// what colour a `div` drew its text in is a fact about a painted frame,
+    /// and this crate buys no windowed harness to read one. What is checkable
+    /// with no window is whether the element still *asks* for each property —
+    /// which is precisely the line that goes missing. `render::scene`'s
+    /// `a_label_is_drawn_in_its_elements_stroke_colour_and_follows_a_change`
+    /// and `the_alignment_rows_move_a_label_inside_its_element` assert the
+    /// canvas half properly, on the frame.
+    #[test]
+    fn the_rich_half_reads_every_text_property_the_canvas_half_does() {
+        let body = body_of(include_str!("nodes.rs"), "fn decorated(");
+
+        for (property, needle) in [
+            ("the element's stroke colour", "text_color()"),
+            ("the font family", "fonts.face(font.family)"),
+            ("the text alignment", "font.align"),
+            ("the vertical alignment", "font.vertical_align"),
+            ("the authored size", "rich.label_font_size"),
+        ] {
+            assert!(
+                body.contains(needle),
+                "views/nodes.rs draws a rich node's label without reading {property} \
+                 (`{needle}`), so that row is dead at working zoom and alive when \
+                 you zoom out — see this test's doc"
             );
         }
     }

@@ -8,30 +8,47 @@
 //! the specification** rather than a detail of it — it is not one panel with
 //! rows greyed out:
 //!
-//! | | node | edge | text | image |
-//! |---|:--:|:--:|:--:|:--:|
-//! | Stroke | ● | ● | ● | — |
-//! | Background | ● | — | — | — |
-//! | Fill | ● | — | — | — |
-//! | Stroke width | ● | ● | — | — |
-//! | Stroke style | ● | ● | — | — |
-//! | Sloppiness | ● | ● | — | — |
-//! | Edges (corners) | ● | — | — | ● |
-//! | Arrow type | — | ● | — | — |
-//! | Arrowheads | — | ● | — | — |
-//! | Font family | — | — | ● | — |
-//! | Font size | — | — | ● | — |
-//! | Text align | — | — | ● | — |
-//! | Opacity | ● | ● | ● | ● |
-//! | Layers | ● | ● | ● | ● |
-//! | Actions | ● | ● | ● | ● |
+//! | | node | node + label | edge | edge + label | text | image |
+//! |---|:--:|:--:|:--:|:--:|:--:|:--:|
+//! | Stroke | ● | ● | ● | ● | ● | — |
+//! | Background | ● | ● | — | — | — | — |
+//! | Fill | ● | ● | — | — | — | — |
+//! | Stroke width | ● | ● | ● | ● | — | — |
+//! | Stroke style | ● | ● | ● | ● | — | — |
+//! | Sloppiness | ● | ● | ● | ● | — | — |
+//! | Edges (corners) | ● | ● | — | — | — | ● |
+//! | Arrow type | — | — | ● | ● | — | — |
+//! | Arrowheads | — | — | ● | ● | — | — |
+//! | Font family | — | ● | — | ● | ● | — |
+//! | Font size | — | ● | — | ● | ● | — |
+//! | Text align | — | ● | — | ● | ● | — |
+//! | Vertical align | — | ● | — | ● | ● | — |
+//! | Opacity | ● | ● | ● | ● | ● | ● |
+//! | Layers | ● | ● | ● | ● | ● | ● |
+//! | Actions | ● | ● | ● | ● | ● | ● |
 //!
 //! So a node gets Background, Fill and a corner style; an edge gets Arrow type
-//! and Arrowheads instead; text gets Font family, size and alignment and
-//! nothing about strokes; and an image is the minimal case — Edges, Opacity,
-//! Layers, Actions and nothing else, because none of the rest means anything to
-//! a bitmap. **Opacity, Layers and Actions are the only three rows on every
-//! form.**
+//! and Arrowheads instead; text gets the four text rows and nothing about
+//! strokes; and an image is the minimal case — Edges, Opacity, Layers, Actions
+//! and nothing else, because none of the rest means anything to a bitmap.
+//! **Opacity, Layers and Actions are the only three rows on every form.**
+//!
+//! # The one place a row depends on what an element *contains*
+//!
+//! The four text rows are on a node's and an edge's panel **when it has a
+//! label**, and that is a genuine departure from the model above: every other
+//! row is a pure function of [`SelectionKind`], and this one is a function of
+//! the kind and the element's content. It is expressed as a second argument to
+//! [`SelectionKind::sections`] — [`Labelled`] — rather than as a special case at
+//! the call site, so the table stays one table and the test beside it can still
+//! state the whole of it independently.
+//!
+//! The argument for it is the same argument decision 1 makes: a Font size row
+//! on a shape with no text is a control that does nothing, and a control that
+//! does nothing is indistinguishable from a broken one. A *standalone text
+//! element* takes no argument — it **is** its text, and an empty one does not
+//! exist (`FlowEditor::commit_text` removes it), so there is no unlabelled form
+//! of it to describe.
 //!
 //! That table is a *fact about the product*. It is exactly the sort of thing
 //! that rots when it is spread across fifteen `if` statements in a render body,
@@ -53,7 +70,11 @@
 //!    Background row for a selection holding a node and a text element would
 //!    offer a control that silently applies to half of what is selected, which
 //!    is the failure mode this crate has already recorded twice under other
-//!    names. [`sections_for`] is where that is decided.
+//!    names. [`sections_for`] is where that is decided, and the label state goes
+//!    through the same fold: **a selection holding one labelled shape and one
+//!    unlabelled one shows no text rows**, because the intersection of "with
+//!    text rows" and "without" is "without". One rule, applied to a second
+//!    axis, rather than a second rule.
 //! 2. **Sloppiness is disabled, not hidden, in Clean mode.** It is a real
 //!    per-element property and it means nothing until the document is drawn by
 //!    hand. Hiding it would make a row appear and disappear with a *document*
@@ -95,7 +116,18 @@
 //!    document — and no painter ever asked for it. What a person sees is the
 //!    words vanishing the moment they click away.
 //!
-//! Each of the five passed every test in the crate, because a test on this
+//! 6. The widest one twice over. A **label** on a node or an edge was drawn in
+//!    the theme's foreground, so the Stroke row — the only colour control those
+//!    two have — moved the outline and left the words behind
+//!    ([`ElementStyle::text_color`] is the one answer now). And the four text
+//!    rows this table grew for a labelled element reached the canvas painter and
+//!    **not** the rich half: a rectangle at working zoom is a GPUI element and
+//!    `views::nodes` drew its label in the theme's colour, the theme's face,
+//!    flex-centred and flowed from the left. That is costume 4's shape exactly —
+//!    two renderers, one of them ignoring the document — arriving through a
+//!    label instead of through a body.
+//!
+//! Each of the six passed every test in the crate, because a test on this
 //! table and a test on the round trip both pass either way. **So the test for a
 //! new row asserts what reaches the painter** — the primitive, its colour, its
 //! cache part — and `render::scene`'s
@@ -112,16 +144,68 @@
 use crate::{
     models::{
         ArrowMarker, Color, DashPattern, EdgeRouting, ElementKind, ElementStyle, FillStyle,
-        FontFamily, FontSize, ImageCrop, Sloppiness, TextAlign,
+        FontFamily, FontSize, ImageCrop, Sloppiness, TextAlign, VerticalAlign,
     },
     runtime::NodeShape,
 };
 
+/// Whether an element carries a label — **the one thing about an element's
+/// content that changes the panel's shape**.
+///
+/// A named pair rather than a `bool`, for the reason
+/// [`views::properties::PanelState`](crate::views::properties::PanelState)
+/// gives for being a struct: `sections(kind, true)` at a call site is how the
+/// wrong answer is given with nothing to notice it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Labelled {
+    No,
+    Yes,
+}
+
+impl Labelled {
+    pub const BOTH: &'static [Labelled] = &[Labelled::No, Labelled::Yes];
+
+    /// From the question every caller actually has: is there a label here?
+    pub fn of(label: Option<&str>) -> Labelled {
+        match label {
+            Some(text) if !text.trim().is_empty() => Labelled::Yes,
+            _ => Labelled::No,
+        }
+    }
+
+    /// A short, stable name. **Not user-facing.**
+    pub const fn name(self) -> &'static str {
+        match self {
+            Labelled::No => "unlabelled",
+            Labelled::Yes => "labelled",
+        }
+    }
+}
+
+/// **One selected element**, as far as the panel is concerned: its kind, and
+/// whether it has a label.
+///
+/// A selection holding several elements is several of these, and
+/// [`sections_for`] folds them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SelectionItem {
+    pub kind: SelectionKind,
+    pub labelled: Labelled,
+}
+
+impl SelectionItem {
+    pub fn new(kind: SelectionKind, labelled: Labelled) -> SelectionItem {
+        SelectionItem { kind, labelled }
+    }
+
+    pub fn sections(self) -> &'static [PanelSection] {
+        self.kind.sections(self.labelled)
+    }
+}
+
 /// What is selected, as far as the panel is concerned.
 ///
-/// Four forms, one per row of the module doc's table. Not a count and not a
-/// set — a selection holding several elements is several of these, and
-/// [`sections_for`] folds them.
+/// Four forms, one per column pair of the module doc's table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SelectionKind {
     /// A shape or a graph node: everything with a body and a border.
@@ -173,10 +257,16 @@ impl SelectionKind {
     /// In panel order, top to bottom. The test beside this states the same
     /// table independently, so a row that moves here without moving there is a
     /// failure rather than a redraw.
-    pub fn sections(self) -> &'static [PanelSection] {
+    ///
+    /// `labelled` is the second axis and it is only read by two of the four
+    /// kinds — see the module doc's second section. A text element ignores it
+    /// because it *is* its text; an image ignores it because a bitmap carries no
+    /// label at all (`render::registry` answers `shows_label: false` for the
+    /// kind, so §9's caret never opens on one).
+    pub fn sections(self, labelled: Labelled) -> &'static [PanelSection] {
         use PanelSection::*;
-        match self {
-            SelectionKind::Node => &[
+        match (self, labelled) {
+            (SelectionKind::Node, Labelled::No) => &[
                 Stroke,
                 Background,
                 Fill,
@@ -188,7 +278,23 @@ impl SelectionKind {
                 Layers,
                 Actions,
             ],
-            SelectionKind::Edge => &[
+            (SelectionKind::Node, Labelled::Yes) => &[
+                Stroke,
+                Background,
+                Fill,
+                StrokeWidth,
+                StrokeStyle,
+                Sloppiness_,
+                Corners,
+                FontFamilyRow,
+                FontSizeRow,
+                TextAlignRow,
+                VerticalAlignRow,
+                Opacity,
+                Layers,
+                Actions,
+            ],
+            (SelectionKind::Edge, Labelled::No) => &[
                 Stroke,
                 StrokeWidth,
                 StrokeStyle,
@@ -199,16 +305,32 @@ impl SelectionKind {
                 Layers,
                 Actions,
             ],
-            SelectionKind::Text => &[
+            (SelectionKind::Edge, Labelled::Yes) => &[
                 Stroke,
+                StrokeWidth,
+                StrokeStyle,
+                Sloppiness_,
+                ArrowType,
+                Arrowheads,
                 FontFamilyRow,
                 FontSizeRow,
                 TextAlignRow,
+                VerticalAlignRow,
                 Opacity,
                 Layers,
                 Actions,
             ],
-            SelectionKind::Image => &[Corners, Opacity, Layers, Actions],
+            (SelectionKind::Text, _) => &[
+                Stroke,
+                FontFamilyRow,
+                FontSizeRow,
+                TextAlignRow,
+                VerticalAlignRow,
+                Opacity,
+                Layers,
+                Actions,
+            ],
+            (SelectionKind::Image, _) => &[Corners, Opacity, Layers, Actions],
         }
     }
 
@@ -255,6 +377,9 @@ pub enum PanelSection {
     FontSizeRow,
     /// Left / centre / right.
     TextAlignRow,
+    /// Top / middle / bottom. **The one row the reference draws with no
+    /// heading** — see `views::properties`' `label_for`.
+    VerticalAlignRow,
     /// A slider, 0 to 100.
     Opacity,
     /// The four depth buttons.
@@ -280,6 +405,7 @@ impl PanelSection {
             PanelSection::FontFamilyRow => "font-family",
             PanelSection::FontSizeRow => "font-size",
             PanelSection::TextAlignRow => "text-align",
+            PanelSection::VerticalAlignRow => "vertical-align",
             PanelSection::Opacity => "opacity",
             PanelSection::Layers => "layers",
             PanelSection::Actions => "actions",
@@ -287,17 +413,21 @@ impl PanelSection {
     }
 }
 
-/// **The sections a whole selection gets**: the intersection of its kinds'.
+/// **The sections a whole selection gets**: the intersection of its elements'.
 ///
 /// The intersection rather than the union — see decision 1 in the module doc.
-/// Order is [`SelectionKind::Node`]'s where the two agree and each kind's own
-/// otherwise, which comes out right because the four forms are one table with
-/// rows removed rather than four different orders.
+/// Order is the leading element's, which comes out right because every form is
+/// one table with rows removed rather than several different orders.
+///
+/// The label state folds through the same intersection and needs no rule of its
+/// own: a selection holding a labelled shape and an unlabelled one shows no text
+/// rows, exactly as a selection holding a shape and a picture shows no Stroke
+/// row.
 ///
 /// An empty selection gets nothing, and the caller draws no panel at all rather
 /// than an empty card.
-pub fn sections_for(kinds: &[SelectionKind]) -> Vec<PanelSection> {
-    let Some((first, rest)) = kinds.split_first() else {
+pub fn sections_for(items: &[SelectionItem]) -> Vec<PanelSection> {
+    let Some((first, rest)) = items.split_first() else {
         return Vec::new();
     };
 
@@ -305,7 +435,7 @@ pub fn sections_for(kinds: &[SelectionKind]) -> Vec<PanelSection> {
         .sections()
         .iter()
         .copied()
-        .filter(|section| rest.iter().all(|kind| kind.sections().contains(section)))
+        .filter(|section| rest.iter().all(|item| item.sections().contains(section)))
         .collect()
 }
 
@@ -323,19 +453,29 @@ pub fn sections_for(kinds: &[SelectionKind]) -> Vec<PanelSection> {
 /// removed element is still in the selection set until something clears it, and
 /// a panel that offered to restyle one would be offering to edit what nobody
 /// can see.
-pub fn selection_kinds(world: &crate::runtime::GraphWorld) -> Vec<SelectionKind> {
+pub fn selection_items(world: &crate::runtime::GraphWorld) -> Vec<SelectionItem> {
     let selection = world.selection();
     selection
         .nodes()
         .iter()
         .filter(|&&node| world.node_is_live(node))
-        .map(|&node| SelectionKind::of_kind(world.nodes().kind(node)))
+        .map(|&node| {
+            SelectionItem::new(
+                SelectionKind::of_kind(world.nodes().kind(node)),
+                Labelled::of(world.nodes().cold(node).label.as_deref()),
+            )
+        })
         .chain(
             selection
                 .edges()
                 .iter()
                 .filter(|&&edge| world.edge_is_live(edge))
-                .map(|_| SelectionKind::Edge),
+                .map(|&edge| {
+                    SelectionItem::new(
+                        SelectionKind::Edge,
+                        Labelled::of(world.edges().label(edge).map(|it| it.as_ref())),
+                    )
+                }),
         )
         .collect()
 }
@@ -827,6 +967,7 @@ pub struct ControlState {
     pub font_family: FontFamily,
     pub font_size: FontSize,
     pub align: TextAlign,
+    pub vertical_align: VerticalAlign,
     /// `0..=100`, which is what the slider's endpoints are labelled with.
     pub opacity_percent: u8,
     pub stroke: Option<Color>,
@@ -846,6 +987,7 @@ impl ControlState {
             font_family: style.font.family,
             font_size: style.font.size,
             align: style.font.align,
+            vertical_align: style.font.vertical_align,
             opacity_percent: percent_of(style.opacity),
             stroke: style.stroke.color,
             background: style.fill,
@@ -877,47 +1019,167 @@ mod tests {
     /// a row that moves in one has to move in the other — which is the whole
     /// value of writing it twice, and the reason this test is a table and not a
     /// loop over `sections()`.
+    ///
+    /// **Eight columns rather than four**, because a form is now a kind *and* a
+    /// label state: the four text rows are the one departure from "a row is a
+    /// pure function of the kind", and a table that only listed the kinds could
+    /// not state it. The unlabelled column of a text element and of an image are
+    /// listed too and are equal to their labelled ones, which is the table
+    /// saying out loud that those two kinds ignore the axis.
     #[test]
     fn each_kind_gets_exactly_the_sections_the_reference_specifies() {
         use PanelSection::*;
 
-        let table: &[(PanelSection, [bool; 4])] = &[
-            //                    node   edge   text   image
-            (Stroke, [true, true, true, false]),
-            (Background, [true, false, false, false]),
-            (Fill, [true, false, false, false]),
-            (StrokeWidth, [true, true, false, false]),
-            (StrokeStyle, [true, true, false, false]),
-            (Sloppiness_, [true, true, false, false]),
-            (Corners, [true, false, false, true]),
-            (ArrowType, [false, true, false, false]),
-            (Arrowheads, [false, true, false, false]),
-            (FontFamilyRow, [false, false, true, false]),
-            (FontSizeRow, [false, false, true, false]),
-            (TextAlignRow, [false, false, true, false]),
-            (Opacity, [true, true, true, true]),
-            (Layers, [true, true, true, true]),
-            (Actions, [true, true, true, true]),
+        // The eight forms, in the order the columns below are written.
+        let forms: Vec<SelectionItem> = SelectionKind::ALL
+            .iter()
+            .flat_map(|kind| {
+                Labelled::BOTH
+                    .iter()
+                    .map(move |labelled| SelectionItem::new(*kind, *labelled))
+            })
+            .collect();
+
+        let table: &[(PanelSection, [bool; 8])] = &[
+            //                 node          edge          text          image
+            //               bare  label   bare  label   bare  label   bare  label
+            (Stroke, [true, true, true, true, true, true, false, false]),
+            (
+                Background,
+                [true, true, false, false, false, false, false, false],
+            ),
+            (Fill, [true, true, false, false, false, false, false, false]),
+            (
+                StrokeWidth,
+                [true, true, true, true, false, false, false, false],
+            ),
+            (
+                StrokeStyle,
+                [true, true, true, true, false, false, false, false],
+            ),
+            (
+                Sloppiness_,
+                [true, true, true, true, false, false, false, false],
+            ),
+            (
+                Corners,
+                [true, true, false, false, false, false, true, true],
+            ),
+            (
+                ArrowType,
+                [false, false, true, true, false, false, false, false],
+            ),
+            (
+                Arrowheads,
+                [false, false, true, true, false, false, false, false],
+            ),
+            (
+                FontFamilyRow,
+                [false, true, false, true, true, true, false, false],
+            ),
+            (
+                FontSizeRow,
+                [false, true, false, true, true, true, false, false],
+            ),
+            (
+                TextAlignRow,
+                [false, true, false, true, true, true, false, false],
+            ),
+            (
+                VerticalAlignRow,
+                [false, true, false, true, true, true, false, false],
+            ),
+            (Opacity, [true, true, true, true, true, true, true, true]),
+            (Layers, [true, true, true, true, true, true, true, true]),
+            (Actions, [true, true, true, true, true, true, true, true]),
         ];
 
-        for (column, kind) in SelectionKind::ALL.iter().enumerate() {
-            let sections = kind.sections();
+        assert_eq!(forms.len(), 8, "the table has a column per form");
+
+        for (column, form) in forms.iter().enumerate() {
+            let sections = form.sections();
             for (section, columns) in table {
                 assert_eq!(
                     sections.contains(section),
                     columns[column],
-                    "{}'s {} row",
-                    kind.name(),
+                    "a {} {}'s {} row",
+                    form.labelled.name(),
+                    form.kind.name(),
                     section.name()
                 );
             }
             assert_eq!(
                 sections.len(),
                 table.iter().filter(|(_, columns)| columns[column]).count(),
-                "{} draws a row the table does not list",
+                "a {} {} draws a row the table does not list",
+                form.labelled.name(),
+                form.kind.name()
+            );
+        }
+    }
+
+    /// **The four text rows are the whole of the label axis**, stated as a
+    /// difference rather than as two lists: nothing else may start depending on
+    /// an element's content without this failing.
+    #[test]
+    fn a_label_adds_the_four_text_rows_and_changes_nothing_else() {
+        let text_rows = [
+            PanelSection::FontFamilyRow,
+            PanelSection::FontSizeRow,
+            PanelSection::TextAlignRow,
+            PanelSection::VerticalAlignRow,
+        ];
+
+        for kind in [SelectionKind::Node, SelectionKind::Edge] {
+            let bare = kind.sections(Labelled::No);
+            let labelled = kind.sections(Labelled::Yes);
+
+            assert_eq!(
+                labelled.len(),
+                bare.len() + text_rows.len(),
+                "{} gains exactly the four text rows",
+                kind.name()
+            );
+            for row in text_rows {
+                assert!(
+                    !bare.contains(&row),
+                    "{} shows {} unlabelled",
+                    kind.name(),
+                    row.name()
+                );
+                assert!(labelled.contains(&row));
+            }
+            let without_text: Vec<PanelSection> = labelled
+                .iter()
+                .copied()
+                .filter(|row| !text_rows.contains(row))
+                .collect();
+            assert_eq!(
+                without_text,
+                bare.to_vec(),
+                "{}'s other rows must keep their order and their membership",
                 kind.name()
             );
         }
+
+        for kind in [SelectionKind::Text, SelectionKind::Image] {
+            assert_eq!(
+                kind.sections(Labelled::No),
+                kind.sections(Labelled::Yes),
+                "{} does not read the label axis",
+                kind.name()
+            );
+        }
+    }
+
+    /// A label is words, not an empty string: an element whose label was
+    /// cleared has none, and `commit_text` stores exactly that.
+    #[test]
+    fn an_empty_label_is_no_label() {
+        assert_eq!(Labelled::of(None), Labelled::No);
+        assert_eq!(Labelled::of(Some("")), Labelled::No);
+        assert_eq!(Labelled::of(Some("   ")), Labelled::No);
+        assert_eq!(Labelled::of(Some("step 1")), Labelled::Yes);
     }
 
     /// The panel's whole shape in one line: **Opacity, Layers and Actions are
@@ -925,13 +1187,15 @@ mod tests {
     #[test]
     fn only_three_sections_are_on_every_panel() {
         let everywhere: Vec<PanelSection> = SelectionKind::ALL[0]
-            .sections()
+            .sections(Labelled::No)
             .iter()
             .copied()
             .filter(|section| {
-                SelectionKind::ALL
-                    .iter()
-                    .all(|kind| kind.sections().contains(section))
+                SelectionKind::ALL.iter().all(|kind| {
+                    Labelled::BOTH
+                        .iter()
+                        .all(|labelled| kind.sections(*labelled).contains(section))
+                })
             })
             .collect();
 
@@ -951,7 +1215,7 @@ mod tests {
     #[test]
     fn the_image_panel_is_edges_opacity_layers_and_actions() {
         assert_eq!(
-            SelectionKind::Image.sections(),
+            SelectionKind::Image.sections(Labelled::No),
             &[
                 PanelSection::Corners,
                 PanelSection::Opacity,
@@ -965,8 +1229,10 @@ mod tests {
     /// than a control that is not there.
     #[test]
     fn a_mixed_selection_gets_the_intersection_of_its_kinds() {
+        let bare = |kind| SelectionItem::new(kind, Labelled::No);
+
         assert_eq!(
-            sections_for(&[SelectionKind::Node, SelectionKind::Text]),
+            sections_for(&[bare(SelectionKind::Node), bare(SelectionKind::Text)]),
             vec![
                 PanelSection::Stroke,
                 PanelSection::Opacity,
@@ -975,7 +1241,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            sections_for(&[SelectionKind::Node, SelectionKind::Image]),
+            sections_for(&[bare(SelectionKind::Node), bare(SelectionKind::Image)]),
             vec![
                 PanelSection::Corners,
                 PanelSection::Opacity,
@@ -984,10 +1250,48 @@ mod tests {
             ]
         );
         assert_eq!(
-            sections_for(&[SelectionKind::Node]),
-            SelectionKind::Node.sections().to_vec()
+            sections_for(&[bare(SelectionKind::Node)]),
+            SelectionKind::Node.sections(Labelled::No).to_vec()
         );
         assert!(sections_for(&[]).is_empty());
+    }
+
+    /// **The label axis folds through the same intersection**, and this is the
+    /// rule stated as an assertion: one labelled shape and one unlabelled one
+    /// have no honest single answer for a Font size row, so there is not one.
+    #[test]
+    fn a_selection_where_only_some_elements_have_a_label_shows_no_text_rows() {
+        let labelled = SelectionItem::new(SelectionKind::Node, Labelled::Yes);
+        let bare = SelectionItem::new(SelectionKind::Node, Labelled::No);
+
+        assert_eq!(
+            sections_for(&[labelled, bare]),
+            SelectionKind::Node.sections(Labelled::No).to_vec()
+        );
+        assert_eq!(
+            sections_for(&[bare, labelled]),
+            SelectionKind::Node.sections(Labelled::No).to_vec(),
+            "and the order of the selection must not change the answer"
+        );
+        assert_eq!(
+            sections_for(&[labelled, labelled]),
+            SelectionKind::Node.sections(Labelled::Yes).to_vec()
+        );
+
+        // A labelled shape beside a labelled edge keeps the text rows: they are
+        // what the two forms have in common past Stroke and the three every
+        // panel has.
+        let edge = SelectionItem::new(SelectionKind::Edge, Labelled::Yes);
+        let shared = sections_for(&[labelled, edge]);
+        for row in [
+            PanelSection::FontFamilyRow,
+            PanelSection::FontSizeRow,
+            PanelSection::TextAlignRow,
+            PanelSection::VerticalAlignRow,
+        ] {
+            assert!(shared.contains(&row), "{} was folded away", row.name());
+        }
+        assert!(!shared.contains(&PanelSection::Background));
     }
 
     /// **Every stepped control reads back what it wrote.** A panel that cannot
@@ -1031,6 +1335,8 @@ mod tests {
         assert_eq!(state.corners, CornerStyle::Sharp);
         assert_eq!(state.fill_style, FillStyle::Solid);
         assert_eq!(state.sloppiness, Sloppiness::Artist);
+        assert_eq!(state.align, TextAlign::default());
+        assert_eq!(state.vertical_align, VerticalAlign::Middle);
         assert_eq!(state.opacity_percent, 100);
         assert!(!state.start_arrowhead && !state.end_arrowhead);
     }
@@ -1107,7 +1413,7 @@ mod tests {
         // The row is still on the panel; it is the control that is muted.
         assert!(
             SelectionKind::Node
-                .sections()
+                .sections(Labelled::No)
                 .contains(&PanelSection::Sloppiness_)
         );
     }
@@ -1138,12 +1444,12 @@ mod tests {
     fn no_two_sections_or_steps_share_a_name() {
         let mut names: Vec<&str> = SelectionKind::ALL
             .iter()
-            .flat_map(|kind| kind.sections())
+            .flat_map(|kind| Labelled::BOTH.iter().flat_map(|it| kind.sections(*it)))
             .map(|section| section.name())
             .collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 15);
+        assert_eq!(names.len(), 16);
 
         let mut buttons: Vec<&str> = StrokeWidthStep::ALL
             .iter()

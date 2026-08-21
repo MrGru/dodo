@@ -129,6 +129,35 @@ pub const LABEL_PADDING_PIXELS: f32 = 6.0;
 /// the *view* one label may cover.
 pub const EDGE_LABEL_MAX_PIXELS: f32 = 220.0;
 
+/// The **height** of that invented box, in screen pixels — and the whole of
+/// what vertical alignment means to a carrier with no rectangle of its own.
+///
+/// An edge and a straight connector are lines: there is no box, so a label gets
+/// one made for it, centred on the midpoint. [`EDGE_LABEL_MAX_PIXELS`] is how
+/// wide that box is and this is how tall, which makes `Top` and `Bottom` "above
+/// the line" and "below the line" — the reading a person expects of an arrow's
+/// label — while `Middle` puts the block exactly on the midpoint, where every
+/// edge label has been drawn since §9.
+///
+/// Four lines of a default label fit inside it, so a wrapped label is centred
+/// on the line rather than clamped to the top of the band. Past that it
+/// overflows downwards, like every other block that outgrows its box.
+pub const EDGE_LABEL_BAND_PIXELS: f32 = 96.0;
+
+/// **The box a label gets when its carrier has no rectangle** — an edge, or a
+/// straight connector whose derived box collapses to a line.
+///
+/// One function rather than the same two lines in `plan_labels` and
+/// `plan_edge_labels`, because those two are the same rule seen from either
+/// side of the node/edge split and the inline editor
+/// (`views::flow`'s `text_edit_bounds`) is a third statement of it. A label that
+/// is laid out into one box and edited over another is what the previous slice
+/// spent a fix on.
+pub fn boxless_label_box(center: Vec2) -> Rect {
+    let size = Vec2::new(EDGE_LABEL_MAX_PIXELS, EDGE_LABEL_BAND_PIXELS);
+    Rect::new(center - size * 0.5, size)
+}
+
 /// The colours an element falls back to when its own style leaves them unset.
 ///
 /// Resolved from the active theme once per frame by the view and passed down,
@@ -1304,20 +1333,13 @@ fn plan_labels(
         // own, centred on the *actual* segment midpoint (§9), so the label sits
         // where the caret was and where `views::flow`'s editor was drawn.
         let inner = match world.nodes().connector(canvas.node) {
-            Some(connector) => {
-                let size = Vec2::new(EDGE_LABEL_MAX_PIXELS, font_size);
-                let center = viewport.world_to_screen(connector.midpoint());
-                Rect::new(center - size * 0.5, size)
-            }
+            Some(connector) => boxless_label_box(viewport.world_to_screen(connector.midpoint())),
             None if canvas.body == NodeShape::Text => canvas.screen,
             None => canvas.screen.inflate(-LABEL_PADDING_PIXELS),
         };
         if inner.size.x <= 0.0 || inner.size.y <= 0.0 {
             continue;
         }
-        // Everything below centres on the box the text was laid into, which is
-        // the node's own for a rectangle and the segment's for a connector.
-        let center_y = inner.center().y;
 
         let style = world.nodes().style(canvas.node);
         let font = &style.font;
@@ -1328,33 +1350,33 @@ fn plan_labels(
         // the painter so the primitive and its cache key carry one number.
         let wrap_width = TextKey::quantize_wrap_width(inner.size.x);
         plan.push_text(TextPrimitive {
-            // Vertically centred on the body, which is where a node's label
-            // belongs; the painter subtracts the line's own height.
-            origin: Vec2::new(inner.origin.x, center_y - font_size * 0.5),
+            // **Placed inside the box by the two alignment rows**, and by
+            // nothing else — a label has no position of its own. The vertical
+            // half is written as `offset` rather than as "centre it" because
+            // `Middle` *is* the centre and is the default: a label nobody has
+            // moved lands on exactly the pixel §9 put it on, and the painter
+            // then subtracts the block's own extra lines.
+            origin: Vec2::new(
+                inner.origin.x,
+                inner.origin.y + font.vertical_align.offset(inner.size.y, font_size),
+            ),
             // An `Arc` clone: a refcount bump, not a `String` allocation per
             // label per frame. See `NodeCold::label`.
             text: Arc::clone(label),
             font_size,
-            color: fade(
-                // **A text element is its glyphs, so its "stroke" is its
-                // colour.** The panel gives a text selection a Stroke row and
-                // nothing else that is a colour (`properties`' table), and it
-                // writes `stroke.color` — which no text painter read, so the
-                // one colour control a text element has did nothing. `font`
-                // still wins where anything sets it; this is what an unset one
-                // falls back to before the theme.
-                font.color
-                    .or((canvas.body == NodeShape::Text)
-                        .then_some(style.stroke.color)
-                        .flatten())
-                    .unwrap_or(ink.text),
-                style.opacity,
-            ),
+            // **A label is drawn in its element's ink.** The panel gives a node,
+            // an edge and a text element a Stroke row and no separate text
+            // colour, so that is the only colour control any of them has —
+            // `ElementStyle::text_color` is the one answer, and it is what makes
+            // a stroke change move the label with it.
+            color: fade(style.text_color().unwrap_or(ink.text), style.opacity),
             key: TextKey::node(canvas.node, canvas.text_version, font_size, wrap_width),
             max_width: inner.size.x,
             wrap_width,
             family: font.family,
             align: font.align,
+            max_height: inner.size.y,
+            vertical_align: font.vertical_align,
         });
         stats.labels += 1;
     }
@@ -1408,21 +1430,34 @@ fn plan_edge_labels(
         // rectangle of its own to lay text into, so one is made the size of the
         // space a label is allowed to take. Wider than a node's would be, on
         // purpose — an edge label that is truncated to nothing tells the reader
-        // less than one that overhangs its route.
-        let half_width = EDGE_LABEL_MAX_PIXELS * 0.5;
+        // less than one that overhangs its route. The same box a connector's
+        // label gets, from the same function.
+        let inner = boxless_label_box(center);
         let style = world.edges().style(planned.edge);
+        let font = &style.font;
         plan.push_text(TextPrimitive {
-            origin: Vec2::new(center.x - half_width, center.y - font_size * 0.5),
+            // **The alignment rows are honoured here too**, and they had to be:
+            // this phase offers both of them for an edge, and a row the panel
+            // draws and no painter reads is the failure `properties`' module doc
+            // lists five costumes of. The default pair — `Center` and `Middle` —
+            // is the exact midpoint of the route, which is where an edge label
+            // has been drawn since §9 and what the format's version-5 rung
+            // writes into every older file.
+            origin: Vec2::new(
+                inner.origin.x,
+                inner.origin.y + font.vertical_align.offset(inner.size.y, font_size),
+            ),
             text: Arc::clone(label),
             font_size,
-            color: fade(style.font.color.unwrap_or(ink.text), style.opacity),
+            // An edge's label takes the edge's ink, exactly as a node's does.
+            color: fade(style.text_color().unwrap_or(ink.text), style.opacity),
             key: TextKey::edge(
                 planned.edge,
                 planned.version,
                 font_size,
                 EDGE_LABEL_MAX_PIXELS,
             ),
-            max_width: EDGE_LABEL_MAX_PIXELS,
+            max_width: inner.size.x,
             // **An edge label wraps to a constant screen width**, not to
             // anything about its route. An edge has no rectangle to lay text
             // into, so the box below is invented at the size a label is allowed
@@ -1430,12 +1465,10 @@ fn plan_edge_labels(
             // and never re-wraps on a zoom, which is the one place edge labels
             // are cheaper than node labels rather than dearer.
             wrap_width: EDGE_LABEL_MAX_PIXELS,
-            family: style.font.family,
-            // **Centred whatever the style says**, because the box is centred
-            // on the route rather than anchored to anything the author placed.
-            // Honouring the alignment here would move the text off the line it
-            // belongs to, which is the opposite of what the control means.
-            align: crate::models::TextAlign::Center,
+            family: font.family,
+            align: font.align,
+            max_height: inner.size.y,
+            vertical_align: font.vertical_align,
         });
         stats.labels += 1;
     }
@@ -3449,6 +3482,262 @@ mod tests {
 
         assert_eq!(stats.labels, 1, "a drawn shape's label was never laid out");
         assert_eq!(plan.texts().len(), 1);
+    }
+
+    /// **Where a label's block actually lands**, which is not
+    /// `TextPrimitive::origin`: the painter adds both alignment offsets once it
+    /// knows how wide and how tall the shaped text turned out.
+    ///
+    /// So a test that asks "is this label centred?" has to do the same
+    /// arithmetic, with a `shaped` width standing in for the text system's
+    /// answer. Reading `origin` alone is exactly how a label that is aligned
+    /// against the left edge of a centred box passes for centred.
+    fn block_centre(
+        text: &crate::render::plan::TextPrimitive,
+        shaped_width: f32,
+        lines: u32,
+    ) -> Vec2 {
+        let left = text.origin.x + text.align.offset(text.max_width, shaped_width);
+        let top = text.origin.y + text.vertical_offset(lines);
+        let height = text.font_size + (lines.saturating_sub(1) as f32) * text.line_height();
+        Vec2::new(left + shaped_width * 0.5, top + height * 0.5)
+    }
+
+    /// A style with a label centred on its element, which is what
+    /// `FlowEditor::commit_text` leaves behind and what the format's version-5
+    /// rung writes into every older file.
+    fn centred_label_style() -> crate::models::ElementStyle {
+        let mut style = crate::models::ElementStyle::default();
+        style.font.centre_on_element();
+        style
+    }
+
+    /// **Requirement 1, as the frame the painter is handed**: a label sits in
+    /// the middle of the element it belongs to, for a node and for both kinds
+    /// of line.
+    ///
+    /// Asserted on the *block*, not on the primitive's origin. Before this
+    /// phase a connector's and a node's label were laid into a centred box and
+    /// then aligned against its **left edge**, so the box was centred and the
+    /// words were not — a bug `origin`-only assertions cannot see, and the
+    /// reason `block_centre` exists.
+    #[test]
+    fn a_label_is_centred_on_the_element_it_belongs_to() {
+        let shaped = 84.0;
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+
+        // A drawn shape: an ellipse, so the answer cannot come from the rich
+        // half — only rectangles become elements.
+        let mut world = GraphWorld::new();
+        let body = Rect::new(Vec2::new(120.0, 120.0), Vec2::new(240.0, 140.0));
+        let node = world.create_node(
+            ElementKind::Shape(crate::models::ShapeKind::Ellipse),
+            body.origin,
+            body.size,
+        );
+        world.set_node_label(node, Some("decision".into()));
+        world.set_node_style(node, centred_label_style());
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let (plan, _) = frame_without_grid(&world, &viewport);
+        let text = plan.texts().first().expect("the shape's label");
+        let want = viewport.world_to_screen(body.center());
+        let got = block_centre(text, shaped, 1);
+        assert!(
+            (got - want).length() < 1e-3,
+            "a shape's label landed at {got:?} rather than on its centre {want:?}"
+        );
+
+        // A straight connector, drawn right-to-left so a normalised rectangle
+        // would disagree with the ordered segment about everything but this.
+        let (start, end) = (Vec2::new(520.0, 380.0), Vec2::new(160.0, 120.0));
+        let mut world = GraphWorld::new();
+        let connector = world.create_node(
+            ElementKind::Linear(crate::models::LinearKind::Arrow),
+            start,
+            end - start,
+        );
+        world.set_node_connector(connector, crate::models::Connector::new(start, end));
+        world.set_node_label(connector, Some("weighs 3".into()));
+        world.set_node_style(connector, centred_label_style());
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let (plan, _) = frame_without_grid(&world, &viewport);
+        let text = plan.texts().first().expect("the connector's label");
+        let want = viewport.world_to_screen((start + end) * 0.5);
+        let got = block_centre(text, shaped, 1);
+        assert!(
+            (got - want).length() < 1e-3,
+            "a connector's label landed at {got:?} rather than on its midpoint {want:?}"
+        );
+
+        // And a graph edge, on its route's arc-length midpoint.
+        let mut world = labelled_pair();
+        let edge = world.edges().indices().next().expect("one edge");
+        world.set_edge_style(edge, centred_label_style());
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let viewport = pane();
+        let (plan, _) = frame_without_grid(&world, &viewport);
+        let text = plan
+            .texts()
+            .iter()
+            .find(|text| text.text.as_ref() == "carries")
+            .expect("the edge's label");
+        let flatten = viewport.screen_to_world_length(1.0);
+        let want = viewport.world_to_screen(world.route(edge).unwrap().midpoint(flatten));
+        let got = block_centre(text, shaped, 1);
+        assert!(
+            (got - want).length() < 1e-3,
+            "an edge's label landed at {got:?} rather than on its route {want:?}"
+        );
+    }
+
+    /// **Requirement 2, as the colour in the frame**: a label is drawn in its
+    /// element's stroke colour, and a stroke change moves it with no second
+    /// press.
+    ///
+    /// This is the sixth costume of `properties`' rule — a row the panel writes
+    /// and no painter reads — so it is asserted on what reaches the painter
+    /// rather than on the model. The Stroke row is the only colour control a
+    /// node or an edge has; before this phase it moved the outline and left the
+    /// words in the theme's foreground.
+    #[test]
+    fn a_label_is_drawn_in_its_elements_stroke_colour_and_follows_a_change() {
+        let mut world = labelled_pair();
+        let node = world.nodes().indices().next().expect("a node");
+        let edge = world.edges().indices().next().expect("an edge");
+        let viewport = pane();
+
+        let theme_ink = ink().text;
+        let colours = |world: &GraphWorld| {
+            let (plan, _) = frame_without_grid(world, &viewport);
+            plan.texts()
+                .iter()
+                .map(|text| (std::sync::Arc::clone(&text.text), text.color))
+                .collect::<Vec<_>>()
+        };
+
+        for (label, color) in colours(&world) {
+            assert_eq!(color, theme_ink, "{label} did not start on the theme's ink");
+        }
+
+        let red = Color::rgb(0.878, 0.192, 0.192);
+        let mut style = centred_label_style();
+        style.stroke.color = Some(red);
+        world.set_node_style(node, style.clone());
+        world.set_edge_style(edge, style);
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let after = colours(&world);
+        assert_eq!(after.len(), 3, "three labels: two nodes and the edge");
+        for (label, color) in after {
+            if label.as_ref() == "sink" {
+                assert_eq!(color, theme_ink, "the untouched node's label moved");
+            } else {
+                assert_eq!(color, red, "{label} did not follow its stroke");
+            }
+        }
+    }
+
+    /// **Requirement 3, as the frame again**: each of the two alignment rows
+    /// moves the label it is drawn over.
+    ///
+    /// Three distinct, ordered placements per axis, all of them inside the
+    /// element — a row that wrote a field no painter read would give three
+    /// identical answers, which is the failure this crate has now met six
+    /// times.
+    #[test]
+    fn the_alignment_rows_move_a_label_inside_its_element() {
+        let shaped = 60.0;
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let body = Rect::new(Vec2::new(120.0, 120.0), Vec2::new(240.0, 140.0));
+
+        let placed = |align: crate::models::TextAlign, vertical: crate::models::VerticalAlign| {
+            let mut world = GraphWorld::new();
+            let node = world.create_node(
+                ElementKind::Shape(crate::models::ShapeKind::Ellipse),
+                body.origin,
+                body.size,
+            );
+            world.set_node_label(node, Some("decision".into()));
+            let mut style = centred_label_style();
+            style.font.align = align;
+            style.font.vertical_align = vertical;
+            world.set_node_style(node, style);
+            world.rebuild_all_geometry();
+            world.clear_spatial_updates();
+
+            let (plan, _) = frame_without_grid(&world, &viewport);
+            block_centre(plan.texts().first().expect("a label"), shaped, 1)
+        };
+
+        use crate::models::{TextAlign, VerticalAlign};
+        let middle = viewport.world_rect_to_screen(body).center();
+
+        let left = placed(TextAlign::Left, VerticalAlign::Middle);
+        let centre = placed(TextAlign::Center, VerticalAlign::Middle);
+        let right = placed(TextAlign::Right, VerticalAlign::Middle);
+        assert!(
+            left.x < centre.x && centre.x < right.x,
+            "the text-align row did not move the label: {left:?} {centre:?} {right:?}"
+        );
+        assert!((centre.x - middle.x).abs() < 1e-3);
+        assert!((left.y - centre.y).abs() < 1e-3 && (right.y - centre.y).abs() < 1e-3);
+
+        let top = placed(TextAlign::Center, VerticalAlign::Top);
+        let bottom = placed(TextAlign::Center, VerticalAlign::Bottom);
+        assert!(
+            top.y < centre.y && centre.y < bottom.y,
+            "the vertical-align row did not move the label: {top:?} {centre:?} {bottom:?}"
+        );
+        assert!((top.x - centre.x).abs() < 1e-3 && (bottom.x - centre.x).abs() < 1e-3);
+
+        // Inside the element, padding included: a label pushed to an edge must
+        // not sit on the border it is drawn against.
+        let inner = viewport
+            .world_rect_to_screen(body)
+            .inflate(-LABEL_PADDING_PIXELS);
+        for point in [top, bottom, left, right] {
+            assert!(
+                point.y >= inner.origin.y && point.y <= inner.max().y,
+                "{point:?} left the element's inner box {inner:?}"
+            );
+        }
+    }
+
+    /// The other two text rows, on the same principle: the family and the
+    /// authored size both have to arrive at the painter, because a row that
+    /// stops at the document is a control that does nothing.
+    #[test]
+    fn the_font_family_and_size_rows_reach_the_painter() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let mut world = GraphWorld::new();
+        let node = world.create_node(
+            ElementKind::Shape(crate::models::ShapeKind::Ellipse),
+            Vec2::new(120.0, 120.0),
+            Vec2::new(240.0, 140.0),
+        );
+        world.set_node_label(node, Some("decision".into()));
+        let mut style = centred_label_style();
+        style.font.family = crate::models::FontFamily::Code;
+        style.font.size = crate::models::FontSize::ExtraLarge;
+        world.set_node_style(node, style);
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let (plan, _) = frame_without_grid(&world, &viewport);
+        let text = plan.texts().first().expect("a label");
+        assert_eq!(text.family, crate::models::FontFamily::Code);
+        assert_eq!(
+            text.font_size,
+            crate::models::FontSize::ExtraLarge.world_size(),
+            "at 100 % zoom the LOD quantiser is the identity"
+        );
     }
 
     /// The snapshot a frame is planned from, for the tests that need to know

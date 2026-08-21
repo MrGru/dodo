@@ -61,7 +61,7 @@ use crate::{
     geometry::{Rect, Vec2},
     models::{
         Color, ElementStyle, FillStyle, FontFamily, FontSize, RenderQuality, SketchStyle,
-        Sloppiness, TextAlign,
+        Sloppiness, TextAlign, VerticalAlign,
     },
     properties::{
         ArrowEnd, ArrowKind, Availability, BACKGROUND_SWATCHES, ControlState, CornerStyle,
@@ -429,6 +429,20 @@ fn row(
             view,
             cx,
         ),
+        PanelSection::VerticalAlignRow => choices(
+            VerticalAlign::ALL,
+            |it| *it == controls.vertical_align,
+            |it| PanelGlyph::VerticalAlign(*it),
+            |it| match it {
+                VerticalAlign::Top => flow::Text::AlignTop,
+                VerticalAlign::Middle => flow::Text::AlignMiddle,
+                VerticalAlign::Bottom => flow::Text::AlignBottom,
+            },
+            |it| Change::VerticalAlign(*it),
+            Availability::Live,
+            view,
+            cx,
+        ),
         PanelSection::Opacity => opacity_row(opacity, cx),
         PanelSection::Layers => choices(
             LayerAction::ALL,
@@ -493,24 +507,31 @@ fn row(
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .child(
+        .children(label_for(section).map(|label| {
             div()
                 .text_size(px(11.0))
                 .text_color(cx.theme().muted_foreground)
-                .child(t(label_for(section), cx)),
-        )
+                .child(t(label, cx))
+        }))
         .child(body)
         .into_any_element()
 }
 
-/// One section's translated label.
+/// One section's translated label, or `None` for the one row that has no
+/// heading.
 ///
 /// A `match` here rather than a method on [`PanelSection`], because that type
 /// is below the UI-framework line and naming a catalogue there would put a
 /// *string* in the pure layer — the same boundary `views::palette` crosses the
 /// same way.
-fn label_for(section: PanelSection) -> flow::Text {
-    match section {
+///
+/// **Vertical align is drawn with no heading**, which is what the captain's
+/// reference shows: three more alignment buttons directly under Text align,
+/// reading as a continuation of it rather than as a section of their own. The
+/// words are still translated — they are the three tooltips — so nothing about
+/// this row is an English literal.
+fn label_for(section: PanelSection) -> Option<flow::Text> {
+    Some(match section {
         PanelSection::Stroke => flow::Text::SectionStroke,
         PanelSection::Background => flow::Text::SectionBackground,
         PanelSection::Fill => flow::Text::SectionFill,
@@ -523,10 +544,11 @@ fn label_for(section: PanelSection) -> flow::Text {
         PanelSection::FontFamilyRow => flow::Text::SectionFontFamily,
         PanelSection::FontSizeRow => flow::Text::SectionFontSize,
         PanelSection::TextAlignRow => flow::Text::SectionTextAlign,
+        PanelSection::VerticalAlignRow => return None,
         PanelSection::Opacity => flow::Text::SectionOpacity,
         PanelSection::Layers => flow::Text::SectionLayers,
         PanelSection::Actions => flow::Text::SectionActions,
-    }
+    })
 }
 
 /// One row's write, boxed so that fifteen different closures have one type.
@@ -558,6 +580,7 @@ pub enum Change {
     Family(FontFamily),
     Size(FontSize),
     Align(TextAlign),
+    VerticalAlign(VerticalAlign),
     /// A whole-number percent, `0..=100`.
     Opacity(u8),
     Layer(LayerAction),
@@ -608,6 +631,9 @@ impl Change {
             })),
             Change::Align(align) => Some(Box::new(move |style: &mut ElementStyle| {
                 style.font.align = *align
+            })),
+            Change::VerticalAlign(align) => Some(Box::new(move |style: &mut ElementStyle| {
+                style.font.vertical_align = *align
             })),
             Change::Opacity(percent) => Some(Box::new(move |style: &mut ElementStyle| {
                 style.opacity = crate::properties::opacity_of(*percent)
@@ -942,6 +968,7 @@ pub enum PanelGlyph {
     Head(ArrowEnd),
     Family(FontFamily),
     Align(TextAlign),
+    VerticalAlign(VerticalAlign),
     Layer(LayerAction),
     Action(ElementAction),
 }
@@ -959,6 +986,7 @@ impl PanelGlyph {
             PanelGlyph::Head(it) => it.name().to_owned(),
             PanelGlyph::Family(it) => format!("font-{}", it.name()),
             PanelGlyph::Align(it) => format!("align-{}", it.name()),
+            PanelGlyph::VerticalAlign(it) => format!("align-{}", it.name()),
             PanelGlyph::Layer(it) => it.name().to_owned(),
             PanelGlyph::Action(it) => format!("action-{}", it.name()),
         }
@@ -979,6 +1007,11 @@ impl PanelGlyph {
             .chain(ArrowEnd::ALL.iter().map(|it| PanelGlyph::Head(*it)))
             .chain(FontFamily::ALL.iter().map(|it| PanelGlyph::Family(*it)))
             .chain(TextAlign::ALL.iter().map(|it| PanelGlyph::Align(*it)))
+            .chain(
+                VerticalAlign::ALL
+                    .iter()
+                    .map(|it| PanelGlyph::VerticalAlign(*it)),
+            )
             .chain(LayerAction::ALL.iter().map(|it| PanelGlyph::Layer(*it)))
             .chain(
                 ElementAction::for_kind(crate::properties::SelectionKind::Node)
@@ -1218,6 +1251,25 @@ fn strokes(glyph: PanelGlyph, box_: Rect, ink: Color) -> Vec<(Outline, PathPaint
             vec![(lines, stroke(1.8))]
         }
 
+        // A bar at the edge the block is aligned to, with the block beside it:
+        // the same two-line shorthand for a paragraph the Align glyphs use,
+        // pushed against the bar rather than against a side. `Middle` puts the
+        // bar *through* the block, which is what "on the line" looks like on an
+        // edge label.
+        PanelGlyph::VerticalAlign(align) => {
+            let (bar, lines) = match align {
+                VerticalAlign::Top => (0.04_f32, [0.40_f32, 0.74]),
+                VerticalAlign::Middle => (0.50, [0.18, 0.82]),
+                VerticalAlign::Bottom => (0.96, [0.26, 0.60]),
+            };
+            let mut marks = Outline::with_capacity(8);
+            marks.move_to(at(0.0, bar)).line_to(at(1.0, bar));
+            for y in lines {
+                marks.move_to(at(0.19, y)).line_to(at(0.81, y));
+            }
+            vec![(marks, stroke(1.8))]
+        }
+
         // An arrow, plus a bar at the end it travels to for the two that go all
         // the way. The bar is what tells "to back" from "backward" at 16 px.
         PanelGlyph::Layer(action) => {
@@ -1368,34 +1420,51 @@ mod tests {
         }
     }
 
-    /// **Every section has its own label.** The mapping is a `match`, so the
-    /// compiler already refuses a missing arm; what it cannot see is two rows
-    /// pointing at the same string, which would put "Stroke" over the fill
-    /// buttons and read as a translation bug.
+    /// Every section a panel can draw, once each. `PanelSection` is not `Ord`,
+    /// so the duplicates are removed by membership rather than by sorting.
+    fn every_section() -> Vec<PanelSection> {
+        let mut sections: Vec<PanelSection> = Vec::new();
+        for kind in crate::properties::SelectionKind::ALL {
+            for labelled in crate::properties::Labelled::BOTH {
+                for section in kind.sections(*labelled) {
+                    if !sections.contains(section) {
+                        sections.push(*section);
+                    }
+                }
+            }
+        }
+        sections
+    }
+
+    /// **Every section that has a label has its own.** The mapping is a
+    /// `match`, so the compiler already refuses a missing arm; what it cannot
+    /// see is two rows pointing at the same string, which would put "Stroke"
+    /// over the fill buttons and read as a translation bug.
+    ///
+    /// Vertical align is the one row with **no** label, which is the reference
+    /// screenshot's own shape — see [`label_for`]. It is asserted by name here
+    /// so that a row losing its heading by accident is a failure rather than a
+    /// silent blank.
     #[test]
     fn every_section_has_its_own_label() {
-        let labels: Vec<flow::Text> = crate::properties::SelectionKind::ALL
-            .iter()
-            .flat_map(|kind| kind.sections())
-            .map(|section| label_for(*section))
-            .collect();
-        let mut unique = labels.clone();
-        unique.dedup();
-
-        for (index, label) in labels.iter().enumerate() {
-            let duplicates = labels[index + 1..].iter().filter(|it| *it == label).count();
-            // A section appears on more than one panel, so a repeat is expected
-            // — what is not is two *different* sections sharing a label.
-            let sections: Vec<PanelSection> = crate::properties::SelectionKind::ALL
-                .iter()
-                .flat_map(|kind| kind.sections())
-                .filter(|section| label_for(**section) == *label)
-                .copied()
+        for section in every_section() {
+            let Some(label) = label_for(section) else {
+                assert_eq!(
+                    section,
+                    PanelSection::VerticalAlignRow,
+                    "{} lost its heading",
+                    section.name()
+                );
+                continue;
+            };
+            let sharing: Vec<PanelSection> = every_section()
+                .into_iter()
+                .filter(|other| label_for(*other).as_ref() == Some(&label))
                 .collect();
-            let first = sections[0];
-            assert!(
-                sections.iter().all(|section| *section == first),
-                "{duplicates} sections share one label: {sections:?}"
+            assert_eq!(
+                sharing,
+                vec![section],
+                "these sections share one label: {sharing:?}"
             );
         }
     }

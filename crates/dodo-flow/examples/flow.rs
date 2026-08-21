@@ -229,6 +229,48 @@
 //!    the diagonal those files displayed, because the direction they were
 //!    *drawn* was never stored and cannot be recovered.
 //!
+//! # Centred labels and the text rows, and the seven things only a person can
+//! check
+//!
+//! A label now belongs to the element it labels: it sits in the middle of it,
+//! it is drawn in that element's stroke colour, and the panel grows four text
+//! rows for any node or edge that has one. All of that is asserted against the
+//! frame the painter is handed; what a test cannot say is whether it *reads*
+//! right.
+//!
+//! 1. **Draw a rectangle, double-click it and type.** The words have to land in
+//!    the **middle of the box**, horizontally and vertically. Do the same on an
+//!    ellipse, on a diamond, on an arrow and on an edge between two graph nodes.
+//!    An arrow's and an edge's label sits on the middle of the line.
+//! 2. **Zoom out one rung and back in** with a labelled rectangle on screen. A
+//!    rectangle at working zoom is a GPUI element and below it is canvas paint —
+//!    two renderers, one label — so the words must not jump, change colour,
+//!    change face or change alignment as it crosses the rung.
+//! 3. **Change the stroke colour of a labelled shape and of a labelled arrow.**
+//!    The label has to change with the outline, immediately, with no second
+//!    press. Then set the element's opacity down: the words fade with it.
+//! 4. **Select a labelled shape** — Font family, Font size, Text align and the
+//!    unlabelled row of three vertical-alignment buttons are all there, under
+//!    Sloppiness and above Opacity. **Select an unlabelled one and they are
+//!    gone.** Select both at once and they are gone again, which is the panel's
+//!    existing rule for a selection that disagrees.
+//! 5. **Press each button in those four rows** and watch the label. Hand-drawn
+//!    may look identical — dodo ships no hand-drawn face, and
+//!    `models::FontFamily::preferred_faces` says why — but the other three
+//!    families, the four sizes and the six alignments must each move or restyle
+//!    the words. Then save, reopen, undo and redo.
+//! 6. **Double-click a label you have aligned to the top or the bottom.** The
+//!    caret opens on the line the words are drawn on, not in the middle of the
+//!    element, and committing must not make them jump. *Known and not fixed*:
+//!    the field itself lays its text out from its left edge, so a centred or
+//!    right-aligned label slides into place on commit — the field spans the same
+//!    box, so it is a shift within the box rather than a jump out of it.
+//! 7. **Open a diagram saved before this slice.** Every label on a shape, an
+//!    arrow or an edge has to come back **centred**, and a standalone text
+//!    element has to come back exactly where it was. That is the format's
+//!    version-5 rung; `models::serialization`'s `labels_centred_on_their_element`
+//!    carries the argument for why moving them is safe.
+//!
 //! **Hover a palette button and it tells you what it is and which key it
 //! answers to.** The label comes from `dodo_i18n::flow`, in whichever language
 //! dodo is set to; the keystroke beside it is looked up from the real binding

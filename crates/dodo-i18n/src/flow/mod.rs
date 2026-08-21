@@ -132,6 +132,13 @@ pub enum Text {
     AlignCenter,
     AlignRight,
 
+    /// Vertical alignment — the panel's fourth text row. It is drawn with no
+    /// heading (the reference screenshot's), so these three are the only words
+    /// a user ever sees for it and they carry the whole meaning of the row.
+    AlignTop,
+    AlignMiddle,
+    AlignBottom,
+
     // Layers.
     LayerSendToBack,
     LayerSendBackward,

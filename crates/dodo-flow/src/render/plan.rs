@@ -160,7 +160,7 @@ use crate::render::shapes::Outline;
 use crate::{
     budgets::RenderBudgets,
     geometry::{Rect, Vec2},
-    models::{Color, FontFamily, NodeImage, NodeIndex, RenderQuality, TextAlign},
+    models::{Color, FontFamily, NodeImage, NodeIndex, RenderQuality, TextAlign, VerticalAlign},
     render::cache::{GeometryKey, TextKey},
 };
 
@@ -410,6 +410,16 @@ pub struct TextPrimitive {
     /// run's *measured* width, and only the painter has shaped it. Baking it
     /// here would mean shaping twice or guessing.
     pub align: TextAlign,
+    /// The box's inner **height** in screen pixels — [`max_width`](TextPrimitive::max_width)'s
+    /// twin, and what [`vertical_align`](TextPrimitive::vertical_align)
+    /// positions the block inside.
+    ///
+    /// Needed here for the same reason the width is: only the painter knows how
+    /// many lines the text took, so the block's height is not a number a scene
+    /// builder can have. See [`vertical_offset`](TextPrimitive::vertical_offset).
+    pub max_height: f32,
+    /// Where the block sits inside [`max_height`](TextPrimitive::max_height).
+    pub vertical_align: VerticalAlign,
 }
 
 impl TextPrimitive {
@@ -432,19 +442,40 @@ impl TextPrimitive {
         self.font_size * TextPrimitive::LINE_HEIGHT_RATIO
     }
 
-    /// **How far up a block of `lines` has to move to stay centred where one
-    /// line was.**
+    /// **The height a block of `lines` occupies**, measured the way the placement
+    /// arithmetic needs it.
+    ///
+    /// The first line counts as `font_size` and every line after it adds a whole
+    /// [`line_height`](TextPrimitive::line_height) — which is not the same as
+    /// `lines * line_height`, and the difference is deliberate. `origin` is
+    /// built from the *font size*, because that is what "a line of text" means
+    /// to a scene builder placing one line; measuring the block the same way is
+    /// what keeps a one-line label on exactly the pixel it has been drawn on
+    /// since §9.
+    fn block_height(&self, lines: u32) -> f32 {
+        self.font_size + lines.saturating_sub(1) as f32 * self.line_height()
+    }
+
+    /// **How far a block of `lines` has to move from where one line was put.**
     ///
     /// [`origin`](TextPrimitive::origin) is built before anything is shaped, so
-    /// it is the top-left of a *single* line centred on the element — the only
-    /// answer available to a scene builder that does not know how many lines
-    /// the text will take. The painter knows, and applies this.
+    /// it is the top-left of a *single* line placed inside the box by
+    /// [`vertical_align`](TextPrimitive::vertical_align) — the only answer
+    /// available to a scene builder that does not know how many lines the text
+    /// will take. The painter knows, and applies the difference between where
+    /// the real block goes and where that one line went.
     ///
-    /// Zero for one line, which is what makes wrapping a superset of Phase 10's
-    /// placement rather than a change to it: an unwrapped label lands on the
-    /// same pixel it always did.
+    /// So the three alignments fall out of one subtraction rather than three
+    /// cases: a `Top` block grows downwards from the line it started on and does
+    /// not move at all, a `Middle` one rises by half of every line past the
+    /// first — Phase 10.5's rule, unchanged — and a `Bottom` one rises by all of
+    /// them. Zero for one line whatever the alignment, which is what makes the
+    /// fourth text row a superset of the placement that was there before it
+    /// rather than a change to it.
     pub fn vertical_offset(&self, lines: u32) -> f32 {
-        -(lines.saturating_sub(1) as f32) * self.line_height() * 0.5
+        let block = self.block_height(lines);
+        self.vertical_align.offset(self.max_height, block)
+            - self.vertical_align.offset(self.max_height, self.font_size)
     }
 }
 
@@ -967,6 +998,8 @@ mod tests {
             color: Color::WHITE,
             family: FontFamily::default(),
             align: TextAlign::default(),
+            max_height: 40.0,
+            vertical_align: VerticalAlign::default(),
         }
     }
 
@@ -974,15 +1007,23 @@ mod tests {
     /// wrapping a superset of Phase 10's single line rather than a change to
     /// it.
     ///
-    /// A scene builder centres one line on its element, because that is all it
-    /// can know before anything is shaped. The painter learns how many lines
-    /// there really were and lifts the block by half of every line past the
-    /// first — so one line lands on the pixel it always did, and a block of any
-    /// height stays centred on the same point.
+    /// A scene builder places one line inside its element, because that is all
+    /// it can know before anything is shaped. The painter learns how many lines
+    /// there really were and moves the block by the difference — so one line
+    /// lands on the pixel it always did, and a centred block of any height stays
+    /// centred on the same point.
     #[test]
     fn a_wrapped_block_stays_centred_where_one_line_was() {
-        let text = a_text();
+        // A box with room for every block below, so this test measures the
+        // centring rather than the overflow clamp — that has its own test.
+        let text = TextPrimitive {
+            max_height: 400.0,
+            ..a_text()
+        };
         let line = text.line_height();
+        let close = |got: f32, want: f32| {
+            assert!((got - want).abs() < 1e-4, "got {got}, wanted {want}");
+        };
 
         assert_eq!(line, 12.0 * TextPrimitive::LINE_HEIGHT_RATIO);
         assert_eq!(
@@ -997,8 +1038,8 @@ mod tests {
         );
 
         // Two lines: the block is one line taller, so it rises half a line.
-        assert_eq!(text.vertical_offset(2), -line * 0.5);
-        assert_eq!(text.vertical_offset(5), -line * 2.0);
+        close(text.vertical_offset(2), -line * 0.5);
+        close(text.vertical_offset(5), -line * 2.0);
 
         // The centre of the block is the centre of the single line it replaced,
         // whatever the count — the statement the arithmetic above is for.
@@ -1009,6 +1050,60 @@ mod tests {
                 (centre - line * 0.5).abs() < 1e-4,
                 "{lines} lines centred at {centre} instead of {}",
                 line * 0.5
+            );
+        }
+    }
+
+    /// **The fourth text row, as arithmetic.** `Top` grows a block downwards
+    /// from the line it started on, `Bottom` grows it upwards, and one line
+    /// never moves whatever the alignment — which is what makes this row a
+    /// superset of the placement that was there before it.
+    #[test]
+    fn a_block_grows_away_from_the_edge_it_is_aligned_to() {
+        let line = a_text().line_height();
+        let placed = |align| TextPrimitive {
+            vertical_align: align,
+            ..a_text()
+        };
+
+        for align in VerticalAlign::ALL {
+            assert_eq!(
+                placed(*align).vertical_offset(1),
+                0.0,
+                "{} moved a single line",
+                align.name()
+            );
+        }
+
+        // `max_height` is 40 and a line is 15.6, so two lines still fit inside
+        // the box and every alignment has slack to spend.
+        let close = |got: f32, want: f32| {
+            assert!((got - want).abs() < 1e-4, "got {got}, wanted {want}");
+        };
+        close(placed(VerticalAlign::Top).vertical_offset(2), 0.0);
+        close(
+            placed(VerticalAlign::Middle).vertical_offset(2),
+            -line * 0.5,
+        );
+        close(placed(VerticalAlign::Bottom).vertical_offset(2), -line);
+
+        // A block taller than its box has no slack anywhere, so every alignment
+        // starts it at the box's top edge and it overflows downwards — the
+        // limitation `render::painter` records, arriving as one number.
+        let overflowing = TextPrimitive {
+            max_height: 10.0,
+            ..a_text()
+        };
+        for align in VerticalAlign::ALL {
+            assert_eq!(
+                TextPrimitive {
+                    vertical_align: *align,
+                    ..overflowing.clone()
+                }
+                .vertical_offset(6),
+                0.0,
+                "{} pushed an overflowing block out of its box",
+                align.name()
             );
         }
     }

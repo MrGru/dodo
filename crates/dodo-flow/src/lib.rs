@@ -1337,6 +1337,120 @@
 //! on a steep diagonal sits somewhere a reader would look for it.
 //! `examples/flow.rs` lists them beside the earlier slices'.
 //!
+//! # What the fourteenth slice added: a label belongs to its element
+//!
+//! Three changes that are one idea. A label was a thing the document happened
+//! to store beside an element; it is now part of the element — it sits in the
+//! middle of it, it is drawn in its ink, and selecting the element offers the
+//! controls that shape it.
+//!
+//! ## A label has no position, and that is the answer rather than a gap
+//!
+//! Nothing in this engine stores where a label sits. `render::scene` lays one
+//! into its carrier's box every frame, so "where is this label?" is answered by
+//! [`models::TextAlign`] and its new twin [`models::VerticalAlign`] and by
+//! nothing else. That made the requirement small: **the default placement is
+//! the default pair of alignments**, and centring a label is
+//! [`models::FontStyle::centre_on_element`].
+//!
+//! It is applied where a label is *born* —
+//! [`FlowEditor::commit_text`](commands::FlowEditor::commit_text), in the same
+//! undo step as the words — rather than made the type's `Default`, because the
+//! same default seeds a **standalone text element**, which reads from its left
+//! edge like any other block of prose. A label centres; a paragraph does not.
+//! And because it fires only on the first label, a user who then aligns one
+//! left keeps it there through every later edit of the words.
+//!
+//! ## The box a label is laid into, per carrier
+//!
+//! | | box |
+//! |---|---|
+//! | a standalone text element | its whole rectangle — it has no border to keep clear of |
+//! | any other node | its rectangle, inset by `LABEL_PADDING_PIXELS` |
+//! | a connector, an edge | `render::scene::boxless_label_box`, centred on the true midpoint |
+//!
+//! The third is the one that had to be invented, and it grew a **height** this
+//! slice: `EDGE_LABEL_BAND_PIXELS`, so that on a line — which has no box at all
+//! — the vertical row means *above it, on it, below it*. `Middle` is the exact
+//! midpoint, which is where every edge label has been drawn since §9.
+//!
+//! **`views::flow`'s `text_edit_bounds` is the fourth statement of that table**
+//! and now returns the same box, so the caret opens over the rectangle the
+//! painter will use; `editor_band` takes the alignment too, which is what keeps
+//! the previous slice's "the editor is centred on the label" fix true now that a
+//! label can be moved off the middle.
+//!
+//! ## A label is drawn in its element's ink
+//!
+//! [`models::ElementStyle::text_color`] is one function because there was one
+//! bug: §32 gives a node, an edge and a text element a Stroke row and no
+//! separate text colour, and every text painter read `font.color` — which no
+//! control writes. The twelfth-and-a-half slice fixed that in one painter for
+//! one kind; a label on a node or an edge still drew in the theme's foreground,
+//! so changing a shape's stroke moved its outline and left its words behind.
+//!
+//! ## The row that depends on what an element *contains*
+//!
+//! [`properties::SelectionKind::sections`] takes a second argument —
+//! [`properties::Labelled`] — and that is a real departure from the model
+//! Phase 11 built: every other row is a pure function of the kind. The four
+//! text rows are offered to a node or an edge **when it has a label** and
+//! withheld when it does not, because a Font size row over a shape with no text
+//! is a control that does nothing.
+//!
+//! The intersection rule needed no second rule: a selection holding one
+//! labelled shape and one unlabelled one shows no text rows, exactly as a
+//! selection holding a shape and a picture shows no Stroke row. The reference
+//! table in `properties`' tests states **eight** columns rather than four, so
+//! the axis is stated twice like everything else in it.
+//!
+//! ## The two renderers, again
+//!
+//! A rectangle at working zoom is a `RichNode` — a GPUI element — and
+//! [`views::nodes`] draws its label with a `div`. That is the renderer a person
+//! is looking at while they use these four rows, and it read **none** of them:
+//! the theme's foreground, the theme's face, flex-centred vertically and
+//! flowed from the left. Phase 12.5 met this exact shape once already and it
+//! arrived as *"the properties only work in sketch mode"*. Both halves read the
+//! same style now, and `views::flow`'s
+//! `the_rich_half_reads_every_text_property_the_canvas_half_does` is the
+//! source assertion that keeps them in step — the same trade the occlusion and
+//! typing-context tests make, and for the same reason.
+//!
+//! ## Format version 5, and the only rung so far that changes how a file looks
+//!
+//! `vertical_align` on its own would have cost no version: an older build drops
+//! it and it defaults straight back to what it displayed. The version moved for
+//! the **rewrite** beside it, which has to happen exactly once — every node
+//! that is not a standalone text element, and every edge, with a label, is
+//! written to `align: Center`.
+//!
+//! That is safe for one reason and it is worth stating plainly: before version
+//! 5 the panel offered the Text align row to *standalone text elements only*,
+//! so **no control anywhere could set a node's or an edge's alignment** and
+//! every value the rung overwrites is the default arriving by default. An
+//! edge's label was additionally drawn centred whatever its style said, so for
+//! an edge the rung writes down what the file already displayed. A standalone
+//! text element is untouched, because its alignment *was* reachable and a
+//! `Left` there may well be a decision.
+//!
+//! ## What the reference asked for and this does not have
+//!
+//! The captain's panel screenshot shows **four** font-family buttons: a pen, a
+//! plain `A`, `</>`, and — past a divider — a serif `A`.
+//! [`models::FontFamily`] has three variants and they are the first three.
+//! The fourth is left out rather than guessed at: there is no serif family in
+//! this model, dodo ships no faces of its own, and inventing one would mean
+//! choosing a font name for three platforms with nothing to check it against.
+//!
+//! ## What only a person can confirm
+//!
+//! That a centred label reads as belonging to its shape, that a label crossing
+//! the rich/canvas rung does not visibly change, and that the vertical row's
+//! three glyphs are legible at 16 px. `examples/flow.rs` lists the seven, and
+//! flags the one known cosmetic gap: the inline editor lays its own text out
+//! from the left, so a centred label slides into place on commit.
+//!
 //! # Where the budget numbers come from, and what they are not
 //!
 //! [`budgets`] is the one named place for every render ceiling and LOD

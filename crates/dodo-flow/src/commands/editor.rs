@@ -301,6 +301,25 @@ impl FlowEditor {
     ///   was ever created. That is what makes an abandoned Text-tool gesture
     ///   free rather than a create-then-delete pair on the undo stack.
     ///
+    /// # A label's first words centre it on the thing it labels
+    ///
+    /// A label has no position of its own — `render::scene` lays it into its
+    /// carrier's box every frame — so where it sits **is**
+    /// [`FontStyle::centre_on_element`](crate::models::FontStyle::centre_on_element)'s
+    /// pair of alignments, and a label belongs in the middle of its element.
+    ///
+    /// It is written here, once, when a node or an edge goes from having no
+    /// label to having one, rather than made the type's [`Default`]: the same
+    /// default seeds a *standalone text element*, which reads from its left edge
+    /// like any other block of prose. Both commands go through `in_one_step`, so
+    /// typing into a shape is still one undo press and one redo — and because
+    /// this only fires on the first label, a user who then aligns the label left
+    /// keeps it there through every later edit of the words.
+    ///
+    /// Documents written before this existed are handled by the format's
+    /// version-5 rung rather than here; `models::serialization`'s
+    /// `labels_centred_on_their_element` says why that is safe.
+    ///
     /// Answers whether the document changed, so a caller can decide about
     /// repainting without diffing.
     pub fn commit_text(&mut self, target: TextTarget, text: &str) -> bool {
@@ -321,15 +340,43 @@ impl FlowEditor {
                         .apply(EditCommand::remove(vec![node], Vec::new()))
                         .is_ok_and(|summary| summary.changed);
                 }
-                self.apply(EditCommand::SetNodeLabels(vec![(node, value)]))
-                    .is_ok_and(|summary| summary.changed)
+                let centre = value.is_some()
+                    && *self.world.nodes().kind(node) != ElementKind::Text
+                    && self.world.nodes().cold(node).label.is_none();
+
+                self.in_one_step(move |editor| {
+                    let mut changed = editor
+                        .apply(EditCommand::SetNodeLabels(vec![(node, value)]))
+                        .is_ok_and(|summary| summary.changed);
+                    if centre {
+                        let mut style = editor.world.nodes().style(node).clone();
+                        style.font.centre_on_element();
+                        changed |= editor
+                            .apply(EditCommand::SetNodeStyles(vec![(node, style)]))
+                            .is_ok_and(|summary| summary.changed);
+                    }
+                    changed
+                })
             }
             TextTarget::Edge(edge) => {
                 if !self.world.edges().contains(edge) || !self.world.edges().is_live(edge) {
                     return false;
                 }
-                self.apply(EditCommand::SetEdgeLabels(vec![(edge, value)]))
-                    .is_ok_and(|summary| summary.changed)
+                let centre = value.is_some() && self.world.edges().label(edge).is_none();
+
+                self.in_one_step(move |editor| {
+                    let mut changed = editor
+                        .apply(EditCommand::SetEdgeLabels(vec![(edge, value)]))
+                        .is_ok_and(|summary| summary.changed);
+                    if centre {
+                        let mut style = editor.world.edges().style(edge).clone();
+                        style.font.centre_on_element();
+                        changed |= editor
+                            .apply(EditCommand::SetEdgeStyles(vec![(edge, style)]))
+                            .is_ok_and(|summary| summary.changed);
+                    }
+                    changed
+                })
             }
             TextTarget::New(rect) => {
                 let Some(value) = value else {
@@ -1172,8 +1219,10 @@ mod tests {
         commands::edit::{EditCommand, NodeDraft},
         geometry::Vec2,
         interaction::TextTarget,
-        models::{ElementId, ElementKind, NodeIndex, ShapeKind},
-        runtime::NodeSpec,
+        models::{
+            ElementId, ElementKind, FontStyle, NodeIndex, ShapeKind, TextAlign, VerticalAlign,
+        },
+        runtime::{EdgeEnd, NodeSpec},
     };
 
     /// **The enforcement, checked rather than remembered.**
@@ -1546,7 +1595,11 @@ mod tests {
 
         editor.commit_text(target, "one");
         editor.commit_text(target, "two");
-        assert_eq!(editor.history().undo_depth(), depth + 2);
+        // Three entries for two edits: a node's **first** label also centres it
+        // on the element, and the two are one gesture. `undo_depth` counts
+        // entries rather than steps, which is the distinction that matters here
+        // — the undos below are what say it is still one press each.
+        assert_eq!(editor.history().undo_depth(), depth + 3);
 
         assert!(editor.undo());
         assert_eq!(editor.text_of(target), Some("one"));
@@ -1557,6 +1610,155 @@ mod tests {
         assert_eq!(editor.text_of(target), Some("one"));
         assert!(editor.redo());
         assert_eq!(editor.text_of(target), Some("two"));
+    }
+
+    /// **A label's first words centre it on the thing it labels**, and the
+    /// centring is part of the same undo press as the words.
+    ///
+    /// Both halves matter. A label has no position of its own, so this pair of
+    /// alignments *is* its placement; and a centring that were its own history
+    /// entry would mean one undo left the words in place and moved them, which
+    /// is worse than either outcome.
+    #[test]
+    fn a_nodes_first_label_is_centred_on_it_in_the_same_undo_step() {
+        let (mut editor, node) = editor_with_a_node();
+        let target = TextTarget::Node(node);
+        let before = editor.world().nodes().style(node).font.clone();
+        assert_eq!(before.align, TextAlign::Left, "the seed is prose's default");
+
+        let steps = |editor: &FlowEditor| editor.history().undo_depth();
+        let depth = steps(&editor);
+        assert!(editor.commit_text(target, "step one"));
+
+        let font = editor.world().nodes().style(node).font.clone();
+        assert_eq!(font.align, TextAlign::Center);
+        assert_eq!(font.vertical_align, VerticalAlign::Middle);
+        assert_eq!(
+            FontStyle {
+                align: before.align,
+                vertical_align: before.vertical_align,
+                ..font.clone()
+            },
+            before,
+            "centring must touch nothing but where the label sits"
+        );
+        assert_eq!(steps(&editor), depth + 2, "the label, and the centring");
+
+        // One press takes both back.
+        assert!(editor.undo());
+        assert_eq!(editor.text_of(target), None);
+        assert_eq!(editor.world().nodes().style(node).font, before);
+
+        // And one press brings both forward.
+        assert!(editor.redo());
+        assert_eq!(editor.text_of(target), Some("step one"));
+        assert_eq!(
+            editor.world().nodes().style(node).font.align,
+            TextAlign::Center
+        );
+    }
+
+    /// **A label the user has moved keeps its position**, which is the other
+    /// half of the rule: the centring is what a label is *born* with, not
+    /// something re-applied on every edit of the words.
+    #[test]
+    fn editing_a_label_again_does_not_move_it_back_to_the_middle() {
+        let (mut editor, node) = editor_with_a_node();
+        let target = TextTarget::Node(node);
+        editor.commit_text(target, "first");
+
+        editor.select_only(Some(node));
+        assert!(editor.restyle_selection(|style| {
+            style.font.align = TextAlign::Right;
+            style.font.vertical_align = VerticalAlign::Bottom;
+        }));
+
+        assert!(editor.commit_text(target, "second"));
+        let font = editor.world().nodes().style(node).font.clone();
+        assert_eq!(font.align, TextAlign::Right);
+        assert_eq!(font.vertical_align, VerticalAlign::Bottom);
+    }
+
+    /// A **standalone text element** is not a label, and is not centred: it is
+    /// a block of prose and reads from its left edge. The Text tool's own
+    /// creation path is the one this covers.
+    #[test]
+    fn a_standalone_text_element_is_not_centred_like_a_label() {
+        let mut editor = FlowEditor::new();
+        let pending = TextTarget::New(crate::geometry::Rect::new(
+            Vec2::new(10.0, 10.0),
+            Vec2::new(200.0, 22.0),
+        ));
+        assert!(editor.commit_text(pending, "a paragraph"));
+
+        let node = editor.world().selection().nodes()[0];
+        assert_eq!(*editor.world().nodes().kind(node), ElementKind::Text);
+        assert_eq!(
+            editor.world().nodes().style(node).font.align,
+            TextAlign::Left
+        );
+
+        // And typing into it again leaves it alone, because a text element's
+        // words are never a *first* label — the element is its words.
+        assert!(editor.commit_text(TextTarget::Node(node), "more prose"));
+        assert_eq!(
+            editor.world().nodes().style(node).font.align,
+            TextAlign::Left
+        );
+    }
+
+    /// The edge's half of the same rule, driven through the real applier.
+    #[test]
+    fn an_edges_first_label_is_centred_on_its_route() {
+        let mut editor = FlowEditor::new();
+        let first = editor
+            .apply(EditCommand::AddNodes(vec![NodeDraft::new(NodeSpec::new(
+                ElementId::NONE,
+                ElementKind::default(),
+                Vec2::ZERO,
+                Vec2::new(120.0, 40.0),
+            ))]))
+            .unwrap()
+            .added_nodes[0];
+        let second = editor
+            .apply(EditCommand::AddNodes(vec![NodeDraft::new(NodeSpec::new(
+                ElementId::NONE,
+                ElementKind::default(),
+                Vec2::new(300.0, 0.0),
+                Vec2::new(120.0, 40.0),
+            ))]))
+            .unwrap()
+            .added_nodes[0];
+        let edge = editor
+            .apply(EditCommand::Connect(vec![crate::runtime::EdgeSpec::new(
+                ElementId::NONE,
+                EdgeEnd::node(first),
+                EdgeEnd::node(second),
+            )]))
+            .unwrap()
+            .added_edges[0];
+
+        assert_eq!(
+            editor.world().edges().style(edge).font.align,
+            TextAlign::Left
+        );
+        assert!(editor.commit_text(TextTarget::Edge(edge), "carries"));
+        assert_eq!(
+            editor.world().edges().style(edge).font.align,
+            TextAlign::Center
+        );
+        assert_eq!(
+            editor.world().edges().style(edge).font.vertical_align,
+            VerticalAlign::Middle
+        );
+
+        assert!(editor.undo());
+        assert_eq!(editor.text_of(TextTarget::Edge(edge)), None);
+        assert_eq!(
+            editor.world().edges().style(edge).font.align,
+            TextAlign::Left,
+            "one press takes the words and the centring together"
+        );
     }
 
     /// **Emptying a text element removes it, and one undo brings it back.**

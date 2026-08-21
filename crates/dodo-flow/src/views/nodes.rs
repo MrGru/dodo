@@ -44,16 +44,18 @@
 //! node", because the snapshot never offers one.
 
 use gpui::{
-    AnyElement, App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Styled, div, px,
-    relative,
+    AnyElement, App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Styled, div,
+    prelude::FluentBuilder, px, relative,
 };
 use gpui_component::ActiveTheme;
 
 use crate::{
     geometry::{Rect, ResizeCorner},
+    models::{TextAlign, VerticalAlign},
     render::{
+        painter::{FontSet, to_hsla},
         registry::{AccentRole, NodeGlyph, NodeVisual},
-        scene::GRAPH_NODE_RADIUS,
+        scene::{GRAPH_NODE_RADIUS, LABEL_PADDING_PIXELS},
         snapshot::{InteractiveHandle, RenderSnapshot, RichNode},
     },
     runtime::GraphWorld,
@@ -88,11 +90,16 @@ const GRIP_PIXELS: f32 = 9.0;
 /// and it is sized from the snapshot so the allocation is one per frame over a
 /// list that is tens long — not the per-element allocation §40 rule 10 is
 /// about.
-pub fn nodes(snapshot: &RenderSnapshot, world: &GraphWorld, cx: &App) -> Vec<AnyElement> {
+pub fn nodes(
+    snapshot: &RenderSnapshot,
+    world: &GraphWorld,
+    fonts: &FontSet,
+    cx: &App,
+) -> Vec<AnyElement> {
     snapshot
         .rich()
         .iter()
-        .map(|rich| node(rich, world, cx))
+        .map(|rich| node(rich, world, fonts, cx))
         .collect()
 }
 
@@ -121,7 +128,7 @@ pub fn nodes(snapshot: &RenderSnapshot, world: &GraphWorld, cx: &App) -> Vec<Any
 /// dash, a hatch, an opacity or a hand, so having it express the two properties
 /// it *can* was never a smaller version of the same thing — it was a second
 /// renderer that quietly disagreed with the first.
-fn node(rich: &RichNode, world: &GraphWorld, cx: &App) -> AnyElement {
+fn node(rich: &RichNode, world: &GraphWorld, fonts: &FontSet, cx: &App) -> AnyElement {
     let accent = accent_color(rich.visual.accent, cx);
     let style = world.nodes().style(rich.node);
     // The clip for the accent bar and the label, not a border: the painted
@@ -138,7 +145,7 @@ fn node(rich: &RichNode, world: &GraphWorld, cx: &App) -> AnyElement {
         .overflow_hidden()
         .cursor_pointer();
 
-    decorated(body, rich, world, accent, cx)
+    decorated(body, rich, world, accent, fonts, cx)
 }
 
 /// The accent bar and the label, on whichever body the caller styled.
@@ -151,6 +158,7 @@ fn decorated(
     rich: &RichNode,
     world: &GraphWorld,
     accent: Hsla,
+    fonts: &FontSet,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -172,39 +180,76 @@ fn decorated(
         rich.label_font_size,
         world.nodes().cold(rich.node).label.as_ref(),
     ) {
+        // **Every text property is read here as well as on the canvas**, and
+        // that is the whole point of this block rather than a refinement of it.
+        // A rectangle at working zoom is a *rich* node, so this element is what
+        // a person actually looks at while they use the four text rows — and a
+        // panel row that only takes effect once you zoom out is Phase 12.5's
+        // "properties only work in sketch mode" arriving through the other
+        // renderer. `render::scene`'s `plan_labels` is the other statement of
+        // each of these; the two must not disagree.
+        let style = world.nodes().style(rich.node);
+        let font = &style.font;
+        let ink = style
+            .text_color()
+            .map(to_hsla)
+            .unwrap_or(theme.foreground)
+            .opacity(style.opacity.clamp(0.0, 1.0));
+
+        let mut row = div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .map(|it| match font.vertical_align {
+                VerticalAlign::Top => it.items_start(),
+                VerticalAlign::Middle => it.items_center(),
+                VerticalAlign::Bottom => it.items_end(),
+            })
+            .px(px(10.0))
+            // The canvas insets a label by this much top and bottom before
+            // laying it out, so a `Top` label has to start on the same pixel
+            // here — see `plan_labels`.
+            .py(px(LABEL_PADDING_PIXELS));
+
+        // **The glyph is a child only when there is one.** `NodeGlyph::None`
+        // used to arrive as a zero-width `div` with the row's gap still after
+        // it, which pushed a centred label three pixels off the body's middle —
+        // invisible until this phase centred labels by default.
+        if rich.visual.glyph != NodeGlyph::None {
+            row = row.gap(px(6.0)).child(glyph(rich.visual, accent));
+        }
+
         children.push(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .px(px(10.0))
-                .child(glyph(rich.visual, accent))
-                .child(
-                    div()
-                        .flex_1()
-                        // Without this a long label pushes the row wider
-                        // than the node instead of wrapping inside it — the
-                        // `min_w_0` rule dodo's other tools also live by.
-                        .min_w_0()
-                        .text_size(px(font_size))
-                        .text_color(theme.foreground)
-                        // **Wrapping, not truncation** (Phase 10.5), because a
-                        // rich node and a canvas node are the same element seen
-                        // through two zoom rungs and they must not disagree
-                        // about what a label does. `truncate()` — which is
-                        // `overflow_hidden` + `whitespace_nowrap` +
-                        // `text_ellipsis` — kept the ellipsis behaviour here
-                        // while `render::painter` wrapped, so a sentence read
-                        // as "a long lab…" at 100 % and as three lines at 60 %.
-                        // Only the clipping is kept: it is what stops an
-                        // unbroken word from reaching a neighbour, and GPUI's
-                        // wrapper already breaks one that cannot fit.
-                        .overflow_hidden()
-                        .child(label.to_string()),
-                )
-                .into_any_element(),
+            row.child(
+                div()
+                    .flex_1()
+                    // Without this a long label pushes the row wider
+                    // than the node instead of wrapping inside it — the
+                    // `min_w_0` rule dodo's other tools also live by.
+                    .min_w_0()
+                    .text_size(px(font_size))
+                    .text_color(ink)
+                    .font(fonts.face(font.family).clone())
+                    .map(|it| match font.align {
+                        TextAlign::Left => it.text_left(),
+                        TextAlign::Center => it.text_center(),
+                        TextAlign::Right => it.text_right(),
+                    })
+                    // **Wrapping, not truncation** (Phase 10.5), because a
+                    // rich node and a canvas node are the same element seen
+                    // through two zoom rungs and they must not disagree
+                    // about what a label does. `truncate()` — which is
+                    // `overflow_hidden` + `whitespace_nowrap` +
+                    // `text_ellipsis` — kept the ellipsis behaviour here
+                    // while `render::painter` wrapped, so a sentence read
+                    // as "a long lab…" at 100 % and as three lines at 60 %.
+                    // Only the clipping is kept: it is what stops an
+                    // unbroken word from reaching a neighbour, and GPUI's
+                    // wrapper already breaks one that cannot fit.
+                    .overflow_hidden()
+                    .child(label.to_string()),
+            )
+            .into_any_element(),
         );
     }
 

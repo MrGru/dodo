@@ -62,6 +62,9 @@ samples! {
     plain AlignLeft;
     plain AlignCenter;
     plain AlignRight;
+    plain AlignTop;
+    plain AlignMiddle;
+    plain AlignBottom;
     plain LayerSendToBack;
     plain LayerSendBackward;
     plain LayerBringForward;

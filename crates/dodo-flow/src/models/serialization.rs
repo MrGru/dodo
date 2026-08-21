@@ -82,7 +82,16 @@ use crate::{
 /// something unrecoverable. Past that line, [`LoadError::FutureVersion`] is the
 /// whole point of the envelope — it is what turns a quiet data loss into a
 /// sentence that names both version numbers.
-pub const CURRENT_VERSION: u32 = 4;
+///
+/// **Version 5 is the third answer to that question, and it is a third
+/// reason.** It adds `font.vertical_align`, which an older build would drop and
+/// which defaults straight back to what it displayed — worth no version at all
+/// by the rule above. The version moves for the *rewrite* beside it: version 5
+/// centres the labels on nodes and edges, and a rewrite has to happen **exactly
+/// once**. Without a rung the choice is between doing it on every load (which
+/// would silently undo a user's own alignment the moment they picked one) and
+/// not doing it at all. See `labels_centred_on_their_element`.
+pub const CURRENT_VERSION: u32 = 5;
 
 /// One rung of the ladder: rewrites a document body written by version `from`
 /// into the shape version `from + 1` expects.
@@ -103,6 +112,7 @@ pub const MIGRATIONS: &[(u32, MigrationStep)] = &[
     (1, fonts_became_four_steps),
     (2, images_arrived),
     (3, connectors_gained_ordered_endpoints),
+    (4, labels_centred_on_their_element),
 ];
 
 /// **Version 1 ▸ 2**: a font's continuous `size` became one of four steps, and
@@ -239,6 +249,92 @@ fn connectors_gained_ordered_endpoints(value: &mut Value) -> Result<(), LoadErro
     }
 
     Ok(())
+}
+
+/// **Version 4 ▸ 5**: a label sits in the middle of the thing it labels.
+///
+/// This is the one rung so far that deliberately changes how an existing
+/// document *looks*, so the argument for it is written out rather than assumed.
+///
+/// A label has no position of its own — it is laid into its carrier's box every
+/// frame — so where it sits is `style.font.align` and nothing else. Before this
+/// version the panel offered the Text align row to **standalone text elements
+/// only**: no control anywhere could set a node's or an edge's alignment, so
+/// every value this step overwrites is [`TextAlign::default`] arriving by
+/// default and not one of them is a choice anybody made. Rewriting them loses
+/// nothing.
+///
+/// What it does for each carrier:
+///
+/// - **An edge** was already drawn centred on its route whatever its style said
+///   — `plan_edge_labels` hard-coded it — so for an edge this rung writes down
+///   what the file already displayed, and it is what stops those labels moving
+///   now that the row is honoured.
+/// - **A node or a connector** was drawn against the left edge of its box. This
+///   rung centres it, which is the change the phase exists to make.
+/// - **A standalone text element is untouched.** Its alignment *was* reachable,
+///   so a `Left` there may well be a decision, and a paragraph reads from its
+///   left edge in any case.
+///
+/// `vertical_align` is not written at all: it is absent from every older file,
+/// and `#[serde(default)]` answers `Middle`, which is exactly where every label
+/// has been drawn since §9.
+///
+/// Elements with no label are skipped. Nothing is displayed for them, so
+/// nothing has to be preserved — and the label they may get later is centred by
+/// [`FontStyle::centre_on_element`](crate::models::FontStyle::centre_on_element)
+/// when it is committed.
+fn labels_centred_on_their_element(value: &mut Value) -> Result<(), LoadError> {
+    let centred = serde_json::to_value(crate::models::TextAlign::Center)?;
+
+    if let Some(nodes) = value.get_mut("nodes").and_then(Value::as_array_mut) {
+        for node in nodes {
+            let is_text = node
+                .get("kind")
+                .cloned()
+                .and_then(|kind| serde_json::from_value::<ElementKind>(kind).ok())
+                .is_some_and(|kind| matches!(kind, ElementKind::Text));
+            if is_text {
+                continue;
+            }
+            centre_label(node, &centred);
+        }
+    }
+
+    if let Some(edges) = value.get_mut("edges").and_then(Value::as_array_mut) {
+        for edge in edges {
+            centre_label(edge, &centred);
+        }
+    }
+
+    Ok(())
+}
+
+/// One element's label alignment, rewritten in place — and only if it has a
+/// label to place.
+///
+/// `style` and `style.font` are created when they are missing, because a
+/// document written entirely with defaults has neither and its labels are
+/// exactly the ones that need moving.
+fn centre_label(element: &mut Value, centred: &Value) {
+    if element.get("label").map(Value::is_null).unwrap_or(true) {
+        return;
+    }
+    let Some(object) = element.as_object_mut() else {
+        return;
+    };
+    let style = object
+        .entry("style")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let Some(style) = style.as_object_mut() else {
+        return;
+    };
+    let font = style
+        .entry("font")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if let Some(font) = font.as_object_mut() {
+        font.insert("align".into(), centred.clone());
+    }
 }
 
 /// Why a document could not be loaded.
@@ -430,7 +526,7 @@ mod tests {
         geometry::Vec2,
         models::{
             ElementKind, Endpoint, FlowDocument, FontFamily, FontSize, LinearKind, RenderQuality,
-            RenderStyle, ShapeKind, ids::ElementId,
+            RenderStyle, ShapeKind, VerticalAlign, ids::ElementId,
         },
     };
 
@@ -653,6 +749,7 @@ mod tests {
             font.size = FontSize::ExtraLarge;
             font.family = FontFamily::HandDrawn;
             font.align = TextAlign::Center;
+            font.vertical_align = VerticalAlign::Bottom;
             font.color = Some(Color::from_rgba8(178, 242, 187, 255));
         }
 
@@ -667,6 +764,7 @@ mod tests {
             .expect("the edge is there");
         original.edges[edge_index].label = Some("carries".into());
         original.edges[edge_index].style.font.align = TextAlign::Right;
+        original.edges[edge_index].style.font.vertical_align = VerticalAlign::Top;
 
         let loaded = FlowDocument::from_json(&original.to_json().unwrap()).expect("loads");
         assert_eq!(loaded, original);
@@ -680,7 +778,79 @@ mod tests {
             json!("ExtraLarge")
         );
         assert_eq!(value["nodes"][1]["style"]["font"]["family"], json!("Code"));
+        assert_eq!(
+            value["nodes"][0]["style"]["font"]["vertical_align"],
+            json!("Bottom"),
+            "the fourth text row is in the file like the other three"
+        );
         assert_eq!(value["edges"][0]["label"], json!("carries"));
+    }
+
+    /// **The rung that moves existing labels, and the three carriers it treats
+    /// differently.**
+    ///
+    /// Written against raw version-4 JSON rather than against a document this
+    /// build produced, because that is what is on disk: the point of the step
+    /// is what happens to a file nobody can re-save.
+    #[test]
+    fn a_version_four_document_opens_with_its_labels_centred() {
+        use crate::models::TextAlign;
+
+        let json = r#"{
+            "version": 4,
+            "nodes": [
+                {"id": 1, "kind": {"Shape": "Rectangle"}, "label": "on a box",
+                 "style": {"font": {"align": "Left"}}},
+                {"id": 2, "kind": "Text", "label": "a paragraph",
+                 "style": {"font": {"align": "Left"}}},
+                {"id": 3, "kind": {"Shape": "Ellipse"},
+                 "style": {"font": {"align": "Left"}}},
+                {"id": 4, "kind": {"Linear": "Arrow"}, "label": "an arrow",
+                 "connector": {"start": {"point": {"x": 0.0, "y": 0.0}, "attachment": null},
+                               "end": {"point": {"x": 80.0, "y": 0.0}, "attachment": null}}}
+            ],
+            "edges": [
+                {"id": 5, "source": {"node": 1, "handle": null},
+                 "target": {"node": 3, "handle": null}, "label": "carries",
+                 "style": {"font": {"align": "Left"}}}
+            ]
+        }"#;
+
+        let document = FlowDocument::from_json(json).expect("a version-4 document still opens");
+
+        assert_eq!(
+            document.nodes[0].style.font.align,
+            TextAlign::Center,
+            "a labelled shape is centred — the change this phase exists to make"
+        );
+        assert_eq!(
+            document.nodes[1].style.font.align,
+            TextAlign::Left,
+            "a standalone text element's alignment was reachable and is a real              choice, so it is left alone"
+        );
+        assert_eq!(
+            document.nodes[2].style.font.align,
+            TextAlign::Left,
+            "an unlabelled element displays nothing, so there is nothing to move"
+        );
+        assert_eq!(
+            document.nodes[3].style.font.align,
+            TextAlign::Center,
+            "a connector with no style object at all still gets one"
+        );
+        assert_eq!(
+            document.edges[0].style.font.align,
+            TextAlign::Center,
+            "an edge label was already drawn centred, so this writes down what              the file displayed"
+        );
+
+        for element in document.nodes.iter() {
+            assert_eq!(
+                element.style.font.vertical_align,
+                VerticalAlign::Middle,
+                "the rung writes no vertical alignment; the default is what                  every label already displayed"
+            );
+        }
     }
 
     /// **The ladder's first real rung, driven through the real loader.**
