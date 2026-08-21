@@ -2756,7 +2756,7 @@ impl FlowView {
         let world = self
             .text_edit_bounds(editing.target)
             .unwrap_or(editing.world);
-        let screen = self.viewport.world_rect_to_screen(world).normalized();
+        let band = editor_band(self.viewport.world_rect_to_screen(world));
 
         Some(
             div()
@@ -2772,10 +2772,10 @@ impl FlowView {
                 // commits and closes the editor a user was aiming into.
                 .occlude()
                 .absolute()
-                .left(px(screen.origin.x))
-                .top(px(screen.origin.y))
-                .w(px(screen.size.x.max(MIN_EDITOR_PIXELS)))
-                .h(px(EDIT_LINE_PIXELS))
+                .left(px(band.origin.x))
+                .top(px(band.origin.y))
+                .w(px(band.size.x))
+                .h(px(band.size.y))
                 .rounded(cx.theme().radius)
                 .border_1()
                 .border_color(cx.theme().primary)
@@ -2783,6 +2783,25 @@ impl FlowView {
                 .child(Input::new(&editing.input).size_full()),
         )
     }
+}
+
+/// **Where the one-line editor sits over the thing it is editing**, in
+/// pane-relative screen pixels.
+///
+/// Pure, so the one rule it carries is assertable with no window. **Vertically
+/// centred, because that is where the label is painted** — the field is one
+/// line tall whatever it is editing (see [`FlowView::text_editor_element`]),
+/// so anchoring it at the element's top put the caret in a band above text
+/// that `render::scene`'s `plan_labels` centres, and what you typed appeared
+/// to jump the moment you committed it. An edge label's box and a connector's
+/// already arrive exactly this tall, so for those the two agree by
+/// construction and this is the identity.
+fn editor_band(screen: Rect) -> Rect {
+    let screen = screen.normalized();
+    Rect::new(
+        Vec2::new(screen.origin.x, screen.center().y - EDIT_LINE_PIXELS * 0.5),
+        Vec2::new(screen.size.x.max(MIN_EDITOR_PIXELS), EDIT_LINE_PIXELS),
+    )
 }
 
 impl Focusable for FlowView {
@@ -2952,6 +2971,31 @@ mod tests {
         let view: Entity<FlowView> = window.root(&mut cx).unwrap();
         cx.run_until_parked();
         (view, cx)
+    }
+
+    /// **The caret sits where the label will be**, which for every element but
+    /// a text box means the middle rather than the top. The editor is one line
+    /// tall whatever it is editing, so a top-anchored field put the words a
+    /// user typed above where `render::scene` was about to paint them.
+    #[test]
+    fn the_inline_editor_is_centred_on_whatever_it_is_editing() {
+        // A tall body: the band is centred and keeps its one-line height.
+        let body = Rect::new(Vec2::new(40.0, 100.0), Vec2::new(300.0, 90.0));
+        let band = editor_band(body);
+        assert_eq!(band.origin.x, body.origin.x);
+        assert_eq!(band.size.y, EDIT_LINE_PIXELS);
+        assert!((band.center().y - body.center().y).abs() < 1e-3);
+
+        // A box already exactly one line tall — an edge label's, and a
+        // connector's — is left where it is.
+        let line = Rect::new(Vec2::new(0.0, 200.0), Vec2::new(240.0, EDIT_LINE_PIXELS));
+        assert_eq!(editor_band(line), line);
+
+        // A sliver still gets a usable field rather than a three-pixel one.
+        let sliver = Rect::new(Vec2::new(10.0, 10.0), Vec2::new(4.0, 3.0));
+        let band = editor_band(sliver);
+        assert_eq!(band.size, Vec2::new(MIN_EDITOR_PIXELS, EDIT_LINE_PIXELS));
+        assert!((band.center().y - sliver.center().y).abs() < 1e-3);
     }
 
     /// **§9's caret has to arrive holding the keyboard, with a selection.**
