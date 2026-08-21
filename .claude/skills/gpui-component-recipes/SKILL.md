@@ -44,6 +44,26 @@ with `KeyContext::parse` + `KeyBindingContextPredicate::depth_of`, which needs n
   as a *sibling* of `Layout`, so a dialog's focus path contains none of the pane's contexts. You do
   not need to exclude dialogs from a pane-scoped binding; they are already out of reach.
 
+## `track_focus` focuses on mouse-down, **after** your own handler
+
+`Interactivity::paint_mouse_listeners` gives every element carrying `track_focus` a
+bubble-phase `MouseDownEvent` listener that calls `window.focus(&handle)` unless
+`window.default_prevented()`. Bubble listeners run in **reverse** registration order and a
+parent registers before its children paint, so that listener is the *last* thing to touch the
+focus on any press inside it — including a press your own handler used to focus something else.
+
+So a handler that opens an inline field and focuses it leaves the field focused for the rest of
+the handler and blurred by the time the event is over. It looks exactly like a repaint dropping
+the focus and it is not; the tell is that clicking the field a second time works, because the
+field is painted by then and (if it `occlude()`s) the ancestor's hitbox is no longer under the
+pointer, so its listener does nothing.
+
+`window.prevent_default()` is the flag that listener reads — call it in the handler that decided
+where the focus goes. `crates/dodo-flow/src/views/flow.rs`'s `begin_text_edit` is the worked
+case, and its `the_press_that_opens_a_caret_does_not_hand_the_keyboard_back` shows how to test
+it: **dispatch the real event** (`Window::dispatch_event`, which is public) rather than calling
+the handler, because a handler-level test cannot see a listener nobody in the repo registered.
+
 ## Overlays are mounted by us, never by `Root`
 
 `Root::render` paints only its child view plus the tooltip and native-menu overlays.
@@ -192,6 +212,21 @@ self.editor.update(cx, |state, cx| {
 
 `crates/dodo-database/src/state/editor.rs`'s module doc is the full diagnosis, including why the colour
 appeared for one frame after Format and never while typing.
+
+### A focused `Input` cannot be painted on a GPUI test window
+
+`Input::render` calls `sync_native_content_type` when the field is focused, which on macOS asks
+the platform window for its `NSView` — and `TestWindow`'s `window_handle()` is
+`unimplemented!()`, not an `Err`, so the draw panics. Any `#[gpui::test]` that focuses an
+`Input` must therefore never let a frame draw while it is focused: assert inside the same
+`update`, and blur or drop the field before returning. `VisualTestContext::simulate_event` draws
+before it returns; `Window::dispatch_event` (public, and what `simulate_event` calls) does not,
+for mouse events.
+
+Related: building an element outside a draw allocates into gpui's thread-local `ELEMENT_ARENA`,
+which no draw ever clears — so a test that calls a `fn ... -> Div` builder holding an `Entity`
+fails the test app's leak check at teardown. Build elements inside `VisualTestContext::draw`, or
+assert on the source instead.
 
 ## Inline diagnostics (wavy underline)
 
