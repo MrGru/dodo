@@ -383,11 +383,13 @@ fn plan_nodes(
     };
     let quality = world.settings().render_quality;
 
+    let boxed = snapshot.overlay().map(|overlay| overlay.node);
+
     for canvas in snapshot.canvas() {
         plan_one_node(
             plan,
             world,
-            NodeBody::of_canvas(canvas),
+            NodeBody::of_canvas(canvas, boxed),
             viewport,
             ink,
             &lod,
@@ -431,6 +433,10 @@ struct NodeBody {
     /// node has no element to hover, and the snapshot answers the question for
     /// one node at most.
     hovered: bool,
+    /// **Whether §44's bounding box is drawn around this element this frame** —
+    /// which is [`RenderSnapshot::overlay`]'s node and nothing else. See
+    /// [`NodeBody::accented`] for the one question it answers.
+    boxed: bool,
     detailed: bool,
     /// Which half of the renderer this body belongs to. It changes nothing
     /// about the painting — see [`NodeBody::count`] for the one thing it
@@ -439,7 +445,7 @@ struct NodeBody {
 }
 
 impl NodeBody {
-    fn of_canvas(canvas: &CanvasNode) -> NodeBody {
+    fn of_canvas(canvas: &CanvasNode, boxed: Option<NodeIndex>) -> NodeBody {
         NodeBody {
             node: canvas.node,
             body: canvas.body,
@@ -448,12 +454,13 @@ impl NodeBody {
             screen: canvas.screen,
             selected: canvas.selected,
             hovered: false,
+            boxed: boxed == Some(canvas.node),
             detailed: canvas.detailed,
             rich: false,
         }
     }
 
-    fn of_rich(rich: &RichNode) -> NodeBody {
+    fn of_rich(rich: &RichNode, boxed: Option<NodeIndex>) -> NodeBody {
         NodeBody {
             node: rich.node,
             body: rich.visual.body,
@@ -462,6 +469,7 @@ impl NodeBody {
             screen: rich.screen,
             selected: rich.selected,
             hovered: rich.hovered,
+            boxed: boxed == Some(rich.node),
             // A node is only `rich_capable` when it is already detailed — see
             // `RenderSnapshot::extract_nodes` — so this is a restatement rather
             // than an assumption.
@@ -470,11 +478,34 @@ impl NodeBody {
         }
     }
 
-    /// Whether the pointer or the selection is on this body, which is the one
-    /// question the two feedback affordances share: both draw the accent, and
-    /// both need a stroke to draw it with even when the style has none.
-    fn active(&self) -> bool {
-        self.selected || self.hovered
+    /// **Whether this body paints the accent instead of its own stroke** — a
+    /// colour, a two-pixel floor, a border where the style asked for none, and
+    /// no dash.
+    ///
+    /// It used to be "selected or hovered", and for the selected element that
+    /// was a real defect: recolouring a border is the one thing that hides the
+    /// colour a person is choosing, and the colour they are choosing is
+    /// *always* the selected element's, because that is what the property panel
+    /// is a view of. The bounding box says "selected" on its own — that is what
+    /// §44 built it for — so an element that has one does not need its border
+    /// repurposed as a second, lossier way of saying the same thing.
+    ///
+    /// **The two cases that keep it, and why neither is an oversight.**
+    ///
+    /// A body that is selected and has *no* box: §44 fills the overlay for the
+    /// single selected node only, so a rubber band over five shapes draws no
+    /// box at all. There the accent is not a redundant signal, it is the only
+    /// one — dropping it makes a multiple selection invisible, and the
+    /// bounding box is not this fix's to widen.
+    ///
+    /// A hovered body: hover has no box either, and its other affordance is
+    /// §44's handle elements — which a *drawn shape has none of*, by
+    /// `commands::gesture`'s `handles_for`. Removing the accent from hover
+    /// therefore leaves a hovered rectangle with nothing but a cursor change.
+    /// Hover is also transient and follows the pointer, so it cannot sit over
+    /// the colour a person is picking the way a selection does.
+    fn accented(&self) -> bool {
+        self.hovered || (self.selected && !self.boxed)
     }
 
     /// Records this body against the half it came from.
@@ -562,11 +593,15 @@ fn plan_one_node(
             }),
             style.opacity,
         );
-        // **The accent answers both affordances.** §44's hover ring used to be
-        // the rich element's own border colour; the body is painted here for
-        // both halves now, so the feedback is painted here too — otherwise
-        // moving the pointer over a node would say nothing.
-        let stroke_color = if canvas.active() {
+        // **The accent, for the affordances that have nothing else.** §44's
+        // hover ring used to be the rich element's own border colour; the body
+        // is painted here for both halves now, so the feedback is painted here
+        // too — otherwise moving the pointer over a node would say nothing.
+        //
+        // **Not for the element the bounding box is around**, which is the
+        // element a person is styling: see [`NodeBody::accented`] for the whole
+        // rule and for the two cases that still take the accent.
+        let stroke_color = if canvas.accented() {
             ink.accent
         } else {
             fade(style.stroke.color.unwrap_or(ink.stroke), style.opacity)
@@ -579,7 +614,7 @@ fn plan_one_node(
             .world_to_screen_length(style.stroke.width)
             .max(if open {
                 MIN_OPEN_STROKE_PIXELS
-            } else if canvas.active() {
+            } else if canvas.accented() {
                 SELECTED_STROKE_PIXELS
             } else {
                 0.0
@@ -590,7 +625,7 @@ fn plan_one_node(
         // box to fall back to, so it keeps its stroke at every rung.
         let has_stroke = open
             || (canvas.detailed
-                && (!style.stroke.is_invisible() || canvas.active())
+                && (!style.stroke.is_invisible() || canvas.accented())
                 && stroke_width > 0.0);
 
         // **A body's dash** (§32's Stroke style row). It was stored, undoable,
@@ -608,7 +643,7 @@ fn plan_one_node(
             .stroke
             .dash
             .spec()
-            .filter(|_| has_stroke && canvas.detailed && !canvas.active())
+            .filter(|_| has_stroke && canvas.detailed && !canvas.accented())
             .map(|(on, off)| {
                 DashSpec::new(
                     viewport.world_to_screen_length(on),
@@ -1024,6 +1059,7 @@ fn plan_bodies(
         return;
     };
     let quality = world.settings().render_quality;
+    let boxed = snapshot.overlay().map(|overlay| overlay.node);
     let (edges, canvas) = (snapshot.edges(), snapshot.canvas());
     let (mut next_edge, mut next_node) = (0, 0);
 
@@ -1050,7 +1086,7 @@ fn plan_bodies(
             plan_one_node(
                 plan,
                 world,
-                NodeBody::of_canvas(&canvas[next_node]),
+                NodeBody::of_canvas(&canvas[next_node], boxed),
                 viewport,
                 ink,
                 &lod,
@@ -1204,11 +1240,13 @@ fn plan_rich_bodies(
     };
     let quality = world.settings().render_quality;
 
+    let boxed = snapshot.overlay().map(|overlay| overlay.node);
+
     for rich in snapshot.rich() {
         plan_one_node(
             plan,
             world,
-            NodeBody::of_rich(rich),
+            NodeBody::of_rich(rich, boxed),
             viewport,
             ink,
             &lod,
@@ -3642,6 +3680,158 @@ mod tests {
                 assert_eq!(color, red, "{label} did not follow its stroke");
             }
         }
+    }
+
+    /// **A selected element keeps its own border**, and that is the whole of
+    /// requirement 3.
+    ///
+    /// Selection used to repaint the body's stroke in the accent, floor it at
+    /// [`SELECTED_STROKE_PIXELS`], force a border on to a style that asked for
+    /// none, and drop the dash. That hides the one thing a person needs while
+    /// they are choosing a border colour — the border colour — and the element
+    /// whose colour they are choosing is *always* the selected one, because the
+    /// property panel is a view of the selection. §44's bounding box already
+    /// says "selected"; see [`NodeBody::accented`].
+    ///
+    /// Asserted on the quad the painter is handed, four properties at a time,
+    /// against the same node unselected. A body that is one path rather than
+    /// one quad takes the same `stroke_color`, so the quad is the cheapest
+    /// place to read the decision rather than a special case of it.
+    #[test]
+    fn a_selected_element_draws_its_own_border_rather_than_the_accent() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+        let teal = Color::rgb(0.13, 0.55, 0.55);
+
+        let build = || {
+            let mut world = GraphWorld::new();
+            let node = world.create_node(
+                ElementKind::Shape(crate::models::ShapeKind::Rectangle),
+                Vec2::new(120.0, 120.0),
+                Vec2::new(240.0, 140.0),
+            );
+            let mut style = crate::models::ElementStyle::default();
+            style.stroke.color = Some(teal);
+            style.stroke.width = 1.0;
+            world.set_node_style(node, style);
+            world.rebuild_all_geometry();
+            world.clear_spatial_updates();
+            (world, node)
+        };
+
+        // The body's quad: the only one whose bounds are the node's box, so a
+        // grid dot or a handle dot cannot be mistaken for it.
+        let body_quad = |world: &GraphWorld| {
+            let (plan, _) = frame_without_grid(world, &viewport);
+            let screen = viewport.world_rect_to_screen(
+                world
+                    .nodes()
+                    .bounds(world.nodes().indices().next().expect("a node")),
+            );
+            *plan
+                .quads()
+                .iter()
+                .find(|quad| (quad.bounds.origin - screen.origin).length() < 1e-3)
+                .expect("the node's body reached the painter as a quad")
+        };
+
+        let (world, _) = build();
+        let unselected = body_quad(&world);
+        assert_eq!(unselected.border_color, fade(teal, 1.0));
+
+        let (mut world, node) = build();
+        world.set_node_selected(node, true);
+        let selected = body_quad(&world);
+        assert_eq!(
+            selected.border_color, unselected.border_color,
+            "selecting the node repainted its border in the accent, so the colour \
+             the property panel is editing is the one thing that cannot be seen"
+        );
+        assert_eq!(
+            selected.border_width, unselected.border_width,
+            "selecting the node thickened its border"
+        );
+    }
+
+    /// **The two cases that still take the accent, stated so a change to either
+    /// is deliberate.**
+    ///
+    /// Both are elements §44 draws no bounding box around, so for both the
+    /// accent is the only thing on screen saying anything at all — see
+    /// [`NodeBody::accented`]. A multiple selection is the case the fix above
+    /// would otherwise have made invisible; hover has no box either, and a
+    /// *drawn shape* has no handle elements to fall back on
+    /// (`commands::gesture`'s `handles_for`).
+    #[test]
+    fn an_element_with_no_bounding_box_still_takes_the_accent() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
+
+        let mut world = GraphWorld::new();
+        let mut style = crate::models::ElementStyle::default();
+        style.stroke.color = Some(Color::rgb(0.13, 0.55, 0.55));
+        style.stroke.width = 1.0;
+        let nodes: Vec<_> = [120.0f32, 480.0]
+            .into_iter()
+            .map(|x| {
+                let node = world.create_node(
+                    ElementKind::Shape(crate::models::ShapeKind::Rectangle),
+                    Vec2::new(x, 120.0),
+                    Vec2::new(240.0, 140.0),
+                );
+                world.set_node_style(node, style.clone());
+                node
+            })
+            .collect();
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let border_of = |world: &GraphWorld, hovered: Option<NodeIndex>, node: NodeIndex| {
+            let index = SpatialIndex::for_world(world);
+            let mut visible = crate::spatial::VisibleSet::new();
+            index.query_visible(world, &viewport, &mut visible);
+
+            let mut snapshot = RenderSnapshot::new();
+            snapshot.extract(
+                world,
+                &visible,
+                &viewport,
+                &for_backend(RenderBackend::Metal),
+                &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
+                hovered,
+                Rect::new(Vec2::ZERO, viewport.size()),
+            );
+
+            let options = SceneOptions::new(
+                GridSettings {
+                    style: GridStyle::None,
+                    ..GridSettings::default()
+                },
+                GridLimits::from_budgets(&for_backend(RenderBackend::Metal)),
+            );
+            let mut plan = PaintPlan::new();
+            plan_scene(&mut plan, world, &snapshot, &viewport, ink(), &options);
+
+            let screen = viewport.world_rect_to_screen(world.nodes().bounds(node));
+            plan.quads()
+                .iter()
+                .find(|quad| (quad.bounds.origin - screen.origin).length() < 1e-3)
+                .expect("the node's body reached the painter as a quad")
+                .border_color
+        };
+
+        // Two selected: no overlay, so the accent is the only signal.
+        world.set_node_selected(nodes[0], true);
+        world.set_node_selected(nodes[1], true);
+        assert!(world.selection().single_node().is_none());
+        assert_eq!(border_of(&world, None, nodes[0]), ink().accent);
+
+        // One selected: the bounding box says it, so the border is its own.
+        world.set_node_selected(nodes[1], false);
+        assert_eq!(world.selection().single_node(), Some(nodes[0]));
+        assert_ne!(border_of(&world, None, nodes[0]), ink().accent);
+
+        // Hovered: no box, and a drawn shape has no handles either.
+        world.set_node_selected(nodes[0], false);
+        assert_eq!(border_of(&world, Some(nodes[0]), nodes[0]), ink().accent);
     }
 
     /// **Requirement 3, as the frame again**: each of the two alignment rows
