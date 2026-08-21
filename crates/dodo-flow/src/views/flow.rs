@@ -2653,6 +2653,29 @@ impl FlowView {
             input.set_selected_range(0..selection_end, cx);
             input.focus(window, cx);
         });
+        // **And keeps it once this handler returns**, which focusing alone did
+        // not buy.
+        //
+        // The canvas root carries `track_focus`, and GPUI answers that by
+        // registering a bubble-phase `MouseDownEvent` listener of its own which
+        // focuses the tracked handle — see `Interactivity::paint_mouse_listeners`
+        // in the pinned gpui. Bubble listeners run in **reverse** registration
+        // order, the root registers before its children paint, so that listener
+        // is the *last* thing to touch the focus for the very press that opened
+        // this caret: the field was focused here and the canvas took it back a
+        // moment later, on the same event. `prevent_default` is the flag that
+        // listener reads, and it is exactly what it is for — this handler has
+        // already decided where the keyboard goes.
+        //
+        // Why the second click then worked, and why that is not a fix: by then
+        // the field is painted and `occlude`d, so the root's hitbox is no longer
+        // under the pointer and its listener does nothing. A caret that has to
+        // be clicked to be typed in is a caret nobody asked for.
+        //
+        // Harmless on the keyboard path (`Esc`/`Enter` reach `apply_text_effect`
+        // too): the flag is reset at the top of every event dispatch and no key
+        // listener in this crate reads it.
+        window.prevent_default();
         cx.notify();
     }
 
@@ -3013,7 +3036,7 @@ mod tests {
     use super::*;
     use crate::models::ElementKind;
     use crate::render::painter::to_hsla;
-    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use gpui::{Entity, EntityInputHandler as _, TestAppContext, VisualTestContext};
 
     /// A canvas on a test window, with no disk store behind it.
     fn mount(cx: &mut TestAppContext) -> (Entity<FlowView>, VisualTestContext) {
@@ -3175,6 +3198,135 @@ mod tests {
                 );
             });
         }
+    }
+
+    /// **And still owns it once the press it arrived on is over** — which is
+    /// a different claim from the one above, and the one the captain was
+    /// actually failing.
+    ///
+    /// The canvas root carries `track_focus`, and GPUI answers that with a
+    /// bubble-phase `MouseDownEvent` listener of its own that focuses the
+    /// tracked handle. Bubble listeners run in *reverse* registration order and
+    /// the root registers before its children paint, so that listener is the
+    /// **last** thing to touch the focus on the very press that opened the
+    /// caret: `begin_text_edit` focused the field and the canvas took it back a
+    /// moment later, on the same event. The test above cannot see that — it
+    /// calls the effect handler directly, so nothing else on the event runs.
+    /// This one dispatches the real press.
+    ///
+    /// **Why the second press by hand rather than through `simulate_event`.**
+    /// A focused `gpui_component::Input` cannot be *painted* on a test window:
+    /// its render asks the platform window for an `NSView` to hang the content
+    /// type on, and GPUI's test window answers that with `unimplemented!`.
+    /// `simulate_event` draws before it returns, so the assertion has to happen
+    /// on the dispatch — which is where the focus was being taken anyway — and
+    /// the caret has to be closed again before the frame that follows.
+    /// `Window::dispatch_event` is the same call `simulate_event` makes.
+    ///
+    /// What is asserted is the focus, not a keystroke, and that is the whole
+    /// chain: GPUI routes a keystroke to the focused handle, so a field that
+    /// holds the focus when the press is over is a field the next keystroke
+    /// reaches.
+    #[gpui::test]
+    fn the_press_that_opens_a_caret_does_not_hand_the_keyboard_back(cx: &mut TestAppContext) {
+        let (view, mut cx) = mount(cx);
+
+        // Away from the palette and the property panel, both of which block the
+        // press underneath them (Phase 12.5) — a node under either of them is
+        // testing the chrome rather than the caret.
+        let node = view.update_in(&mut cx, |this, _window, _cx| {
+            let node = this
+                .editor
+                .apply(crate::commands::EditCommand::AddNodes(vec![
+                    crate::commands::NodeDraft::new(crate::runtime::NodeSpec::new(
+                        crate::models::ElementId::NONE,
+                        ElementKind::Shape(crate::models::ShapeKind::Diamond),
+                        Vec2::new(500.0, 400.0),
+                        Vec2::new(200.0, 80.0),
+                    )),
+                ]))
+                .expect("adding a node cannot fail")
+                .added_nodes[0];
+            this.refresh_snapshot();
+            node
+        });
+        cx.run_until_parked();
+
+        let position = view.update(&mut cx, |this, _cx| {
+            let screen = this
+                .viewport
+                .world_to_screen(this.editor.world().nodes().bounds(node).center());
+            gpui::point(px(screen.x), px(screen.y))
+        });
+
+        // The hitbox every canvas listener gates on is answered from the hit
+        // test, and the hit test is recomputed on a move.
+        cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+        cx.simulate_event(MouseDownEvent {
+            position,
+            modifiers: gpui::Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 1,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseUpEvent {
+            position,
+            modifiers: gpui::Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 1,
+        });
+
+        cx.update(|window, cx| {
+            window.dispatch_event(
+                gpui::PlatformInput::MouseDown(MouseDownEvent {
+                    position,
+                    modifiers: gpui::Modifiers::default(),
+                    button: MouseButton::Left,
+                    // The platform's count, which is the only thing that knows
+                    // this machine's double-click interval.
+                    click_count: 2,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+
+            view.update(cx, |this, cx| {
+                let editing = this
+                    .editing
+                    .as_ref()
+                    .expect("the double-click opened no caret");
+                assert_eq!(editing.target, TextTarget::Node(node));
+                assert!(
+                    editing.input.focus_handle(cx).is_focused(window),
+                    "the canvas took the keyboard back on the press that opened the caret",
+                );
+                assert!(
+                    !this.focus_handle.is_focused(window),
+                    "the canvas is focused, so the next letter is a tool binding",
+                );
+
+                // Typed through the same call the platform's input handler
+                // makes, then committed the way a click away commits: the point
+                // is that the words reach the document, not that GPUI can
+                // deliver a keystroke.
+                editing.input.update(cx, |input, cx| {
+                    input.replace_text_in_range(None, "Duan", window, cx);
+                });
+            });
+
+            // Closed inside this same update, before the frame that follows it:
+            // see the note above about painting a focused field.
+            view.update(cx, |this, cx| {
+                let effect = this.interaction.handle(InteractionEvent::FinishTextEdit);
+                assert!(this.apply_text_effect(effect, window, cx));
+            });
+        });
+        cx.run_until_parked();
+
+        view.update(&mut cx, |this, _cx| {
+            assert!(this.editing.is_none());
+            assert_eq!(this.editor.text_of(TextTarget::Node(node)), Some("Duan"));
+        });
     }
 
     /// macOS reports `NSEvent.magnification` as a relative factor, so a zero
