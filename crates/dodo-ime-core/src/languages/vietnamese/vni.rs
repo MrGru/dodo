@@ -28,6 +28,13 @@
 //! engine because it is scheme-specific: Telex's `s` is a tone key whether or
 //! not it can land, because `s` is never a digit somebody meant literally.
 //!
+//! "Somewhere to go" includes *somewhere worth going*: a digit next to the
+//! letter it marks is a statement and lands (`d9` is `đ`), while one reaching
+//! back over letters that cannot be a Vietnamese syllable is read as the digit
+//! it is, so `dvd9` keeps its nine instead of losing it to a stroke. Both
+//! halves come from [`Syllable::intended_mark_target`], shared with Telex's
+//! `dd`/`did` — the two schemes have no private opinion about this either.
+//!
 //! The tone digits are the exception: `1`–`5` are reported as tone keys
 //! whenever any vowel has been typed, and the engine's own "does this look like
 //! Vietnamese" test decides whether the tone may actually land. That keeps the
@@ -73,11 +80,18 @@ pub fn interpret(key: char, syllable: &Syllable) -> Option<Transform> {
     }
 }
 
-/// A digit is a diacritic key only when some letter could take that diacritic;
-/// otherwise it is the digit the user typed.
+/// A digit is a diacritic key only when some letter could take that diacritic
+/// *and* the syllable is one this engine should be decorating; otherwise it is
+/// the digit the user typed.
+///
+/// [`Syllable::intended_mark_target`] is where both halves of that live, shared
+/// with Telex: a digit next to the letter it marks is a statement (`d9`), while
+/// one reaching back over the word is an inference that is only drawn over a
+/// possible Vietnamese syllable. So `di9` is `đi` and `dvd9` types its digit
+/// rather than eating it.
 fn mark_if_it_lands(syllable: &Syllable, mark: Mark, literal: char) -> Option<Transform> {
     syllable
-        .mark_target(mark)
+        .intended_mark_target(mark)
         .map(|_| Transform::Mark { mark, literal })
 }
 
@@ -179,6 +193,29 @@ mod tests {
         // No vowel typed yet, so no tone key either.
         assert_eq!(read('1', "ngh"), None);
         assert_eq!(read('0', ""), None);
+    }
+
+    /// Nowhere *sensible* to land is the same answer, and it is the shared
+    /// question Telex's `d` asks: a digit reaching back over letters that
+    /// cannot be a Vietnamese syllable is the digit itself, so `dvd9` keeps
+    /// its nine instead of losing it to a stroke. Adjacent digits are
+    /// statements and land regardless — `d9` is `đ` from a lone `d`.
+    #[test]
+    fn a_digit_reaching_back_asks_whether_the_word_could_be_vietnamese() {
+        for (key, spelling) in [('9', "dvd"), ('9', "dc"), ('6', "dvong"), ('7', "dvuong")] {
+            assert_eq!(read(key, spelling), None, "{spelling}{key}");
+        }
+        for (key, mark, spelling) in [
+            ('9', Mark::Stroke, "d"),
+            ('9', Mark::Stroke, "di"),
+            ('6', Mark::Circumflex, "dvo"),
+        ] {
+            assert_eq!(
+                read(key, spelling),
+                Some(Transform::Mark { mark, literal: key }),
+                "{spelling}{key}"
+            );
+        }
     }
 
     #[test]

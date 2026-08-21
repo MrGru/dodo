@@ -13,6 +13,28 @@
 //! | `z` | remove the tone |
 //! | `[` `]` | `ơ` and `ư` outright — see below |
 //!
+//! # A stated stroke and an inferred one are different keys
+//!
+//! `dd` and `did` both ask for `đ`, and they are not asking with the same
+//! authority. **`dd` is the user spelling the letter out** — nothing was typed
+//! between the two presses — so it is honoured whatever the word turns out to
+//! be, and it stays honoured when the next key makes the word unpronounceable:
+//! `ddm` is `đm` and `ddc` is `đc`, which is how Vietnamese writes those
+//! abbreviations. **A `d` arriving later is an inference** drawn from the shape
+//! of the word, and this engine only infers over something that could be a
+//! Vietnamese syllable — so `did` is still `đi`, while the `d` that ends
+//! `download` is a `d`, because `đownloa` is no syllable.
+//!
+//! Both halves are one question asked of the shared layer,
+//! [`Syllable::intended_mark_target`], so VNI's `9` obeys them without a second
+//! copy of the rule. The plausibility half is
+//! [`Syllable::is_valid`](super::syllable::Syllable::is_valid), the same check
+//! the doubled vowel and the tone keys have always made; the stroke was the one
+//! mark that skipped it. The statement half is why an explicitly doubled `dd`
+//! also stops the engine's spell-check restore handing the raw keys back — `đ`
+//! is a letter of the Vietnamese alphabet and the user just typed it, whereas a
+//! doubled *vowel* keeps the restore and `book` stays `book`.
+//!
 //! # This file decides *which key*, and nothing else
 //!
 //! Every entry above turns into a [`Transform`] — a [`Mark`], a [`Tone`], or a
@@ -190,10 +212,14 @@ fn horn_or_breve(syllable: &Syllable, literal: char, upper: bool) -> Transform {
 /// is typed — `ddi` and `did` both give `đi`, and `add` stays `add` because its
 /// first letter is an `a`.
 ///
-/// This asks [`Syllable::mark_target`] rather than looking at the letters
-/// itself, so the position rule is stated once and both schemes obey it: `9` in
-/// VNI has always reached back this way. The test is deliberately *not* "and it
-/// is not already stroked" — a second stroke key is a
+/// This asks [`Syllable::intended_mark_target`] rather than looking at the
+/// letters itself, so both the position rule and the adjacent/reaching-back
+/// distinction are stated once and both schemes obey them: `9` in VNI has
+/// always reached back this way and now asks the same question. `dd` is
+/// honoured whatever follows it; a `d` arriving from a distance is believed
+/// only over a syllable that could be Vietnamese, which is what leaves the `d`
+/// that ends `download` alone. The test is deliberately *not* "and it is not
+/// already stroked" — a second stroke key is a
 /// [`Reverted`](super::syllable::MarkOutcome::Reverted) mark, which is how every
 /// other modifier here undoes itself (`noww` types `now`, `didd` types `did`).
 ///
@@ -202,13 +228,20 @@ fn horn_or_breve(syllable: &Syllable, literal: char, upper: bool) -> Transform {
 /// (`dD` is `Đ`, `Dd` is `đ`) and leaves it alone when the key reached back
 /// over a word (`Did` is `Đi`).
 fn strokes_the_initial_d(syllable: &Syllable) -> bool {
-    syllable.mark_target(Mark::Stroke).is_some()
+    syllable.intended_mark_target(Mark::Stroke).is_some()
 }
 
 /// `aa`, `ee`, `oo` — the repeated nucleus vowel, where the later key is a
 /// circumflex. The vowel need not be adjacent: `thienej` and `thieenj` both
 /// mean `thiện`. The current nucleus target keeps unrelated vowels out, so
 /// `taoa` remains plain text rather than marking its `o`.
+///
+/// It asks [`Syllable::is_valid`](super::syllable::Syllable::is_valid) outright
+/// rather than `intended_mark_target`, and the difference is deliberate: a
+/// doubled vowel gets **no** adjacency exemption, because `ô` is a decorated
+/// `o` and not a letter anybody spells an abbreviation with. Only `đ` has to
+/// outrank the shape of the word, which is also why `book` still comes back as
+/// `book` — see the module docs.
 fn repeats_nucleus_vowel(syllable: &Syllable, lower: char) -> bool {
     syllable.is_valid()
         && syllable
@@ -222,12 +255,34 @@ mod tests {
     use crate::languages::vietnamese::Transform;
     use crate::languages::vietnamese::syllable::{Mark, Syllable, Tone};
 
+    /// A syllable spelled the way it renders, with each diacritic put back on
+    /// the base it belongs to.
+    ///
+    /// Pushing `ư` as a *base* would describe a state the engine cannot reach,
+    /// and one `super::rules` cannot read: `ư` is not a vowel letter, so
+    /// `dươn` would look like four consonants and no nucleus to every question
+    /// this file asks the syllable.
     fn syllable(spelling: &str) -> Syllable {
         let mut syllable = Syllable::new();
         for ch in spelling.chars() {
-            syllable.push_letter(ch, ch.is_uppercase());
+            let (base, mark) = ch.to_lowercase().next().map_or((ch, None), decompose);
+            syllable.push_marked_letter(base, mark, ch.is_uppercase(), None);
         }
         syllable
+    }
+
+    /// A rendered letter, split back into its base and the mark it carries.
+    fn decompose(lower: char) -> (char, Option<Mark>) {
+        match lower {
+            'ă' => ('a', Some(Mark::Breve)),
+            'â' => ('a', Some(Mark::Circumflex)),
+            'ê' => ('e', Some(Mark::Circumflex)),
+            'ô' => ('o', Some(Mark::Circumflex)),
+            'ơ' => ('o', Some(Mark::Horn)),
+            'ư' => ('u', Some(Mark::Horn)),
+            'đ' => ('d', Some(Mark::Stroke)),
+            base => (base, None),
+        }
     }
 
     fn read(key: char, spelling: &str) -> Option<Transform> {
@@ -448,6 +503,34 @@ mod tests {
                 base: 'd',
                 mark: None,
                 upper: false
+            })
+        );
+    }
+
+    /// Reaching back is an *inference*, and this file draws it only over a
+    /// syllable that could be Vietnamese — the same question the doubled vowel
+    /// below has always asked. `dd` is exempt because it is not an inference:
+    /// the user spelled the letter out.
+    #[test]
+    fn a_stroke_from_a_distance_asks_whether_the_word_could_be_vietnamese() {
+        for spelling in ["downloa", "dc", "dm", "dvd", "dnd", "dpt"] {
+            assert_eq!(
+                read('d', spelling),
+                Some(Transform::Letter {
+                    base: 'd',
+                    mark: None,
+                    upper: false
+                }),
+                "{spelling}d"
+            );
+        }
+        // Adjacent, so it is a statement rather than a reading of the word:
+        // `dd` strokes whatever `dc` and `dm` do not.
+        assert_eq!(
+            read('d', "d"),
+            Some(Transform::Mark {
+                mark: Mark::Stroke,
+                literal: 'd'
             })
         );
     }

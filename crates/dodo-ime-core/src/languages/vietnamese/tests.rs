@@ -214,6 +214,10 @@ fn the_doubled_vowels_and_the_w_marks() {
 /// *the syllable's **initial** letter is a `d`*, which is why `add` is still
 /// `add`, and why VNI's `9` — asking the same shared question — never had the
 /// defect.
+///
+/// Where it reaches back *from* is only half of it: the two tables below state
+/// what a stroke from a distance has to be plausible over, and what an adjacent
+/// `dd` outranks.
 #[test]
 fn the_stroke_reaches_back_to_the_syllables_initial_d() {
     check(
@@ -264,6 +268,71 @@ fn a_latin_word_that_spells_a_valid_syllable_is_still_composed() {
     );
 }
 
+/// The other half of that rule: a stroke arriving **from a distance** is an
+/// inference from the shape of the word, and an inference is only drawn over
+/// something that could be a Vietnamese syllable. `did` is `đi` because `di`
+/// is one; `download` keeps the `d` it ends with because `đownloa` is not.
+///
+/// The keys before the stroke are what decides it, never a list of English
+/// words — see `rules::is_valid_syllable`, which the doubled vowel and the
+/// tone keys have always asked and which the stroke used to skip.
+#[test]
+fn a_stroke_reaching_back_needs_a_possible_vietnamese_syllable() {
+    check(
+        &[
+            ("download", "download"),
+            ("dcd", "dcd"),
+            ("dmd", "dmd"),
+            ("dvd", "dvd"),
+            ("dnd", "dnd"),
+            // Still believed, because these are possible syllables.
+            ("did", "đi"),
+            ("dungd", "đung"),
+            ("dad ", "đa "),
+        ],
+        telex,
+    );
+
+    // Structural, not a consequence of the spell-check restore: with the
+    // setting off the horn still fires — that is the documented cost of
+    // turning it off — but the trailing `d` is no longer eaten.
+    let mut off = configured(VietnameseConfig {
+        spell_check: false,
+        ..VietnameseConfig::default()
+    });
+    assert_eq!(type_keys(&mut off, "download"), "dơnload");
+}
+
+/// An adjacent `dd` is a *statement*, not an inference, and it survives both
+/// the letters that follow it and the spell-check restore: `ddm` is `đm` and
+/// `ddc` is `đc`, the abbreviations Vietnamese writes them as.
+///
+/// The restore exists to rescue words nobody stated anything about, so the
+/// doubled *vowel* keeps it — `book` is not `bôk` — and only the stroke, the
+/// one mark that spells a letter of the Vietnamese alphabet, takes the raw
+/// keys out of play.
+#[test]
+fn an_explicit_dd_keeps_its_stroke_whatever_follows() {
+    check(
+        &[
+            ("ddm", "đm"),
+            ("ddc", "đc"),
+            ("ddt", "đt"),
+            ("ddma", "đma"),
+            ("Ddm", "đm"),
+            ("dDm", "Đm"),
+            // A third `d` is still the shared undo rule, keys and all.
+            ("ddd", "dd"),
+            // The doubled vowel states its case just as loudly and is still
+            // handed back, because `bôk` is nobody's Vietnamese.
+            ("book", "book"),
+            ("look", "look"),
+            ("food", "food"),
+        ],
+        telex,
+    );
+}
+
 #[test]
 fn the_vni_digits_do_the_same_things() {
     check(
@@ -297,6 +366,18 @@ fn the_vni_stroke_also_reaches_back_to_the_initial_d() {
             // typed as a digit.
             ("ad9", "ad9"),
             ("a9", "a9"),
+            // And nowhere sensible to land: a `9` reaching back over letters
+            // that cannot be a syllable is the digit nine, not a stroke, so it
+            // is typed rather than eaten.
+            ("dvd9", "dvd9"),
+            ("dcd9", "dcd9"),
+            ("dmd9", "dmd9"),
+            // A digit is never part of a word, so `d9` states the stroke the
+            // way Telex's `dd` does and keeps it: `đm`, not `d9m`.
+            ("d9m", "đm"),
+            ("d9c", "đc"),
+            ("d9t", "đt"),
+            ("d9ma", "đma"),
         ],
         vni,
     );

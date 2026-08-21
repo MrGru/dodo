@@ -44,7 +44,15 @@ Three rules are subtle enough to name before you open the files:
 - **Every modifier reaches back over the current syllable**, the stroke included since 2026-08-08
   (`did` is `đi`; `add` is still `add`, because the rule is about the *initial* letter). A scheme
   file that decides position itself rather than asking `Syllable::mark_target` is how that was wrong
-  for a round.
+  for a round. **Reaching back is an inference, though, and adjacency is a statement** (the
+  captain's call, 2026-08-21): a modifier read from the shape of the word lands only over something
+  `rules::is_valid_syllable` calls possible, which leaves the `d` that ends `download` alone while
+  `did` is still `đi`; a key next to the letter it marks was read from nothing and lands regardless.
+  `Syllable::intended_mark_target` is both halves and both schemes ask it, so `d9`/`di9` behave as
+  `dd`/`did` do. A stated **stroke** goes further and takes the raw record out of play, so the
+  spell-check restore cannot revoke it — `ddm` is `đm` and `ddc` is `đc`, the abbreviations. Only
+  the stroke: `đ` is a letter of the alphabet a user can spell out, whereas a doubled *vowel* is
+  stated just as loudly and `book` must still come back as `book`.
 - **Undoing a modifier reaches back too, and adjacency decides its shape.** This is the rule that
   makes `window` type `window`: a repeat cancels the letter *its own key* made (`Letter::source`,
   never the rendered text), collapsing to one literal when nothing was typed since (`ww` → `w`) and
@@ -55,7 +63,9 @@ Three rules are subtle enough to name before you open the files:
 
 **The accepted price** is stated in `vietnamese::tests`: a Latin word whose keys spell a *valid*
 Vietnamese syllable is composed and stays composed, because the word-boundary restore in `rules`
-only rescues invalid ones. So `dodo` types `đô`. Unikey does the same; it is not a bug to fix.
+only rescues invalid ones. So `dodo` types `đô` and `dad` types `đa`. Unikey does the same; it is
+not a bug to fix, and it is the reason the plausibility rule above is the whole guard there is —
+a word list of English exceptions is not on the table.
 
 ## The corpus tests derive the keys, never the answer
 

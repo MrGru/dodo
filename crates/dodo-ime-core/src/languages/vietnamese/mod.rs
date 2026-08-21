@@ -85,6 +85,11 @@
 //! which is most of them. Once a trustworthy run becomes impossible it is
 //! restored immediately and later Telex controls stay literal until the
 //! boundary; the rest are why an input method has an off switch.
+//!
+//! The one thing that restore may not undo is a letter the user *stated*:
+//! `dd` spells `đ` outright, so `ddm` is `đm` rather than the keys handed back.
+//! The syllable stops trusting its raw record at that point — see
+//! `Syllable::states_the_mark` — which is the same lever an undo pulls.
 
 pub mod rules;
 pub mod syllable;

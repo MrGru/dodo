@@ -338,6 +338,37 @@ impl Syllable {
             .map(|at| nucleus.start + at)
     }
 
+    /// Where `mark` would land, when the key asking for it is entitled to be
+    /// believed.
+    ///
+    /// [`Syllable::mark_target`] answers *where a mark could go*; this answers
+    /// *whether it was meant*, and the difference is adjacency:
+    ///
+    /// - **A key next to the letter it marks states the intent outright** —
+    ///   Telex's `dd`, VNI's `d9`, with nothing typed since. A statement is
+    ///   honoured whatever the rest of the word turns out to be, which is how
+    ///   `ddm` stays `đm` and `ddc` stays `đc`.
+    /// - **A key that reaches back over the word is an inference** from the
+    ///   shape of what has been typed — `did`, `dungd`, `hoiw` — and this
+    ///   engine infers only about something that could be a Vietnamese
+    ///   syllable. So `did` is still `đi`, and the `d` that ends `download`
+    ///   stays a `d`.
+    ///
+    /// The plausibility question is [`Syllable::is_valid`], the one notion of
+    /// "could be Vietnamese" this crate has; a doubled vowel and the tone keys
+    /// have always asked it, and the stroke is the mark that used to skip it.
+    pub fn intended_mark_target(&self, mark: Mark) -> Option<usize> {
+        let at = self.mark_target(mark)?;
+        (self.is_adjacent(at) || self.is_valid()).then_some(at)
+    }
+
+    /// Whether the letter at `at` is the last one typed, so that a key arriving
+    /// now is part of the same gesture. The adjacency `undo_self_mark` and
+    /// `retypes_last_letter` are asking about too.
+    fn is_adjacent(&self, at: usize) -> bool {
+        at + 1 == self.letters.len()
+    }
+
     /// The `u` and `o` of a bare `uo`, at the end of the nucleus.
     ///
     /// `ươ` is the most common two-diacritic nucleus in the language —
@@ -427,11 +458,25 @@ impl Syllable {
     ///   word (`Did`, `dungd`) is a modifier applied from a distance, and the
     ///   case of that letter was settled when the user typed it.
     fn retypes_last_letter(&self, at: usize, source: char) -> bool {
-        at + 1 == self.letters.len()
+        self.is_adjacent(at)
             && self
                 .letters
                 .get(at)
                 .is_some_and(|letter| source.eq_ignore_ascii_case(&letter.base))
+    }
+
+    /// Whether `source` is the user *stating* the mark rather than the engine
+    /// inferring it — asked only about the stroke, which is the one mark that
+    /// then has to survive the spell-check restore.
+    ///
+    /// Telex spells the statement by typing the `d` again with nothing since
+    /// (`dd`); VNI spells it with a digit, and a digit can never be a letter of
+    /// the word, so it is a statement wherever it lands (`d9`, `di9`). A `d`
+    /// that reaches back over a word is the inference — `did`, `dungd` — and
+    /// the raw keys still describe what a Vietnamese typist might want handed
+    /// back.
+    fn states_the_mark(&self, at: usize, source: char) -> bool {
+        self.retypes_last_letter(at, source) || !word_boundary::is_syllable_letter(source)
     }
 
     /// Put `mark` on the letter that should have it, or take it off again.
@@ -491,6 +536,14 @@ impl Syllable {
             MarkOutcome::Reverted
         } else {
             let retyped = source.is_some_and(|source| self.retypes_last_letter(at, source));
+            // `đ` is a letter of the Vietnamese alphabet, not a decoration, and
+            // a stated stroke is the user saying so. The raw keys stop
+            // describing the screen from here, so the spell-check restore
+            // cannot hand `ddm` back as `ddm` when `đm` turns out not to be a
+            // syllable. Only the stroke: `oo` is stated exactly as loudly and
+            // `book` must still come back as `book`.
+            let stated_stroke = mark == Mark::Stroke
+                && source.is_some_and(|source| self.states_the_mark(at, source));
             let letter = &mut self.letters[at];
             // A different mark is replaced rather than refused: `oow` is `ô`
             // corrected to `ơ`, which is a typist changing their mind, not an
@@ -507,6 +560,9 @@ impl Syllable {
                 // A modifier that is not this letter says nothing about it, and
                 // a replaced mark carries no earlier override forward.
                 None => letter.overridden_case = None,
+            }
+            if stated_stroke {
+                self.distrust_raw();
             }
             MarkOutcome::Applied
         }
@@ -818,6 +874,65 @@ mod tests {
         let mut syllable = make("D");
         assert_eq!(syllable.apply_mark(Mark::Stroke), MarkOutcome::Applied);
         assert_eq!(syllable.render(MODERN), "Đ");
+    }
+
+    /// A key next to the letter it marks is a statement and lands regardless;
+    /// one reaching back over the word is read from the word, so it lands only
+    /// on something that could be Vietnamese. `mark_target` answers *where*
+    /// and keeps answering; this is the question about *whether*.
+    #[test]
+    fn a_mark_from_a_distance_only_lands_on_a_possible_syllable() {
+        let adjacent = make("d");
+        assert_eq!(adjacent.mark_target(Mark::Stroke), Some(0));
+        assert_eq!(adjacent.intended_mark_target(Mark::Stroke), Some(0));
+
+        let reaching_back = make("di");
+        assert_eq!(reaching_back.intended_mark_target(Mark::Stroke), Some(0));
+
+        for spelling in ["dc", "dm", "dvd"] {
+            let impossible = make(spelling);
+            assert_eq!(
+                impossible.mark_target(Mark::Stroke),
+                Some(0),
+                "{spelling}: the stroke still has somewhere to go"
+            );
+            assert_eq!(
+                impossible.intended_mark_target(Mark::Stroke),
+                None,
+                "{spelling}: but nothing here asked for a Vietnamese letter"
+            );
+        }
+    }
+
+    /// A stroke the user spelled out takes the raw keys out of play, so the
+    /// engine's spell-check restore cannot hand `ddm` back as `ddm`. Only the
+    /// stroke does this, and only when it was stated: `did` is an inference
+    /// about a word that may still want its keys back.
+    #[test]
+    fn a_stated_stroke_stops_the_raw_keys_describing_the_screen() {
+        let mut stated = make("d");
+        assert_eq!(
+            stated.apply_mark_from(Mark::Stroke, Some('d')),
+            MarkOutcome::Applied
+        );
+        assert!(!stated.raw_is_trustworthy());
+
+        let mut inferred = make("di");
+        assert_eq!(
+            inferred.apply_mark_from(Mark::Stroke, Some('d')),
+            MarkOutcome::Applied
+        );
+        assert!(inferred.raw_is_trustworthy());
+
+        let mut vowel = make("bo");
+        assert_eq!(
+            vowel.apply_mark_from(Mark::Circumflex, Some('o')),
+            MarkOutcome::Applied
+        );
+        assert!(
+            vowel.raw_is_trustworthy(),
+            "`book` still comes back as book"
+        );
     }
 
     /// Backspace removes one visible character, which is the same thing as one
