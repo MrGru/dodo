@@ -323,6 +323,14 @@ impl FlowEditor {
     /// Answers whether the document changed, so a caller can decide about
     /// repainting without diffing.
     pub fn commit_text(&mut self, target: TextTarget, text: &str) -> bool {
+        // **`trim`, and it is a paragraph that is being trimmed.** §9's caret
+        // is a multi-line field, so `Enter` puts a `\n` in the text — including
+        // a trailing one, when somebody presses it and then commits. Trimming
+        // takes those off both ends and leaves every break *inside* the label
+        // alone, which is exactly the rule wanted: an empty-looking label is
+        // still empty however many blank lines it holds, and a paragraph is
+        // still a paragraph. See
+        // `a_committed_label_keeps_the_line_breaks_inside_it`.
         let text = text.trim();
         let value = (!text.is_empty()).then(|| text.to_owned());
 
@@ -1224,6 +1232,40 @@ mod tests {
         },
         runtime::{EdgeEnd, NodeSpec},
     };
+
+    /// **A committed label keeps the line breaks inside it, and loses the ones
+    /// on the ends.**
+    ///
+    /// §9's caret inserts a `\n` on `Enter`, including on the `Enter` somebody
+    /// presses just before committing. `commit_text` trims, which is the right
+    /// rule for both halves at once and is worth a test rather than a reading
+    /// of `str::trim`: what reaches the document is the paragraph, and a label
+    /// made only of blank lines is still nothing at all.
+    #[test]
+    fn a_committed_label_keeps_the_line_breaks_inside_it() {
+        let mut editor = FlowEditor::new();
+        let node = editor
+            .apply(EditCommand::AddNodes(vec![NodeDraft::new(NodeSpec::new(
+                ElementId::NONE,
+                ElementKind::Shape(ShapeKind::Diamond),
+                Vec2::new(0.0, 0.0),
+                Vec2::new(200.0, 120.0),
+            ))]))
+            .expect("adding a node cannot fail")
+            .added_nodes[0];
+
+        assert!(editor.commit_text(TextTarget::Node(node), "\nfirst\n\nthird\n"));
+        assert_eq!(
+            editor.text_of(TextTarget::Node(node)),
+            Some("first\n\nthird"),
+            "the breaks inside the label did not survive the commit"
+        );
+
+        // And a label that is only breaks is an empty label, not a label of
+        // whitespace — the same answer spaces have always got.
+        assert!(editor.commit_text(TextTarget::Node(node), "\n\n  \n"));
+        assert_eq!(editor.text_of(TextTarget::Node(node)), None);
+    }
 
     /// **The enforcement, checked rather than remembered.**
     ///

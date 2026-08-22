@@ -171,7 +171,7 @@ use crate::{
     spatial::{SpatialIndex, SyncReport, VisibleSet},
     views::{
         images::{self, ImageCache},
-        keymap::{Delete, InsertImage, Redo, SelectTool, ToggleToolLock, Undo},
+        keymap::{CommitText, Delete, InsertImage, Redo, SelectTool, ToggleToolLock, Undo},
         nodes, palette, properties,
     },
 };
@@ -258,6 +258,26 @@ pub const TYPING_CONTEXT: &str = "FlowTyping";
 /// the three in step, by evaluating the real predicate against the real
 /// context stacks through GPUI's own matcher.
 pub const BINDING_SCOPE: &str = "FlowCanvas && !FlowTyping";
+
+/// **The scope the one binding that belongs to the caret is registered
+/// under** — a canvas text field, and specifically the widget inside it.
+///
+/// `FlowTyping` alone would be the obvious spelling and it does not work. GPUI
+/// scores a binding by the *depth* at which its predicate matches the context
+/// stack and gives the deepest match the keystroke;
+/// [`TYPING_CONTEXT`] sits on the wrapper and `gpui-component`'s own `Input`
+/// context sits one node below it, on the focused widget — which binds
+/// `secondary-enter` itself, to insert a line break. A predicate naming the
+/// wrapper alone therefore always loses to the widget.
+///
+/// Naming both makes the two match at the same depth, and GPUI breaks that tie
+/// by **registration order, later wins**. `flow::init` runs after
+/// `gpui_component::init` for exactly this reason — `src/main.rs` says so, and
+/// `settings`, `api_explorer` and `database` all depend on the same ordering.
+/// `the_commit_keystroke_outranks_the_field_s_own_line_break` in
+/// [`views::keymap`](crate::views::keymap) is that sentence driven through
+/// GPUI's real matcher rather than asserted here.
+pub const TYPING_BINDING_SCOPE: &str = "FlowTyping > Input";
 
 /// The key that turns a left-drag into a pan, alongside the middle button.
 ///
@@ -2504,6 +2524,28 @@ impl FlowView {
         }
     }
 
+    /// **`Cmd`/`Ctrl`+`Enter`: the keyboard's way to finish a label** (§9).
+    ///
+    /// `Enter` was this until the caret became a paragraph field, and it was
+    /// never a binding — it was the key `gpui-component`'s *single-line*
+    /// `Input` declines, arriving at a raw key handler. A multi-line field
+    /// keeps that key, correctly, so the ending needs a keystroke of its own;
+    /// `commands::keys` carries which one on each host and
+    /// [`TYPING_BINDING_SCOPE`] carries why it has to outrank the field's.
+    ///
+    /// Nothing else about finishing an edit changed: clicking away still
+    /// commits — `EditingText + PointerDown` — and `Escape` still abandons.
+    ///
+    /// A no-op with no caret open, which is reachable: the binding is scoped to
+    /// any canvas text field, and the property panel's hex prompt is one.
+    fn on_commit_text(&mut self, _: &CommitText, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing.is_none() {
+            return;
+        }
+        let effect = self.interaction.handle(InteractionEvent::FinishTextEdit);
+        self.apply_text_effect(effect, window, cx);
+    }
+
     /// `q`, and the palette's toggle.
     fn on_toggle_tool_lock(
         &mut self,
@@ -2526,23 +2568,31 @@ impl FlowView {
     /// abandoned creation and an abandoned drag are undone the same way they
     /// always were.
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        // **While a caret is out, the canvas answers two keys and ignores the
-        // rest** (§9). It sees them at all because the text field is a
-        // descendant of this element, so a key gpui's single-line `Input`
-        // declines — `enter` and `escape` both call `cx.propagate()` — bubbles
-        // up here.
+        // **While a caret is out, the canvas answers one key and ignores the
+        // rest** (§9). It sees `escape` at all because the text field is a
+        // descendant of this element and `gpui-component`'s `Input` declines
+        // that key with `cx.propagate()`, so it bubbles up here.
         //
-        // The `else` branch below is the part that matters: without it, typing
-        // a space into a label would set `pan_key_held`, and the *next* press
-        // anywhere on the canvas would pan instead of doing what the tool said.
+        // **`enter` used to be the other one, and it is not any more.** It
+        // reached this handler only because the field was *single-line*: that
+        // is the mode in which `Input` declines the key. §9's caret is a
+        // paragraph field now, so `Enter` is a line break inside it and never
+        // arrives — see `text_editor_element`. The keyboard's way to finish an
+        // edit is [`keymap::CommitText`](crate::views::keymap::CommitText),
+        // which is a real binding rather than a key the widget happened not to
+        // want. Falling through to `FinishTextEdit` here would be a second,
+        // disagreeing answer on any path where the field does propagate
+        // `enter` — a context menu being open is one.
+        //
+        // The early `return` is the part that matters beyond the two keys:
+        // without it, typing a space into a label would set `pan_key_held`, and
+        // the *next* press anywhere on the canvas would pan instead of doing
+        // what the tool said.
         if self.editing.is_some() {
-            let event = match event.keystroke.key.as_str() {
-                "enter" => InteractionEvent::FinishTextEdit,
-                "escape" => InteractionEvent::Cancel,
-                _ => return,
-            };
-            let effect = self.interaction.handle(event);
-            self.apply_text_effect(effect, window, cx);
+            if event.keystroke.key.as_str() == "escape" {
+                let effect = self.interaction.handle(InteractionEvent::Cancel);
+                self.apply_text_effect(effect, window, cx);
+            }
             return;
         }
 
@@ -3168,6 +3218,7 @@ impl Render for FlowView {
             .on_action(cx.listener(Self::on_delete))
             .on_action(cx.listener(Self::on_insert_image))
             .on_action(cx.listener(Self::on_toggle_tool_lock))
+            .on_action(cx.listener(Self::on_commit_text))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
             .child(
@@ -3618,6 +3669,153 @@ mod tests {
         view.update(&mut cx, |this, _cx| {
             assert!(this.editing.is_none());
             assert_eq!(this.editor.text_of(TextTarget::Node(node)), Some("Duan"));
+        });
+    }
+
+    /// **`Enter` no longer ends an edit, and `Escape` still does.**
+    ///
+    /// `Enter` was never a binding: a *single-line* `gpui-component` `Input`
+    /// declines that key with `cx.propagate()`, so it fell through to the
+    /// canvas's raw key handler, which turned it into `FinishTextEdit`. §9's
+    /// caret is a paragraph field now — the key belongs to the field, which
+    /// inserts a line break and keeps it — so the fall-through has to go, or a
+    /// path where the field *does* propagate (a context menu is open) would
+    /// still commit behind the user's back.
+    ///
+    /// Driven through the real handler with a real event, on both keys,
+    /// because either one alone is passed by a mistake: deleting the whole
+    /// block satisfies the first assertion and the bug satisfied the second.
+    #[gpui::test]
+    fn enter_leaves_the_caret_open_and_escape_still_closes_it(cx: &mut TestAppContext) {
+        fn press(key: &str) -> KeyDownEvent {
+            KeyDownEvent {
+                keystroke: gpui::Keystroke::parse(key).expect("a real keystroke"),
+                is_held: false,
+                prefer_character_input: false,
+            }
+        }
+
+        let (view, mut cx) = mount(cx);
+        let node = view.update_in(&mut cx, |this, _window, _cx| {
+            let node = this
+                .editor
+                .apply(crate::commands::EditCommand::AddNodes(vec![
+                    crate::commands::NodeDraft::new(crate::runtime::NodeSpec::new(
+                        crate::models::ElementId::NONE,
+                        ElementKind::Shape(crate::models::ShapeKind::Diamond),
+                        Vec2::new(500.0, 400.0),
+                        Vec2::new(200.0, 80.0),
+                    )),
+                ]))
+                .expect("adding a node cannot fail")
+                .added_nodes[0];
+            this.refresh_snapshot();
+            node
+        });
+        cx.run_until_parked();
+
+        let target = TextTarget::Node(node);
+        view.update_in(&mut cx, |this, window, cx| {
+            // Through the machine, because `Escape` is answered by the machine:
+            // opening the caret behind its back leaves it in a state where
+            // `Cancel` means nothing.
+            let effect = this.interaction.handle(InteractionEvent::DoubleClick {
+                world: this.editor.world().nodes().bounds(node).center(),
+                target: PointerTarget::Node(node),
+            });
+            assert!(this.apply_text_effect(effect, window, cx));
+            assert!(this.editing.is_some(), "the caret did not open");
+
+            this.on_key_down(&press("enter"), window, cx);
+            assert!(
+                this.editing.is_some(),
+                "`Enter` closed the caret, so the line break a person typed \
+                 finished the label instead"
+            );
+            assert_eq!(
+                this.editor.text_of(target),
+                None,
+                "`Enter` committed the label as well"
+            );
+
+            this.on_key_down(&press("escape"), window, cx);
+            assert!(
+                this.editing.is_none(),
+                "`Escape` no longer abandons the edit"
+            );
+        });
+    }
+
+    /// **The caret's field is built in the mode that turns `Enter` into a line
+    /// break**, which is the whole of "Enter inserts a newline" on this side of
+    /// the boundary.
+    ///
+    /// The insertion itself is `gpui-component`'s, in `InputState::enter`:
+    /// `insert_newline = self.mode.is_multi_line() && (!self.submit_on_enter ||
+    /// action.shift)`, and `submit_on_enter` defaults to `false`. One builder
+    /// call decides it, and dropping that call is silent — the field simply
+    /// goes back to swallowing paragraphs.
+    ///
+    /// The mode is not readable from outside the widget, so this asks the
+    /// question the only way a public API can: a single-line field and this one
+    /// must not answer `set_value` the same way. They do not — `reset_selection`
+    /// parks the caret at the end of a single-line field and at the start of a
+    /// multi-line one — and a build where they *did* would be a build where the
+    /// two are the same kind of field, which is exactly what this is guarding
+    /// against.
+    #[gpui::test]
+    fn the_caret_types_into_a_paragraph_field(cx: &mut TestAppContext) {
+        let (view, mut cx) = mount(cx);
+        let node = view.update_in(&mut cx, |this, _window, _cx| {
+            let node = this
+                .editor
+                .apply(crate::commands::EditCommand::AddNodes(vec![
+                    crate::commands::NodeDraft::new(crate::runtime::NodeSpec::new(
+                        crate::models::ElementId::NONE,
+                        ElementKind::Shape(crate::models::ShapeKind::Diamond),
+                        Vec2::new(500.0, 400.0),
+                        Vec2::new(200.0, 80.0),
+                    )),
+                ]))
+                .expect("adding a node cannot fail")
+                .added_nodes[0];
+            this.refresh_snapshot();
+            node
+        });
+        cx.run_until_parked();
+
+        view.update_in(&mut cx, |this, window, cx| {
+            this.begin_text_edit(TextTarget::Node(node), window, cx);
+            let caret = this
+                .editing
+                .as_ref()
+                .expect("the caret did not open")
+                .input
+                .clone();
+
+            // A plain one, for the comparison to be against something rather
+            // than against a remembered number.
+            let single = cx.new(|cx| InputState::new(window, cx));
+
+            let mut probe = |state: &Entity<InputState>, cx: &mut Context<FlowView>| {
+                state.update(cx, |state, cx| {
+                    state.set_value("one\ntwo", window, cx);
+                    state.selected_range()
+                })
+            };
+
+            assert_ne!(
+                probe(&caret, cx),
+                probe(&single, cx),
+                "the caret's field behaves exactly like a single-line one, so \
+                 `Enter` in it escapes to the canvas instead of breaking the line"
+            );
+
+            // And the text itself survives, which a single-line field is under
+            // no obligation to promise.
+            assert_eq!(caret.read(cx).value().as_ref(), "one\ntwo");
+
+            this.cancel_text_edit(window, cx);
         });
     }
 

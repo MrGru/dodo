@@ -90,6 +90,35 @@ pub enum EditAction {
     /// [`no_keystroke_is_bound_to_two_actions`](tests::no_keystroke_is_bound_to_two_actions)
     /// is able to rule out precisely because there is only one.
     Tool(CanvasTool),
+    /// **Finishes the label a caret is open on**, from the keyboard.
+    ///
+    /// The one row in this table that is live *while* a text field inside the
+    /// canvas has the focus, and dead the rest of the time — see
+    /// [`EditAction::while_typing`]. `Enter` used to be this, by accident: a
+    /// single-line `gpui-component` `Input` declines that key and propagates
+    /// it, so it arrived at the canvas's raw key handler. §9's caret is a
+    /// paragraph field now, `Enter` is a line break in it, and the commit needs
+    /// a keystroke of its own.
+    ///
+    /// `Cmd`/`Ctrl`+`Enter` rather than anything else because it is what every
+    /// multi-line field with a submit already uses, and because the two endings
+    /// a person already had are untouched: clicking away commits, `Escape`
+    /// abandons.
+    CommitText,
+}
+
+impl EditAction {
+    /// **Whether this row belongs to the caret rather than to the canvas.**
+    ///
+    /// Every other action here focuses the canvas as part of doing its job, so
+    /// letting one through while somebody is typing ends the edit — that is
+    /// [`TYPING_CONTEXT`](crate::views::flow::TYPING_CONTEXT)'s whole story.
+    /// This one *is* the edit's ending, so it is the exception, and it is a
+    /// property of the action rather than a special case in the builder so the
+    /// two scopes are decided in the same table as the keystrokes.
+    pub fn while_typing(self) -> bool {
+        matches!(self, EditAction::CommitText)
+    }
 }
 
 impl EditAction {
@@ -102,6 +131,7 @@ impl EditAction {
             EditAction::Delete => "delete",
             EditAction::ToggleToolLock => "toggle-tool-lock",
             EditAction::InsertImage => "insert-image",
+            EditAction::CommitText => "commit-text",
             EditAction::Tool(tool) => tool.name(),
         }
     }
@@ -126,6 +156,10 @@ const MACOS: &[Binding] = &[
     Binding {
         keystroke: "cmd-shift-z",
         action: EditAction::Redo,
+    },
+    Binding {
+        keystroke: "cmd-enter",
+        action: EditAction::CommitText,
     },
 ];
 
@@ -218,6 +252,10 @@ const PC: &[Binding] = &[
         keystroke: "ctrl-y",
         action: EditAction::Redo,
     },
+    Binding {
+        keystroke: "ctrl-enter",
+        action: EditAction::CommitText,
+    },
 ];
 
 /// **The canvas's default bindings on a given host.** A total function, so the
@@ -228,7 +266,7 @@ const PC: &[Binding] = &[
 pub fn for_host(host: HostOs) -> Vec<Binding> {
     let editing = match host {
         HostOs::MacOs => MACOS,
-        // Windows and every Linux desktop dodo targets use the same three, and
+        // Windows and every Linux desktop dodo targets use the same rows, and
         // splitting them would be two identical tables to keep in step.
         HostOs::Windows | HostOs::Unix => PC,
     };

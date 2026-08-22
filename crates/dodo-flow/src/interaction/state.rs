@@ -346,9 +346,13 @@ pub enum InteractionEvent {
         world: Vec2,
         target: PointerTarget,
     },
-    /// **The text being edited is finished** — Enter, or a commit from
-    /// anywhere else. The caller has the characters; this only closes the
-    /// state.
+    /// **The text being edited is finished** — `Cmd`/`Ctrl`+`Enter`, a click
+    /// away, or a commit from anywhere else. The caller has the characters;
+    /// this only closes the state.
+    ///
+    /// It was plain `Enter` until §9's caret became a paragraph field. That key
+    /// belongs to the field now — it inserts a line break — and the keyboard's
+    /// way here is `commands::keys`'s `CommitText` row.
     FinishTextEdit,
     /// `Esc`, a lost window focus, or anything else that means "stop".
     Cancel,

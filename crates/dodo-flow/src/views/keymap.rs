@@ -68,7 +68,11 @@
 
 use gpui::{Action, App, KeyBinding, actions};
 
-use crate::{commands::keys, interaction::CanvasTool, views::flow::BINDING_SCOPE};
+use crate::{
+    commands::keys,
+    interaction::CanvasTool,
+    views::flow::{BINDING_SCOPE, TYPING_BINDING_SCOPE},
+};
 
 actions!(
     flow,
@@ -95,7 +99,15 @@ actions!(
         /// [`keys::EditAction::InsertImage`](crate::commands::keys::EditAction::InsertImage)
         /// — and, like Delete, it is what the palette button names in its
         /// tooltip so the keystroke beside the label is the real binding.
-        InsertImage
+        InsertImage,
+        /// **Finishes the label a caret is open on** — see
+        /// [`keys::EditAction::CommitText`](crate::commands::keys::EditAction::CommitText).
+        ///
+        /// The one action here that is bound *inside* a text field rather than
+        /// outside every one of them, which is why [`binding`] chooses its
+        /// scope from the row instead of using [`BINDING_SCOPE`] for all of
+        /// them.
+        CommitText
     ]
 );
 
@@ -113,18 +125,28 @@ pub struct SelectTool {
 /// same way — the test's whole value is that it builds *every* host's rows, and
 /// it would prove nothing if it built them differently.
 fn binding(row: keys::Binding) -> KeyBinding {
+    // **Which of the two scopes**, from the row rather than from this `match`.
+    // Every canvas action is dead while a caret is open, because every one of
+    // them takes the focus back and would end the edit; the one that *is* the
+    // edit's ending is alive there and nowhere else. See
+    // [`keys::EditAction::while_typing`].
+    let scope = if row.action.while_typing() {
+        TYPING_BINDING_SCOPE
+    } else {
+        BINDING_SCOPE
+    };
+
     match row.action {
-        keys::EditAction::Undo => KeyBinding::new(row.keystroke, Undo, Some(BINDING_SCOPE)),
-        keys::EditAction::Redo => KeyBinding::new(row.keystroke, Redo, Some(BINDING_SCOPE)),
-        keys::EditAction::Delete => KeyBinding::new(row.keystroke, Delete, Some(BINDING_SCOPE)),
+        keys::EditAction::Undo => KeyBinding::new(row.keystroke, Undo, Some(scope)),
+        keys::EditAction::Redo => KeyBinding::new(row.keystroke, Redo, Some(scope)),
+        keys::EditAction::Delete => KeyBinding::new(row.keystroke, Delete, Some(scope)),
         keys::EditAction::ToggleToolLock => {
-            KeyBinding::new(row.keystroke, ToggleToolLock, Some(BINDING_SCOPE))
+            KeyBinding::new(row.keystroke, ToggleToolLock, Some(scope))
         }
-        keys::EditAction::InsertImage => {
-            KeyBinding::new(row.keystroke, InsertImage, Some(BINDING_SCOPE))
-        }
+        keys::EditAction::InsertImage => KeyBinding::new(row.keystroke, InsertImage, Some(scope)),
+        keys::EditAction::CommitText => KeyBinding::new(row.keystroke, CommitText, Some(scope)),
         keys::EditAction::Tool(tool) => {
-            KeyBinding::new(row.keystroke, SelectTool { tool }, Some(BINDING_SCOPE))
+            KeyBinding::new(row.keystroke, SelectTool { tool }, Some(scope))
         }
     }
 }
@@ -136,13 +158,13 @@ pub fn init(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::binding;
+    use super::{CommitText, binding};
     use crate::{
         commands::keys,
         views::flow::{KEY_CONTEXT, TYPING_CONTEXT},
     };
     use dodo_paths::HostOs;
-    use gpui::KeyContext;
+    use gpui::{KeyBinding, KeyContext};
 
     /// **Every host's bindings, actually built.**
     ///
@@ -189,22 +211,108 @@ mod tests {
                     .predicate()
                     .expect("every canvas binding is scoped to a context");
 
+                let idle = predicate.depth_of(std::slice::from_ref(&canvas));
+                let typing = predicate.depth_of(&[canvas.clone(), typing.clone(), input.clone()]);
+
+                // **The commit row is the exception, and it is the exact
+                // mirror image** — see `keys::EditAction::while_typing`. It is
+                // the *ending* of an edit rather than something that would
+                // interrupt one, so it is the one binding that has to be alive
+                // inside a text field and dead outside every one of them.
+                if row.action.while_typing() {
+                    assert!(
+                        typing.is_some(),
+                        "{:?} ({}) is dead while a caret is open, which is the \
+                         only place it exists to work",
+                        row.action,
+                        row.keystroke
+                    );
+                    assert!(
+                        idle.is_none(),
+                        "{:?} ({}) is live on the idle canvas, where there is no \
+                         edit to finish",
+                        row.action,
+                        row.keystroke
+                    );
+                    continue;
+                }
+
                 assert!(
-                    predicate.depth_of(std::slice::from_ref(&canvas)).is_some(),
+                    idle.is_some(),
                     "{:?} ({}) is dead on the focused canvas",
                     row.action,
                     row.keystroke
                 );
                 assert!(
-                    predicate
-                        .depth_of(&[canvas.clone(), typing.clone(), input.clone()])
-                        .is_none(),
+                    typing.is_none(),
                     "{:?} ({}) is still live while a text field inside the canvas \
                      has the focus, so that keystroke never reaches the text",
                     row.action,
                     row.keystroke
                 );
             }
+        }
+    }
+
+    /// **The commit keystroke has to beat the field's own line break**, and
+    /// nothing about scoping it to the canvas achieves that on its own.
+    ///
+    /// `gpui-component`'s `Input` binds `secondary-enter` — `Cmd`+`Enter` on a
+    /// Mac, `Ctrl`+`Enter` elsewhere — to its own `Enter` action, which in a
+    /// multi-line field inserts a newline. GPUI scores a binding by the
+    /// **depth** at which its predicate matches the context stack, and the
+    /// field's context is one node deeper than the wrapper's, so a predicate
+    /// naming `FlowTyping` alone would always lose. Naming both makes the two
+    /// tie on depth, and GPUI breaks that tie by registration order with the
+    /// **later** binding winning — which is why `src/main.rs` runs `flow::init`
+    /// after `gpui_component::init`.
+    ///
+    /// Driven through GPUI's real [`Keymap`] with the library's real action
+    /// type and the library's real predicate, in the real registration order,
+    /// because every one of those is a thing that could change underneath this
+    /// and none of them would produce an error — only a `Cmd`+`Enter` that
+    /// types a line break instead of finishing the label.
+    #[test]
+    fn the_commit_keystroke_outranks_the_field_s_own_line_break() {
+        use gpui::{Keymap, Keystroke};
+
+        for host in [HostOs::MacOs, HostOs::Windows, HostOs::Unix] {
+            let row = keys::for_host(host)
+                .into_iter()
+                .find(|row| row.action.while_typing())
+                .expect("every host has a way to finish a label from the keyboard");
+
+            let mut keymap = Keymap::default();
+            // `crates/ui/src/input/state.rs`'s `init`, verbatim for this key.
+            keymap.add_bindings([KeyBinding::new(
+                "secondary-enter",
+                gpui_component::input::Enter {
+                    secondary: true,
+                    shift: false,
+                },
+                Some("Input"),
+            )]);
+            // …and then dodo's, exactly as `init` above adds it.
+            keymap.add_bindings([binding(row)]);
+
+            let stack = vec![
+                KeyContext::parse(KEY_CONTEXT).expect("the canvas context parses"),
+                KeyContext::parse(TYPING_CONTEXT).expect("the typing context parses"),
+                KeyContext::parse("Input").expect("the input context parses"),
+            ];
+            let keystroke = Keystroke::parse(row.keystroke).expect("the commit keystroke parses");
+            let (matched, _) = keymap.bindings_for_input(&[keystroke], &stack);
+
+            let first = matched
+                .first()
+                .unwrap_or_else(|| panic!("{} matched nothing at all", row.keystroke));
+            assert!(
+                first.action().partial_eq(&CommitText),
+                "{} on {host:?} reaches {:?} before the canvas's own binding, so it \
+                 types a line break instead of finishing the label",
+                row.keystroke,
+                first.action()
+            );
         }
     }
 }

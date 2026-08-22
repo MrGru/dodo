@@ -786,6 +786,79 @@ mod tests {
         assert_eq!(value["edges"][0]["label"], json!("carries"));
     }
 
+    /// **A label with line breaks in it survives a save and a reload, on every
+    /// carrier**, and does not cost the format a version.
+    ///
+    /// §9's caret is a paragraph field, so `Enter` puts a `\n` in a label. The
+    /// format needs nothing for that — a label is a JSON string and JSON
+    /// strings carry newlines — and this is the test that says so rather than a
+    /// comment claiming it. Which is the point of writing it at all: the *rule*
+    /// for when [`CURRENT_VERSION`] moves is "an older build's silent discard
+    /// would lose something", and nothing here is discarded. An older build
+    /// reads the string whole and its painter already splits on `\n` — see
+    /// `render::painter`'s `shape_wrapped` — so it renders the paragraph too.
+    ///
+    /// The escaping is asserted on the bytes as well, because that is the half
+    /// a round trip cannot see: a serializer that dropped the breaks and a
+    /// deserializer that put them back would pass the comparison and leave a
+    /// file nothing else can read.
+    #[test]
+    fn a_multi_line_label_survives_a_round_trip_with_its_breaks() {
+        let paragraph = "first line\nsecond line\n\nafter a blank one";
+
+        let mut original = FlowDocument::new();
+        let node = original.add_node(
+            ElementKind::default(),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(160.0, 60.0),
+        );
+        let text = original.add_node(
+            ElementKind::Text,
+            Vec2::new(300.0, 40.0),
+            Vec2::new(200.0, 22.0),
+        );
+        let edge = original.add_edge(Endpoint::node(node), Endpoint::node(text));
+
+        original.node_mut(node).unwrap().label = Some(paragraph.into());
+        original.node_mut(text).unwrap().label = Some(paragraph.into());
+        let edge_index = original
+            .edges
+            .iter()
+            .position(|it| it.id == edge)
+            .expect("the edge is there");
+        original.edges[edge_index].label = Some(paragraph.into());
+
+        let json = original.to_json().expect("serializes");
+        let loaded = FlowDocument::from_json(&json).expect("loads");
+        assert_eq!(loaded, original);
+
+        assert_eq!(
+            loaded.node(node).unwrap().label.as_deref(),
+            Some(paragraph),
+            "a node's label came back with its breaks changed"
+        );
+        assert_eq!(
+            loaded.node(text).unwrap().label.as_deref(),
+            Some(paragraph),
+            "a text element came back with its breaks changed"
+        );
+        assert_eq!(
+            loaded.edges[edge_index].label.as_deref(),
+            Some(paragraph),
+            "an edge's label came back with its breaks changed"
+        );
+
+        // On disk as escapes in one string, not as anything the format had to
+        // learn — and still at the version this build already wrote.
+        let value: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["nodes"][0]["label"], json!(paragraph));
+        assert_eq!(value["version"], json!(CURRENT_VERSION));
+        assert!(
+            json.contains("first line\\nsecond line"),
+            "the breaks are not escaped into the file at all"
+        );
+    }
+
     /// **The rung that moves existing labels, and the three carriers it treats
     /// differently.**
     ///

@@ -3841,6 +3841,53 @@ mod tests {
         }
     }
 
+    /// **A label with line breaks in it reaches the painter as a paragraph.**
+    ///
+    /// §9's caret is a multi-line field now, so `Enter` puts a `\n` in a
+    /// label. Three things have to carry it and this is the middle one: the
+    /// document does (`models::serialization`'s
+    /// `a_multi_line_label_survives_a_round_trip_with_its_breaks`), the painter
+    /// does (`render::painter`'s `shape_wrapped` calls `shape_text`, which
+    /// splits on `\n` and returns one `WrappedLine` each), and the plan between
+    /// them must hand the string over **whole** rather than flattening it.
+    ///
+    /// The placement is asserted too, because a block of hard lines is exactly
+    /// where the two block conventions in this crate could drift:
+    /// [`TextPrimitive::vertical_offset`] has to move a three-line block up by
+    /// one whole line from where one line sat, and that is the same arithmetic
+    /// `views::flow`'s caret is placed by.
+    #[test]
+    fn a_label_with_line_breaks_reaches_the_plan_as_a_paragraph() {
+        let paragraph = "first\nsecond\nthird";
+        let mut world = GraphWorld::new();
+        let node = world.create_node(
+            ElementKind::Shape(crate::models::ShapeKind::Diamond),
+            Vec2::new(80.0, 80.0),
+            Vec2::new(300.0, 200.0),
+        );
+        world.set_node_label(node, Some(paragraph.into()));
+        world.set_node_style(node, centred_label_style());
+        world.rebuild_all_geometry();
+        world.clear_spatial_updates();
+
+        let (plan, _) = frame_without_grid(&world, &pane());
+        let text = plan.texts().first().expect("the label");
+        assert_eq!(
+            text.text.as_ref(),
+            paragraph,
+            "the breaks were flattened between the document and the painter"
+        );
+
+        // One line does not move; three rise by one whole line height. Both
+        // halves matter: the first is what keeps every existing label where it
+        // was, and the second is what a typed paragraph depends on.
+        assert_eq!(text.vertical_offset(1), 0.0);
+        assert!(
+            (text.vertical_offset(3) + text.line_height()).abs() < 1e-3,
+            "a three-line block did not rise by exactly one line"
+        );
+    }
+
     /// **Requirement 2, as the colour in the frame**: a label is drawn in its
     /// element's stroke colour, and a stroke change moves it with no second
     /// press.

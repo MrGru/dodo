@@ -1537,6 +1537,49 @@
 //! drawn by three renderers in this crate and they have to agree about its box
 //! as much as about its style.
 //!
+//! ## `Enter` is a line break, and the commit is a real binding
+//!
+//! A label wraps, so the caret has to. Making it a paragraph field — `Input`'s
+//! `auto_grow` mode — is the same change as the wrap reconciliation above and
+//! it settles the keyboard as a side effect: **`Enter` never was a binding**.
+//! It reached the canvas's raw key handler only because a *single-line*
+//! `gpui-component` `Input` declines that key and calls `cx.propagate()`, and
+//! that handler turned it into `FinishTextEdit`. A multi-line field keeps the
+//! key and inserts the break, so the fall-through is gone: a keystroke the
+//! widget happened not to want is not a design, and on any path where the field
+//! *does* propagate — a context menu is open — it would have committed behind
+//! the user's back.
+//!
+//! So the ending is a row in `commands::keys` like every other: `Cmd`+`Enter`
+//! on macOS, `Ctrl`+`Enter` elsewhere, both asserted from any machine.
+//! **It is the one row in that table registered under a different scope.**
+//! Every other canvas binding is scoped `FlowCanvas && !FlowTyping`, because
+//! every one of them takes the focus back and would end an edit; this one *is*
+//! the ending, so `keys::EditAction::while_typing` picks
+//! [`views::flow::TYPING_BINDING_SCOPE`] instead — and that predicate names two
+//! contexts rather than one for a reason worth keeping:
+//!
+//! **GPUI scores a binding by the depth at which its predicate matches the
+//! context stack, and `gpui-component`'s `Input` binds `secondary-enter`
+//! itself** — to insert a line break. The `Input` context is one node deeper
+//! than the wrapper's `FlowTyping`, so `FlowTyping` alone always loses. Naming
+//! both (`FlowTyping > Input`) ties on depth, and GPUI breaks a depth tie by
+//! registration order with the later binding winning — which is why `src/main.rs`
+//! runs `flow::init` after `gpui_component::init`, as `settings`,
+//! `api_explorer`, `docker` and `database` already do.
+//! `the_commit_keystroke_outranks_the_field_s_own_line_break` drives that
+//! through GPUI's real `Keymap`, with the library's real action type and its
+//! real predicate, in the real order — every one of which could change
+//! underneath this without producing an error, only a `Cmd`+`Enter` that types
+//! a line break.
+//!
+//! **The format does not move for this.** A label is a JSON string and JSON
+//! strings carry newlines; `commit_text`'s `trim` takes the break off the end
+//! that a final `Enter` left and leaves every break inside the label alone; and
+//! `render::painter`'s `shape_wrapped` has split on `\n` since §9, so an older
+//! build reads the paragraph and draws it as one. Nothing is discarded, which
+//! is exactly the rule [`models::serialization::CURRENT_VERSION`] moves by.
+//!
 //! # Where the budget numbers come from, and what they are not
 //!
 //! [`budgets`] is the one named place for every render ceiling and LOD

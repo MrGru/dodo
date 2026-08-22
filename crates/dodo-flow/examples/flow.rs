@@ -66,15 +66,16 @@
 //! because no test in this crate can: shaping and hit-testing both need a live
 //! window, and an unattended one presents its first frame and stops.
 //!
-//! 1. **Double-click a node, an edge and a text element, type, press `Enter`,
-//!    then double-click the same thing again.** The field must come up holding
-//!    what is there. An editor that opened blank would look identical until the
-//!    second visit, and then quietly replace a sentence with a word.
+//! 1. **Double-click a node, an edge and a text element, type, press
+//!    `Cmd`/`Ctrl`+`Enter`, then double-click the same thing again.** The field
+//!    must come up holding what is there. An editor that opened blank would
+//!    look identical until the second visit, and then quietly replace a
+//!    sentence with a word.
 //! 2. **Drag a labelled node.** Its own text moves with it, and the label on
 //!    every edge attached to it rides the route as the route bends.
-//! 3. **Empty a text element** — select all, delete, `Enter`. It goes, because
-//!    a text element with no glyphs is invisible; one `Cmd+Z` brings it back
-//!    with its words.
+//! 3. **Empty a text element** — select all, delete, `Cmd`/`Ctrl`+`Enter`. It
+//!    goes, because a text element with no glyphs is invisible; one `Cmd+Z`
+//!    brings it back with its words.
 //! 4. **Pick the Hand-drawn family.** On a machine with none of the platform's
 //!    hand-drawn faces installed it looks exactly like Normal, and that is the
 //!    honest behaviour rather than a bug — dodo ships no font of its own. See
@@ -296,6 +297,14 @@
 //!    only text there is. `render::scene`'s
 //!    `a_label_being_edited_is_not_also_drawn_by_the_canvas` proves the frame
 //!    carries one label; that it *reads* as one is the screen's answer.
+//!
+//!    **Then press `Enter` in it.** The caret must go to a new line and typing
+//!    must continue, the field must grow to hold the extra line rather than
+//!    scroll or clip it, and the block must stay put according to the label's
+//!    own vertical alignment — a centred one rises by half a line, a `Top` one
+//!    does not move. `Cmd`/`Ctrl`+`Enter` finishes; `Esc` still abandons; and
+//!    the committed label has to come back with the same breaks in the same
+//!    places, at the same zoom and after a save and a reload.
 //! 3. **Select one node and watch its border.** It must not change colour or
 //!    thickness — the bounding box and its grips are the only thing that says
 //!    "selected", which is what makes the Stroke row in the panel usable. Then
@@ -337,7 +346,8 @@
 //! | **double-click an edge** | edit its label — aim at the line, not at the space around it |
 //! | **double-click empty canvas** | place text under the pointer and start typing |
 //! | **`t`, then click or drag** | the same, with a box you chose |
-//! | `Enter`, or a click anywhere | commit what you typed |
+//! | `Enter` while typing a label | a line break — the caret is a paragraph field |
+//! | `Cmd+Enter` / `Ctrl+Enter`, or a click anywhere | commit what you typed |
 //! | `Esc` while typing | abandon it — nothing reaches the document, so nothing is undone |
 //! | `Delete` / `Backspace` | remove whatever is selected, nodes and edges alike |
 //! | `Esc` | abandon the drag — a moved node goes back exactly where it was, and the drag leaves no undo step |
