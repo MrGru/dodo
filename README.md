@@ -78,7 +78,7 @@ Use `Cmd/Ctrl + V` or simply `p` when no input field is focused.
 
 Customize themes, language, appearance, enabled features, sidebar order, Quick Navigation, startup behavior, input method, and more.
 
-![Settings](assets/screenshots/settings.png)
+![Settings](docs/screenshots/settings.png)
 
 ## Install
 
