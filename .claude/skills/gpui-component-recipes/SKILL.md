@@ -31,6 +31,16 @@ with `KeyContext::parse` + `KeyBindingContextPredicate::depth_of`, which needs n
   completion popup or an IME composition to close, so an `escape` bound at an ancestor context runs
   only when the input declined it. Ties at equal depth go to whichever was registered *later* —
   hence every `dodo::init` running after `gpui_component::init`.
+- **To *beat* a focused widget's own binding, name the widget's context in your predicate.**
+  Depth wins before registration order, and the widget's context is always deeper than any
+  wrapper you put around it — so `MyTyping` alone loses `cmd-enter` to `gpui-component`'s `Input`
+  every time, however late you register it. `MyTyping > Input` matches at the *same* depth as
+  `Input`, and only then does "registered later wins" apply. The symptom is a keystroke that
+  silently does the widget's thing instead of yours, with no error anywhere.
+  `crates/dodo-flow/src/views/flow.rs`'s `TYPING_BINDING_SCOPE` is the worked case, and
+  `views/keymap.rs`'s `the_commit_keystroke_outranks_the_field_s_own_line_break` tests it by
+  building a real `gpui::Keymap` with both bindings in the real order and asking
+  `bindings_for_input` — no window, and it catches a reordered `init`.
 - **`!Foo` is evaluated against the whole dispatch path**, not just the node being tested
   (`KeyBindingContextPredicate::Not`). So `MyPane && !Input` means "somewhere under MyPane, with no
   text input anywhere between the focused element and the root" — the honest way to express a
