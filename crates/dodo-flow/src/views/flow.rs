@@ -157,7 +157,7 @@ use crate::{
         edges,
         lod::LodPlan,
         painter::{self, FontSet, PictureElement, TextCache, from_hsla, to_hsla},
-        plan::{PathPrimitive, QuadPrimitive},
+        plan::{PathPrimitive, QuadPrimitive, TextPrimitive},
         registry::NodeRendererRegistry,
         scene,
         scene::GRAPH_NODE_RADIUS,
@@ -315,27 +315,29 @@ const PREVIEW_WIDTH: f32 = 1.5;
 /// Endpoint snapping distance in screen pixels.
 const CONNECTOR_SNAP_PIXELS: f32 = 12.0;
 
-/// The height of §9's text editor, in screen pixels.
+/// **The margin `gpui-component`'s `Input` wraps inside but does not align
+/// inside**, in screen pixels.
 ///
-/// A **screen** constant rather than the edited element's height, and that is
-/// deliberate: a node three pixels tall at low zoom is still a thing a user
-/// double-clicked to type in, and a three-pixel text field is not an editor.
-/// The text lands where the element's own layout puts it once the caret closes;
-/// while it is open the field is a control, and a control is measured in
-/// pixels.
-const EDIT_LINE_PIXELS: f32 = 26.0;
-
-/// How tall one line of the inline editor is, as a multiple of its text size.
+/// `RIGHT_MARGIN` in the pinned checkout's `crates/ui/src/input/element.rs`.
+/// A soft-wrapped multi-line field breaks its lines at `bounds.width -
+/// RIGHT_MARGIN` and then *aligns* them within the full `bounds.width` — two
+/// different numbers, and the caret needs both to be the label's box. It is
+/// recorded here rather than worked around because the difference is a
+/// constant: [`editor_band`] hands the field a box this much wider than the
+/// label's, placed so the two agree on the wrap width **and** on where a
+/// left-, centre- or right-aligned run starts.
 ///
-/// The same 1.25 `gpui-component`'s `Input` uses, kept as a factor rather than
-/// as its `1.25rem`: a rem is a constant 20 px and a label is drawn at whatever
-/// the zoom makes it, so the widget's own line height clipped a label the
-/// moment somebody zoomed in.
-const EDIT_LINE_FACTOR: f32 = 1.25;
+/// A private constant of a vendored crate, so it is a fact about the pinned
+/// revision rather than an API. `the_editor_wraps_and_aligns_on_the_label_s_box`
+/// is what fails if a `cargo update` moves it.
+const EDITOR_WRAP_MARGIN_PIXELS: f32 = 10.0;
 
-/// The narrowest §9's text editor is drawn, in screen pixels. Same argument as
-/// [`EDIT_LINE_PIXELS`], on the other axis.
-const MIN_EDITOR_PIXELS: f32 = 120.0;
+/// The most rows §9's caret grows to before it starts scrolling instead.
+///
+/// `gpui-component`'s auto-grow mode needs an upper bound and this is it. Far
+/// past any label anybody types into a diagram, and the behaviour past it is a
+/// scrolling field rather than a broken one.
+const EDITOR_MAX_ROWS: usize = 64;
 
 /// The Flow Canvas.
 pub struct FlowView {
@@ -1519,6 +1521,9 @@ impl FlowView {
             &self.budgets,
             &self.registry,
             self.hovered,
+            // **The caret's target, so the canvas does not draw the label the
+            // caret is already drawing** — see `render::snapshot`'s module doc.
+            self.editing.as_ref().map(|editing| editing.target),
             Rect::new(Vec2::ZERO, self.viewport.size()),
         );
         self.instruments.record(Probe::RenderExtract, timer);
@@ -2648,6 +2653,21 @@ impl FlowView {
         let selection_end = seed.len();
         let input = cx.new(|cx| {
             InputState::new(window, cx)
+                // **A label is a paragraph, so the field is one** (§9). Three
+                // things follow from it and all three are the point:
+                // `Enter` inserts a line break rather than escaping to the
+                // canvas — `gpui-component` only propagates that key from a
+                // *single*-line field, which is the whole of why the canvas saw
+                // it at all; the text soft-wraps at the label's own width, so
+                // the caret breaks its lines where the committed label breaks
+                // them; and the field is exactly as tall as the block it holds,
+                // which is what `editor_band` places.
+                //
+                // Auto-grow rather than `multi_line(true)`: a plain multi-line
+                // field asks for one line's height and paints however many it
+                // has, so the box the band aligns would have been a line tall
+                // over a paragraph. The cap is [`EDITOR_MAX_ROWS`].
+                .auto_grow(1, EDITOR_MAX_ROWS)
                 .placeholder(t(flow::Text::TextPlaceholder, cx))
                 .default_value(seed)
         });
@@ -2795,63 +2815,59 @@ impl FlowView {
     /// be rid of. Reading the label's own style here is what makes the field
     /// invisible: what is left on screen is the label, plus a caret.
     ///
-    /// The style comes from the document; the *size* comes from the snapshot,
+    /// The style comes from the document; the *size* is asked of the **ladder**,
     /// because that is the one property the frame changes. `render::lod`
     /// quantises a label onto the ladder before it is shaped, so the authored
     /// size times the zoom is **not** what is on screen — see
-    /// [`crate::render::lod`]. The scan is over what is visible, which is tens
-    /// of rows, and it only runs while somebody is typing.
+    /// [`crate::render::lod`].
+    ///
+    /// **It is asked of `LodPlan::font_size_for` rather than read back out of
+    /// the snapshot**, and that is a consequence of the fix beside it: the
+    /// snapshot now deliberately carries *no* `label_font_size` for the element
+    /// the caret is open on (see `render::snapshot`'s module doc), so a scan for
+    /// it would find `None` every time and the caret would open at the
+    /// unquantised size — the text resizing the instant somebody double-clicks,
+    /// which is exactly what this value exists to prevent. The ladder's answer
+    /// is a pure function of the plan, the thresholds and the element's own
+    /// step, which is what the snapshot computed anyway; asking for it directly
+    /// is also O(1) rather than a scan, and right for an element the frame
+    /// culled.
+    ///
+    /// `None` from the ladder means the label would not be shaped at all at
+    /// this zoom, and then the authored size projected to the screen is the
+    /// honest answer — the same fallback a brand-new element gets.
     ///
     /// The default style answers for a text element that does not exist yet,
     /// which is exactly what `commit_text` is about to seed it with.
     fn text_edit_ink(&self, target: TextTarget, cx: &App) -> EditorInk {
         let world = self.editor.world();
         let theme = cx.theme();
-        let (style, drawn) = match target {
-            TextTarget::New(_) => (&world.settings().default_style, None),
+        let style = match target {
+            TextTarget::New(_) => &world.settings().default_style,
             TextTarget::Node(node) => {
                 if world.nodes().contains(node) && world.node_is_live(node) {
-                    let drawn = self
-                        .snapshot
-                        .rich()
-                        .iter()
-                        .find(|rich| rich.node == node)
-                        .and_then(|rich| rich.label_font_size)
-                        .or_else(|| {
-                            self.snapshot
-                                .canvas()
-                                .iter()
-                                .find(|canvas| canvas.node == node)
-                                .and_then(|canvas| canvas.label_font_size)
-                        });
-                    (world.nodes().style(node), drawn)
+                    world.nodes().style(node)
                 } else {
-                    (&world.settings().default_style, None)
+                    &world.settings().default_style
                 }
             }
             TextTarget::Edge(edge) => {
                 if world.edges().contains(edge) && world.edge_is_live(edge) {
-                    let drawn = self
-                        .snapshot
-                        .edges()
-                        .iter()
-                        .find(|planned| planned.edge == edge)
-                        .and_then(|planned| planned.label_font_size);
-                    (world.edges().style(edge), drawn)
+                    world.edges().style(edge)
                 } else {
-                    (&world.settings().default_style, None)
+                    &world.settings().default_style
                 }
             }
         };
 
+        let world_size = style.font.world_size();
+        let drawn = self
+            .snapshot
+            .lod()
+            .and_then(|lod| lod.font_size_for(&self.budgets.lod, world_size));
+
         EditorInk {
-            // A label with no shaped size this frame — a brand-new element, or
-            // one the ladder dropped the label of — is typed at the size it
-            // will be drawn at once it has one.
-            font_size: drawn.unwrap_or_else(|| {
-                self.viewport
-                    .world_to_screen_length(style.font.world_size())
-            }),
+            font_size: drawn.unwrap_or_else(|| self.viewport.world_to_screen_length(world_size)),
             color: style
                 .text_color()
                 .map(to_hsla)
@@ -2867,9 +2883,6 @@ impl FlowView {
     ///
     /// Projected from world units **every frame**, which is what keeps the
     /// field on its node while the canvas is panned or zoomed underneath it.
-    /// The height is a screen floor rather than the element's: a text field
-    /// three pixels tall is not an editor, whatever the thing it is editing
-    /// looks like at that zoom.
     /// Returns a concrete `Div` rather than an `impl IntoElement`, and that is
     /// not a style choice: an opaque return type captures the `&self` borrow
     /// for as long as the element lives, and this one is built at the top of
@@ -2892,6 +2905,25 @@ impl FlowView {
     ///
     /// The one thing left that a label does not have is the caret, and that is
     /// the point of the reference the captain drew.
+    ///
+    /// # It is the same shape of text, not just the same ink
+    ///
+    /// **The field is multi-line and it wraps** (`auto_grow`), because the
+    /// label it stands in for does. A one-line field over a label that wraps
+    /// onto three is not "the label plus a caret" — it is a different piece of
+    /// text in a different place, which is how the two came to be a line apart
+    /// on screen. Auto-grow rather than a fixed row count so the field is
+    /// exactly as tall as the block it is typing, which is what
+    /// [`editor_band`]'s vertical arithmetic assumes; the height is deliberately
+    /// **not** set here, so `Input`'s own `h_auto` survives.
+    ///
+    /// **There is no floor on the band any more, on either axis.** A screen
+    /// minimum was right while the field was a control — a three-pixel text box
+    /// is not an editor — and is wrong for a caret whose whole contract is that
+    /// the words do not move when it opens: a floor is a box that is not
+    /// derived from the label's box, and a box that is not derived from the
+    /// label's box wraps and aligns somewhere else. A tiny element gets a tiny
+    /// caret, exactly as it gets a tiny label, and the two agree.
     fn text_editor_element(&self, fonts: &FontSet, cx: &App) -> Option<Div> {
         let editing = self.editing.as_ref()?;
         // A live element may have moved since the caret opened — an undo, a
@@ -2903,7 +2935,8 @@ impl FlowView {
         let line = editor_line_height(ink.font_size);
         let band = editor_band(
             self.viewport.world_rect_to_screen(world),
-            ink.vertical_align,
+            ink.align,
+            ink.font_size,
             line,
         );
 
@@ -2927,11 +2960,22 @@ impl FlowView {
                 .top(px(band.origin.y))
                 .w(px(band.size.x))
                 .h(px(band.size.y))
+                // **The field is the block and the band is what it is
+                // aligned in** — the second half of [`editor_band`]'s vertical
+                // arithmetic, which is why the band is the label's box grown by
+                // one convention's worth and why nothing below sets a height:
+                // the field has to be free to be shorter than the band.
+                .flex()
+                .map(|it| match ink.vertical_align {
+                    VerticalAlign::Top => it.items_start(),
+                    VerticalAlign::Middle => it.items_center(),
+                    VerticalAlign::Bottom => it.items_end(),
+                })
                 .child(
                     Input::new(&editing.input)
                         // No border, no background, no shadow, no corner.
                         .appearance(false)
-                        .size_full()
+                        .w_full()
                         // **Layout, not decoration.** `Input` pads itself by
                         // its size step, which is a control's padding and not a
                         // label's: left in, the first letter starts several
@@ -2940,16 +2984,6 @@ impl FlowView {
                         .text_size(px(ink.font_size))
                         .text_color(ink.color)
                         .font(fonts.face(ink.family).clone())
-                        // The band is at least [`EDIT_LINE_PIXELS`] tall so a
-                        // tiny element still gets a usable field; the *text*
-                        // inside it is placed by the label's own vertical
-                        // alignment, so the words do not drift to the middle of
-                        // a band that is taller than they are.
-                        .map(|it| match ink.vertical_align {
-                            VerticalAlign::Top => it.items_start(),
-                            VerticalAlign::Middle => it.items_center(),
-                            VerticalAlign::Bottom => it.items_end(),
-                        })
                         .map(|it| match ink.align {
                             TextAlign::Left => it.text_left(),
                             TextAlign::Center => it.text_center(),
@@ -2979,44 +3013,76 @@ struct EditorInk {
 
 /// One line of label text, in screen pixels.
 ///
-/// `gpui-component`'s `Input` lays out at `1.25rem`, which is a constant 20 px
-/// whatever the text size is — fine for a control and wrong for a label, which
-/// is drawn at whatever the zoom makes it. Pure, and the same multiplier the
-/// element tree's own labels flow at.
+/// **[`TextPrimitive::LINE_HEIGHT_RATIO`], not `gpui-component`'s.** The widget
+/// lays out at `1.25rem`, which is a constant 20 px whatever the text size is —
+/// fine for a control, wrong for a label, and *still* wrong once it is scaled
+/// by the text size, because `render::painter` flows a committed label at 1.3.
+/// A caret that used a different ratio put every line after the first on a
+/// different pixel from the label it is standing in for. One number, read from
+/// the painter's own model.
 fn editor_line_height(font_size: f32) -> f32 {
-    (font_size * EDIT_LINE_FACTOR).max(1.0)
+    (font_size * TextPrimitive::LINE_HEIGHT_RATIO).max(1.0)
 }
 
-/// **Where the one-line editor sits over the thing it is editing**, in
-/// pane-relative screen pixels.
+/// **The box to hand the field so its text lands on the label's own pixels**,
+/// in pane-relative screen pixels.
 ///
-/// Pure, so the one rule it carries is assertable with no window. **On the line
-/// the label is painted on**, because the field is one line tall whatever it is
-/// editing (see [`FlowView::text_editor_element`]): anchoring it at the
-/// element's top put the caret in a band above text that `render::scene`'s
-/// `plan_labels` centres, and what you typed appeared to jump the moment you
-/// committed it.
+/// `label` is the box `render::scene` lays the committed label into — the same
+/// rectangle [`FlowView::text_edit_bounds`] projects, which is the whole reason
+/// that function mirrors `plan_labels`. This is **not** that box: it is that box
+/// plus the two constant differences between how `render::painter` places a
+/// block of text and how a `gpui-component` `Input` places one. Both are
+/// constants, so both are one arithmetic offset and neither needs a window.
 ///
-/// **`align` is the same `VerticalAlign` the painter places the label with**,
-/// which is what keeps that fix true now that a label can be moved off the
-/// middle: `Middle` is the previous behaviour exactly, and the other two put the
-/// field where the words will be. It is passed in rather than read here for the
-/// reason everything in this half of the file is pure — one arithmetic offset,
-/// asserted with no window.
+/// # The horizontal one: wrap width against align width
 ///
-/// **`line` is the label's own line height**, floored at [`EDIT_LINE_PIXELS`].
-/// A fixed band was right while the field was a control at the widget's text
-/// size; now that it types in the label's face at the label's size, a band
-/// shorter than the line would clip a label the zoom has made large.
-fn editor_band(screen: Rect, align: VerticalAlign, line: f32) -> Rect {
-    let screen = screen.normalized();
-    let height = line.max(EDIT_LINE_PIXELS);
+/// The field wraps at `width - RIGHT_MARGIN` and aligns within `width` — see
+/// [`EDITOR_WRAP_MARGIN_PIXELS`]. Handing it a box exactly
+/// [`EDITOR_WRAP_MARGIN_PIXELS`] wider than the label's makes the *wrap* widths
+/// agree, and sliding that box left by where the alignment puts the slack makes
+/// the *runs* agree: `Left` keeps the left edge, `Center` splits the margin, and
+/// `Right` gives all of it back. That is exactly [`TextAlign::offset`] over the
+/// margin, which is why it is that call rather than three arms.
+///
+/// # The vertical one: two conventions for how tall a block is
+///
+/// `render::painter` measures a block of `n` lines as
+/// `font_size + (n - 1) * line_height` — see
+/// [`TextPrimitive::vertical_offset`], which is deliberate and is what keeps a
+/// one-line label on the pixel §9 put it on. A text field measures the same
+/// block as `n * line_height`. **The two differ by `line_height - font_size`
+/// whatever `n` is**, so a box that much taller than the label's cancels the
+/// difference for every `n` at once — which it has to, because the caret cannot
+/// know `n` before the field has been laid out.
+///
+/// Growing the *box* rather than sliding it is the half that took a second go.
+/// Sliding it by the same constant gets the arithmetic right and the **clamp**
+/// wrong: `VerticalAlign::offset` floors its slack at zero, so a block that
+/// outgrows its box starts at the box's top edge, and two boxes of different
+/// heights reach that floor at different moments — a one-line label in a
+/// three-pixel element was already over it, and the slide showed up as a real
+/// offset in the ordinary case. With the box grown instead, the field's slack
+/// and the painter's are *the same number*, so they clamp together.
+///
+/// # What is left over
+///
+/// Flexbox does not clamp at all: an item taller than its container is centred
+/// on it, overflowing both ways, where the painter would have started it at the
+/// top. So a label that outgrows its element is the one case where the caret and
+/// the committed text disagree, by half the overflow, and only while the caret
+/// is open. Stated rather than fixed: closing it needs the line count before
+/// layout, which is the one thing this cannot have.
+fn editor_band(label: Rect, align: TextAlign, font_size: f32, line: f32) -> Rect {
+    let label = label.normalized();
     Rect::new(
         Vec2::new(
-            screen.origin.x,
-            screen.origin.y + align.offset(screen.size.y, height),
+            label.origin.x - align.offset(EDITOR_WRAP_MARGIN_PIXELS, 0.0),
+            label.origin.y,
         ),
-        Vec2::new(screen.size.x.max(MIN_EDITOR_PIXELS), height),
+        Vec2::new(
+            label.size.x + EDITOR_WRAP_MARGIN_PIXELS,
+            (label.size.y + line - font_size).max(0.0),
+        ),
     )
 }
 
@@ -3198,98 +3264,142 @@ mod tests {
         (view, cx)
     }
 
-    /// One line of a label at a readable size, for the placement tests below.
-    /// Small enough that [`EDIT_LINE_PIXELS`]'s floor is what decides the band,
-    /// which is the case those tests were written against.
-    const SMALL_LINE: f32 = 15.0;
+    /// A readable label size for the placement tests below, and the line
+    /// height the painter would flow it at.
+    const SAMPLE_SIZE: f32 = 16.0;
 
-    /// **The caret sits where the label will be**, which for a label nobody has
-    /// moved means the middle rather than the top. The editor is one line tall
-    /// whatever it is editing, so a top-anchored field put the words a user
-    /// typed above where `render::scene` was about to paint them.
-    #[test]
-    fn the_inline_editor_is_centred_on_whatever_it_is_editing() {
-        // A tall body: the band is centred and keeps its one-line height.
-        let body = Rect::new(Vec2::new(40.0, 100.0), Vec2::new(300.0, 90.0));
-        let band = editor_band(body, VerticalAlign::Middle, SMALL_LINE);
-        assert_eq!(band.origin.x, body.origin.x);
-        assert_eq!(band.size.y, EDIT_LINE_PIXELS);
-        assert!((band.center().y - body.center().y).abs() < 1e-3);
-
-        // A box already exactly one line tall is left where it is.
-        let line = Rect::new(Vec2::new(0.0, 200.0), Vec2::new(240.0, EDIT_LINE_PIXELS));
-        assert_eq!(editor_band(line, VerticalAlign::Middle, SMALL_LINE), line);
-
-        // A sliver still gets a usable field rather than a three-pixel one. It
-        // starts at the sliver's top rather than straddling it, because a box
-        // shorter than one line has no slack to centre in — the same clamp
-        // `VerticalAlign::offset` applies to the label itself, so the field and
-        // the words still land on the same line.
-        let sliver = Rect::new(Vec2::new(10.0, 10.0), Vec2::new(4.0, 3.0));
-        let band = editor_band(sliver, VerticalAlign::Middle, SMALL_LINE);
-        assert_eq!(band.size, Vec2::new(MIN_EDITOR_PIXELS, EDIT_LINE_PIXELS));
-        assert_eq!(band.origin.y, sliver.origin.y);
-    }
-
-    /// **And it grows with the label rather than clipping it.**
+    /// Where `render::painter` actually puts the first line of a block of
+    /// `lines` label lines inside `box`, restated here as the thing
+    /// [`editor_band`] has to agree with.
     ///
-    /// The band was a screen constant while the field was a control at the
-    /// widget's own text size. It now types in the label's face at the label's
-    /// size, so a zoom that makes a label 40 px tall has to make the band at
-    /// least that: a fixed 26 px band would have cut the words the caret is in
-    /// half. The floor is unchanged, and it is what a tiny element still gets.
-    #[test]
-    fn the_inline_editor_is_never_shorter_than_the_line_it_holds() {
-        let body = Rect::new(Vec2::new(40.0, 100.0), Vec2::new(300.0, 400.0));
-
-        // Below the floor, the floor wins — that is `EDIT_LINE_PIXELS`'s whole
-        // argument, and a zoomed-out label must still be typeable.
-        assert_eq!(
-            editor_band(body, VerticalAlign::Middle, 4.0).size.y,
-            EDIT_LINE_PIXELS
-        );
-
-        // Above it, the line wins.
-        let tall = editor_line_height(48.0);
-        assert!(tall > EDIT_LINE_PIXELS);
-        let band = editor_band(body, VerticalAlign::Middle, tall);
-        assert_eq!(band.size.y, tall);
-        // And it is still centred on the same box, so growing the band did not
-        // move the words.
-        assert!((band.center().y - body.center().y).abs() < 1e-3);
-
-        // The line height is the text size, not a rem: it tracks the zoom.
-        assert!(editor_line_height(40.0) > editor_line_height(10.0));
-        assert!(editor_line_height(0.0) > 0.0);
+    /// It is [`TextPrimitive::vertical_offset`] folded into
+    /// `plan_labels`'s origin — `origin.y + lift` — with the two halves
+    /// cancelling down to one `VerticalAlign::offset` over the block. Written
+    /// out rather than called so the test states the target independently of
+    /// the code under test.
+    fn painted_block_top(body: Rect, align: VerticalAlign, font_size: f32, lines: u32) -> f32 {
+        let line = editor_line_height(font_size);
+        let block = font_size + (lines.saturating_sub(1)) as f32 * line;
+        body.origin.y + align.offset(body.size.y, block)
     }
 
-    /// **And it follows the label off the middle**, which is what this phase's
-    /// fourth text row can do to one. `editor_band` and `plan_labels` place a
-    /// single line by the same arithmetic — `VerticalAlign::offset` — so a
-    /// `Top`-aligned label is typed on the line it will be painted on rather
-    /// than one the field picked.
+    /// **The caret's text lands on the label's own pixels, for any number of
+    /// lines and any vertical alignment.**
+    ///
+    /// This is the whole of `editor_band`'s vertical half. The field measures a
+    /// block of `n` lines as `n * line_height`; the painter measures the same
+    /// block as `font_size + (n - 1) * line_height`
+    /// ([`TextPrimitive::vertical_offset`]). The two differ by a constant, so
+    /// one offset places the field's box so that both put the first line on the
+    /// same pixel — and it has to hold for every `n`, because the caret cannot
+    /// know `n` before the field is laid out.
     #[test]
-    fn the_inline_editor_follows_a_label_that_is_not_in_the_middle() {
-        let body = Rect::new(Vec2::new(40.0, 100.0), Vec2::new(300.0, 90.0));
+    fn the_caret_puts_its_first_line_where_the_painter_puts_the_label_s() {
+        // Tall enough that neither `VerticalAlign::offset` clamps — the clamp
+        // divergence is the one residual `editor_band`'s doc records.
+        let body = Rect::new(Vec2::new(40.0, 100.0), Vec2::new(300.0, 400.0));
+        let line = editor_line_height(SAMPLE_SIZE);
 
-        let top = editor_band(body, VerticalAlign::Top, SMALL_LINE);
-        assert_eq!(top.origin.y, body.origin.y);
-
-        let bottom = editor_band(body, VerticalAlign::Bottom, SMALL_LINE);
-        assert_eq!(bottom.origin.y, body.max().y - EDIT_LINE_PIXELS);
-
-        // The three agree with the painter's own placement of one line: the
-        // scene puts a label's first line at exactly this offset inside the
-        // same box. One function, two callers — see `render::scene`.
         for align in VerticalAlign::ALL {
-            let band = editor_band(body, *align, SMALL_LINE);
+            let band = editor_band(body, TextAlign::Left, SAMPLE_SIZE, line);
+            for lines in 1..=6u32 {
+                // Where the field puts its block: flexbox aligns a child of
+                // `lines * line` inside the band.
+                let field = band.origin.y + align.offset(band.size.y, lines as f32 * line);
+                let painted = painted_block_top(body, *align, SAMPLE_SIZE, lines);
+                assert!(
+                    (field - painted).abs() < 1e-3,
+                    "{} at {lines} line(s): the caret drew at {field} and the \
+                     painter draws at {painted}",
+                    align.name()
+                );
+            }
+        }
+    }
+
+    /// **And it wraps and aligns on the label's box, not on its own.**
+    ///
+    /// `gpui-component`'s field breaks its lines at `width -
+    /// RIGHT_MARGIN` and aligns them within `width` — two numbers where the
+    /// painter has one. Both have to come out as the label's box or the caret
+    /// re-wraps the text the moment it opens, which is the other half of the
+    /// captain's doubled line.
+    #[test]
+    fn the_editor_wraps_and_aligns_on_the_label_s_box() {
+        let body = Rect::new(Vec2::new(40.0, 100.0), Vec2::new(300.0, 90.0));
+        let line = editor_line_height(SAMPLE_SIZE);
+
+        for align in TextAlign::ALL {
+            let band = editor_band(body, *align, SAMPLE_SIZE, line);
+
+            assert!(
+                (band.size.x - EDITOR_WRAP_MARGIN_PIXELS - body.size.x).abs() < 1e-3,
+                "{} wraps at {} rather than at the label's {}",
+                align.name(),
+                band.size.x - EDITOR_WRAP_MARGIN_PIXELS,
+                body.size.x
+            );
+
+            // A run of any width lands on the same pixel either way: the field
+            // aligns it in `band.size.x` and the painter in `body.size.x`.
+            for run in [0.0, 40.0, 299.0, 300.0] {
+                let field = band.origin.x + align.offset(band.size.x, run);
+                let painted = body.origin.x + align.offset(body.size.x, run);
+                assert!(
+                    (field - painted).abs() < 1e-3,
+                    "{} at a {run}px run: the caret drew at {field} and the \
+                     painter draws at {painted}",
+                    align.name()
+                );
+            }
+        }
+    }
+
+    /// **The band is the label's box, with no floor of its own.**
+    ///
+    /// A screen minimum was right while the field was a control and is wrong
+    /// for a caret: a box that is not the label's box wraps and aligns
+    /// somewhere else, so a floor *is* the text moving when the caret opens.
+    /// A sliver gets a sliver, exactly as it gets a sliver of a label.
+    #[test]
+    fn the_band_takes_its_size_from_the_label_and_nothing_else() {
+        let sliver = Rect::new(Vec2::new(10.0, 10.0), Vec2::new(4.0, 3.0));
+        let line = editor_line_height(SAMPLE_SIZE);
+        let band = editor_band(sliver, TextAlign::Left, SAMPLE_SIZE, line);
+
+        assert_eq!(band.size.x, sliver.size.x + EDITOR_WRAP_MARGIN_PIXELS);
+        assert_eq!(band.size.y, sliver.size.y + line - SAMPLE_SIZE);
+        // The band is never *moved*: growing it is what cancels the two block
+        // conventions, and it is why the field's slack and the painter's reach
+        // the clamp at the same moment rather than a lead apart.
+        assert_eq!(band.origin.y, sliver.origin.y);
+
+        // Which is the point: one line of 16px text does not fit a 3px element,
+        // so both clamp, and both start on the element's top edge.
+        for align in VerticalAlign::ALL {
             assert_eq!(
-                band.origin.y - body.origin.y,
-                align.offset(body.size.y, EDIT_LINE_PIXELS),
-                "{} disagreed with the arithmetic the painter uses",
+                align.offset(band.size.y, line),
+                align.offset(sliver.size.y, SAMPLE_SIZE),
+                "{} clamps differently for the caret than for the painter",
                 align.name()
             );
         }
+    }
+
+    /// **The line height is the painter's, and it tracks the zoom.**
+    ///
+    /// `gpui-component` lays a field out at `1.25rem` — a constant 20 px — and
+    /// the painter flows a label at `1.3 × font_size`. A caret on the widget's
+    /// number put every line after the first on a different pixel from the
+    /// label it stands in for.
+    #[test]
+    fn the_caret_flows_its_lines_at_the_painter_s_line_height() {
+        assert_eq!(
+            editor_line_height(20.0),
+            20.0 * TextPrimitive::LINE_HEIGHT_RATIO
+        );
+        assert!(editor_line_height(40.0) > editor_line_height(10.0));
+        assert!(editor_line_height(0.0) > 0.0);
     }
 
     /// **§9's caret has to arrive holding the keyboard, with a selection.**

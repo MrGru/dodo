@@ -73,11 +73,30 @@
 //! between a canvas whose control hierarchy is proportional to the selection
 //! and one whose control hierarchy is proportional to the screen.
 //!
+//! # A label being edited is not drawn
+//!
+//! [`extract`](RenderSnapshot::extract) takes the
+//! [`TextTarget`](crate::interaction::TextTarget) the caret is open on, and the
+//! element it names gets **no** `label_font_size` this frame. That is the whole
+//! mechanism, and it is here rather than at each painter on purpose: the three
+//! things that draw a committed label — `render::scene`'s `plan_labels` and
+//! `plan_edge_labels`, and `views::nodes`'s element — all gate on that one
+//! `Option`, so suppressing it here is the only edit that cannot be forgotten
+//! by a fourth one. §9's inline editor draws the words while it is open; the
+//! canvas drawing them *as well* is text doubled a line apart, which is the
+//! captain's report the chromeless caret uncovered — the box used to hide it.
+//!
+//! The size the label *would* be shaped at is still a pure function of the
+//! ladder and the element's own step, so `views::flow`'s `text_edit_ink` asks
+//! [`LodPlan::font_size_for`] for it directly rather than reading it back out
+//! of a snapshot that has deliberately stopped carrying it.
+//!
 //! **This file names no UI framework.**
 
 use crate::{
     budgets::{DetailLevel, RenderBudgets},
     geometry::{Rect, ResizeCorner, Vec2, Viewport},
+    interaction::TextTarget,
     models::{EdgeIndex, HandleIndex, NodeIndex},
     render::{
         cache::ScreenAnchor,
@@ -262,6 +281,10 @@ impl RenderSnapshot {
     /// is §40 rule 1 and what makes this function's cost proportional to the
     /// screen rather than to the file. The buffers are cleared and refilled, so
     /// a steady frame allocates nothing.
+    ///
+    /// `editing` is the target §9's caret is open on, or `None`. The element it
+    /// names gets no `label_font_size` this frame — see the module doc for why
+    /// that is the one place this is decided.
     #[allow(clippy::too_many_arguments)]
     pub fn extract(
         &mut self,
@@ -271,6 +294,7 @@ impl RenderSnapshot {
         budgets: &RenderBudgets,
         registry: &NodeRendererRegistry,
         hovered: Option<NodeIndex>,
+        editing: Option<TextTarget>,
         pane: Rect,
     ) {
         self.load = SceneLoad::measure(world, visible, viewport);
@@ -296,8 +320,10 @@ impl RenderSnapshot {
         self.overlay = None;
         self.counts = SnapshotCounts::default();
 
-        self.extract_edges(world, visible, viewport, budgets, &lod);
-        self.extract_nodes(world, visible, viewport, budgets, registry, hovered, &lod);
+        self.extract_edges(world, visible, viewport, budgets, editing, &lod);
+        self.extract_nodes(
+            world, visible, viewport, budgets, registry, hovered, editing, &lod,
+        );
         self.extract_controls(world, viewport, &lod, hovered, budgets);
 
         self.counts.rich_nodes = self.rich.len() as u32;
@@ -318,6 +344,7 @@ impl RenderSnapshot {
         visible: &VisibleSet,
         viewport: &Viewport,
         budgets: &RenderBudgets,
+        editing: Option<TextTarget>,
         lod: &LodPlan,
     ) {
         let thresholds = &budgets.lod;
@@ -350,12 +377,14 @@ impl RenderSnapshot {
             // for the same reason a node's is: the ladder answers per element,
             // and an edge labelled `XL` survives a zoom-out that an `S` one
             // does not.
-            let label_font_size = world
-                .edges()
-                .label(edge)
-                .is_some()
-                .then(|| lod.font_size_for(thresholds, world.edges().style(edge).font.world_size()))
-                .flatten();
+            //
+            // **And not while the caret is open on it** — the inline editor is
+            // drawing those words already, and a canvas that draws them too is
+            // the same string twice, a line apart. See the module doc.
+            let label_font_size = (world.edges().label(edge).is_some()
+                && editing != Some(TextTarget::Edge(edge)))
+            .then(|| lod.font_size_for(thresholds, world.edges().style(edge).font.world_size()))
+            .flatten();
 
             self.edges.push(PlannedEdge {
                 edge,
@@ -396,6 +425,7 @@ impl RenderSnapshot {
         budgets: &RenderBudgets,
         registry: &NodeRendererRegistry,
         hovered: Option<NodeIndex>,
+        editing: Option<TextTarget>,
         lod: &LodPlan,
     ) {
         let layered = world.is_layered();
@@ -458,9 +488,15 @@ impl RenderSnapshot {
             // have been invisible at 100 % zoom. The only legibility question
             // it has is whether its glyphs can be read, and `font_size_for` is
             // already the answer to that.
+            //
+            // **The last clause is the caret**, and it is the whole of "do not
+            // draw a label that is being edited": every renderer of a committed
+            // label gates on the `label_font_size` this decides. See the module
+            // doc.
             let laid_out = visual.shows_label
                 && nodes.cold(node).label.is_some()
-                && (detailed || visual.body == NodeShape::Text || connector.is_some());
+                && (detailed || visual.body == NodeShape::Text || connector.is_some())
+                && editing != Some(TextTarget::Node(node));
             let label_font_size = laid_out
                 .then(|| lod.font_size_for(&thresholds, nodes.style(node).font.world_size()))
                 .flatten();
@@ -778,6 +814,7 @@ mod tests {
                 &budgets(),
                 &self.registry,
                 hovered,
+                None,
                 Rect::new(Vec2::ZERO, self.viewport.size()),
             );
             &self.snapshot

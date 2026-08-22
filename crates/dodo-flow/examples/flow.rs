@@ -288,6 +288,14 @@
 //!    words must not move, resize or re-centre in either direction. Then zoom
 //!    in two rungs and do it again, which is where a fixed-height field used to
 //!    clip the line.
+//!
+//!    **And exactly one copy of the words.** Until this fix the canvas painted
+//!    the committed label under the caret — invisible while the field had an
+//!    opaque box, and two overlapping runs of text a line apart once it did
+//!    not. Type something and watch: the characters you add must appear in the
+//!    only text there is. `render::scene`'s
+//!    `a_label_being_edited_is_not_also_drawn_by_the_canvas` proves the frame
+//!    carries one label; that it *reads* as one is the screen's answer.
 //! 3. **Select one node and watch its border.** It must not change colour or
 //!    thickness — the bounding box and its grips are the only thing that says
 //!    "selected", which is what makes the Stroke row in the panel usable. Then

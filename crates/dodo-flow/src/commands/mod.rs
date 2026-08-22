@@ -215,6 +215,7 @@ mod tests {
             &budgets,
             &registry,
             None,
+            None,
             Rect::new(Vec2::ZERO, viewport.size()),
         );
 

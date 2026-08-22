@@ -1644,6 +1644,7 @@ mod tests {
             &for_backend(RenderBackend::Metal),
             &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
             None,
+            None,
             Rect::new(Vec2::ZERO, viewport.size()),
         );
         snapshot
@@ -1664,6 +1665,7 @@ mod tests {
             viewport,
             &for_backend(RenderBackend::Metal),
             &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
+            None,
             None,
             Rect::new(Vec2::ZERO, viewport.size()),
         );
@@ -2407,6 +2409,7 @@ mod tests {
             &for_backend(RenderBackend::Metal),
             &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
             None,
+            None,
             Rect::new(Vec2::ZERO, viewport.size()),
         );
 
@@ -2720,6 +2723,48 @@ mod tests {
         world.rebuild_all_geometry();
         world.clear_spatial_updates();
         world
+    }
+
+    /// One frame with a caret open on `editing`, returning both halves of what
+    /// the frame produced: the plan the painter is handed, and the snapshot the
+    /// element tree reads.
+    ///
+    /// Two returns rather than one because a label is drawn by two renderers —
+    /// the painter, from a `TextPrimitive`, and `views::nodes`, from the
+    /// snapshot's `label_font_size` — and only the second is visible to a
+    /// windowless test for a rich node.
+    fn frame_editing(
+        world: &GraphWorld,
+        viewport: &Viewport,
+        editing: Option<crate::interaction::TextTarget>,
+    ) -> (PaintPlan, RenderSnapshot) {
+        let index = SpatialIndex::for_world(world);
+        let mut visible = crate::spatial::VisibleSet::new();
+        index.query_visible(world, viewport, &mut visible);
+
+        let mut snapshot = RenderSnapshot::new();
+        snapshot.extract(
+            world,
+            &visible,
+            viewport,
+            &for_backend(RenderBackend::Metal),
+            &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
+            None,
+            editing,
+            Rect::new(Vec2::ZERO, viewport.size()),
+        );
+
+        let options = SceneOptions::new(
+            GridSettings {
+                style: GridStyle::None,
+                ..GridSettings::default()
+            },
+            GridLimits::from_budgets(&for_backend(RenderBackend::Metal)),
+        );
+
+        let mut plan = PaintPlan::new();
+        plan_scene(&mut plan, world, &snapshot, viewport, ink(), &options);
+        (plan, snapshot)
     }
 
     /// A camera on the **Compact** rung.
@@ -3634,6 +3679,168 @@ mod tests {
         );
     }
 
+    /// **While a caret is open on a label, nothing else draws that label** —
+    /// on every kind that has one.
+    ///
+    /// The captain's report: a double-clicked node shows the words twice, a
+    /// line apart, one copy carrying the keystroke the other has not seen. The
+    /// canvas had been painting the committed label under the inline editor
+    /// since §9; the editor's opaque box hid it, and taking that box away
+    /// uncovered it.
+    ///
+    /// **This is asserted on the frame, not on the source.** The commit that
+    /// removed the box could only say "the source builds no border", because
+    /// whether a pixel was painted is a fact about a window and this crate is
+    /// windowless — and a source assertion cannot see two elements both being
+    /// drawn. A label is not a pixel, though: it is a `TextPrimitive` in the
+    /// plan and a `label_font_size` in the snapshot, and both are data this
+    /// crate builds with no window at all. So both are checked, and the second
+    /// is what covers the rich half, whose label is a GPUI element rather than
+    /// a primitive.
+    ///
+    /// Every kind that can carry a label is here: a graph node, a group, a
+    /// drawn shape, a standalone text element, a straight connector and a
+    /// graph edge. They are one table because they are one mechanism — see
+    /// `render::snapshot`'s module doc — and a table is what notices when a
+    /// seventh kind arrives.
+    #[test]
+    fn a_label_being_edited_is_not_also_drawn_by_the_canvas() {
+        use crate::interaction::TextTarget;
+        use crate::models::{LinearKind, ShapeKind};
+
+        /// One case: a world, the label to look for, and the caret to open.
+        struct Case {
+            what: &'static str,
+            world: GraphWorld,
+            label: &'static str,
+            target: TextTarget,
+        }
+
+        fn node_case(what: &'static str, kind: ElementKind, label: &'static str) -> Case {
+            let mut world = GraphWorld::new();
+            let node = world.create_node(kind, Vec2::new(80.0, 80.0), Vec2::new(300.0, 160.0));
+            world.set_node_label(node, Some(label.into()));
+            world.set_node_style(node, centred_label_style());
+            world.rebuild_all_geometry();
+            world.clear_spatial_updates();
+            Case {
+                what,
+                world,
+                label,
+                target: TextTarget::Node(node),
+            }
+        }
+
+        let connector = {
+            let (start, end) = (Vec2::new(160.0, 120.0), Vec2::new(520.0, 380.0));
+            let mut world = GraphWorld::new();
+            let node =
+                world.create_node(ElementKind::Linear(LinearKind::Arrow), start, end - start);
+            world.set_node_connector(node, crate::models::Connector::new(start, end));
+            world.set_node_label(node, Some("weighs 3".into()));
+            world.set_node_style(node, centred_label_style());
+            world.rebuild_all_geometry();
+            world.clear_spatial_updates();
+            Case {
+                what: "a straight connector",
+                world,
+                label: "weighs 3",
+                target: TextTarget::Node(node),
+            }
+        };
+
+        let edge = {
+            let world = labelled_pair();
+            let index = world.edges().indices().next().expect("one edge");
+            Case {
+                what: "a graph edge",
+                world,
+                label: "carries",
+                target: TextTarget::Edge(index),
+            }
+        };
+
+        let cases = [
+            node_case(
+                "a graph node",
+                ElementKind::GraphNode(GraphNodeKind::Default),
+                "step one",
+            ),
+            node_case(
+                "a group",
+                ElementKind::GraphNode(GraphNodeKind::Group),
+                "the cluster",
+            ),
+            node_case(
+                "a drawn shape",
+                ElementKind::Shape(ShapeKind::Diamond),
+                "decision",
+            ),
+            node_case("a text element", ElementKind::Text, "a paragraph"),
+            connector,
+            edge,
+        ];
+
+        let viewport = pane();
+        for case in cases {
+            let runs = |editing: Option<TextTarget>| {
+                let (plan, snapshot) = frame_editing(&case.world, &viewport, editing);
+                let painted = plan
+                    .texts()
+                    .iter()
+                    .filter(|text| text.text.as_ref() == case.label)
+                    .count();
+                // The rich half draws its label from the snapshot rather than
+                // from the plan, so the shaped size is the fact that covers
+                // both — see `views::nodes`.
+                let shaped = snapshot
+                    .rich()
+                    .iter()
+                    .filter(|rich| rich.label_font_size.is_some())
+                    .count()
+                    + snapshot
+                        .canvas()
+                        .iter()
+                        .filter(|node| node.label_font_size.is_some())
+                        .count()
+                    + snapshot
+                        .edges()
+                        .iter()
+                        .filter(|planned| planned.label_font_size.is_some())
+                        .count();
+                (painted, shaped)
+            };
+
+            // The label this case is about is the only one in its world except
+            // for `labelled_pair`, whose two node labels are the control: they
+            // must be untouched while the edge's caret is open.
+            let others = usize::from(matches!(case.target, TextTarget::Edge(_))) * 2;
+
+            let (painted, shaped) = runs(None);
+            assert_eq!(painted, 1, "{}: its label is not drawn at all", case.what);
+            assert_eq!(
+                shaped,
+                1 + others,
+                "{}: the frame shapes the wrong number of labels",
+                case.what
+            );
+
+            let (painted, shaped) = runs(Some(case.target));
+            assert_eq!(
+                painted, 0,
+                "{}: the canvas drew the label the caret is already drawing — \
+                 the words appear twice, a line apart",
+                case.what
+            );
+            assert_eq!(
+                shaped, others,
+                "{}: the frame still shapes the label being edited, so whichever \
+                 renderer takes it will draw it under the caret",
+                case.what
+            );
+        }
+    }
+
     /// **Requirement 2, as the colour in the frame**: a label is drawn in its
     /// element's stroke colour, and a stroke change moves it with no second
     /// press.
@@ -3797,6 +4004,7 @@ mod tests {
                 &for_backend(RenderBackend::Metal),
                 &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
                 hovered,
+                None,
                 Rect::new(Vec2::ZERO, viewport.size()),
             );
 
@@ -3944,6 +4152,7 @@ mod tests {
             viewport,
             &for_backend(RenderBackend::Metal),
             &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
+            None,
             None,
             Rect::new(Vec2::ZERO, viewport.size()),
         );

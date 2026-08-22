@@ -205,7 +205,14 @@ fn decorated(
                 VerticalAlign::Middle => it.items_center(),
                 VerticalAlign::Bottom => it.items_end(),
             })
-            .px(px(10.0))
+            // **The same inset on both axes, and the same one the canvas
+            // uses.** It was 10 px horizontally and `LABEL_PADDING_PIXELS`
+            // vertically, so a rectangle's label started four pixels further in
+            // than the identical label on a diamond — and four pixels further
+            // in than the caret, which opens on
+            // `views::flow`'s `text_edit_bounds` and that mirrors `plan_labels`.
+            // Three renderers of one label, so one number.
+            .px(px(LABEL_PADDING_PIXELS))
             // The canvas insets a label by this much top and bottom before
             // laying it out, so a `Top` label has to start on the same pixel
             // here — see `plan_labels`.

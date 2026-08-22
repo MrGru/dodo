@@ -156,6 +156,7 @@ fn extract(
         budgets,
         &NodeRendererRegistry::with_generic_kinds(),
         None,
+        None,
         Rect::new(Vec2::ZERO, viewport.size()),
     );
 }

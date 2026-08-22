@@ -1399,9 +1399,14 @@
 //!
 //! **`views::flow`'s `text_edit_bounds` is the fourth statement of that table**
 //! and now returns the same box, so the caret opens over the rectangle the
-//! painter will use; `editor_band` takes the alignment too, which is what keeps
-//! the previous slice's "the editor is centred on the label" fix true now that a
-//! label can be moved off the middle.
+//! painter will use.
+//!
+//! *Corrected later:* `editor_band` no longer takes the vertical alignment. The
+//! field is a multi-line block placed inside that box by flexbox, so the
+//! alignment is applied to the field rather than arithmetic on the band, and
+//! what the band carries instead is the two **constant** differences between
+//! how `render::painter` places a block of text and how a `gpui-component`
+//! `Input` places one. See the section on the caret that was drawn twice.
 //!
 //! ## A label is drawn in its element's ink
 //!
@@ -1476,6 +1481,61 @@
 //! out from the left, so a centred label slid into place on commit — is closed:
 //! `views::flow`'s `text_editor_element` reads the label's own face, size, ink
 //! and both alignments, and draws no box at all.
+//!
+//! # The caret that was drawn twice
+//!
+//! Taking the editor's box away uncovered something that had been true since
+//! §9 and invisible for exactly as long: **the canvas paints the committed
+//! label underneath the caret**. The box was opaque, so it covered it. Without
+//! the box the same words appear twice, a line apart, one copy carrying the
+//! keystroke the other has not seen — the captain's report, and not a fault in
+//! the chromeless caret.
+//!
+//! The mechanism is one field. A committed label is drawn in three places —
+//! `render::scene`'s `plan_labels` and `plan_edge_labels`, and `views::nodes`'s
+//! element — and **all three gate on the snapshot's `label_font_size`**. So
+//! [`render::snapshot::RenderSnapshot::extract`] takes the
+//! [`interaction::TextTarget`] the caret is open on and gives that element no
+//! shaped size for the frame. One edit, every kind covered, and a fourth
+//! renderer cannot forget it.
+//!
+//! **The regression test is on the frame, not on the source**, and that is the
+//! point of it. The commit that removed the box could only assert that the
+//! source builds no border, because whether a pixel was painted is a fact about
+//! a window; a source assertion cannot see two elements both being drawn. A
+//! *label* is not a pixel, though — it is a `TextPrimitive` in the plan and an
+//! `Option<f32>` in the snapshot — so
+//! `a_label_being_edited_is_not_also_drawn_by_the_canvas` asserts both, over a
+//! table of every kind that can carry one. The transferable part: when a
+//! windowless crate cannot see the symptom, look for the *data* the symptom is
+//! made of before settling for a source grep.
+//!
+//! ## And the offset was a second fault
+//!
+//! The two runs were a line apart rather than exactly superimposed, which was
+//! its own bug and would have survived hiding one of them — the survivor would
+//! simply have been in the wrong place, and the text would jump when the edit
+//! ended. Three disagreements, all now arithmetic in `editor_band`:
+//!
+//! - **The field was one line and the label wraps.** It is `auto_grow`
+//!   multi-line now, soft-wrapping at the label's own width.
+//! - **`gpui-component` flows lines at 1.25 × the text size and
+//!   `render::painter` at 1.3** ([`render::plan::TextPrimitive::LINE_HEIGHT_RATIO`]).
+//!   One number, the painter's.
+//! - **The two measure a block of `n` lines differently** — `n × line_height`
+//!   against `font_size + (n − 1) × line_height` — and **wrap at one width
+//!   while aligning within another**, ten pixels apart. Both differences are
+//!   constant in `n`, so the band is the label's box grown by each of them, and
+//!   the field's own layout then lands on the painter's pixels for every `n`.
+//!   Growing the box rather than sliding it is load-bearing: `VerticalAlign`
+//!   clamps, and two boxes of different heights reach that clamp at different
+//!   moments.
+//!
+//! `views::nodes` also padded a rich label by 10 px horizontally where the
+//! canvas insets by `LABEL_PADDING_PIXELS`, so the same label sat four pixels
+//! further in on a rectangle than on a diamond. One number now — a label is
+//! drawn by three renderers in this crate and they have to agree about its box
+//! as much as about its style.
 //!
 //! # Where the budget numbers come from, and what they are not
 //!
