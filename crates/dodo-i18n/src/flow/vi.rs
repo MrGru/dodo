@@ -18,6 +18,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::TextPlaceholder => "Nhập nội dung".into(),
         Text::Delete => "Xoá phần đang chọn".into(),
         Text::KeepToolActive => "Giữ nguyên công cụ sau khi vẽ".into(),
+        Text::HandDrawnStyle => "Vẽ sơ đồ theo nét tay".into(),
         Text::SectionStroke => "Nét vẽ".into(),
         Text::SectionBackground => "Nền".into(),
         Text::SectionFill => "Kiểu tô".into(),

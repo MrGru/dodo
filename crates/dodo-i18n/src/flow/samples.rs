@@ -20,6 +20,7 @@ samples! {
     plain TextPlaceholder;
     plain Delete;
     plain KeepToolActive;
+    plain HandDrawnStyle;
 
     plain SectionStroke;
     plain SectionBackground;

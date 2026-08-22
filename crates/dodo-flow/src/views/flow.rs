@@ -928,12 +928,16 @@ impl FlowView {
     /// `switching_render_style_touches_no_element`. The geometry cache keeps
     /// both hands' entries apart by key ([`GeometryKey::sketch`](crate::render::cache::GeometryKey::sketch)),
     /// so switching back finds the old tessellations still warm.
+    ///
+    /// **Cheap to draw is not the same as free to change.** It is still an
+    /// edit — the style is the author's choice and it is saved with the
+    /// document — so it travels
+    /// [`FlowEditor::set_render_style`](crate::commands::FlowEditor::set_render_style)
+    /// and lands on the undo stack like every other change to the document.
     pub fn set_render_style(&mut self, style: RenderStyle, cx: &mut Context<Self>) {
-        if self.editor.world().settings().render_style == style {
-            return;
+        if self.editor.set_render_style(style) {
+            cx.notify();
         }
-        self.editor.set_render_style(style);
-        cx.notify();
     }
 
     pub fn toggle_render_style(&mut self, cx: &mut Context<Self>) {
@@ -1276,6 +1280,7 @@ impl FlowView {
             tool: self.interaction.tool(),
             tool_locked: self.interaction.tool_locked(),
             can_delete: self.can_delete(),
+            render_style: self.render_style(),
         }
     }
 

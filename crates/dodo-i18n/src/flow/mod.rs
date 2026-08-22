@@ -49,6 +49,11 @@ pub enum Text {
     /// The tool lock: with it on, finishing a drawing keeps the tool rather
     /// than returning to Select.
     KeepToolActive,
+    /// §13's clean/hand-drawn switch, on the palette. Phrased as what turning
+    /// it on does rather than as the name of a mode, because the button has one
+    /// glyph for both states and its fill is what says which one is on — the
+    /// same shape the tool lock's string takes, for the same reason.
+    HandDrawnStyle,
 
     // ---- the contextual property panel (Phase 11) ----
     //

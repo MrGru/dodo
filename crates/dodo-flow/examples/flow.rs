@@ -387,12 +387,19 @@
 //! # The launcher's own two buttons are English on purpose
 //!
 //! The canvas's strings go through `dodo_i18n::flow` from Phase 9 on, and
-//! **this file's do not**. The Clean/Sketch toggle is a developer harness: it
-//! is an `examples/` target nothing a shipped build can reach, `i18n_lint`
-//! does not scan it, and giving it catalogue entries would put two strings in
-//! the app's catalogue that the app never draws — the same objection
-//! `commands::keys` makes to a binding no code reads. If the render-style
-//! toggle becomes a real control, its strings are added then, with a caller.
+//! **this file's do not**. The Clean/Sketch toggle here is a developer harness:
+//! it is an `examples/` target no shipped build runs, `i18n_lint` does not scan
+//! it, and giving *these two buttons* catalogue entries would put two strings in
+//! the app's catalogue that nothing draws — the same objection `commands::keys`
+//! makes to a binding no code reads.
+//!
+//! **The render style itself is no longer harness-only.** It became a real
+//! control — the hand-drawn toggle on the tool palette, beside the tool lock —
+//! so its string was added then, with a caller: `dodo_i18n::flow`'s
+//! `HandDrawnStyle`, drawn by `views::palette`'s `sketch_button`. That control
+//! is one toggle rather than two buttons, so it needs one string and neither of
+//! this file's; these two stay untranslated for the reason above, which is
+//! about *these buttons* rather than about the feature they reach.
 //!
 //! # The clean/sketch toggle
 //!
@@ -402,6 +409,13 @@
 //! `runtime::world`'s `switching_render_style_touches_no_element` asserts and
 //! which is what makes the switch instant on a 100,000-node document. Open with
 //! `DODO_FLOW_NODES=100000` and click between them to see it.
+//!
+//! **Cheap to draw is not the same as free to change**, and the app's own
+//! control is where that shows: `FlowEditor::set_render_style` records an
+//! `EditCommand::SetRenderStyle` on the undo stack, because the style is saved
+//! with the document and is the author's choice. These two buttons take the
+//! same path — they call `FlowView::set_render_style` — so `Cmd+Z` in this
+//! launcher steps back over a click on them too.
 //!
 //! Zoom out past 0.35 and the buttons stop making a difference: the ladder
 //! degrades sketch to clean below the zoom at which a 2 px wobble is visible.

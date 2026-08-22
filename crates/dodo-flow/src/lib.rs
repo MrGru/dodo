@@ -300,6 +300,16 @@
 //! `switching_render_style_touches_no_element` asserts every one of those, and
 //! it is what makes the toggle instant on a 100,000-node document.
 //!
+//! **What it costs to *draw* and what it costs to *change* are different
+//! questions, and only the first one is answered above.** The style is saved
+//! with the document and is the author's choice rather than the viewer's, so
+//! changing it is an edit: it travels [`commands::EditCommand::SetRenderStyle`]
+//! — the one variant that names no element — and lands on the undo stack like
+//! any other change. The palette's hand-drawn toggle
+//! ([`views::palette`]'s `sketch_button`) is where a user reaches it; the
+//! property panel is not, because that panel is a view of the selection and
+//! this is a property of the document.
+//!
 //! - [`render::sketch`] — the generator: a deterministic function from a
 //!   canonical [`render::Outline`] to a wobbly one, seeded per element from its
 //!   [`ElementId`] and the document's own seed. splitmix64, no clock, no state,

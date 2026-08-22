@@ -53,17 +53,23 @@
 //! is the same reason the glyphs are drawn by the canvas's own outline builders
 //! rather than by an icon set.
 //!
-//! # The two actions beside the tools
+//! # The actions beside the tools
 //!
-//! **Delete** and **the tool lock** sit past a divider, because they are not
-//! tools: neither changes what the next press means. They are here rather than
-//! in a second strip because a palette the user has to find twice is worse than
-//! one with a divider in it, and because the lock is *about* the tools — with
-//! it on, finishing a drawing keeps the tool instead of returning to Select.
+//! **Insert image**, **the hand-drawn toggle**, **the tool lock** and
+//! **Delete** sit past a divider, because none of them is a tool: not one
+//! changes what the next press means. They are here rather than in a second
+//! strip because a palette the user has to find twice is worse than one with a
+//! divider in it.
 //!
-//! The lock reuses the active-tool look: filled means locked. A second glyph
-//! for the unlocked state would be a second thing to draw, and the state it
-//! reports is exactly the one "this button is on" already means.
+//! The two toggles reuse the active-tool look: filled means on. A second glyph
+//! for the off state would be a second thing to draw, and the state it reports
+//! is exactly the one "this button is on" already means.
+//!
+//! **The hand-drawn toggle is the only one here that is not about the canvas at
+//! all — it is about the document**, and that is why it is on this strip rather
+//! than on the property panel: the panel is a view of the *selection*, and a
+//! document-wide setting reachable only once something is selected is a setting
+//! most users never find. [`sketch_button`] carries the whole argument.
 //!
 //! Delete is drawn muted and does nothing when the selection is empty. Muted
 //! rather than absent, so the control does not move under the pointer, and
@@ -80,11 +86,12 @@ use gpui_component::{ActiveTheme, tooltip::Tooltip};
 use crate::{
     geometry::{Rect, Vec2},
     interaction::CanvasTool,
-    models::{Color, RenderQuality},
+    models::{Color, RenderQuality, RenderStyle, SketchStyle},
     render::{
         painter::{build_path, from_hsla, to_hsla},
         plan::PathPaint,
         shapes::{self, Outline},
+        sketch,
     },
     runtime::NodeShape,
     views::{
@@ -136,13 +143,16 @@ pub enum Glyph {
     /// [`CanvasTool`](crate::interaction::CanvasTool)'s own doc for why an
     /// image has no tool.
     Picture,
+    /// **§13's clean/hand-drawn switch**, in either state — one glyph for both,
+    /// for the same reason [`Glyph::Lock`] is one.
+    Sketch,
 }
 
 impl Glyph {
     /// The glyphs that are not a tool's, for the tests. Every *tool's* comes
     /// from [`CanvasTool::ALL`], so there is no second list of the eight.
     #[cfg(test)]
-    const ACTIONS: &'static [Glyph] = &[Glyph::Lock, Glyph::Trash, Glyph::Picture];
+    const ACTIONS: &'static [Glyph] = &[Glyph::Lock, Glyph::Trash, Glyph::Picture, Glyph::Sketch];
 
     /// A short stable name, for the element id. **Not user-facing** — the
     /// labels are `dodo_i18n::flow`'s.
@@ -152,6 +162,7 @@ impl Glyph {
             Glyph::Trash => "delete",
             Glyph::Lock => "tool-lock",
             Glyph::Picture => "insert-image",
+            Glyph::Sketch => "render-style",
         }
     }
 }
@@ -167,6 +178,8 @@ pub struct PaletteState {
     pub tool_locked: bool,
     /// Whether anything is selected. The Delete button is muted when not.
     pub can_delete: bool,
+    /// §13's style, which the hand-drawn toggle shows as filled or not.
+    pub render_style: RenderStyle,
 }
 
 /// **The palette** (§45), as an element the canvas positions over itself.
@@ -203,6 +216,7 @@ pub fn palette(view: Entity<FlowView>, state: PaletteState, cx: &App) -> impl In
         )
         .child(divider(cx))
         .child(image_button(view.clone(), cx))
+        .child(sketch_button(state.render_style, view.clone(), cx))
         .child(lock_button(state.tool_locked, view.clone(), cx))
         .child(delete_button(state.can_delete, view, cx))
 }
@@ -252,6 +266,40 @@ fn image_button(view: Entity<FlowView>, cx: &App) -> impl IntoElement {
         })
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             view.update(cx, |this, cx| this.insert_image(window, cx));
+        })
+}
+
+/// **§13's hand-drawn toggle**, as a toggle: filled means the document is
+/// drawn by hand.
+///
+/// Beside the tools rather than in the property panel, and that is the whole of
+/// the placement decision: the panel is a view of *the selection*
+/// ([`properties`](crate::properties)'s section table is indexed by selection
+/// kind and has no row for an empty one), and this is a property of the
+/// **document**. A control that only appears once something is selected would
+/// be a document setting a user can only reach by first picking an element that
+/// has nothing to do with it.
+///
+/// It is an authoring control, not a display preference, so it does not belong
+/// in dodo's Settings dialog either —
+/// [`DocumentSettings`](crate::models::DocumentSettings) states the difference
+/// and names `render_quality` as the one that would go there.
+fn sketch_button(style: RenderStyle, view: Entity<FlowView>, cx: &App) -> impl IntoElement {
+    let next = match style {
+        RenderStyle::Clean => RenderStyle::Sketch,
+        RenderStyle::Sketch => RenderStyle::Clean,
+    };
+
+    shell(Glyph::Sketch, style == RenderStyle::Sketch, true, cx)
+        // No `.action()`: alone among the buttons here this has no key hint,
+        // because `commands::keys` carries no binding for it — and a binding
+        // added there to decorate a tooltip is a binding no handler reads,
+        // which is the objection that table makes to itself.
+        .tooltip(move |window, cx| {
+            Tooltip::new(t(flow::Text::HandDrawnStyle, cx)).build(window, cx)
+        })
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            view.update(cx, |this, cx| this.set_render_style(next, cx));
         })
 }
 
@@ -386,6 +434,12 @@ fn strokes(glyph: Glyph, box_: Rect, ink: Color) -> Vec<(Outline, PathPaint)> {
         Glyph::Tool(tool) => tool,
         Glyph::Trash => return trash_glyph(box_).map(|outline| (outline, stroke)).collect(),
         Glyph::Lock => return lock_glyph(box_).map(|outline| (outline, stroke)).collect(),
+        Glyph::Sketch => {
+            return sketch_glyph(box_)
+                .into_iter()
+                .map(|outline| (outline, stroke))
+                .collect();
+        }
         Glyph::Picture => {
             // The frame is the canvas's own rectangle builder, for the module
             // doc's reason: it is the shape the action creates. What the frame
@@ -543,6 +597,52 @@ pub fn lock_glyph(box_: Rect) -> impl Iterator<Item = Outline> {
 
     [shackle, body].into_iter()
 }
+
+/// **The hand-drawn toggle's glyph: a rectangle drawn by §13's own hand.**
+///
+/// The module's rule, applied to the one button that is not about a shape at
+/// all — it borrows [`render::sketch`](crate::render::sketch), the generator
+/// that draws the canvas when this toggle is on, rather than picturing it. A
+/// change to how the hand wobbles changes this button with it, and there is no
+/// second drawing of "hand-drawn" to keep in step.
+///
+/// **Two constants make that safe at 14 px.** The canvas's own hand is a 2 px
+/// tremor, which on a button is most of the glyph, so [`GLYPH_HAND`] is the
+/// same hand at a lower roughness and [`SKETCH_GLYPH_MARGIN`] leaves it room
+/// to wobble inside the button — `tests::no_glyph_leaves_its_button` is what
+/// holds those two in a working relationship. The seed is fixed, so the button
+/// draws the same wobble every frame rather than shimmering.
+pub fn sketch_glyph(box_: Rect) -> Vec<Outline> {
+    let margin = Vec2::new(
+        box_.size.x * SKETCH_GLYPH_MARGIN,
+        box_.size.y * SKETCH_GLYPH_MARGIN,
+    );
+    let inner = Rect::new(
+        box_.origin + margin,
+        Vec2::new(box_.size.x - margin.x * 2.0, box_.size.y - margin.y * 2.0),
+    );
+
+    match shapes::outline_for_node(NodeShape::Rectangle, inner, 0.0) {
+        Some(outline) => sketch::strokes(&outline, &GLYPH_HAND, SKETCH_GLYPH_SEED),
+        None => Vec::new(),
+    }
+}
+
+/// The hand the glyph is drawn with: the canvas's default at a third of its
+/// roughness, because [`SketchStyle::DEFAULT`]'s 2 px tremor is sized for a
+/// node rather than for a 14 px button.
+const GLYPH_HAND: SketchStyle = SketchStyle {
+    roughness: 0.55,
+    ..SketchStyle::DEFAULT
+};
+
+/// The room the wobble is given inside the button, as a fraction of the glyph
+/// box on each side. Comfortably more than [`GLYPH_HAND`]'s worst excursion —
+/// jitter plus bow, both scaled by its roughness.
+const SKETCH_GLYPH_MARGIN: f32 = 0.16;
+
+/// A fixed seed, so the button is the same button every frame.
+const SKETCH_GLYPH_SEED: u64 = 0x_C0FF_EE00_5EED_1234;
 
 /// The Text tool's glyph: a serif capital A, stroked.
 ///
@@ -709,6 +809,42 @@ mod tests {
             assert!(
                 !labels[index + 1..].contains(label),
                 "two tools share the label {label:?}"
+            );
+        }
+    }
+
+    /// **The hand-drawn toggle is drawn by the hand, not by a picture of one.**
+    ///
+    /// Two things it would silently become otherwise. With
+    /// [`GLYPH_HAND`]'s roughness at zero, [`sketch::strokes`] returns the
+    /// canonical outline and the button draws a plain rectangle — which is the
+    /// *rectangle tool's* glyph, the collision the module doc calls worse than
+    /// no button. And with one stroke instead of two it stops reading as a line
+    /// gone over twice, which is the whole look it is advertising.
+    #[test]
+    fn the_hand_drawn_glyph_is_drawn_by_the_hand() {
+        let sketched = sketch_glyph(BOX);
+        assert_eq!(sketched.len(), GLYPH_HAND.strokes() as usize);
+
+        let margin = Vec2::new(
+            BOX.size.x * SKETCH_GLYPH_MARGIN,
+            BOX.size.y * SKETCH_GLYPH_MARGIN,
+        );
+        let clean = shapes::outline_for_node(
+            NodeShape::Rectangle,
+            Rect::new(
+                BOX.origin + margin,
+                Vec2::new(BOX.size.x - margin.x * 2.0, BOX.size.y - margin.y * 2.0),
+            ),
+            0.0,
+        )
+        .expect("a rectangle has an outline");
+
+        for pass in &sketched {
+            assert_ne!(
+                pass.commands(),
+                clean.commands(),
+                "the toggle is drawing a clean rectangle"
             );
         }
     }

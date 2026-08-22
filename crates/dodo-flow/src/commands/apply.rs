@@ -425,6 +425,20 @@ pub fn apply(world: &mut GraphWorld, command: EditCommand) -> Result<EditOutcome
 
             Ok(EditOutcome::from_inverse(EditCommand::SetEdgeLinks(before)))
         }
+
+        // The one arm that names no element, and therefore the one that has no
+        // liveness check to make: a document setting is always there. Reading
+        // the old value out on the way past is what makes the inverse a
+        // `SetRenderStyle` of what was, so undo and redo are the same arm.
+        EditCommand::SetRenderStyle(style) => {
+            let was = world.settings().render_style;
+            if was == style {
+                return Ok(EditOutcome::unchanged());
+            }
+            world.settings_mut().render_style = style;
+
+            Ok(EditOutcome::from_inverse(EditCommand::SetRenderStyle(was)))
+        }
     }
 }
 

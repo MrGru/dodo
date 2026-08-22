@@ -133,6 +133,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// **§13's render style is the author's choice, so it survives the file.**
+    ///
+    /// The whole chain a user walks — switch it on the palette, let the canvas
+    /// write, reopen — rather than serde alone: `to_document` and
+    /// `from_document` are where a settings field gets quietly dropped, and
+    /// neither of them is exercised by round-tripping a `FlowDocument`.
+    #[test]
+    fn the_render_style_survives_a_save_and_a_reload() {
+        use crate::{commands::FlowEditor, models::RenderStyle};
+
+        let path = path();
+        let mut editor = FlowEditor::new();
+        assert!(editor.set_render_style(RenderStyle::Sketch));
+
+        DiskDocumentStore::at(path.clone())
+            .persist(&editor.to_document())
+            .expect("persists");
+
+        let reopened = DiskDocumentStore::at(path.clone()).load().expect("loads");
+        let (editor, _) = FlowEditor::from_document(&reopened);
+        assert_eq!(editor.settings().render_style, RenderStyle::Sketch);
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     #[test]
     fn a_corrupt_file_is_refused_and_left_untouched() {
         let path = path();

@@ -52,7 +52,7 @@
 
 use crate::{
     geometry::Vec2,
-    models::{Connector, EdgeIndex, EdgeRouting, ElementStyle, NodeImage, NodeIndex},
+    models::{Connector, EdgeIndex, EdgeRouting, ElementStyle, NodeImage, NodeIndex, RenderStyle},
     runtime::{ConnectionError, EdgeSpec, HandleSpec, NodeSpec},
 };
 
@@ -193,6 +193,28 @@ pub enum EditCommand {
 
     /// The same, for edges.
     SetEdgeLinks(Vec<(EdgeIndex, Option<String>)>),
+
+    /// **§13's render style**, and the one variant that names no element.
+    ///
+    /// It is here rather than beside the other document settings because of
+    /// what [`DocumentSettings::render_style`](crate::models::DocumentSettings)
+    /// says about itself: a hand-drawn diagram is hand-drawn every time it is
+    /// opened, so the style is the *author's* choice and switching it edits the
+    /// document. An edit that does not travel this enum is an edit undo cannot
+    /// reach, and a user who sketched a diagram by accident would have no way
+    /// back but to click the other button — which is not undo, because undo is
+    /// what people press.
+    ///
+    /// **A whole document setting fits in the delta**, unlike the element
+    /// variants: [`RenderStyle`] is one byte, so this carries the *new* value
+    /// and the applier reads the old one out on its way past, exactly as
+    /// [`SetNodeStyles`](EditCommand::SetNodeStyles) does.
+    ///
+    /// It still touches no element — `runtime::world`'s
+    /// `switching_render_style_touches_no_element` is untouched by this, and
+    /// has to stay that way. The undo entry is a record of the switch, not a
+    /// snapshot of what it drew.
+    SetRenderStyle(RenderStyle),
 }
 
 impl EditCommand {
@@ -274,6 +296,7 @@ impl EditCommand {
             EditCommand::SetNodeImages(_) => "image-nodes",
             EditCommand::SetNodeLinks(_) => "link-nodes",
             EditCommand::SetEdgeLinks(_) => "link-edges",
+            EditCommand::SetRenderStyle(_) => "render-style",
         }
     }
 
@@ -301,6 +324,9 @@ impl EditCommand {
             EditCommand::SetNodeImages(items) => items.is_empty(),
             EditCommand::SetNodeLinks(items) => items.is_empty(),
             EditCommand::SetEdgeLinks(items) => items.is_empty(),
+            // Nothing to be empty of: one value, always a request to set it.
+            // Whether it *changes* anything is the applier's answer.
+            EditCommand::SetRenderStyle(_) => false,
         }
     }
 

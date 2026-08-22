@@ -1167,11 +1167,19 @@ impl FlowEditor {
         self.world.settings()
     }
 
-    pub fn set_render_style(&mut self, style: RenderStyle) {
-        if self.world.settings().render_style != style {
-            self.world.settings_mut().render_style = style;
-            self.bump_revision();
-        }
+    /// **§13's clean/hand-drawn switch**, as an edit.
+    ///
+    /// The two settings below it write the world directly and bump the
+    /// revision, which is enough to save them; this one goes through
+    /// [`apply`](FlowEditor::apply) instead, because it is the only one of the
+    /// three a user reaches from a control. `render_style` is the *author's*
+    /// choice — [`DocumentSettings`] says so in as many words — so switching it
+    /// is a document edit, and an edit a user makes is an edit they can undo.
+    ///
+    /// Answers whether anything changed, so a caller can skip its repaint.
+    pub fn set_render_style(&mut self, style: RenderStyle) -> bool {
+        self.apply(EditCommand::SetRenderStyle(style))
+            .is_ok_and(|summary| summary.changed)
     }
 
     pub fn set_sketch_style(&mut self, sketch: SketchStyle) {
@@ -2070,6 +2078,36 @@ mod tests {
         editor.clear_selection();
 
         assert_eq!(editor.history().undo_depth(), depth);
+    }
+
+    /// **§13's toggle is an edit, and behaves like one.** It saves (the
+    /// revision moves), it undoes, it redoes, and setting the style it already
+    /// has costs neither an entry nor a revision — the four properties the
+    /// palette's button relies on.
+    #[test]
+    fn switching_the_render_style_is_one_undoable_step() {
+        use crate::models::RenderStyle;
+
+        let (mut editor, _) = editor_with_a_node();
+        let before = editor.revision();
+        let depth = editor.history().undo_depth();
+        assert_eq!(editor.settings().render_style, RenderStyle::Clean);
+
+        assert!(editor.set_render_style(RenderStyle::Sketch));
+        assert_eq!(editor.settings().render_style, RenderStyle::Sketch);
+        assert_ne!(editor.revision(), before, "the document has to save");
+        assert_eq!(editor.history().undo_depth(), depth + 1);
+
+        assert!(
+            !editor.set_render_style(RenderStyle::Sketch),
+            "setting the style it already has is not an edit"
+        );
+        assert_eq!(editor.history().undo_depth(), depth + 1);
+
+        assert!(editor.undo());
+        assert_eq!(editor.settings().render_style, RenderStyle::Clean);
+        assert!(editor.redo());
+        assert_eq!(editor.settings().render_style, RenderStyle::Sketch);
     }
 
     /// Loading a document must drop the history: every stored delta names

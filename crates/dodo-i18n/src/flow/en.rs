@@ -18,6 +18,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::TextPlaceholder => "Type something".into(),
         Text::Delete => "Delete the selection".into(),
         Text::KeepToolActive => "Keep the tool active after drawing".into(),
+        Text::HandDrawnStyle => "Draw the diagram by hand".into(),
         Text::SectionStroke => "Stroke".into(),
         Text::SectionBackground => "Background".into(),
         Text::SectionFill => "Fill".into(),
