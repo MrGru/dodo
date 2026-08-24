@@ -2117,6 +2117,43 @@ mod tests {
             [a, b, c].map(|node| editor.world().nodes().position(node)),
             before
         );
+
+        assert!(editor.align_selection(crate::properties::Alignment::DistributeVertical));
+        let mut bounds = [a, b, c].map(|node| editor.world().nodes().bounds(node));
+        bounds.sort_by(|a, b| a.min().y.total_cmp(&b.min().y));
+        let first_gap = bounds[1].min().y - bounds[0].max().y;
+        let second_gap = bounds[2].min().y - bounds[1].max().y;
+        assert!((first_gap - second_gap).abs() < 1e-4);
+    }
+
+    #[test]
+    fn all_six_alignment_controls_share_the_requested_axis() {
+        for alignment in crate::properties::Alignment::SIX {
+            let mut editor = FlowEditor::new();
+            let a = add_shape(&mut editor, Vec2::new(10.0, 20.0), Vec2::new(40.0, 30.0));
+            let b = add_shape(&mut editor, Vec2::new(160.0, 100.0), Vec2::new(80.0, 50.0));
+            editor.set_node_selected(a, true);
+            editor.set_node_selected(b, true);
+            assert!(editor.align_selection(*alignment), "{alignment:?}");
+            let (a, b) = (
+                editor.world().nodes().rotated_bounds(a),
+                editor.world().nodes().rotated_bounds(b),
+            );
+            let equal = match alignment {
+                crate::properties::Alignment::Left => (a.min().x - b.min().x).abs() < 1e-4,
+                crate::properties::Alignment::HorizontalCenter => {
+                    (a.center().x - b.center().x).abs() < 1e-4
+                }
+                crate::properties::Alignment::Right => (a.max().x - b.max().x).abs() < 1e-4,
+                crate::properties::Alignment::Top => (a.min().y - b.min().y).abs() < 1e-4,
+                crate::properties::Alignment::VerticalMiddle => {
+                    (a.center().y - b.center().y).abs() < 1e-4
+                }
+                crate::properties::Alignment::Bottom => (a.max().y - b.max().y).abs() < 1e-4,
+                _ => unreachable!(),
+            };
+            assert!(equal, "{alignment:?}: {a:?}, {b:?}");
+        }
     }
 
     #[test]
