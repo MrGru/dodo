@@ -79,8 +79,13 @@ impl EditOutcome {
     }
 
     fn from_inverse(inverse: EditCommand) -> EditOutcome {
+        let changed = !inverse.is_trivially_empty();
+        EditOutcome::from_inverse_with_changed(inverse, changed)
+    }
+
+    fn from_inverse_with_changed(inverse: EditCommand, changed: bool) -> EditOutcome {
         EditOutcome {
-            changed: !inverse.is_trivially_empty(),
+            changed,
             inverse,
             added_nodes: Vec::new(),
             added_edges: Vec::new(),
@@ -184,38 +189,40 @@ pub fn apply(world: &mut GraphWorld, command: EditCommand) -> Result<EditOutcome
 
         EditCommand::SetNodePositions(items) => {
             let mut before = Vec::with_capacity(items.len());
+            let mut changed = false;
             for (node, position) in items {
                 if !world.node_is_live(node) {
                     continue;
                 }
                 let was = world.nodes().position(node);
-                if was == position {
-                    continue;
-                }
+                changed |= was != position;
                 world.set_node_position(node, position);
                 before.push((node, was));
             }
 
-            Ok(EditOutcome::from_inverse(EditCommand::SetNodePositions(
-                before,
-            )))
+            Ok(EditOutcome::from_inverse_with_changed(
+                EditCommand::SetNodePositions(before),
+                changed,
+            ))
         }
 
         EditCommand::ResizeNodes(items) => {
             let mut before = Vec::with_capacity(items.len());
+            let mut changed = false;
             for (node, size) in items {
                 if !world.node_is_live(node) {
                     continue;
                 }
                 let was = world.nodes().size(node);
-                if was == size {
-                    continue;
-                }
+                changed |= was != size;
                 world.set_node_size(node, size);
                 before.push((node, was));
             }
 
-            Ok(EditOutcome::from_inverse(EditCommand::ResizeNodes(before)))
+            Ok(EditOutcome::from_inverse_with_changed(
+                EditCommand::ResizeNodes(before),
+                changed,
+            ))
         }
 
         EditCommand::RotateElements {
@@ -831,6 +838,42 @@ mod tests {
             let outcome = apply(&mut world, command).expect("a no-op is not an error");
             assert!(!outcome.changed, "{name} claimed a change it did not make");
         }
+    }
+
+    /// Batched absolute writes keep every live member in their inverse, even
+    /// when one member rounded to its current value. History coalescing keys on
+    /// that list; filtering no-ops made the inverse change shape per frame.
+    #[test]
+    fn batched_absolute_inverses_keep_unchanged_live_members() {
+        let mut world = world_with_two_connected_nodes();
+        let a = crate::models::NodeIndex::new(0);
+        let b = crate::models::NodeIndex::new(1);
+        let positions = [
+            (a, world.nodes().position(a)),
+            (b, world.nodes().position(b)),
+        ];
+        let outcome = apply(
+            &mut world,
+            EditCommand::SetNodePositions(vec![
+                positions[0],
+                (b, positions[1].1 + Vec2::new(10.0, 0.0)),
+            ]),
+        )
+        .unwrap();
+        assert!(outcome.changed);
+        assert_eq!(
+            outcome.inverse,
+            EditCommand::SetNodePositions(positions.into())
+        );
+
+        let sizes = [(a, world.nodes().size(a)), (b, world.nodes().size(b))];
+        let outcome = apply(
+            &mut world,
+            EditCommand::ResizeNodes(vec![sizes[0], (b, sizes[1].1 + Vec2::ONE)]),
+        )
+        .unwrap();
+        assert!(outcome.changed);
+        assert_eq!(outcome.inverse, EditCommand::ResizeNodes(sizes.into()));
     }
 
     /// The one arm that can fail part-way must leave nothing behind.

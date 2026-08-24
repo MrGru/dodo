@@ -1664,6 +1664,23 @@
 //! solid outline per member. The test is on the paint plan: four chrome paths
 //! for two loose members, two for the same members grouped.
 //!
+//! ## The rotation crash was a history invariant doing its job
+//!
+//! Batched absolute position and size edits originally filtered unchanged
+//! members out of their inverses. That latent command-layer fault predated
+//! groups; rotation exposed it because a member at or near the group centre can
+//! round to the same `f32` position on one small frame and move on the next.
+//! The redo then named the full batch while the undo named a changing subset:
+//! debug builds stopped at history's asymmetric-merge assertion, while release
+//! builds could retain a half-merged entry and corrupt a later undo.
+//!
+//! Absolute-write inverses now retain every live member while reporting a true
+//! no-op separately, and history tests both directions on clones before
+//! committing either merge. A real machine-driven group rotation covers both
+//! an exactly central member and hundreds of sub-resolution frames; a direct
+//! history test proves a deliberately asymmetric pair stays as two untouched
+//! entries. The same inverse-shape assertion covers group resize.
+//!
 //! # What the seventeenth slice added: Align and the grouping chords
 //!
 //! [`properties::PanelSection::Align`] is inserted exactly between Layers and

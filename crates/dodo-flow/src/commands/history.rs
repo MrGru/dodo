@@ -207,19 +207,17 @@ impl CommandHistory {
         if let Some(gesture) = self.gesture
             && let Some(top) = self.undos.back_mut()
             && top.gesture == Some(gesture)
-            && top.redo.merge(&redo)
         {
-            // The undo side folds the other way round — undoing A then B is
-            // `undo B` then `undo A` — and `EditCommand::merge` sums, so
-            // folding the new undo into the old one gives the same answer as
-            // folding them in order. `edit.rs` has that as a test.
-            let merged = top.undo.merge(&undo);
-            debug_assert!(
-                merged,
-                "the redo sides merged but the undo sides did not, which would \
-                 leave this entry undoing less than it redoes"
-            );
-            return;
+            // Merge transactionally: either both directions fold or neither
+            // does. Mutating the redo first and discovering that the undo
+            // cannot merge leaves a release build undoing less than it redoes.
+            let mut merged_redo = top.redo.clone();
+            let mut merged_undo = top.undo.clone();
+            if merged_redo.merge(&redo) && merged_undo.merge(&undo) {
+                top.redo = merged_redo;
+                top.undo = merged_undo;
+                return;
+            }
         }
 
         // **The second rule, for a dragged control.** See
@@ -378,6 +376,27 @@ mod tests {
             step[0].redo,
             EditCommand::move_node(NodeIndex::new(0), Vec2::new(60.0, 0.0))
         );
+    }
+
+    /// A failed merge is all-or-nothing. The old implementation mutated the
+    /// redo before finding that the undo named different nodes; debug builds
+    /// panicked, while release builds silently kept a corrupt half-merge.
+    #[test]
+    fn an_asymmetric_merge_leaves_the_earlier_entry_untouched() {
+        let mut history = CommandHistory::new();
+        let first_redo = EditCommand::move_node(NodeIndex::new(0), Vec2::new(1.0, 0.0));
+        let first_undo = EditCommand::SetNodePositions(vec![(NodeIndex::new(0), Vec2::ZERO)]);
+
+        history.begin_gesture();
+        history.push(first_redo.clone(), first_undo);
+        history.push(
+            EditCommand::move_node(NodeIndex::new(0), Vec2::new(2.0, 0.0)),
+            EditCommand::SetNodePositions(vec![(NodeIndex::new(1), Vec2::ZERO)]),
+        );
+        history.end_gesture();
+
+        assert_eq!(history.undo_depth(), 2);
+        assert_eq!(history.undos.front().unwrap().redo, first_redo);
     }
 
     /// The mechanism merging cannot cover: a gesture whose commands are not

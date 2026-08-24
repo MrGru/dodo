@@ -499,6 +499,103 @@ mod tests {
         }
     }
 
+    fn grouped_rotation_fixture(
+        centre: Vec2,
+        inner_offset: f32,
+    ) -> (FlowEditor, NodeIndex, [NodeIndex; 3]) {
+        let mut editor = FlowEditor::new();
+        let size = Vec2::new(2.0, 2.0);
+        let specs = [-1_000.0, inner_offset, 1_000.0].map(|offset| {
+            NodeDraft::new(NodeSpec::new(
+                ElementId::NONE,
+                ElementKind::GraphNode(GraphNodeKind::Default),
+                centre + Vec2::new(offset, 0.0) - size * 0.5,
+                size,
+            ))
+        });
+        let members: [NodeIndex; 3] = editor
+            .apply(EditCommand::AddNodes(specs.into()))
+            .unwrap()
+            .added_nodes
+            .try_into()
+            .unwrap();
+        for member in members {
+            editor.set_node_selected(member, true);
+        }
+        assert!(editor.group_selection());
+        let group = editor.world().selection().single_node().unwrap();
+        (editor, group, members)
+    }
+
+    fn rotate_in_steps(editor: &mut FlowEditor, group: NodeIndex, centre: Vec2, angles: &[f32]) {
+        let mut machine = InteractionMachine::new();
+        apply_gesture(
+            editor,
+            machine.handle(InteractionEvent::BeginRotate {
+                node: group,
+                centre,
+                pointer: centre + Vec2::new(100.0, 0.0),
+            }),
+        );
+        for &angle in angles {
+            apply_gesture(
+                editor,
+                machine.handle(InteractionEvent::MoveRotate {
+                    world: centre + Vec2::new(angle.cos(), angle.sin()) * 100.0,
+                    shift: false,
+                }),
+            );
+        }
+        apply_gesture(
+            editor,
+            machine.handle(InteractionEvent::PointerUp {
+                button: PointerButton::Left,
+                world: Vec2::ZERO,
+                target: PointerTarget::Empty,
+            }),
+        );
+    }
+
+    #[test]
+    fn a_group_rotation_with_a_member_at_its_centre_undoes_exactly() {
+        let centre = Vec2::new(10_000.0, 20_000.0);
+        let (mut editor, group, members) = grouped_rotation_fixture(centre, 0.0);
+        let before = members.map(|node| editor.world().nodes().position(node));
+        let depth = editor.history().undo_depth();
+
+        rotate_in_steps(
+            &mut editor,
+            group,
+            centre,
+            &[0.001, 0.002, 0.003, 0.01, 0.1],
+        );
+
+        assert!(editor.undo());
+        assert_eq!(editor.history().undo_depth(), depth);
+        assert_eq!(
+            members.map(|node| editor.world().nodes().position(node)),
+            before
+        );
+    }
+
+    #[test]
+    fn tiny_group_rotation_frames_do_not_change_the_history_member_set() {
+        let centre = Vec2::new(1_000_000.0, 1_000_000.0);
+        let (mut editor, group, members) = grouped_rotation_fixture(centre, 0.125);
+        let before = members.map(|node| editor.world().nodes().position(node));
+        let depth = editor.history().undo_depth();
+        let angles: Vec<f32> = (1..=200).map(|step| step as f32 * 0.001).collect();
+
+        rotate_in_steps(&mut editor, group, centre, &angles);
+
+        assert!(editor.undo());
+        assert_eq!(editor.history().undo_depth(), depth);
+        assert_eq!(
+            members.map(|node| editor.world().nodes().position(node)),
+            before
+        );
+    }
+
     #[test]
     fn a_rotation_drag_is_one_undo_step() {
         let (mut editor, node, _) = editor_with_two_nodes();
