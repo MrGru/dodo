@@ -4038,6 +4038,67 @@ mod tests {
         assert!((round_tripped.a - original.a).abs() < 1e-3);
     }
 
+    /// A full-height layout carrier must not turn the empty strip below a
+    /// content-sized property card into an invisible input shield.
+    #[gpui::test]
+    fn the_pane_below_the_property_card_still_receives_canvas_presses(cx: &mut TestAppContext) {
+        let (view, mut cx) = mount(cx);
+        cx.update(|window, _| window.resize(gpui::size(px(900.0), px(1200.0))));
+
+        view.update_in(&mut cx, |this, _window, cx| {
+            let node = this
+                .editor
+                .apply(crate::commands::EditCommand::AddNodes(vec![
+                    crate::commands::NodeDraft::new(crate::runtime::NodeSpec::new(
+                        crate::models::ElementId::NONE,
+                        ElementKind::Shape(crate::models::ShapeKind::Rectangle),
+                        Vec2::new(500.0, 300.0),
+                        Vec2::new(160.0, 80.0),
+                    )),
+                ]))
+                .expect("adding a node cannot fail")
+                .added_nodes[0];
+            this.editor.select_only(Some(node));
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        let card = cx
+            .debug_bounds("flow-properties-card")
+            .expect("the selected node draws a property card");
+        let position = gpui::point(card.left() + px(40.0), card.bottom() + px(40.0));
+        let viewport = cx.update(|window, _| window.viewport_size());
+        assert!(
+            position.y < viewport.height,
+            "the test needs canvas below the card"
+        );
+
+        cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+        cx.simulate_event(MouseDownEvent {
+            position,
+            modifiers: gpui::Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 1,
+            first_mouse: false,
+        });
+
+        view.update(&mut cx, |this, _cx| {
+            assert!(
+                matches!(
+                    this.interaction.state(),
+                    crate::interaction::InteractionState::BoxSelecting { .. }
+                ),
+                "the panel's full-height layout column swallowed a canvas press below the card",
+            );
+        });
+        cx.simulate_event(MouseUpEvent {
+            position,
+            modifiers: gpui::Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 1,
+        });
+    }
+
     /// Every overlay this view stacks over the canvas, as `(file, source,
     /// builder)` — the function whose *outermost* element is the overlay.
     ///

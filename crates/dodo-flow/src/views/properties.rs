@@ -43,6 +43,22 @@
 //! can never be open at once and because the commit/cancel keys are the same —
 //! `enter` and `escape` bubble up from `Input` exactly as they do for §9's
 //! caret, which is the mechanism this borrows wholesale.
+//!
+//! # The pane height must stay definite
+//!
+//! The canvas positions the panel wrapper by pinning both its top and bottom.
+//! The panel's intermediate column must then take that definite height with
+//! `h_full`; `max_h_full` alone is only a percentage cap, and without a
+//! definite parent it resolves as auto. The card therefore mistakes its own
+//! content height for the pane's height and scrolls while empty pane remains
+//! below it. Once the column has the real height, ordinary flex shrinking
+//! bounds the card and leaves room for the prompt below it.
+//!
+//! That full-height column is **layout only** and must never `occlude()`: GPUI
+//! blocks mouse input over an occluding element's whole bounds, so doing both
+//! would make the empty strip below a content-sized card swallow canvas
+//! gestures. This is the second layout carrier in this view that has made an
+//! invisible input shield. Only the visible card and prompt block the canvas.
 
 use dodo_i18n::{flow, t};
 use gpui::{
@@ -110,6 +126,11 @@ pub const PANEL_MIN_PIXELS: f32 = 160.0;
 /// The prompt card's fixed height. The pinned input's medium height is 32 px;
 /// the card adds 6 px of padding on each side.
 const PROMPT_PIXELS: f32 = 44.0;
+
+/// The pinned scrollbar's private `WIDTH`: 4 px inset on each side of its 8 px
+/// active thumb. Kept as a gutter even when content fits so rows do not shift
+/// sideways when resizing crosses the overflow threshold.
+const SCROLLBAR_GUTTER_PIXELS: f32 = 16.0;
 
 /// The stroke width the glyphs are drawn at, in screen pixels.
 const GLYPH_STROKE: f32 = 1.4;
@@ -202,15 +223,17 @@ impl PromptKind {
 /// Takes the view entity rather than a `Context<FlowView>` for the same reason
 /// the palette does: a click handler is handed an `&mut App`.
 ///
-/// **[`occlude`](gpui::InteractiveElement::occlude) is what keeps the panel
-/// open when it is used.** Without it every press on a control was delivered
-/// twice — once here, applying the edit, and once to the canvas underneath,
-/// where it landed on empty canvas, started a rubber band and committed an
-/// empty replacing selection on the release. The selection is what the panel is
-/// drawn *from*, so the panel vanished on the first press: the edit had already
-/// been applied, which is why it looked like the panel closing rather than like
-/// the press going somewhere else. See [`views::flow`](crate::views::flow)'s
-/// module doc for the mechanism.
+/// **[`occlude`](gpui::InteractiveElement::occlude) on the visible card and
+/// prompt is what keeps the panel open when it is used.** Without it every
+/// press on a control was delivered twice — once here, applying the edit, and
+/// once to the canvas underneath, where it landed on empty canvas, started a
+/// rubber band and committed an empty replacing selection on the release. The
+/// selection is what the panel is drawn *from*, so the panel vanished on the
+/// first press: the edit had already been applied, which is why it looked like
+/// the panel closing rather than like the press going somewhere else. The
+/// full-height layout column deliberately does not occlude; see the module doc.
+/// See [`views::flow`](crate::views::flow)'s module doc for the hit-test
+/// mechanism.
 pub fn panel(
     view: Entity<FlowView>,
     state: &PanelState,
@@ -226,13 +249,12 @@ pub fn panel(
         .collect();
 
     // The absolutely positioned parent pins both its top and bottom, so this
-    // stack gets the pane's remaining height from layout on every resize. The
-    // card is content-sized up to that cap, then yields to the prompt sibling.
+    // stack takes that definite height on every resize. The card remains
+    // content-sized up to that ceiling, then shrinks for the pane or prompt.
     // It remains one scrolling column: a row that moved between columns as the
     // window resized would be a row nobody could find twice.
     div()
-        .occlude()
-        .max_h_full()
+        .h_full()
         .min_h_0()
         .flex()
         .flex_col()
@@ -240,28 +262,41 @@ pub fn panel(
         .child(
             div()
                 .id("flow-properties")
+                .debug_selector(|| "flow-properties-card".into())
+                .occlude()
                 .w(px(PANEL_PIXELS))
                 .max_h_full()
                 .min_h_0()
                 .relative()
-                .track_scroll(scroll)
-                .overflow_y_scroll()
                 .flex()
                 .flex_col()
-                .gap(px(12.0))
-                .p(px(12.0))
                 .rounded(cx.theme().radius)
                 .border_1()
                 .border_color(cx.theme().border)
                 .bg(cx.theme().popover)
-                .children(rows)
+                .child(
+                    div()
+                        .id("flow-properties-scroll")
+                        .min_h_0()
+                        .track_scroll(scroll)
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.0))
+                        .p(px(12.0))
+                        // Keep the old 24 px total inset: the gutter replaces
+                        // the right padding without narrowing any row.
+                        .pl(px(8.0))
+                        .pr(px(SCROLLBAR_GUTTER_PIXELS))
+                        .children(rows),
+                )
                 .child(
                     div()
                         .absolute()
                         .top_0()
                         .right_0()
                         .bottom_0()
-                        .left_0()
+                        .w(px(SCROLLBAR_GUTTER_PIXELS))
                         .child(Scrollbar::vertical(scroll).scrollbar_show(ScrollbarShow::Always)),
                 ),
         )
@@ -282,6 +317,7 @@ pub fn panel(
 /// See [`TYPING_CONTEXT`]'s own doc for the whole diagnosis.
 fn prompt_row(kind: PromptKind, input: &Entity<InputState>, cx: &App) -> impl IntoElement {
     div()
+        .occlude()
         .key_context(TYPING_CONTEXT)
         .w(px(PANEL_PIXELS))
         .h(px(PROMPT_PIXELS))
