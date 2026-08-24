@@ -1609,9 +1609,11 @@
 //! text and the inline editor.
 //!
 //! [`commands::EditCommand::RotateElements`] is its own inverse with the sign
-//! reversed and consecutive ticks over the same members merge. The round grip
-//! above the selection ring starts that gesture; Shift snaps the total to 15°,
-//! and an abandoned drag applies the recorded inverses and leaves no history.
+//! reversed for discrete rotations. A grip drag instead writes absolute
+//! `SetNodeTransforms` from its captured start frame, so consecutive ticks
+//! supersede one another. The round grip above the selection ring starts that
+//! gesture; Shift snaps the total to 15°, and an abandoned drag applies the
+//! recorded inverse and leaves no history.
 //!
 //! **One framework boundary remains visible.** The pinned GPUI exposes a
 //! transform for monochrome SVGs, but not for a general element, a polychrome
@@ -1664,6 +1666,27 @@
 //! solid outline per member. The test is on the paint plan: four chrome paths
 //! for two loose members, two for the same members grouped.
 //!
+//! ## Group transforms use the frame at the grip press
+//!
+//! Group rotation originally discarded the machine's fixed centre and, on
+//! every pointer frame, rebuilt one from the members' current rotated AABBs.
+//! Those bounds change shape with angle, so the centre wandered and incremental
+//! edits accumulated into a smear. Rotation now keeps the pressed centre plus
+//! every member's starting global rectangle and angle on the editor side of the
+//! world-free interaction boundary; each move writes the absolute transform for
+//! the machine's total angle. Sixty frames and one frame therefore land bit-for-
+//! bit alike, a full turn restores the group bounds, and the whole drag is one
+//! history entry. No parent-relative coordinate system was added to the hot
+//! node store.
+//!
+//! Resize had the analogous real fault: it interpreted every absolute pointer
+//! target against bounds recomputed after the preceding frame. It now captures
+//! the group's box and member rectangles at the press, and a multi-frame drag
+//! is asserted equal to one step. The suspected rotated/unrotated centre mismatch
+//! was not a second fault — a rectangle's centre is invariant under rotation —
+//! and a pre-rotated-member test pins that placement while its local rectangle
+//! scales and its angle stays unchanged.
+//!
 //! ## The rotation crash was a history invariant doing its job
 //!
 //! Batched absolute position and size edits originally filtered unchanged
@@ -1679,7 +1702,8 @@
 //! committing either merge. A real machine-driven group rotation covers both
 //! an exactly central member and hundreds of sub-resolution frames; a direct
 //! history test proves a deliberately asymmetric pair stays as two untouched
-//! entries. The same inverse-shape assertion covers group resize.
+//! entries. The same inverse-shape rule is asserted directly for
+//! `ResizeNodes` too.
 //!
 //! # What the seventeenth slice added: Align and the grouping chords
 //!

@@ -191,45 +191,59 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
         }
 
         // ---- §12's resize, the same four arms a drag has ----
-        //
-        // **The selection is replaced by the element being resized**, and not
-        // extended: a grip belongs to one element, so a press on it is
-        // unambiguous about which element the user means.
-        InteractionEffect::BeginResize { node } => {
+        InteractionEffect::BeginResize { node, start } => {
+            if !editor.world().node_is_live(node) {
+                return GestureReport::default();
+            }
             editor.begin_gesture();
-            editor.select_only(Some(node));
+            editor.begin_resize_node_or_group(node, start);
+            // A loose multi-selection owns one outer grip. Keep that selection;
+            // only an otherwise-unselected subject replaces it.
+            if !editor.world().selection().contains_node(node) {
+                editor.select_only(Some(node));
+            }
             GestureReport::changed(true)
         }
 
-        // **Two commands, one gesture, one undo step.** A corner drag moves the
-        // origin as well as the size, and the two are separate variants because
-        // their coalescing rules are different — `SetNodePositions` keeps the
-        // *earliest* value (see `EditCommand::merge`) and `ResizeNodes` is
-        // superseded by the *latest* (see `EditCommand::supersedes`). Sixty
-        // ticks of a drag are two history entries in total, whichever corner is
-        // being pulled.
+        // One absolute transform command per frame: each supersedes the last
+        // while its inverse retains the rectangles captured at the press.
         InteractionEffect::ResizeNodeTo { node, rect } => {
             GestureReport::changed(editor.resize_node_or_group(node, rect))
         }
 
         InteractionEffect::EndResize { .. } => {
+            editor.finish_transform_gesture();
             editor.end_gesture();
             GestureReport::changed(false)
         }
 
-        InteractionEffect::BeginRotate { node } => {
+        InteractionEffect::BeginRotate { node, centre } => {
+            if !editor.world().node_is_live(node) {
+                return GestureReport::default();
+            }
             editor.begin_gesture();
-            editor.select_only(Some(node));
+            editor.begin_rotate_node_or_group(node, centre);
+            if !editor.world().selection().contains_node(node) {
+                editor.select_only(Some(node));
+            }
             GestureReport::changed(true)
         }
-        InteractionEffect::RotateBy { node, delta } => {
-            GestureReport::changed(editor.rotate_node_or_group(node, delta))
-        }
+        InteractionEffect::RotateBy {
+            node,
+            centre,
+            total,
+            ..
+        } => GestureReport::changed(editor.rotate_node_or_group(node, centre, total)),
         InteractionEffect::EndRotate { .. } => {
+            editor.finish_transform_gesture();
             editor.end_gesture();
             GestureReport::changed(false)
         }
-        InteractionEffect::CancelRotate => GestureReport::changed(editor.abandon_gesture()),
+        InteractionEffect::CancelRotate => {
+            let changed = editor.abandon_gesture();
+            editor.finish_transform_gesture();
+            GestureReport::changed(changed)
+        }
 
         InteractionEffect::BeginConnectorEndpointDrag { node } => {
             editor.begin_gesture();
@@ -253,7 +267,11 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
         // Abandoned exactly as a drag is, and for the same reason: the entries
         // the gesture recorded carry where the element was, and putting it back
         // by applying them in reverse leaves nothing on the stack.
-        InteractionEffect::CancelResize { .. } => GestureReport::changed(editor.abandon_gesture()),
+        InteractionEffect::CancelResize { .. } => {
+            let changed = editor.abandon_gesture();
+            editor.finish_transform_gesture();
+            GestureReport::changed(changed)
+        }
 
         // **An abandoned drag is not an undo step**, so its entries are
         // discarded rather than reversed by another edit — a "move back" left
@@ -343,7 +361,7 @@ mod tests {
         interaction::{
             CanvasTool, InputModifiers, InteractionEvent, InteractionMachine, PointerButton,
         },
-        models::{ElementId, ElementKind, GraphNodeKind, NodeIndex},
+        models::{Connector, ElementId, ElementKind, GraphNodeKind, LinearKind, NodeIndex},
         runtime::{ConnectionRules, NodeSpec, PointerTarget},
     };
 
@@ -570,6 +588,7 @@ mod tests {
             &[0.001, 0.002, 0.003, 0.01, 0.1],
         );
 
+        assert_eq!(editor.history().undo_depth(), depth + 1);
         assert!(editor.undo());
         assert_eq!(editor.history().undo_depth(), depth);
         assert_eq!(
@@ -588,12 +607,169 @@ mod tests {
 
         rotate_in_steps(&mut editor, group, centre, &angles);
 
+        assert_eq!(editor.history().undo_depth(), depth + 1);
         assert!(editor.undo());
         assert_eq!(editor.history().undo_depth(), depth);
         assert_eq!(
             members.map(|node| editor.world().nodes().position(node)),
             before
         );
+    }
+
+    #[test]
+    fn group_rotation_is_rigid_across_many_frames_and_a_full_turn() {
+        let centre = Vec2::new(4_000.0, 3_000.0);
+        let (start, group, members) = grouped_rotation_fixture(centre, 0.0);
+        let mut stepped = start.clone();
+        let mut single = start.clone();
+        let theta = 1.1_f32;
+        let angles: Vec<f32> = (1..=60).map(|step| theta * step as f32 / 60.0).collect();
+
+        rotate_in_steps(&mut stepped, group, centre, &angles);
+        rotate_in_steps(&mut single, group, centre, &[theta]);
+
+        assert_eq!(
+            members.map(|node| stepped.world().nodes().position(node)),
+            members.map(|node| single.world().nodes().position(node)),
+            "incremental pointer frames changed the final orbit"
+        );
+        assert_eq!(
+            members.map(|node| stepped.world().nodes().angle(node)),
+            members.map(|node| single.world().nodes().angle(node)),
+            "members did not receive the same total angle"
+        );
+
+        let before = start.world().nodes().bounds(group);
+        let mut full_turn = start;
+        let turn: Vec<f32> = (1..=72)
+            .map(|step| std::f32::consts::TAU * step as f32 / 72.0)
+            .collect();
+        rotate_in_steps(&mut full_turn, group, centre, &turn);
+        let after = full_turn.world().nodes().bounds(group);
+        assert!((after.min() - before.min()).length() < 1e-3, "{after:?}");
+        assert!((after.max() - before.max()).length() < 1e-3, "{after:?}");
+    }
+
+    #[test]
+    fn awkward_group_rotation_subjects_stay_headless_and_safe() {
+        // A nested group: the outer gesture must reach leaves without trying
+        // to assign geometry to the bodyless inner group.
+        let (mut nested, a, b) = editor_with_two_nodes();
+        let c = nested
+            .apply(EditCommand::AddNodes(vec![draft(800.0)]))
+            .unwrap()
+            .added_nodes[0];
+        nested.set_node_selected(a, true);
+        nested.set_node_selected(b, true);
+        assert!(nested.group_selection());
+        let inner = nested.world().selection().single_node().unwrap();
+        nested.set_node_selected(c, true);
+        assert!(nested.group_selection());
+        let outer = nested.world().selection().single_node().unwrap();
+        let centre = nested.world().nodes().bounds(outer).center();
+        rotate_in_steps(&mut nested, outer, centre, &[0.2, 0.4]);
+        assert!(nested.world().nodes().angle(a) > 0.39);
+        assert_eq!(nested.world().nodes().angle(inner), 0.0);
+
+        // A pre-rotated image and a zero-height free arrow share one group.
+        let mut mixed = FlowEditor::new();
+        let mut line = NodeSpec::new(
+            ElementId::NONE,
+            ElementKind::Linear(LinearKind::Arrow),
+            Vec2::ZERO,
+            Vec2::new(200.0, 0.0),
+        );
+        line.connector = Some(Connector::new(Vec2::ZERO, Vec2::new(200.0, 0.0)));
+        let image = NodeSpec::new(
+            ElementId::NONE,
+            ElementKind::Image,
+            Vec2::new(40.0, 80.0),
+            Vec2::new(120.0, 80.0),
+        );
+        let nodes = mixed
+            .apply(EditCommand::AddNodes(vec![
+                NodeDraft::new(line),
+                NodeDraft::new(image),
+            ]))
+            .unwrap()
+            .added_nodes;
+        mixed
+            .apply(EditCommand::RotateElements {
+                nodes: vec![nodes[1]],
+                edges: Vec::new(),
+                delta: 0.3,
+            })
+            .unwrap();
+        for node in &nodes {
+            mixed.set_node_selected(*node, true);
+        }
+        assert!(mixed.group_selection());
+        let group = mixed.world().selection().single_node().unwrap();
+        let centre = mixed.world().nodes().bounds(group).center();
+        rotate_in_steps(&mut mixed, group, centre, &[0.1, 0.2]);
+        assert!(mixed.world().nodes().connector(nodes[0]).is_some());
+
+        // A group can legitimately be left with one member after deletion.
+        let (mut singleton, group, members) = grouped_rotation_fixture(Vec2::ZERO, 0.0);
+        singleton.clear_selection();
+        singleton.set_node_selected(members[1], true);
+        singleton.set_node_selected(members[2], true);
+        assert!(singleton.delete_selection());
+        singleton.select_only(Some(group));
+        let centre = singleton.world().nodes().bounds(group).center();
+        rotate_in_steps(&mut singleton, group, centre, &[0.25]);
+        assert!((singleton.world().nodes().angle(members[0]) - 0.25).abs() < 1e-5);
+
+        // Undo/redo restores the same group slot; beginning immediately after
+        // either operation must capture only the live descendants.
+        let (mut restored, group, _) = grouped_rotation_fixture(Vec2::ZERO, 0.0);
+        let centre = restored.world().nodes().bounds(group).center();
+        assert!(restored.undo());
+        rotate_in_steps(&mut restored, group, centre, &[0.1]);
+        assert!(restored.redo());
+        restored.select_only(Some(group));
+        let centre = restored.world().nodes().bounds(group).center();
+        rotate_in_steps(&mut restored, group, centre, &[0.3]);
+    }
+
+    #[test]
+    fn a_label_editor_masks_a_rotation_press_in_the_machine() {
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::DoubleClick {
+            world: Vec2::ZERO,
+            target: PointerTarget::Node(NodeIndex::new(0)),
+        });
+        assert_eq!(
+            machine.handle(InteractionEvent::BeginRotate {
+                node: NodeIndex::new(0),
+                centre: Vec2::ZERO,
+                pointer: Vec2::new(1.0, 0.0),
+            }),
+            crate::interaction::InteractionEffect::None
+        );
+    }
+
+    #[test]
+    fn a_loose_multi_selection_rotates_as_one_selection() {
+        let (mut editor, a, b) = editor_with_two_nodes();
+        editor.set_node_selected(a, true);
+        editor.set_node_selected(b, true);
+        let centre = crate::geometry::Rect::of_rects(
+            [a, b]
+                .into_iter()
+                .map(|node| editor.world().nodes().rotated_bounds(node)),
+        )
+        .unwrap()
+        .center();
+        let before = [a, b].map(|node| editor.world().nodes().bounds(node).center());
+
+        rotate_in_steps(&mut editor, a, centre, &[std::f32::consts::FRAC_PI_2]);
+
+        assert_eq!(editor.world().selection().nodes().len(), 2);
+        for (index, node) in [a, b].into_iter().enumerate() {
+            let expected = before[index].rotated_about(centre, std::f32::consts::FRAC_PI_2);
+            assert!((editor.world().nodes().bounds(node).center() - expected).length() < 1e-3);
+        }
     }
 
     #[test]
@@ -639,12 +815,13 @@ mod tests {
     ///
     /// Answers the frame the drag ended on and the number of undo steps it
     /// cost, because those are the two questions every resize test below asks.
-    fn resize(
+    fn resize_in_steps(
         editor: &mut FlowEditor,
         node: NodeIndex,
         corner: crate::geometry::ResizeCorner,
         to: Vec2,
         keeps_aspect: bool,
+        steps: usize,
     ) -> (crate::geometry::Rect, usize) {
         let depth = editor.history().undo_depth();
         let frame = editor.world().nodes().bounds(node);
@@ -658,11 +835,9 @@ mod tests {
         });
         apply_gesture(editor, effect);
 
-        // Ten moves rather than one: a resize that is only correct for its last
-        // event is a resize whose coalescing is wrong.
         let start = corner.of(frame);
-        for step in 1..=10 {
-            let at = start + (to - start) * (step as f32 / 10.0);
+        for step in 1..=steps {
+            let at = start + (to - start) * (step as f32 / steps as f32);
             let effect = machine.handle(InteractionEvent::PointerMove {
                 screen: at,
                 world: at,
@@ -683,9 +858,19 @@ mod tests {
         )
     }
 
-    /// **A whole resize is one undo press**, however many moves it took — the
-    /// same requirement a drag has, met by two commands rather than one because
-    /// a corner drag moves the origin as well as the size.
+    fn resize(
+        editor: &mut FlowEditor,
+        node: NodeIndex,
+        corner: crate::geometry::ResizeCorner,
+        to: Vec2,
+        keeps_aspect: bool,
+    ) -> (crate::geometry::Rect, usize) {
+        resize_in_steps(editor, node, corner, to, keeps_aspect, 10)
+    }
+
+    /// **A whole resize is one undo press**, however many moves it took. The
+    /// absolute transform from the latest frame supersedes the prior one while
+    /// retaining the inverse captured at the press.
     #[test]
     fn a_resize_drag_is_one_undo_step_and_undoes_exactly() {
         use crate::geometry::ResizeCorner;
@@ -711,6 +896,61 @@ mod tests {
             (restored.origin - before.origin).length() < 1e-3
                 && (restored.size - before.size).length() < 1e-3,
             "{restored:?} is not {before:?}"
+        );
+    }
+
+    #[test]
+    fn group_resize_is_absolute_and_places_a_rotated_member_from_its_start_centre() {
+        use crate::geometry::ResizeCorner;
+
+        let centre = Vec2::new(4_000.0, 3_000.0);
+        let (mut start, group, members) = grouped_rotation_fixture(centre, 0.0);
+        start
+            .apply(EditCommand::RotateElements {
+                nodes: vec![members[0]],
+                edges: Vec::new(),
+                delta: 0.6,
+            })
+            .unwrap();
+        let frame = start.world().nodes().bounds(group).normalized();
+        let old_centres = members.map(|node| start.world().nodes().bounds(node).center());
+        let old_angles = members.map(|node| start.world().nodes().angle(node));
+        let to = frame.max() + Vec2::new(700.0, 300.0);
+        let target = crate::geometry::Rect::from_corners(frame.min(), to);
+        let scale = Vec2::new(
+            target.width() / frame.width(),
+            target.height() / frame.height(),
+        );
+        let mut stepped = start.clone();
+        let mut single = start.clone();
+
+        let (_, entries) = resize_in_steps(
+            &mut stepped,
+            group,
+            ResizeCorner::BottomRight,
+            to,
+            false,
+            30,
+        );
+        resize_in_steps(&mut single, group, ResizeCorner::BottomRight, to, false, 1);
+
+        assert_eq!(entries, 1, "the resize grew history per frame");
+        assert_eq!(
+            members.map(|node| stepped.world().nodes().bounds(node)),
+            members.map(|node| single.world().nodes().bounds(node)),
+            "per-frame resize diverged from the one-step target"
+        );
+        for (index, member) in members.into_iter().enumerate() {
+            let expected = target.origin + (old_centres[index] - frame.origin).scale(scale);
+            let actual = stepped.world().nodes().bounds(member).center();
+            assert!((actual - expected).length() < 1e-3, "{member}: {actual:?}");
+            assert_eq!(stepped.world().nodes().angle(member), old_angles[index]);
+        }
+
+        assert!(stepped.undo());
+        assert_eq!(
+            members.map(|node| stepped.world().nodes().bounds(node)),
+            members.map(|node| start.world().nodes().bounds(node))
         );
     }
 

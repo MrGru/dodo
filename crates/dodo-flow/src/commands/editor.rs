@@ -105,10 +105,32 @@ pub struct EditSummary {
 /// **A [`GraphWorld`] with a [`CommandHistory`] welded to it.**
 ///
 /// See the module doc for the invariant and for how it is enforced.
+#[derive(Debug, Clone, Copy)]
+struct TransformNodeStart {
+    node: NodeIndex,
+    bounds: Rect,
+    angle: f32,
+}
+
+#[derive(Debug, Clone)]
+enum TransformGesture {
+    Resize {
+        subject: NodeIndex,
+        start: Rect,
+        nodes: Vec<TransformNodeStart>,
+    },
+    Rotate {
+        subject: NodeIndex,
+        centre: Vec2,
+        nodes: Vec<TransformNodeStart>,
+    },
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FlowEditor {
     world: GraphWorld,
     history: CommandHistory,
+    transform_gesture: Option<TransformGesture>,
     /// Monotonic stamp for the persisted document. Selection and derived
     /// geometry leave it alone; every document write moves it.
     revision: u64,
@@ -119,6 +141,7 @@ impl FlowEditor {
         FlowEditor {
             world: GraphWorld::new(),
             history: CommandHistory::new(),
+            transform_gesture: None,
             revision: 0,
         }
     }
@@ -131,6 +154,7 @@ impl FlowEditor {
             FlowEditor {
                 world,
                 history: CommandHistory::new(),
+                transform_gesture: None,
                 revision: 0,
             },
             report,
@@ -147,6 +171,7 @@ impl FlowEditor {
         let (world, report) = GraphWorld::from_document(&document);
         self.world = world;
         self.history.clear();
+        self.transform_gesture = None;
         self.bump_revision();
         report
     }
@@ -877,6 +902,9 @@ impl FlowEditor {
     }
 
     fn transform_nodes_of(&self, node: NodeIndex) -> Vec<NodeIndex> {
+        if !self.world.node_is_live(node) {
+            return Vec::new();
+        }
         if matches!(self.world.nodes().kind(node), ElementKind::Group) {
             self.world
                 .descendants(node)
@@ -889,7 +917,9 @@ impl FlowEditor {
     }
 
     fn transform_edges_of(&self, node: NodeIndex) -> Vec<EdgeIndex> {
-        if !matches!(self.world.nodes().kind(node), ElementKind::Group) {
+        if !self.world.node_is_live(node)
+            || !matches!(self.world.nodes().kind(node), ElementKind::Group)
+        {
             return Vec::new();
         }
         let mut groups = vec![node];
@@ -923,36 +953,44 @@ impl FlowEditor {
         nodes
     }
 
+    fn transform_start_nodes(&self, node: NodeIndex) -> Vec<TransformNodeStart> {
+        self.gesture_nodes(node)
+            .into_iter()
+            .map(|node| TransformNodeStart {
+                node,
+                bounds: self.world.nodes().bounds(node).normalized(),
+                angle: self.world.nodes().angle(node),
+            })
+            .collect()
+    }
+
     pub fn move_node_or_group(&mut self, node: NodeIndex, delta: Vec2) -> bool {
         let nodes = self.gesture_nodes(node);
         self.apply(EditCommand::MoveNodes { nodes, delta })
             .is_ok_and(|summary| summary.changed)
     }
 
+    /// Captures the resize frame once, at the grip press. Every later target is
+    /// interpreted against these rectangles rather than against the preceding
+    /// pointer frame.
+    pub fn begin_resize_node_or_group(&mut self, node: NodeIndex, start: Rect) {
+        self.transform_gesture = Some(TransformGesture::Resize {
+            subject: node,
+            start: start.normalized(),
+            nodes: self.transform_start_nodes(node),
+        });
+    }
+
     pub fn resize_node_or_group(&mut self, node: NodeIndex, target: Rect) -> bool {
-        let collection = matches!(self.world.nodes().kind(node), ElementKind::Group)
-            || (self.world.selection().contains_node(node) && self.world.selection().len() >= 2);
-        if !collection {
-            return self.in_one_step(|editor| {
-                let mut changed = editor
-                    .apply(EditCommand::SetNodePositions(vec![(node, target.origin)]))
-                    .is_ok_and(|summary| summary.changed);
-                changed |= editor
-                    .apply(EditCommand::resize_node(node, target.size))
-                    .is_ok_and(|summary| summary.changed);
-                changed
-            });
-        }
-        let children = self.gesture_nodes(node);
-        let Some(start) = Rect::of_rects(
-            children
-                .iter()
-                .map(|child| self.world.nodes().rotated_bounds(*child)),
-        ) else {
+        let Some(TransformGesture::Resize {
+            subject,
+            start,
+            nodes,
+        }) = self.transform_gesture.as_ref()
+        else {
             return false;
         };
-        let start = start.normalized();
-        if start.width() <= f32::EPSILON || start.height() <= f32::EPSILON {
+        if *subject != node || start.width() <= f32::EPSILON || start.height() <= f32::EPSILON {
             return false;
         }
         let target = target.normalized();
@@ -960,69 +998,63 @@ impl FlowEditor {
             target.width() / start.width(),
             target.height() / start.height(),
         );
-        let mut positions = Vec::new();
-        let mut sizes = Vec::new();
-        for child in children {
-            let bounds = self.world.nodes().bounds(child).normalized();
-            let relative = bounds.center() - start.origin;
-            let size = bounds.size.scale(scale);
-            let center = target.origin + relative.scale(scale);
-            positions.push((child, center - size * 0.5));
-            sizes.push((child, size));
-        }
-        self.in_one_step(|editor| {
-            let mut changed = editor
-                .apply(EditCommand::SetNodePositions(positions))
-                .is_ok_and(|summary| summary.changed);
-            changed |= editor
-                .apply(EditCommand::ResizeNodes(sizes))
-                .is_ok_and(|summary| summary.changed);
-            changed
-        })
-    }
-
-    pub fn rotate_node_or_group(&mut self, node: NodeIndex, delta: f32) -> bool {
-        let collection = matches!(self.world.nodes().kind(node), ElementKind::Group)
-            || (self.world.selection().contains_node(node) && self.world.selection().len() >= 2);
-        if !collection {
-            return self
-                .apply(EditCommand::RotateElements {
-                    nodes: vec![node],
-                    edges: Vec::new(),
-                    delta,
-                })
-                .is_ok_and(|summary| summary.changed);
-        }
-        let children = self.gesture_nodes(node);
-        let Some(centre) = Rect::of_rects(
-            children
-                .iter()
-                .map(|child| self.world.nodes().rotated_bounds(*child)),
-        )
-        .map(|bounds| bounds.center()) else {
-            return false;
-        };
-        let positions = children
+        let transforms = nodes
             .iter()
-            .map(|&child| {
-                let bounds = self.world.nodes().bounds(child);
-                let moved = bounds.center().rotated_about(centre, delta);
-                (child, moved - bounds.size * 0.5)
+            .map(|member| {
+                let relative = member.bounds.center() - start.origin;
+                let size = member.bounds.size.scale(scale);
+                let centre = target.origin + relative.scale(scale);
+                (
+                    member.node,
+                    Rect::new(centre - size * 0.5, size),
+                    member.angle,
+                )
             })
             .collect();
-        self.in_one_step(|editor| {
-            let mut changed = editor
-                .apply(EditCommand::SetNodePositions(positions))
-                .is_ok_and(|summary| summary.changed);
-            changed |= editor
-                .apply(EditCommand::RotateElements {
-                    nodes: children,
-                    edges: Vec::new(),
-                    delta,
-                })
-                .is_ok_and(|summary| summary.changed);
-            changed
-        })
+        self.apply(EditCommand::SetNodeTransforms(transforms))
+            .is_ok_and(|summary| summary.changed)
+    }
+
+    /// Captures every member's global rectangle and angle at the grip press.
+    /// The flat world representation stays authoritative; this is only the
+    /// transient frame needed to derive an absolute gesture result.
+    pub fn begin_rotate_node_or_group(&mut self, node: NodeIndex, centre: Vec2) {
+        self.transform_gesture = Some(TransformGesture::Rotate {
+            subject: node,
+            centre,
+            nodes: self.transform_start_nodes(node),
+        });
+    }
+
+    pub fn rotate_node_or_group(&mut self, node: NodeIndex, centre: Vec2, total: f32) -> bool {
+        let Some(TransformGesture::Rotate {
+            subject,
+            centre: captured_centre,
+            nodes,
+        }) = self.transform_gesture.as_ref()
+        else {
+            return false;
+        };
+        if *subject != node || *captured_centre != centre {
+            return false;
+        }
+        let transforms = nodes
+            .iter()
+            .map(|member| {
+                let moved = member.bounds.center().rotated_about(centre, total);
+                (
+                    member.node,
+                    Rect::new(moved - member.bounds.size * 0.5, member.bounds.size),
+                    member.angle + total,
+                )
+            })
+            .collect();
+        self.apply(EditCommand::SetNodeTransforms(transforms))
+            .is_ok_and(|summary| summary.changed)
+    }
+
+    pub fn finish_transform_gesture(&mut self) {
+        self.transform_gesture = None;
     }
 
     /// Rotates every selected element by `delta` counter-clockwise radians.
@@ -1604,6 +1636,7 @@ impl FlowEditor {
         // into itself; close it first, so the step is taken against a settled
         // stack.
         self.history.end_gesture();
+        self.transform_gesture = None;
 
         let step = self.history.take_undo();
         let mut changed = false;
@@ -1627,6 +1660,7 @@ impl FlowEditor {
     /// Takes one step forward again.
     pub fn redo(&mut self) -> bool {
         self.history.end_gesture();
+        self.transform_gesture = None;
 
         let step = self.history.take_redo();
         let mut changed = false;
@@ -1660,6 +1694,7 @@ impl FlowEditor {
                 .expect("a recorded inverse is always applicable");
             changed |= outcome.changed;
         }
+        self.transform_gesture = None;
         if changed {
             self.bump_revision();
         }
@@ -2047,17 +2082,21 @@ mod tests {
         let group = editor.world().selection().single_node().unwrap();
         let before = editor.world().nodes().bounds(group);
 
+        editor.begin_resize_node_or_group(group, before);
         assert!(editor.resize_node_or_group(
             group,
             crate::geometry::Rect::new(before.origin, before.size * 2.0),
         ));
+        editor.finish_transform_gesture();
         assert_eq!(editor.world().nodes().size(a), Vec2::new(200.0, 100.0));
         assert_eq!(editor.world().nodes().position(b), Vec2::new(400.0, 100.0));
         assert_eq!(editor.world().nodes().style(a), &styled);
 
         let centre = editor.world().nodes().bounds(group).center();
         let old = editor.world().nodes().bounds(a).center();
-        assert!(editor.rotate_node_or_group(group, std::f32::consts::FRAC_PI_2));
+        editor.begin_rotate_node_or_group(group, centre);
+        assert!(editor.rotate_node_or_group(group, centre, std::f32::consts::FRAC_PI_2));
+        editor.finish_transform_gesture();
         let moved = editor.world().nodes().bounds(a).center();
         assert!((moved - old.rotated_about(centre, std::f32::consts::FRAC_PI_2)).length() < 1e-3);
         assert!((editor.world().nodes().angle(a) - std::f32::consts::FRAC_PI_2).abs() < 1e-4);

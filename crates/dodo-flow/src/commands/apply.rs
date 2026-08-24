@@ -225,6 +225,28 @@ pub fn apply(world: &mut GraphWorld, command: EditCommand) -> Result<EditOutcome
             ))
         }
 
+        EditCommand::SetNodeTransforms(items) => {
+            let mut before = Vec::with_capacity(items.len());
+            let mut changed = false;
+            for (node, bounds, angle) in items {
+                if !world.node_is_live(node) {
+                    continue;
+                }
+                let was_bounds = world.nodes().bounds(node);
+                let was_angle = world.nodes().angle(node);
+                changed |= was_bounds != bounds || was_angle != angle;
+                world.set_node_position(node, bounds.origin);
+                world.set_node_size(node, bounds.size);
+                world.set_node_angle(node, angle);
+                before.push((node, was_bounds, was_angle));
+            }
+
+            Ok(EditOutcome::from_inverse_with_changed(
+                EditCommand::SetNodeTransforms(before),
+                changed,
+            ))
+        }
+
         EditCommand::RotateElements {
             nodes,
             edges,
@@ -665,6 +687,17 @@ mod tests {
             }),
             Box::new(|_| {
                 EditCommand::resize_node(crate::models::NodeIndex::new(0), Vec2::new(11.0, 13.0))
+            }),
+            Box::new(|world| {
+                let node = crate::models::NodeIndex::new(0);
+                EditCommand::SetNodeTransforms(vec![(
+                    node,
+                    crate::geometry::Rect::new(
+                        world.nodes().position(node) + Vec2::new(2.0, 3.0),
+                        world.nodes().size(node),
+                    ),
+                    0.4,
+                )])
             }),
             Box::new(|_| EditCommand::RotateElements {
                 nodes: vec![crate::models::NodeIndex::new(0)],

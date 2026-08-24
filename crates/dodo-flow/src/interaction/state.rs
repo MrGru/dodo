@@ -445,6 +445,7 @@ pub enum InteractionEffect {
     /// a node drag, so the gesture survives the pointer leaving the pane.
     BeginResize {
         node: NodeIndex,
+        start: Rect,
     },
     /// **Put this node in this rectangle** — position and size together, in
     /// world units.
@@ -483,10 +484,15 @@ pub enum InteractionEffect {
     },
     BeginRotate {
         node: NodeIndex,
+        centre: Vec2,
     },
     RotateBy {
         node: NodeIndex,
+        centre: Vec2,
+        /// Increment since the preceding pointer frame.
         delta: f32,
+        /// Total angle since the grip press.
+        total: f32,
     },
     EndRotate {
         node: NodeIndex,
@@ -617,9 +623,11 @@ impl InteractionEffect {
         },
         || InteractionEffect::BeginResize {
             node: NodeIndex::new(0),
+            start: Rect::new(Vec2::ZERO, Vec2::ONE),
         },
         || InteractionEffect::BeginRotate {
             node: NodeIndex::new(0),
+            centre: Vec2::ZERO,
         },
     ];
 
@@ -910,7 +918,7 @@ impl InteractionMachine {
                     aspect,
                     current: frame,
                 };
-                InteractionEffect::BeginResize { node }
+                InteractionEffect::BeginResize { node, start: frame }
             }
             (_, InteractionEvent::BeginResize { .. }) => InteractionEffect::None,
 
@@ -928,7 +936,7 @@ impl InteractionMachine {
                     start_pointer_angle: pointer_angle(centre, pointer),
                     applied: 0.0,
                 };
-                InteractionEffect::BeginRotate { node }
+                InteractionEffect::BeginRotate { node, centre }
             }
             (_, InteractionEvent::BeginRotate { .. }) => InteractionEffect::None,
 
@@ -951,7 +959,9 @@ impl InteractionMachine {
                 };
                 InteractionEffect::RotateBy {
                     node,
+                    centre,
                     delta: total - applied,
+                    total,
                 }
             }
             (_, InteractionEvent::MoveRotate { .. }) => InteractionEffect::None,
@@ -1512,7 +1522,10 @@ mod tests {
                 centre: Vec2::ZERO,
                 pointer: Vec2::new(10.0, 0.0),
             }),
-            InteractionEffect::BeginRotate { node: NODE },
+            InteractionEffect::BeginRotate {
+                node: NODE,
+                centre: Vec2::ZERO,
+            },
         );
 
         let angle = 22.0_f32.to_radians();
@@ -1560,7 +1573,13 @@ mod tests {
             frame,
             keeps_aspect: true,
         });
-        assert_eq!(effect, InteractionEffect::BeginResize { node: NODE });
+        assert_eq!(
+            effect,
+            InteractionEffect::BeginResize {
+                node: NODE,
+                start: frame,
+            }
+        );
         assert!(matches!(
             machine.state(),
             InteractionState::Resizing {

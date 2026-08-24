@@ -48,7 +48,7 @@
 //! **This file names no UI framework.**
 
 use crate::{
-    geometry::Vec2,
+    geometry::{Rect, Vec2},
     models::{Connector, EdgeIndex, EdgeRouting, ElementStyle, NodeImage, NodeIndex, RenderStyle},
     runtime::{ConnectionError, EdgeSpec, HandleSpec, NodeSpec},
 };
@@ -134,11 +134,16 @@ pub enum EditCommand {
     /// §30's `ResizeElements`, as the size each node should end up with.
     ResizeNodes(Vec<(NodeIndex, Vec2)>),
 
+    /// Absolute rectangles and angles for resize and rotation gestures. Each
+    /// pointer move is derived from the frame captured at the press, and
+    /// supersedes the preceding move while its inverse retains that frame.
+    SetNodeTransforms(Vec<(NodeIndex, Rect, f32)>),
+
     /// §30's `RotateElements`, in counter-clockwise radians.
     ///
     /// Its inverse is this command with the negative delta. Consecutive ticks
-    /// over the same members merge by summing, so a drag occupies one history
-    /// entry rather than one per pointer move.
+    /// over the same members merge by summing, so a keyboard rotation occupies
+    /// one history entry rather than one per repeat.
     RotateElements {
         nodes: Vec<NodeIndex>,
         edges: Vec<EdgeIndex>,
@@ -309,6 +314,7 @@ impl EditCommand {
             EditCommand::MoveNodes { .. } => "move-nodes",
             EditCommand::SetNodePositions(_) => "place-nodes",
             EditCommand::ResizeNodes(_) => "resize-nodes",
+            EditCommand::SetNodeTransforms(_) => "set-node-transforms",
             EditCommand::RotateElements { .. } => "rotate-elements",
             EditCommand::Group { .. } => "group",
             EditCommand::Ungroup { .. } => "ungroup",
@@ -340,6 +346,7 @@ impl EditCommand {
             }
             EditCommand::SetNodePositions(items) => items.is_empty(),
             EditCommand::ResizeNodes(items) => items.is_empty(),
+            EditCommand::SetNodeTransforms(items) => items.is_empty(),
             EditCommand::RotateElements {
                 nodes,
                 edges,
@@ -453,6 +460,9 @@ impl EditCommand {
             (EditCommand::ResizeNodes(first), EditCommand::ResizeNodes(later)) => {
                 same_keys(first, later)
             }
+            (EditCommand::SetNodeTransforms(first), EditCommand::SetNodeTransforms(later)) => {
+                same_transform_nodes(first, later)
+            }
             (EditCommand::SetNodeConnectors(first), EditCommand::SetNodeConnectors(later)) => {
                 same_keys(first, later)
             }
@@ -506,6 +516,18 @@ fn same_nodes(first: &[(NodeIndex, Vec2)], later: &[(NodeIndex, Vec2)]) -> bool 
             .iter()
             .zip(later)
             .all(|((node, _), (other, _))| node == other)
+}
+
+fn same_transform_nodes(
+    first: &[(NodeIndex, Rect, f32)],
+    later: &[(NodeIndex, Rect, f32)],
+) -> bool {
+    !first.is_empty()
+        && first.len() == later.len()
+        && first
+            .iter()
+            .zip(later)
+            .all(|((node, _, _), (other, _, _))| node == other)
 }
 
 /// Why an edit could not be applied.
