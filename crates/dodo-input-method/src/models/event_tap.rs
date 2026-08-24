@@ -686,6 +686,13 @@ mod tests {
     /// Every Telex modifier is checked against the document after every key,
     /// not merely against the engine's semantic state or its final action list.
     #[test]
+    fn direct_output_keeps_the_captains_english_w_examples_literal() {
+        for word in ["window", "gateway", "follow", "widow", "willow", "elbow"] {
+            assert_eq!(type_at_end_cursor(word), word, "{word}");
+        }
+    }
+
+    #[test]
     fn repeated_telex_modifiers_are_visible_after_every_press() {
         assert_visible_steps("[[[", &["ơ", "[", "[ơ"]);
         assert_visible_steps("]]]", &["ư", "]", "]ư"]);

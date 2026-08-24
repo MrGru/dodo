@@ -21,10 +21,10 @@
 //!
 //! # What this module cannot see, and what that costs
 //!
-//! **Focus.** A bundle identifier says which application is frontmost; it
-//! cannot say whether the caret is in the address bar or in a page input, and
-//! macOS offers a direct-output host no cheap way to ask. So the workaround
-//! runs for the whole application. For [`Strategy::ExtendSelection`] that is
+//! **Focus.** A macOS bundle identifier or Windows process image name says
+//! which application is frontmost; neither says whether the caret is in the
+//! address bar or in a page input. So the workaround runs for the whole
+//! application. For [`Strategy::ExtendSelection`] that is
 //! free — the arithmetic is identical with and without a selection. For
 //! [`Strategy::CommitSuggestion`] it means every tone mark typed into an
 //! ordinary in-page input also costs one invisible insert and one extra
@@ -35,8 +35,8 @@
 //! narrow it without touching anything else.
 //!
 //! **Start of field.** Nothing here can prove the caret is at the start of the
-//! text field, and no CoreGraphics API offers it without an Accessibility query
-//! per keystroke. The proxy is the plan itself: `delete_before > 0` means the
+//! text field, and neither host has that fact without a focus query per
+//! keystroke. The proxy is the plan itself: `delete_before > 0` means the
 //! engine believes it rendered at least that many graphemes immediately before
 //! the caret, and the composer forgets that belief on a mouse-down, an arrow
 //! key, a focus change or a target-process change. The residual risk is a caret
@@ -72,22 +72,29 @@ pub enum Strategy {
 /// **The one place to extend.** Every browser dodo works around, beside the
 /// strategy its engine needs.
 ///
-/// A new browser is one row. Getting the row wrong is not dangerous — the worst
-/// case is the strategy that does not help — but putting an application that is
+/// A new identifier is one row. Getting the row wrong is not dangerous — the
+/// worst case is the strategy that does not help — but putting an application that is
 /// not a browser here is, because [`Strategy::CommitSuggestion`] types a
 /// character into it.
-const BROWSERS: [(&str, Strategy); 13] = [
-    // Blink.
+const BROWSERS: [(&str, Strategy); 21] = [
+    // Blink: macOS bundle identifiers and Windows process image names.
     ("com.google.Chrome", Strategy::ExtendSelection),
     ("com.google.Chrome.canary", Strategy::ExtendSelection),
+    ("chrome.exe", Strategy::ExtendSelection),
     ("org.chromium.Chromium", Strategy::ExtendSelection),
+    ("chromium.exe", Strategy::ExtendSelection),
     ("com.brave.Browser", Strategy::ExtendSelection),
+    ("brave.exe", Strategy::ExtendSelection),
     ("com.microsoft.edgemac", Strategy::ExtendSelection),
+    ("msedge.exe", Strategy::ExtendSelection),
     ("com.vivaldi.Vivaldi", Strategy::ExtendSelection),
+    ("vivaldi.exe", Strategy::ExtendSelection),
     ("com.operasoftware.Opera", Strategy::ExtendSelection),
-    // Arc.
+    ("opera.exe", Strategy::ExtendSelection),
+    // Arc and Cốc Cốc.
     ("company.thebrowser.Browser", Strategy::ExtendSelection),
     ("com.coccoc.Coccoc", Strategy::ExtendSelection),
+    ("coccoc.exe", Strategy::ExtendSelection),
     // WebKit.
     ("com.apple.Safari", Strategy::CommitSuggestion),
     (
@@ -100,6 +107,7 @@ const BROWSERS: [(&str, Strategy); 13] = [
         "org.mozilla.firefoxdeveloperedition",
         Strategy::CommitSuggestion,
     ),
+    ("firefox.exe", Strategy::CommitSuggestion),
 ];
 
 impl Strategy {
@@ -111,10 +119,10 @@ impl Strategy {
     /// invisible character into every text field on the system to fix a problem
     /// only browsers have. Widening it is one line here if a browser turns up
     /// that nobody listed.
-    pub fn for_bundle_id(bundle_id: &str) -> Strategy {
+    pub fn for_application_id(application_id: &str) -> Strategy {
         BROWSERS
             .into_iter()
-            .find_map(|(id, strategy)| (id == bundle_id).then_some(strategy))
+            .find_map(|(id, strategy)| (id == application_id).then_some(strategy))
             .unwrap_or(Strategy::None)
     }
 }
@@ -153,7 +161,7 @@ impl BrowserRewrite {
     /// direction: a skipped workaround leaves an address bar wrong, while a
     /// workaround applied where it does not belong destroys text the user
     /// typed.
-    pub fn plan(enabled: bool, bundle_id: Option<&str>, plan: &OutputPlan) -> BrowserRewrite {
+    pub fn plan(enabled: bool, application_id: Option<&str>, plan: &OutputPlan) -> BrowserRewrite {
         let verbatim = BrowserRewrite::verbatim(plan);
         if !enabled {
             return verbatim;
@@ -179,7 +187,7 @@ impl BrowserRewrite {
             return verbatim;
         }
 
-        match bundle_id.map_or(Strategy::None, Strategy::for_bundle_id) {
+        match application_id.map_or(Strategy::None, Strategy::for_application_id) {
             Strategy::None => verbatim,
             Strategy::ExtendSelection => BrowserRewrite {
                 extend_selection: true,
@@ -209,6 +217,8 @@ impl BrowserRewrite {
 mod tests {
     use super::{BROWSERS, BrowserRewrite, SELECTION_COMMIT_CHARACTER, Strategy};
     use crate::models::direct_output::OutputPlan;
+    use crate::models::event_tap::DirectComposer;
+    use dodo_ime_core::{KeyEvent, VietnameseConfig};
 
     /// A tone mark: replace the last *n* graphemes with a composed string.
     fn tone(delete_before: usize) -> OutputPlan {
@@ -274,21 +284,48 @@ mod tests {
         );
     }
 
+    /// The captain's exact one-character rewrites. Windows Chrome needs the
+    /// same selection correction as macOS Chrome, keyed by the process image
+    /// name Windows can actually report.
     #[test]
-    fn every_listed_bundle_id_routes_to_the_strategy_its_engine_needs() {
+    fn windows_chrome_corrects_the_exact_cos_dar_and_gif_plans() {
+        for (keys, inserted) in [("cos", "ó"), ("dar", "ả"), ("gif", "ì")] {
+            let mut composer = DirectComposer::new(VietnameseConfig::default());
+            let mut plan = OutputPlan::default();
+            for key in keys.chars() {
+                plan = composer.process(KeyEvent::character(key));
+            }
+            assert_eq!(plan.delete_before, 1, "{keys}");
+            assert_eq!(plan.insert.as_deref(), Some(inserted), "{keys}");
+
+            let rewrite = BrowserRewrite::plan(true, Some("chrome.exe"), &plan);
+            assert!(rewrite.extend_selection, "{keys}");
+            assert_eq!(rewrite.delete_before, 0, "{keys}");
+        }
+    }
+
+    #[test]
+    fn every_listed_application_id_routes_to_the_strategy_its_engine_needs() {
         for id in [
             "com.google.Chrome",
             "com.google.Chrome.canary",
+            "chrome.exe",
             "org.chromium.Chromium",
+            "chromium.exe",
             "com.brave.Browser",
+            "brave.exe",
             "com.microsoft.edgemac",
+            "msedge.exe",
             "com.vivaldi.Vivaldi",
+            "vivaldi.exe",
             "com.operasoftware.Opera",
+            "opera.exe",
             "company.thebrowser.Browser",
             "com.coccoc.Coccoc",
+            "coccoc.exe",
         ] {
             assert_eq!(
-                Strategy::for_bundle_id(id),
+                Strategy::for_application_id(id),
                 Strategy::ExtendSelection,
                 "{id}"
             );
@@ -298,9 +335,10 @@ mod tests {
             "com.apple.SafariTechnologyPreview",
             "org.mozilla.firefox",
             "org.mozilla.firefoxdeveloperedition",
+            "firefox.exe",
         ] {
             assert_eq!(
-                Strategy::for_bundle_id(id),
+                Strategy::for_application_id(id),
                 Strategy::CommitSuggestion,
                 "{id}"
             );
@@ -322,19 +360,24 @@ mod tests {
 
     /// An application dodo has never heard of is left exactly as it is today.
     /// This is the conservative reading of "everything else" — see
-    /// [`Strategy::for_bundle_id`].
+    /// [`Strategy::for_application_id`].
     #[test]
-    fn an_unknown_or_absent_bundle_id_changes_nothing() {
-        for bundle_id in [
+    fn an_unknown_or_absent_application_id_changes_nothing() {
+        for application_id in [
             Some("com.apple.TextEdit"),
             Some("com.apple.Terminal"),
+            Some("notepad.exe"),
             Some("com.googl.Chrome"),
             Some("com.google.Chrome "),
             Some(""),
             None,
         ] {
-            let rewrite = BrowserRewrite::plan(true, bundle_id, &tone(3));
-            assert_eq!(rewrite, BrowserRewrite::verbatim(&tone(3)), "{bundle_id:?}");
+            let rewrite = BrowserRewrite::plan(true, application_id, &tone(3));
+            assert_eq!(
+                rewrite,
+                BrowserRewrite::verbatim(&tone(3)),
+                "{application_id:?}"
+            );
             assert!(!rewrite.extend_selection);
             assert_eq!(rewrite.commit_character, None);
             assert_eq!(rewrite.delete_before, 3);

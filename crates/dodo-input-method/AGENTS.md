@@ -35,9 +35,12 @@ CoreGraphics boundary. Generated events carry a process-unique marker and pass t
 state is touched. Secure input passes through. Focus, target, navigation, mouse, recovery, or
 configuration changes discard retained composition.
 
+## Browser address bars
+
 Browser address bars need the adjustment in `models/browser_rewrite.rs`: Chromium extends the
 selection; Safari and Firefox insert then remove a zero-width character. Unknown applications are
-left unchanged. The browser switch is macOS-only and defaults on.
+left unchanged. Both hosts use that one table — macOS supplies a bundle identifier and Windows a
+process image name — while the browser switch remains macOS-only and defaults on.
 
 ## Keyboard Hook
 

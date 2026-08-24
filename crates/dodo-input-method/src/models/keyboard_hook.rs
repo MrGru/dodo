@@ -16,6 +16,7 @@ use std::collections::HashSet;
 
 use dodo_ime_core::{Key, KeyEvent, Modifiers};
 
+use crate::models::browser_rewrite::BrowserRewrite;
 use crate::models::direct_output::OutputPlan;
 use crate::models::event_tap::DirectComposer;
 
@@ -49,6 +50,13 @@ pub enum Handling {
     Process,
     PassThrough,
     Suppress,
+}
+
+/// One event in the array handed to Windows' `SendInput`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WindowsInput {
+    Key { virtual_key: u16, key_up: bool },
+    Unicode { unit: u16, key_up: bool },
 }
 
 /// The Windows signals that prove composition is still aimed at one control.
@@ -106,15 +114,79 @@ impl SuppressedKeyUps {
     }
 }
 
-/// Number of fully paired Windows `INPUT`s in one direct-output plan.
-pub(crate) fn input_event_count(plan: &OutputPlan) -> usize {
+/// One complete, ordered Windows input batch for a rewritten plan.
+pub(crate) fn output_inputs(plan: &OutputPlan, rewrite: &BrowserRewrite) -> Vec<WindowsInput> {
     let inserted = plan
         .insert
         .as_deref()
         .map_or(0, |text| text.encode_utf16().count());
-    plan.delete_before
-        .saturating_add(inserted)
-        .saturating_mul(2)
+    let committed = rewrite
+        .commit_character
+        .map_or(0, |text| text.encode_utf16().count());
+    let mut inputs = Vec::with_capacity(
+        rewrite
+            .delete_before
+            .saturating_add(inserted)
+            .saturating_add(committed)
+            .saturating_mul(2)
+            .saturating_add(usize::from(rewrite.extend_selection) * 4),
+    );
+    if rewrite.extend_selection {
+        inputs.extend([
+            WindowsInput::Key {
+                virtual_key: vk::SHIFT as u16,
+                key_up: false,
+            },
+            WindowsInput::Key {
+                virtual_key: vk::LEFT as u16,
+                key_up: false,
+            },
+            WindowsInput::Key {
+                virtual_key: vk::LEFT as u16,
+                key_up: true,
+            },
+            WindowsInput::Key {
+                virtual_key: vk::SHIFT as u16,
+                key_up: true,
+            },
+        ]);
+    }
+    if let Some(text) = rewrite.commit_character {
+        push_unicode(&mut inputs, text);
+    }
+    for _ in 0..rewrite.delete_before {
+        inputs.extend([
+            WindowsInput::Key {
+                virtual_key: vk::BACK as u16,
+                key_up: false,
+            },
+            WindowsInput::Key {
+                virtual_key: vk::BACK as u16,
+                key_up: true,
+            },
+        ]);
+    }
+    if let Some(text) = &plan.insert {
+        push_unicode(&mut inputs, text);
+    }
+    inputs
+}
+
+fn push_unicode(inputs: &mut Vec<WindowsInput>, text: &str) {
+    for unit in text.encode_utf16() {
+        inputs.extend([
+            WindowsInput::Unicode {
+                unit,
+                key_up: false,
+            },
+            WindowsInput::Unicode { unit, key_up: true },
+        ]);
+    }
+}
+
+/// Number of fully paired Windows `INPUT`s in one verbatim plan.
+pub(crate) fn input_event_count(plan: &OutputPlan) -> usize {
+    output_inputs(plan, &BrowserRewrite::verbatim(plan)).len()
 }
 
 /// Commits a staged plan only when `SendInput` accepted every event.
@@ -138,7 +210,9 @@ pub(crate) fn adopt_after_send(
 /// Spelled out rather than imported, for the reason the whole module exists:
 /// `windows-sys` is not available on the host these rules are tested on.
 pub mod vk {
+    pub const BACK: u32 = 0x08;
     pub const SHIFT: u32 = 0x10;
+    pub const LEFT: u32 = 0x25;
     pub const CONTROL: u32 = 0x11;
     pub const MENU: u32 = 0x12;
     pub const CAPITAL: u32 = 0x14;
@@ -404,9 +478,10 @@ pub fn handling(event: HookEvent) -> Handling {
 mod tests {
     use super::{
         CapsLock, Handling, HookEvent, PhysicalKeys, SuppressedKeyUps, TargetIdentity,
-        adopt_after_send, handling, input_event_count, key_event, layout_state, modifiers,
-        physical_modifiers, target_changed, vk, with_key_down,
+        WindowsInput, adopt_after_send, handling, input_event_count, key_event, layout_state,
+        modifiers, output_inputs, physical_modifiers, target_changed, vk, with_key_down,
     };
+    use crate::models::browser_rewrite::BrowserRewrite;
     use crate::models::direct_output::OutputPlan;
     use crate::models::event_tap::DirectComposer;
     use crate::models::live_switch::LiveSwitch;
@@ -830,6 +905,9 @@ mod tests {
     #[test]
     fn minimal_windows_plans_match_the_investigation_traces() {
         for (keys, expected_text, expected_events, expected_rewrites) in [
+            ("cos", "có", 4, &[(1, Some("ó"))][..]),
+            ("dar", "dả", 4, &[(1, Some("ả"))][..]),
+            ("gif", "gì", 4, &[(1, Some("ì"))][..]),
             ("dd", "đ", 4, &[(1, Some("đ"))][..]),
             ("uw", "ư", 4, &[(1, Some("ư"))][..]),
             ("hoiw", "hơi", 8, &[(2, Some("ơi"))][..]),
@@ -852,6 +930,182 @@ mod tests {
             assert_eq!(harness.events, expected_events, "{keys}");
             assert_eq!(rewrites, expected_rewrites, "{keys}");
         }
+    }
+
+    /// Applies a synthetic batch to the part of a Chromium address bar the
+    /// composer knows. Inline autocomplete's selected suffix is represented by
+    /// `suggestion_selected`: its first deletion dismisses the suggestion
+    /// without touching that known prefix.
+    fn chromium_address_bar_after(
+        mut document: String,
+        suggestion_selected: bool,
+        inputs: &[WindowsInput],
+    ) -> String {
+        let mut suggestion_selected = suggestion_selected;
+        let mut shift = false;
+        let mut selected_tail = false;
+        for input in inputs {
+            match *input {
+                WindowsInput::Key {
+                    virtual_key,
+                    key_up,
+                } if virtual_key == vk::SHIFT as u16 => shift = !key_up,
+                WindowsInput::Key {
+                    virtual_key,
+                    key_up: false,
+                } if virtual_key == vk::LEFT as u16 && shift => {
+                    suggestion_selected = false;
+                    selected_tail = !document.is_empty();
+                }
+                WindowsInput::Key {
+                    virtual_key,
+                    key_up: false,
+                } if virtual_key == vk::BACK as u16 => {
+                    if suggestion_selected {
+                        suggestion_selected = false;
+                    } else {
+                        document = dodo_ime_core::core::truncate_graphemes(&document, 1);
+                        selected_tail = false;
+                    }
+                }
+                WindowsInput::Unicode {
+                    unit,
+                    key_up: false,
+                } => {
+                    if selected_tail {
+                        document = dodo_ime_core::core::truncate_graphemes(&document, 1);
+                        selected_tail = false;
+                    }
+                    suggestion_selected = false;
+                    document.push(char::from_u32(u32::from(unit)).expect("test uses BMP text"));
+                }
+                WindowsInput::Key { .. } | WindowsInput::Unicode { .. } => {}
+            }
+        }
+        document
+    }
+
+    #[test]
+    fn windows_chromium_stages_the_captains_english_w_restore_plans() {
+        let plans = |keys: &str| {
+            let mut composer = DirectComposer::new(VietnameseConfig::default());
+            keys.chars()
+                .filter_map(|key| {
+                    let plan = composer.process(KeyEvent::character(key));
+                    plan.transforms().then_some((key, plan))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let window = plans("window");
+        assert_eq!(
+            window
+                .iter()
+                .map(|(key, plan)| (*key, plan.delete_before, plan.insert.as_deref()))
+                .collect::<Vec<_>>(),
+            [('w', 0, Some("ư")), ('d', 3, Some("wind"))]
+        );
+        assert!(plans("gateway").is_empty());
+        assert!(plans("follow").is_empty());
+
+        let restore = &window[1].1;
+        let mut before = chromium_address_bar_after(
+            "ưin".into(),
+            true,
+            &output_inputs(restore, &BrowserRewrite::verbatim(restore)),
+        );
+        before.push_str("ow");
+        assert_eq!(before, "ưwindow");
+
+        let rewrite = BrowserRewrite::plan(true, Some("chrome.exe"), restore);
+        let mut after =
+            chromium_address_bar_after("ưin".into(), true, &output_inputs(restore, &rewrite));
+        after.push_str("ow");
+        assert_eq!(after, "window");
+    }
+
+    #[test]
+    fn chromium_output_stages_shift_left_before_the_replacement() {
+        let plan = OutputPlan {
+            delete_before: 1,
+            insert: Some("ó".into()),
+            pass_through: false,
+        };
+        let rewrite = BrowserRewrite::plan(true, Some("chrome.exe"), &plan);
+        assert_eq!(
+            output_inputs(&plan, &rewrite),
+            vec![
+                WindowsInput::Key {
+                    virtual_key: vk::SHIFT as u16,
+                    key_up: false,
+                },
+                WindowsInput::Key {
+                    virtual_key: vk::LEFT as u16,
+                    key_up: false,
+                },
+                WindowsInput::Key {
+                    virtual_key: vk::LEFT as u16,
+                    key_up: true,
+                },
+                WindowsInput::Key {
+                    virtual_key: vk::SHIFT as u16,
+                    key_up: true,
+                },
+                WindowsInput::Unicode {
+                    unit: 'ó' as u16,
+                    key_up: false,
+                },
+                WindowsInput::Unicode {
+                    unit: 'ó' as u16,
+                    key_up: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn firefox_output_commits_the_suggestion_before_the_extra_backspace() {
+        let plan = OutputPlan {
+            delete_before: 1,
+            insert: Some("ó".into()),
+            pass_through: false,
+        };
+        let rewrite = BrowserRewrite::plan(true, Some("firefox.exe"), &plan);
+        let inputs = output_inputs(&plan, &rewrite);
+        assert_eq!(
+            inputs[..2],
+            [
+                WindowsInput::Unicode {
+                    unit: '\u{200b}' as u16,
+                    key_up: false,
+                },
+                WindowsInput::Unicode {
+                    unit: '\u{200b}' as u16,
+                    key_up: true,
+                },
+            ]
+        );
+        assert_eq!(
+            inputs
+                .iter()
+                .filter(|input| matches!(input, WindowsInput::Key { virtual_key, .. } if *virtual_key == vk::BACK as u16))
+                .count(),
+            4,
+            "two Backspace pairs: the plan's one plus the commit character"
+        );
+        assert_eq!(
+            inputs[inputs.len() - 2..],
+            [
+                WindowsInput::Unicode {
+                    unit: 'ó' as u16,
+                    key_up: false,
+                },
+                WindowsInput::Unicode {
+                    unit: 'ó' as u16,
+                    key_up: true,
+                },
+            ]
+        );
     }
 
     #[test]

@@ -29,6 +29,14 @@
 //! The shortcut is also answered **before** anything asks where text would go.
 //! A window with no focused control is still a window the user may switch
 //! language in, and the switch is answered before any focus check.
+//!
+//! # Browser address bars
+//!
+//! `models::browser_rewrite` is shared with the macOS host and remains the one
+//! browser/strategy table. Windows supplies the foreground process image name;
+//! the resulting selection, Backspace, and Unicode events are one `SendInput`
+//! array, so Windows preserves their order and the injected-event guard passes
+//! the whole batch without re-entering composition.
 
 use std::collections::HashSet;
 use std::ptr::null_mut;
@@ -36,11 +44,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use dodo_ime_core::{Key, LanguageId};
 use futures_channel::mpsc::UnboundedSender;
-use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{CloseHandle, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyState, GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, ToUnicodeEx, VK_CAPITAL,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, ToUnicodeEx, VK_CAPITAL,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
@@ -49,12 +60,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
 };
 
+use crate::models::browser_rewrite::BrowserRewrite;
 use crate::models::direct_output::OutputPlan;
 use crate::models::event_tap::DirectComposer;
 use crate::models::keyboard_hook::{
     CapsLock, Handling, HookEvent, KeyboardHookStatus, PhysicalKeys, SuppressedKeyUps,
-    TargetIdentity, adopt_after_send, handling, input_event_count, key_event as windows_key_event,
-    layout_state, physical_modifiers, target_changed, vk, with_key_down,
+    TargetIdentity, WindowsInput, adopt_after_send, handling, key_event as windows_key_event,
+    layout_state, output_inputs, physical_modifiers, target_changed, vk, with_key_down,
 };
 use crate::models::live_switch::LiveSwitch;
 use crate::models::settings::SettingsDocument;
@@ -241,7 +253,7 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
     }
     let caps_lock = state.caps.on();
     let window = foreground_window();
-    let Some(key) = normalized_key(event, window.map(|(_, thread)| thread), caps_lock) else {
+    let Some(key) = normalized_key(event, window.map(|(_, thread, _)| thread), caps_lock) else {
         state.composer.reset();
         target_changed(&mut state.target, None);
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
@@ -268,7 +280,8 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         return 1;
     }
     // From here the key is text, so where it would land has to be known.
-    let Some(target) = window.and_then(|(foreground, thread)| target_identity(foreground, thread))
+    let Some(target) =
+        window.and_then(|(foreground, thread, _)| target_identity(foreground, thread))
     else {
         state.composer.reset();
         target_changed(&mut state.target, None);
@@ -304,7 +317,9 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         state.composer = next;
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
-    let (sent, requested) = send_output(&plan);
+    let application_id = window.and_then(|(_, _, process)| process_image_name(process));
+    let rewrite = BrowserRewrite::plan(true, application_id.as_deref(), &plan);
+    let (sent, requested) = send_output(&plan, &rewrite);
     if !adopt_after_send(&mut state.composer, next, sent, requested) {
         state.suppressed_key_ups.allow(event.vkCode);
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
@@ -346,13 +361,41 @@ unsafe extern "system" fn mouse_callback(code: i32, wparam: WPARAM, lparam: LPAR
 }
 
 /// The foreground window and its thread, when Windows names both.
-fn foreground_window() -> Option<(usize, u32)> {
+fn foreground_window() -> Option<(usize, u32, u32)> {
     let foreground = unsafe { GetForegroundWindow() };
     if foreground.is_null() {
         return None;
     }
-    let thread = unsafe { GetWindowThreadProcessId(foreground, null_mut()) };
-    (thread != 0).then_some((foreground as usize, thread))
+    let mut process = 0;
+    let thread = unsafe { GetWindowThreadProcessId(foreground, &mut process) };
+    (thread != 0).then_some((foreground as usize, thread, process))
+}
+
+/// The lowercase executable name Windows reports for the foreground process.
+fn process_image_name(process_id: u32) -> Option<String> {
+    if process_id == 0 {
+        return None;
+    }
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+    if process.is_null() {
+        return None;
+    }
+    // ponytail: paths over 1,023 UTF-16 units skip the workaround; grow and
+    // retry only if a real browser installation ever reaches that ceiling.
+    let mut path = [0_u16; 1024];
+    let mut length = path.len() as u32;
+    let queried = unsafe { QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut length) };
+    unsafe {
+        CloseHandle(process);
+    }
+    if queried == 0 {
+        return None;
+    }
+    let path = String::from_utf16(path.get(..length as usize)?).ok()?;
+    path.rsplit(|character| ['\\', '/'].contains(&character))
+        .next()
+        .filter(|name| !name.is_empty())
+        .map(str::to_ascii_lowercase)
 }
 
 /// The focused control retained text belongs to, when there is one.
@@ -456,18 +499,30 @@ fn one_character(units: &[u16]) -> Option<char> {
     (characters.next().is_none() && !character.is_control()).then_some(character)
 }
 
-fn send_output(plan: &OutputPlan) -> (usize, usize) {
-    let mut events = Vec::with_capacity(input_event_count(plan));
-    for _ in 0..plan.delete_before {
-        events.push(key_input(0x08, 0, 0));
-        events.push(key_input(0x08, 0, KEYEVENTF_KEYUP));
-    }
-    if let Some(text) = &plan.insert {
-        for unit in text.encode_utf16() {
-            events.push(key_input(0, unit, KEYEVENTF_UNICODE));
-            events.push(key_input(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
-        }
-    }
+fn send_output(plan: &OutputPlan, rewrite: &BrowserRewrite) -> (usize, usize) {
+    let events: Vec<_> = output_inputs(plan, rewrite)
+        .into_iter()
+        .map(|event| match event {
+            WindowsInput::Key {
+                virtual_key,
+                key_up,
+            } => key_input(
+                virtual_key,
+                0,
+                (if key_up { KEYEVENTF_KEYUP } else { 0 })
+                    | if virtual_key == vk::LEFT as u16 {
+                        KEYEVENTF_EXTENDEDKEY
+                    } else {
+                        0
+                    },
+            ),
+            WindowsInput::Unicode { unit, key_up } => key_input(
+                0,
+                unit,
+                KEYEVENTF_UNICODE | if key_up { KEYEVENTF_KEYUP } else { 0 },
+            ),
+        })
+        .collect();
     let requested = events.len();
     let Ok(requested_u32) = u32::try_from(requested) else {
         return (0, requested);

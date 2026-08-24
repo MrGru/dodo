@@ -84,6 +84,8 @@ windows-sys = { version = "0.61", features = [
     # `MessageBeep`, which Windows declares beside the debugging APIs rather
     # than beside the message-box constants it takes.
     "Win32_System_Diagnostics_Debug",
+    # Foreground browser detection by process image name.
+    "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }

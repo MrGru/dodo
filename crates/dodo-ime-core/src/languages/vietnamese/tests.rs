@@ -1188,6 +1188,27 @@ fn a_foreign_precomposed_scalar_commits_and_passes_through() {
 
 // -------------------------------------------------- English and nonsense
 
+/// A word-final `w` remains part of an English word once the trustworthy run
+/// has proved non-Vietnamese. Real Telex/VNI marks stay available in syllables
+/// where their key or digit has a target.
+#[test]
+fn english_words_ending_in_w_stay_literal_without_costing_real_marks() {
+    let english = &[
+        ("window", "window"),
+        ("gateway", "gateway"),
+        ("follow", "follow"),
+        ("widow", "widow"),
+        ("willow", "willow"),
+        ("shadow", "shadow"),
+        ("below", "below"),
+        ("elbow", "elbow"),
+    ];
+    check(english, telex);
+    check(english, vni);
+    check(&[("mow", "mơ"), ("tuw", "tư"), ("bawng", "băng")], telex);
+    check(&[("mo7", "mơ"), ("tu7", "tư"), ("ba8ng", "băng")], vni);
+}
+
 /// The spell-check fallback: a syllable that is not Vietnamese is handed back
 /// as the keys that were typed.
 #[test]
