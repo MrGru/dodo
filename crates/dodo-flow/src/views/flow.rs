@@ -124,7 +124,7 @@ use gpui::{
     App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior,
     Hsla, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Path, PathPromptOptions, PinchEvent, Pixels,
-    Point, Render, ScrollWheelEvent, SharedString, Styled, Window, canvas, div,
+    Point, Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled, Window, canvas, div,
     prelude::FluentBuilder as _, px,
 };
 use gpui::{AppContext as _, Div};
@@ -470,6 +470,9 @@ pub struct FlowView {
     preview_route: EdgeRoute,
 
     // ---- Phase 11's property panel ------------------------------------
+    /// The property panel's persistent scroll position and scrollbar state.
+    panel_scroll: ScrollHandle,
+
     /// The opacity slider's own state, which is `gpui-component`'s and needs a
     /// window to exist. Built once and reused: a slider rebuilt per frame would
     /// lose the drag the moment anything else repainted.
@@ -569,6 +572,7 @@ impl FlowView {
             pan_key_held: false,
             rebuilt_routes: 0,
             preview_route: EdgeRoute::default(),
+            panel_scroll: ScrollHandle::default(),
             opacity: cx.new(|_| {
                 SliderState::new()
                     .min(0.0)
@@ -3399,8 +3403,10 @@ impl Render for FlowView {
             .children(panel.map(|state| {
                 div()
                     .absolute()
-                    .top(px(52.0))
+                    .top(px(properties::PANEL_TOP_PIXELS))
+                    .bottom(px(properties::PANEL_BOTTOM_PIXELS))
                     .left(px(12.0))
+                    .min_h(px(properties::PANEL_MIN_PIXELS))
                     .child(properties::panel(
                         cx.entity(),
                         &state,
@@ -3408,6 +3414,7 @@ impl Render for FlowView {
                             .as_ref()
                             .map(|prompt| (prompt.kind, &prompt.input)),
                         &self.opacity,
+                        &self.panel_scroll,
                         cx,
                     ))
             }))

@@ -47,11 +47,13 @@
 use dodo_i18n::{flow, t};
 use gpui::{
     App, Bounds, Entity, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
-    SharedString, StatefulInteractiveElement, Styled, canvas, div, prelude::FluentBuilder, px,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, canvas, div,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme,
     input::{Input, InputState},
+    scroll::{Scrollbar, ScrollbarShow},
     slider::Slider,
     tooltip::Tooltip,
 };
@@ -95,11 +97,19 @@ const SWATCH_PIXELS: f32 = 26.0;
 /// its widest row and the section labels would sit under a ragged edge.
 pub const PANEL_PIXELS: f32 = 214.0;
 
-/// The tallest the panel may get before it scrolls. It is **a single scrolling
-/// column** rather than a wrapped or paged one: a node's panel is ten sections
-/// and does not fit a short window, and a row that moved between columns as the
-/// window resized would be a row nobody could find twice.
-const MAX_PANEL_PIXELS: f32 = 620.0;
+/// The panel's top edge: below the palette, with eight pixels between them.
+pub const PANEL_TOP_PIXELS: f32 = 52.0;
+
+/// The panel's bottom inset, matching the canvas chrome's left and top insets.
+pub const PANEL_BOTTOM_PIXELS: f32 = 12.0;
+
+/// The smallest useful height for the panel stack. dodo's supported pane is
+/// taller; this floor keeps a pathologically short host from collapsing it.
+pub const PANEL_MIN_PIXELS: f32 = 160.0;
+
+/// The prompt card's fixed height. The pinned input's medium height is 32 px;
+/// the card adds 6 px of padding on each side.
+const PROMPT_PIXELS: f32 = 44.0;
 
 /// The stroke width the glyphs are drawn at, in screen pixels.
 const GLYPH_STROKE: f32 = 1.4;
@@ -206,6 +216,7 @@ pub fn panel(
     state: &PanelState,
     prompt: Option<(PromptKind, &Entity<InputState>)>,
     opacity: &Entity<gpui_component::slider::SliderState>,
+    scroll: &ScrollHandle,
     cx: &App,
 ) -> impl IntoElement {
     let rows: Vec<gpui::AnyElement> = state
@@ -214,8 +225,15 @@ pub fn panel(
         .map(|section| row(*section, state, view.clone(), opacity, cx))
         .collect();
 
+    // The absolutely positioned parent pins both its top and bottom, so this
+    // stack gets the pane's remaining height from layout on every resize. The
+    // card is content-sized up to that cap, then yields to the prompt sibling.
+    // It remains one scrolling column: a row that moved between columns as the
+    // window resized would be a row nobody could find twice.
     div()
         .occlude()
+        .max_h_full()
+        .min_h_0()
         .flex()
         .flex_col()
         .gap(px(4.0))
@@ -223,7 +241,10 @@ pub fn panel(
             div()
                 .id("flow-properties")
                 .w(px(PANEL_PIXELS))
-                .max_h(px(MAX_PANEL_PIXELS))
+                .max_h_full()
+                .min_h_0()
+                .relative()
+                .track_scroll(scroll)
                 .overflow_y_scroll()
                 .flex()
                 .flex_col()
@@ -233,7 +254,16 @@ pub fn panel(
                 .border_1()
                 .border_color(cx.theme().border)
                 .bg(cx.theme().popover)
-                .children(rows),
+                .children(rows)
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .left_0()
+                        .child(Scrollbar::vertical(scroll).scrollbar_show(ScrollbarShow::Always)),
+                ),
         )
         .children(prompt.map(|(kind, input)| prompt_row(kind, input, cx)))
 }
@@ -254,6 +284,8 @@ fn prompt_row(kind: PromptKind, input: &Entity<InputState>, cx: &App) -> impl In
     div()
         .key_context(TYPING_CONTEXT)
         .w(px(PANEL_PIXELS))
+        .h(px(PROMPT_PIXELS))
+        .flex_shrink_0()
         .p(px(6.0))
         .rounded(cx.theme().radius)
         .border_1()
