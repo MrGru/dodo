@@ -2065,6 +2065,25 @@ mod tests {
     }
 
     #[test]
+    fn grouping_makes_members_contiguous_in_depth() {
+        let mut editor = FlowEditor::new();
+        let a = add_shape(&mut editor, Vec2::ZERO, Vec2::ONE);
+        let outsider = add_shape(&mut editor, Vec2::new(20.0, 0.0), Vec2::ONE);
+        let b = add_shape(&mut editor, Vec2::new(40.0, 0.0), Vec2::ONE);
+        editor
+            .apply(EditCommand::SetNodeZ(vec![(a, 0), (outsider, 1), (b, 2)]))
+            .unwrap();
+        editor.set_node_selected(a, true);
+        editor.set_node_selected(b, true);
+
+        assert!(editor.group_selection());
+        let low = editor.world().nodes().z(a).min(editor.world().nodes().z(b));
+        let high = editor.world().nodes().z(a).max(editor.world().nodes().z(b));
+        assert_eq!(high - low, 1);
+        assert!(!(low..=high).contains(&editor.world().nodes().z(outsider)));
+    }
+
+    #[test]
     fn align_and_distribute_move_subjects_in_one_undo_step() {
         let mut editor = FlowEditor::new();
         let a = add_shape(&mut editor, Vec2::new(10.0, 10.0), Vec2::new(40.0, 30.0));
