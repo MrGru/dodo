@@ -239,7 +239,9 @@ impl Syllable {
     /// was wanted, so the rendered text stands from then on and the spell-check
     /// fallback stops second-guessing it. Without this, `aww` would come back as
     /// `aww` rather than `aw`, because `aw` is not a Vietnamese syllable and the
-    /// fallback would helpfully undo the undo.
+    /// fallback would helpfully undo the undo. The one later exception is
+    /// [`Syllable::restore_raw_letters_after_undo`], after intervening letters
+    /// and another Telex control prove that the cancelled reading was foreign.
     pub fn distrust_raw(&mut self) {
         self.raw_trusted = false;
     }
@@ -276,7 +278,20 @@ impl Syllable {
     /// a raw record abandoned by Backspace/undo are refused rather than
     /// guessed.
     pub fn restore_raw_letters(&mut self) -> bool {
-        if !self.raw_trusted || !self.raw.chars().all(|key| key.is_ascii_alphabetic()) {
+        if !self.raw_trusted {
+            return false;
+        }
+        self.restore_ascii_raw_letters()
+    }
+
+    /// Restore an undo's raw keys after a later Telex control proves that the
+    /// repeated letter belonged to a foreign run rather than a cancellation.
+    pub fn restore_raw_letters_after_undo(&mut self) -> bool {
+        self.restore_ascii_raw_letters()
+    }
+
+    fn restore_ascii_raw_letters(&mut self) -> bool {
+        if !self.raw.chars().all(|key| key.is_ascii_alphabetic()) {
             return false;
         }
         self.letters = self

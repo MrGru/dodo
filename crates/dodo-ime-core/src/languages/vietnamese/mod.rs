@@ -84,7 +84,11 @@
 //! *not* a Vietnamese syllable (`where` stays `where`, `sport` stays `sport`),
 //! which is most of them. Once a trustworthy run becomes impossible it is
 //! restored immediately and later Telex controls stay literal until the
-//! boundary; the rest are why an input method has an off switch.
+//! boundary. An undo is deliberately not immediate proof — `marr` is the
+//! supported way to take hỏi back and type `mar` — but if intervening letters
+//! make that cancelled reading impossible and another control follows, the raw
+//! keys win (`arrow` stays `arrow`). The rest are why an input method has an
+//! off switch.
 //!
 //! The one thing that restore may not undo is a letter the user *stated*:
 //! `dd` spells `đ` outright, so `ddm` is `đm` rather than the keys handed back.
@@ -185,7 +189,8 @@ pub struct VietnameseConfig {
     /// a mangling whose result
     /// *is* a Vietnamese syllable — `test` still becomes `tét` — because the
     /// engine has no way to tell that apart from someone typing `tét` on
-    /// purpose.
+    /// purpose. A repeated control remains a deliberate cancellation unless a
+    /// later control follows intervening letters in an impossible Telex run.
     ///
     /// `false` means the rendered syllable always stands, which is what a user
     /// who types no English at all wants.
@@ -264,6 +269,10 @@ pub struct VietnameseEngine {
     /// Telex controls stay literal after trustworthy input becomes
     /// structurally impossible, until the next boundary.
     literal_mode: bool,
+    /// Raw-key length when an alphabetic Telex control other than `w` was
+    /// undone. A control after intervening letters can prove a foreign run;
+    /// the undo itself and an immediate repeat remain Vietnamese cancellation.
+    telex_undo_at: Option<usize>,
 }
 
 impl Default for VietnameseEngine {
@@ -280,6 +289,7 @@ impl VietnameseEngine {
             composition: Composition::new(),
             emitted: 0,
             literal_mode: false,
+            telex_undo_at: None,
         }
     }
 
@@ -394,6 +404,7 @@ impl VietnameseEngine {
         self.composition.clear();
         self.emitted = 0;
         self.literal_mode = false;
+        self.telex_undo_at = None;
     }
 
     /// Commit what is composed, then hand the key to the application.
@@ -407,8 +418,18 @@ impl VietnameseEngine {
         if self.syllable.is_empty() {
             return EngineResult::from_actions(vec![EngineAction::PassThrough]);
         }
+        self.telex_undo_at = None;
         self.syllable.pop_letter(self.config.tone_placement);
         EngineResult::from_actions(self.show())
+    }
+
+    fn note_undo(&mut self, literal: char) {
+        self.telex_undo_at = (self.config.spell_check
+            && self.config.scheme == InputScheme::Telex
+            && literal.is_ascii_alphabetic()
+            && !literal.eq_ignore_ascii_case(&'w'))
+        .then(|| self.syllable.raw().len());
+        self.syllable.distrust_raw();
     }
 
     /// Apply one transform to the syllable.
@@ -422,7 +443,7 @@ impl VietnameseEngine {
         match transform {
             Transform::Letter { base, mark, upper } => {
                 if mark.is_some_and(|mark| self.syllable.cancel_self_mark(mark, source)) {
-                    self.syllable.distrust_raw();
+                    self.note_undo(source);
                     self.literal_after_undo(source)
                 } else {
                     self.syllable
@@ -436,7 +457,7 @@ impl VietnameseEngine {
                     MarkOutcome::SourceCancelled
                     | MarkOutcome::SourceRestored
                     | MarkOutcome::Reverted => {
-                        self.syllable.distrust_raw();
+                        self.note_undo(literal);
                         self.literal_after_undo(literal)
                     }
                     MarkOutcome::NoTarget => self.fall_back(literal),
@@ -448,7 +469,7 @@ impl VietnameseEngine {
                 }
                 if self.syllable.tone() == tone {
                     self.syllable.clear_tone();
-                    self.syllable.distrust_raw();
+                    self.note_undo(literal);
                     return self.literal_after_undo(literal);
                 }
                 self.syllable.set_tone(tone);
@@ -565,6 +586,11 @@ impl LanguageEngine for VietnameseEngine {
             return self.type_literal(key);
         }
 
+        let restore_undone_control = self
+            .telex_undo_at
+            .is_some_and(|undo_at| self.syllable.raw().len() > undo_at)
+            && self.config.scheme == InputScheme::Telex
+            && telex::continues_control_sequence(key, self.syllable.raw().chars().last());
         let transform = match self.config.scheme {
             InputScheme::Telex => {
                 telex::interpret(key, &self.syllable, self.config.bracket_shortcuts)
@@ -579,6 +605,13 @@ impl LanguageEngine for VietnameseEngine {
         match self.apply(transform, key) {
             Applied::Changed => {
                 self.normalize();
+                if restore_undone_control
+                    && self.syllable.viability() == rules::Viability::Impossible
+                    && self.syllable.restore_raw_letters_after_undo()
+                {
+                    self.literal_mode = true;
+                    self.telex_undo_at = None;
+                }
                 EngineResult::from_actions(self.show())
             }
             Applied::Literal(literal) => {

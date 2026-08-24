@@ -611,6 +611,10 @@ fn a_repeated_vni_digit_undoes_itself_and_types_its_digit() {
             ("a666", "a66"),
             ("ma111", "ma11"),
             ("ma11n", "ma1n"),
+            // The literal digit finishes the old syllable. Later letters cannot
+            // let a control reach back across it; a later digit starts fresh.
+            ("ma11w", "ma1w"),
+            ("ma11a8", "ma1ă"),
         ],
         vni,
     );
@@ -1127,6 +1131,22 @@ fn typing_continues_after_a_backspace() {
 }
 
 #[test]
+fn backspace_clears_deferred_english_evidence() {
+    let mut engine = engine();
+    let mut host = Host::new();
+    for key in "marr".chars() {
+        let event = KeyEvent::character(key);
+        host.apply(&engine.process_key(&event).actions, event.text);
+    }
+    press(&mut engine, &mut host, Key::Backspace);
+    for key in "nw".chars() {
+        let event = KeyEvent::character(key);
+        host.apply(&engine.process_key(&event).actions, event.text);
+    }
+    assert_eq!(host.visible(), "măn");
+}
+
+#[test]
 fn reset_throws_the_composition_away_without_inserting_it() {
     let mut engine = engine();
     let mut host = Host::new();
@@ -1188,6 +1208,103 @@ fn a_foreign_precomposed_scalar_commits_and_passes_through() {
 
 // -------------------------------------------------- English and nonsense
 
+#[test]
+fn doubled_control_letter_english_table() {
+    let cases = [
+        // Tone and clear-tone keys. Without a later control, a repeat remains
+        // the supported cancellation (`marr` -> `mar`), not proof of English.
+        ("arrow", "arrow"),
+        ("arrows", "arrows"),
+        ("narrow", "narrow"),
+        ("borrow", "borrow"),
+        ("sorrow", "sorrow"),
+        ("tomorrow", "tomorrow"),
+        ("carry", "cary"),
+        ("sorry", "sory"),
+        ("hurry", "hury"),
+        ("worry", "ưory"),
+        ("berry", "bery"),
+        ("error", "error"),
+        ("mirror", "mirror"),
+        ("horror", "horror"),
+        ("terror", "terror"),
+        ("marrow", "marrow"),
+        ("barrow", "barrow"),
+        ("harrow", "harrow"),
+        ("class", "class"),
+        ("pass", "pas"),
+        ("miss", "mis"),
+        ("assess", "assess"),
+        ("across", "across"),
+        ("address", "address"),
+        ("off", "of"),
+        ("offer", "offer"),
+        ("coffee", "coffee"),
+        ("different", "different"),
+        ("buffer", "buffer"),
+        ("effort", "effort"),
+        ("jazz", "jazz"),
+        ("buzz", "buzz"),
+        ("fizz", "fizz"),
+        ("pizza", "pizza"),
+        // Stroke and circumflex keys. `see` is also exactly how Telex spells
+        // Vietnamese `sê`; those valid readings cannot be guessed as English.
+        ("add", "add"),
+        ("odd", "odd"),
+        ("ladder", "ladder"),
+        ("sudden", "sudden"),
+        ("daddy", "dady"),
+        ("middle", "middle"),
+        ("hidden", "hidden"),
+        ("wedding", "wedding"),
+        ("see", "sê"),
+        ("meet", "mêt"),
+        ("need", "need"),
+        ("book", "book"),
+        ("door", "dổ"),
+        ("food", "food"),
+        ("floor", "floor"),
+        ("cheese", "chée"),
+        ("agree", "agree"),
+        ("aardvark", "aardvark"),
+        // Case variants obey the same distinction.
+        ("Arrow", "Arrow"),
+        ("ARROW", "ARROW"),
+        ("Sorry", "Sory"),
+    ];
+    check(&cases, telex);
+
+    // VNI uses digits as controls, so every alphabetic word in the same table
+    // is literal; doubled English letters never enter its undo path.
+    for (keys, _) in cases {
+        assert_eq!(vni(keys), keys, "{keys}");
+    }
+
+    // Every Telex control family takes the deferred path: only a later control
+    // over the now-impossible cancelled reading restores the physical keys.
+    check(
+        &[
+            ("marrnw", "marrnw"),
+            ("massnw", "massnw"),
+            ("maffnw", "maffnw"),
+            ("maxxnw", "maxxnw"),
+            ("majjnw", "majjnw"),
+            ("maszzw", "maszzw"),
+            ("daddaw", "daddaw"),
+            ("aaand", "aaand"),
+            ("eeend", "eeend"),
+            ("ooond", "ooond"),
+        ],
+        telex,
+    );
+
+    let mut arrow = engine();
+    assert_eq!(
+        action_stream(&mut arrow, "arrow"),
+        ["a", "ả", "ar", "aro", "arrow"].map(composition)
+    );
+}
+
 /// A word-final `w` remains part of an English word once the trustworthy run
 /// has proved non-Vietnamese. Real Telex/VNI marks stay available in syllables
 /// where their key or digit has a target.
@@ -1202,6 +1319,12 @@ fn english_words_ending_in_w_stay_literal_without_costing_real_marks() {
         ("shadow", "shadow"),
         ("below", "below"),
         ("elbow", "elbow"),
+        ("arrow", "arrow"),
+        ("narrow", "narrow"),
+        ("borrow", "borrow"),
+        ("sorrow", "sorrow"),
+        ("tomorrow", "tomorrow"),
+        ("marrow", "marrow"),
     ];
     check(english, telex);
     check(english, vni);
@@ -1238,6 +1361,15 @@ fn non_vietnamese_words_fall_through_as_typed() {
             ("NEW", "NEW"),
             ("View", "View"),
             ("Browser", "Browser"),
+            // A cancelled doubled control makes the run literal only when a
+            // later control supplies the missing evidence.
+            ("arrow", "arrow"),
+            ("assess", "assess"),
+            ("offer", "offer"),
+            ("coffee", "coffee"),
+            ("error", "error"),
+            ("Arrow", "Arrow"),
+            ("ARROW", "ARROW"),
         ],
         telex,
     );

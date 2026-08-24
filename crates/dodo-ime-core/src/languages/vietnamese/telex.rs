@@ -56,7 +56,9 @@
 //! [`MarkOutcome::Reverted`](super::syllable::MarkOutcome::Reverted) — or a
 //! tone that is already set — is what tells the engine to take the diacritic
 //! off and type the key as itself. So the undo rule is stated once and both
-//! schemes get it.
+//! schemes get it. The undo alone is not evidence of English: if intervening
+//! letters make its literal reading impossible and a later control follows,
+//! [`VietnameseEngine`](super::VietnameseEngine) restores the raw Telex keys.
 //!
 //! The bare `w` is the one key that reaches that layer as a whole *letter*
 //! rather than as a mark, and it undoes itself the same way — but the shared
@@ -161,6 +163,16 @@ pub fn interpret(key: char, syllable: &Syllable, bracket_shortcuts: bool) -> Opt
     })
 }
 
+/// Whether `key` can continue a Telex control sequence after an earlier undo.
+/// The vowel keys are controls only when doubled; the remaining Telex letters
+/// may become a control anywhere in the syllable.
+pub(super) fn continues_control_sequence(key: char, previous: Option<char>) -> bool {
+    let lower = key.to_ascii_lowercase();
+    matches!(lower, 's' | 'f' | 'r' | 'x' | 'j' | 'z' | 'w' | 'd')
+        || matches!(lower, 'a' | 'e' | 'o')
+            && previous.is_some_and(|previous| previous.eq_ignore_ascii_case(&key))
+}
+
 fn tone_key(lower: char) -> Option<Tone> {
     match lower {
         's' => Some(Tone::Acute),
@@ -251,7 +263,7 @@ fn repeats_nucleus_vowel(syllable: &Syllable, lower: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::interpret;
+    use super::{continues_control_sequence, interpret};
     use crate::languages::vietnamese::Transform;
     use crate::languages::vietnamese::syllable::{Mark, Syllable, Tone};
 
@@ -287,6 +299,18 @@ mod tests {
 
     fn read(key: char, spelling: &str) -> Option<Transform> {
         interpret(key, &syllable(spelling), true)
+    }
+
+    #[test]
+    fn the_control_sequence_letters_include_doubled_vowels() {
+        for key in ['s', 'f', 'r', 'x', 'j', 'z', 'w', 'd'] {
+            assert!(continues_control_sequence(key, None), "{key}");
+        }
+        for key in ['a', 'e', 'o'] {
+            assert!(continues_control_sequence(key, Some(key)), "{key}{key}");
+            assert!(!continues_control_sequence(key, None), "{key}");
+        }
+        assert!(!continues_control_sequence('n', Some('n')));
     }
 
     #[test]

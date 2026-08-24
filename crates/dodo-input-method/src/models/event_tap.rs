@@ -687,9 +687,13 @@ mod tests {
     /// not merely against the engine's semantic state or its final action list.
     #[test]
     fn direct_output_keeps_the_captains_english_w_examples_literal() {
-        for word in ["window", "gateway", "follow", "widow", "willow", "elbow"] {
+        for word in [
+            "window", "gateway", "follow", "widow", "willow", "elbow", "arrow", "narrow", "borrow",
+            "sorrow", "tomorrow", "marrow",
+        ] {
             assert_eq!(type_at_end_cursor(word), word, "{word}");
         }
+        assert_visible_steps("arrow", &["a", "ả", "ar", "aro", "arrow"]);
     }
 
     #[test]
