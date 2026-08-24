@@ -67,14 +67,14 @@ use crate::{
         history::{CommandHistory, GestureId},
         layers::{DepthSpan, LayerAction},
     },
-    geometry::{RouteOptions, Vec2},
+    geometry::{Rect, RouteOptions, Vec2},
     interaction::TextTarget,
     models::{
         Connector, ConnectorEnd, ConnectorEndpoint, DocumentSettings, EdgeIndex, EdgeRouting,
         ElementId, ElementKind, ElementStyle, FlowDocument, ImageCrop, ImageResource, NodeImage,
         NodeIndex, RenderStyle, SketchStyle,
     },
-    properties::{CropChoice, crop_choice},
+    properties::{Alignment, CropChoice, crop_choice},
     runtime::{
         BoxQuery, ConnectionRules, DirtyState, EdgeSpec, GraphWorld, LoadReport, NodeSpec,
         PointerTarget,
@@ -242,8 +242,20 @@ impl FlowEditor {
     /// the incident edges of a removed node go with it because the applier
     /// records the cascade rather than the request.
     pub fn delete_selection(&mut self) -> bool {
-        let nodes = self.world.selection().nodes().to_vec();
-        let edges = self.world.selection().edges().to_vec();
+        let mut nodes = self.world.selection().nodes().to_vec();
+        let mut edges = self.world.selection().edges().to_vec();
+        for &selected in self.world.selection().nodes() {
+            if self.world.node_is_live(selected)
+                && matches!(self.world.nodes().kind(selected), ElementKind::Group)
+            {
+                nodes.extend(self.world.descendants(selected));
+                edges.extend(self.transform_edges_of(selected));
+            }
+        }
+        nodes.sort_unstable();
+        nodes.dedup();
+        edges.sort_unstable();
+        edges.dedup();
         if nodes.is_empty() && edges.is_empty() {
             return false;
         }
@@ -637,6 +649,512 @@ impl FlowEditor {
         })
     }
 
+    /// Groups the selected outermost nodes. Internal graph edges and straight
+    /// connectors whose two attached endpoints are inside join automatically.
+    pub fn group_selection(&mut self) -> bool {
+        let selected: Vec<NodeIndex> = self
+            .world
+            .selection()
+            .nodes()
+            .iter()
+            .copied()
+            .filter(|&node| self.world.node_is_live(node))
+            .filter(|&node| {
+                !self.world.selection().nodes().iter().any(|&other| {
+                    other != node
+                        && self.world.node_is_live(other)
+                        && self.world.is_descendant_of(node, other)
+                })
+            })
+            .collect();
+        if selected.len() < 2 {
+            return false;
+        }
+
+        let contains = |node: NodeIndex| {
+            selected
+                .iter()
+                .any(|&member| member == node || self.world.is_descendant_of(node, member))
+        };
+        let edges: Vec<EdgeIndex> = self
+            .world
+            .edges()
+            .live_indices()
+            .filter(|&edge| {
+                self.world
+                    .parent_of_edge(edge)
+                    .is_none_or(|parent| !contains(parent))
+                    && contains(self.world.edges().source(edge).node)
+                    && contains(self.world.edges().target(edge).node)
+            })
+            .collect();
+        let connectors: Vec<NodeIndex> = self
+            .world
+            .nodes()
+            .live_indices()
+            .filter(|node| !contains(*node))
+            .filter(|&node| {
+                self.world.nodes().connector(node).is_some_and(|connector| {
+                    [connector.start, connector.end]
+                        .into_iter()
+                        .all(|endpoint| {
+                            endpoint
+                                .attachment
+                                .and_then(|attachment| self.world.node_index(attachment.element))
+                                .is_some_and(contains)
+                        })
+                })
+            })
+            .collect();
+
+        let mut members = selected;
+        members.extend(connectors);
+        let common_parent = members
+            .first()
+            .and_then(|first| {
+                let parent = self.world.nodes().cold(*first).parent;
+                members
+                    .iter()
+                    .all(|node| self.world.nodes().cold(*node).parent == parent)
+                    .then_some(parent)
+            })
+            .flatten();
+        let z = members
+            .iter()
+            .map(|node| self.world.nodes().z(*node))
+            .min()
+            .unwrap_or(0);
+
+        self.in_one_step(|editor| {
+            let mut spec =
+                NodeSpec::new(ElementId::NONE, ElementKind::Group, Vec2::ZERO, Vec2::ZERO);
+            spec.parent = common_parent;
+            spec.z = z;
+            let Ok(added) = editor.apply(EditCommand::AddNodes(vec![NodeDraft::new(spec)])) else {
+                return false;
+            };
+            let Some(group) = added.added_nodes.first().copied() else {
+                return false;
+            };
+            let changed = editor
+                .apply(EditCommand::Group {
+                    group,
+                    nodes: members.clone(),
+                    edges: edges.clone(),
+                })
+                .is_ok_and(|summary| summary.changed);
+            let layered = editor.make_group_depth_contiguous(group, &members, &edges);
+            editor.select_only(Some(group));
+            changed || layered
+        })
+    }
+
+    fn make_group_depth_contiguous(
+        &mut self,
+        group: NodeIndex,
+        members: &[NodeIndex],
+        member_edges: &[EdgeIndex],
+    ) -> bool {
+        #[derive(Clone, Copy)]
+        enum Element {
+            Node(NodeIndex),
+            Edge(EdgeIndex),
+        }
+        let mut block_nodes = members.to_vec();
+        let mut block_edges = member_edges.to_vec();
+        for &member in members {
+            if matches!(self.world.nodes().kind(member), ElementKind::Group) {
+                block_nodes.extend(self.world.descendants(member));
+                block_edges.extend(self.transform_edges_of(member));
+            }
+        }
+        block_nodes.sort_unstable();
+        block_nodes.dedup();
+        block_edges.sort_unstable();
+        block_edges.dedup();
+
+        let mut all: Vec<Element> = self
+            .world
+            .nodes()
+            .live_indices()
+            .filter(|node| *node != group)
+            .map(Element::Node)
+            .chain(self.world.edges().live_indices().map(Element::Edge))
+            .collect();
+        let key = |element: &Element| match *element {
+            Element::Node(node) => (self.world.nodes().z(node), 1_u8, node.raw()),
+            Element::Edge(edge) => (self.world.edges().z(edge), 0_u8, edge.raw()),
+        };
+        all.sort_unstable_by_key(key);
+        let belongs = |element: &Element| match element {
+            Element::Node(node) => block_nodes.contains(node),
+            Element::Edge(edge) => block_edges.contains(edge),
+        };
+        let at = all.iter().position(&belongs).unwrap_or(all.len());
+        let mut block: Vec<Element> = all.iter().copied().filter(&belongs).collect();
+        all.retain(|element| !belongs(element));
+        all.splice(at.min(all.len())..at.min(all.len()), block.drain(..));
+        all.insert(
+            (at + block_nodes.len() + block_edges.len()).min(all.len()),
+            Element::Node(group),
+        );
+
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        for (z, element) in all.into_iter().enumerate() {
+            match element {
+                Element::Node(node) => nodes.push((node, z as i32)),
+                Element::Edge(edge) => edges.push((edge, z as i32)),
+            }
+        }
+        self.in_one_step(|editor| {
+            let mut changed = editor
+                .apply(EditCommand::SetNodeZ(nodes))
+                .is_ok_and(|summary| summary.changed);
+            changed |= editor
+                .apply(EditCommand::SetEdgeZ(edges))
+                .is_ok_and(|summary| summary.changed);
+            changed
+        })
+    }
+
+    /// Peels one level from every selected group.
+    pub fn ungroup_selection(&mut self) -> bool {
+        let groups: Vec<NodeIndex> = self
+            .world
+            .selection()
+            .nodes()
+            .iter()
+            .copied()
+            .filter(|&node| {
+                self.world.node_is_live(node)
+                    && matches!(self.world.nodes().kind(node), ElementKind::Group)
+            })
+            .collect();
+        if groups.is_empty() {
+            return false;
+        }
+
+        let mut revealed = Vec::new();
+        let changed = self.in_one_step(|editor| {
+            let mut changed = false;
+            for group in groups {
+                let parent = editor.world.nodes().cold(group).parent;
+                let nodes: Vec<(NodeIndex, Option<ElementId>)> = editor
+                    .world
+                    .children(group)
+                    .iter()
+                    .copied()
+                    .map(|node| {
+                        revealed.push(node);
+                        (node, parent)
+                    })
+                    .collect();
+                let edges: Vec<(EdgeIndex, Option<ElementId>)> = editor
+                    .world
+                    .child_edges(group)
+                    .iter()
+                    .copied()
+                    .map(|edge| (edge, parent))
+                    .collect();
+                changed |= editor
+                    .apply(EditCommand::Ungroup {
+                        group,
+                        nodes,
+                        edges,
+                    })
+                    .is_ok_and(|summary| summary.changed);
+            }
+            changed
+        });
+        if changed {
+            self.clear_selection();
+            for node in revealed {
+                self.set_node_selected(node, true);
+            }
+        }
+        changed
+    }
+
+    fn transform_nodes_of(&self, node: NodeIndex) -> Vec<NodeIndex> {
+        if matches!(self.world.nodes().kind(node), ElementKind::Group) {
+            self.world
+                .descendants(node)
+                .into_iter()
+                .filter(|child| !matches!(self.world.nodes().kind(*child), ElementKind::Group))
+                .collect()
+        } else {
+            vec![node]
+        }
+    }
+
+    fn transform_edges_of(&self, node: NodeIndex) -> Vec<EdgeIndex> {
+        if !matches!(self.world.nodes().kind(node), ElementKind::Group) {
+            return Vec::new();
+        }
+        let mut groups = vec![node];
+        groups.extend(
+            self.world
+                .descendants(node)
+                .into_iter()
+                .filter(|child| matches!(self.world.nodes().kind(*child), ElementKind::Group)),
+        );
+        groups
+            .into_iter()
+            .flat_map(|group| self.world.child_edges(group).iter().copied())
+            .collect()
+    }
+
+    fn gesture_nodes(&self, node: NodeIndex) -> Vec<NodeIndex> {
+        let mut nodes =
+            if self.world.selection().contains_node(node) && self.world.selection().len() >= 2 {
+                self.world
+                    .selection()
+                    .nodes()
+                    .iter()
+                    .copied()
+                    .flat_map(|selected| self.transform_nodes_of(selected))
+                    .collect()
+            } else {
+                self.transform_nodes_of(node)
+            };
+        nodes.sort_unstable();
+        nodes.dedup();
+        nodes
+    }
+
+    pub fn move_node_or_group(&mut self, node: NodeIndex, delta: Vec2) -> bool {
+        let nodes = self.gesture_nodes(node);
+        self.apply(EditCommand::MoveNodes { nodes, delta })
+            .is_ok_and(|summary| summary.changed)
+    }
+
+    pub fn resize_node_or_group(&mut self, node: NodeIndex, target: Rect) -> bool {
+        let collection = matches!(self.world.nodes().kind(node), ElementKind::Group)
+            || (self.world.selection().contains_node(node) && self.world.selection().len() >= 2);
+        if !collection {
+            return self.in_one_step(|editor| {
+                let mut changed = editor
+                    .apply(EditCommand::SetNodePositions(vec![(node, target.origin)]))
+                    .is_ok_and(|summary| summary.changed);
+                changed |= editor
+                    .apply(EditCommand::resize_node(node, target.size))
+                    .is_ok_and(|summary| summary.changed);
+                changed
+            });
+        }
+        let children = self.gesture_nodes(node);
+        let Some(start) = Rect::of_rects(
+            children
+                .iter()
+                .map(|child| self.world.nodes().rotated_bounds(*child)),
+        ) else {
+            return false;
+        };
+        let start = start.normalized();
+        if start.width() <= f32::EPSILON || start.height() <= f32::EPSILON {
+            return false;
+        }
+        let target = target.normalized();
+        let scale = Vec2::new(
+            target.width() / start.width(),
+            target.height() / start.height(),
+        );
+        let mut positions = Vec::new();
+        let mut sizes = Vec::new();
+        for child in children {
+            let bounds = self.world.nodes().bounds(child).normalized();
+            let relative = bounds.center() - start.origin;
+            let size = bounds.size.scale(scale);
+            let center = target.origin + relative.scale(scale);
+            positions.push((child, center - size * 0.5));
+            sizes.push((child, size));
+        }
+        self.in_one_step(|editor| {
+            let mut changed = editor
+                .apply(EditCommand::SetNodePositions(positions))
+                .is_ok_and(|summary| summary.changed);
+            changed |= editor
+                .apply(EditCommand::ResizeNodes(sizes))
+                .is_ok_and(|summary| summary.changed);
+            changed
+        })
+    }
+
+    pub fn rotate_node_or_group(&mut self, node: NodeIndex, delta: f32) -> bool {
+        let collection = matches!(self.world.nodes().kind(node), ElementKind::Group)
+            || (self.world.selection().contains_node(node) && self.world.selection().len() >= 2);
+        if !collection {
+            return self
+                .apply(EditCommand::RotateElements {
+                    nodes: vec![node],
+                    edges: Vec::new(),
+                    delta,
+                })
+                .is_ok_and(|summary| summary.changed);
+        }
+        let children = self.gesture_nodes(node);
+        let Some(centre) = Rect::of_rects(
+            children
+                .iter()
+                .map(|child| self.world.nodes().rotated_bounds(*child)),
+        )
+        .map(|bounds| bounds.center()) else {
+            return false;
+        };
+        let positions = children
+            .iter()
+            .map(|&child| {
+                let bounds = self.world.nodes().bounds(child);
+                let moved = bounds.center().rotated_about(centre, delta);
+                (child, moved - bounds.size * 0.5)
+            })
+            .collect();
+        self.in_one_step(|editor| {
+            let mut changed = editor
+                .apply(EditCommand::SetNodePositions(positions))
+                .is_ok_and(|summary| summary.changed);
+            changed |= editor
+                .apply(EditCommand::RotateElements {
+                    nodes: children,
+                    edges: Vec::new(),
+                    delta,
+                })
+                .is_ok_and(|summary| summary.changed);
+            changed
+        })
+    }
+
+    /// Rotates every selected element by `delta` counter-clockwise radians.
+    pub fn rotate_selection(&mut self, delta: f32) -> bool {
+        let nodes = self
+            .world
+            .selection()
+            .nodes()
+            .iter()
+            .copied()
+            .filter(|&node| self.world.node_is_live(node))
+            .collect();
+        let edges = self
+            .world
+            .selection()
+            .edges()
+            .iter()
+            .copied()
+            .filter(|&edge| self.world.edge_is_live(edge))
+            .collect();
+
+        self.apply(EditCommand::RotateElements {
+            nodes,
+            edges,
+            delta,
+        })
+        .is_ok_and(|summary| summary.changed)
+    }
+
+    /// The nodes alignment treats as peers: a selected group's direct
+    /// children, otherwise the loose selected nodes.
+    fn alignment_subjects(&self) -> Vec<NodeIndex> {
+        match self.world.selection().single_node() {
+            Some(group) if matches!(self.world.nodes().kind(group), ElementKind::Group) => self
+                .world
+                .children(group)
+                .iter()
+                .copied()
+                .filter(|node| self.world.node_is_live(*node))
+                .collect(),
+            _ => self
+                .world
+                .selection()
+                .nodes()
+                .iter()
+                .copied()
+                .filter(|node| self.world.node_is_live(*node))
+                .collect(),
+        }
+    }
+
+    pub fn alignment_subject_count(&self) -> usize {
+        self.alignment_subjects().len()
+    }
+
+    /// Applies one Align control. Absolute target positions are carried by the
+    /// existing position command; one gesture groups subjects that need
+    /// different deltas into one undo press.
+    pub fn align_selection(&mut self, alignment: Alignment) -> bool {
+        let subjects = self.alignment_subjects();
+        if subjects.len() < 2
+            || (matches!(
+                alignment,
+                Alignment::DistributeHorizontal | Alignment::DistributeVertical
+            ) && subjects.len() < 3)
+        {
+            return false;
+        }
+        let mut rows: Vec<(NodeIndex, Rect)> = subjects
+            .iter()
+            .map(|&node| (node, self.world.nodes().rotated_bounds(node)))
+            .collect();
+        let union = Rect::of_rects(rows.iter().map(|(_, bounds)| *bounds)).expect("two bounds");
+        let mut deltas: Vec<(NodeIndex, Vec2)> = Vec::with_capacity(rows.len());
+
+        match alignment {
+            Alignment::Left => deltas.extend(
+                rows.iter()
+                    .map(|(node, bounds)| (*node, Vec2::new(union.min().x - bounds.min().x, 0.0))),
+            ),
+            Alignment::HorizontalCenter => deltas.extend(rows.iter().map(|(node, bounds)| {
+                (*node, Vec2::new(union.center().x - bounds.center().x, 0.0))
+            })),
+            Alignment::Right => deltas.extend(
+                rows.iter()
+                    .map(|(node, bounds)| (*node, Vec2::new(union.max().x - bounds.max().x, 0.0))),
+            ),
+            Alignment::Top => deltas.extend(
+                rows.iter()
+                    .map(|(node, bounds)| (*node, Vec2::new(0.0, union.min().y - bounds.min().y))),
+            ),
+            Alignment::VerticalMiddle => deltas.extend(rows.iter().map(|(node, bounds)| {
+                (*node, Vec2::new(0.0, union.center().y - bounds.center().y))
+            })),
+            Alignment::Bottom => deltas.extend(
+                rows.iter()
+                    .map(|(node, bounds)| (*node, Vec2::new(0.0, union.max().y - bounds.max().y))),
+            ),
+            Alignment::DistributeHorizontal => {
+                rows.sort_by(|a, b| a.1.min().x.total_cmp(&b.1.min().x));
+                let width: f32 = rows.iter().map(|(_, bounds)| bounds.width()).sum();
+                let gap = (union.width() - width) / (rows.len() - 1) as f32;
+                let mut x = union.min().x;
+                for (node, bounds) in &rows {
+                    deltas.push((*node, Vec2::new(x - bounds.min().x, 0.0)));
+                    x += bounds.width() + gap;
+                }
+            }
+            Alignment::DistributeVertical => {
+                rows.sort_by(|a, b| a.1.min().y.total_cmp(&b.1.min().y));
+                let height: f32 = rows.iter().map(|(_, bounds)| bounds.height()).sum();
+                let gap = (union.height() - height) / (rows.len() - 1) as f32;
+                let mut y = union.min().y;
+                for (node, bounds) in &rows {
+                    deltas.push((*node, Vec2::new(0.0, y - bounds.min().y)));
+                    y += bounds.height() + gap;
+                }
+            }
+        }
+
+        self.in_one_step(|editor| {
+            let mut changed = false;
+            for (node, delta) in deltas {
+                let nodes = editor.transform_nodes_of(node);
+                changed |= editor
+                    .apply(EditCommand::MoveNodes { nodes, delta })
+                    .is_ok_and(|summary| summary.changed);
+            }
+            changed
+        })
+    }
+
     /// **Restyles whatever is selected, through the one door** — every control
     /// on the property panel's style rows.
     ///
@@ -655,26 +1173,44 @@ impl FlowEditor {
     /// repainting without diffing. A control set to the value it already holds
     /// changes nothing, records nothing and consumes no undo.
     pub fn restyle_selection(&mut self, mut edit: impl FnMut(&mut ElementStyle)) -> bool {
-        let nodes: Vec<(NodeIndex, ElementStyle)> = self
+        let mut selected_nodes: Vec<NodeIndex> = self
             .world
             .selection()
             .nodes()
             .iter()
-            .filter(|&&node| self.world.node_is_live(node))
-            .map(|&node| {
+            .copied()
+            .filter(|&node| self.world.node_is_live(node))
+            .flat_map(|node| self.transform_nodes_of(node))
+            .collect();
+        selected_nodes.sort_unstable();
+        selected_nodes.dedup();
+        let nodes: Vec<(NodeIndex, ElementStyle)> = selected_nodes
+            .into_iter()
+            .map(|node| {
                 let mut style = self.world.nodes().style(node).clone();
                 edit(&mut style);
                 (node, style)
             })
             .collect();
 
-        let edges: Vec<(EdgeIndex, ElementStyle)> = self
+        let mut selected_edges: Vec<EdgeIndex> = self
             .world
             .selection()
             .edges()
             .iter()
-            .filter(|&&edge| self.world.edge_is_live(edge))
-            .map(|&edge| {
+            .copied()
+            .filter(|&edge| self.world.edge_is_live(edge))
+            .collect();
+        for &node in self.world.selection().nodes() {
+            if self.world.node_is_live(node) {
+                selected_edges.extend(self.transform_edges_of(node));
+            }
+        }
+        selected_edges.sort_unstable();
+        selected_edges.dedup();
+        let edges: Vec<(EdgeIndex, ElementStyle)> = selected_edges
+            .into_iter()
+            .map(|edge| {
                 let mut style = self.world.edges().style(edge).clone();
                 edit(&mut style);
                 (edge, style)
@@ -916,6 +1452,7 @@ impl FlowEditor {
                     kind: cold.kind.clone(),
                     position: self.world.nodes().position(node) + DUPLICATE_OFFSET,
                     size: self.world.nodes().size(node),
+                    angle: self.world.nodes().angle(node),
                     z: self.world.nodes().z(node),
                     style: self.world.nodes().style(node).clone(),
                     label: cold.label.as_deref().map(str::to_owned),
@@ -982,6 +1519,8 @@ impl FlowEditor {
                     style: editor.world.edges().style(edge).clone(),
                     label: editor.world.edges().label(edge).map(|it| it.to_string()),
                     link: editor.world.edges().link(edge).map(str::to_owned),
+                    angle: editor.world.edges().angle(edge),
+                    parent: None,
                     z: editor.world.edges().z(edge),
                     hidden: editor.world.edges().is_hidden(edge),
                 })
@@ -1141,6 +1680,46 @@ impl FlowEditor {
 
     pub fn clear_selection(&mut self) {
         self.world.clear_selection();
+    }
+
+    /// Selects the direct child under the pointer, one hierarchy level down.
+    pub fn drill_into_group(
+        &mut self,
+        group: NodeIndex,
+        point: Vec2,
+        tolerance: crate::runtime::HitTolerance,
+        flatten: f32,
+    ) -> bool {
+        if !matches!(self.world.nodes().kind(group), ElementKind::Group) {
+            return false;
+        }
+        let target = self
+            .world
+            .hit_test_in_group(group, point, tolerance, flatten);
+        self.world.clear_selection();
+        match target {
+            PointerTarget::Node(node) => self.world.set_node_selected(node, true),
+            PointerTarget::Edge(edge) => self.world.set_edge_selected(edge, true),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Selects the current selection's parent, one level out.
+    pub fn step_out_selection(&mut self) -> bool {
+        let parent = match (
+            self.world.selection().nodes(),
+            self.world.selection().edges(),
+        ) {
+            ([node], []) => self.world.parent_of_node(*node),
+            ([], [edge]) => self.world.parent_of_edge(*edge),
+            _ => None,
+        };
+        let Some(parent) = parent else {
+            return false;
+        };
+        self.world.select_only(Some(parent));
+        true
     }
 
     pub fn set_node_selected(&mut self, node: NodeIndex, selected: bool) {
@@ -1334,6 +1913,240 @@ mod tests {
         assert_eq!(editor.revision(), sketch, "an identical write is a no-op");
     }
 
+    fn add_shape(editor: &mut FlowEditor, position: Vec2, size: Vec2) -> NodeIndex {
+        editor
+            .apply(EditCommand::AddNodes(vec![NodeDraft::new(NodeSpec::new(
+                ElementId::NONE,
+                ElementKind::Shape(ShapeKind::Rectangle),
+                position,
+                size,
+            ))]))
+            .unwrap()
+            .added_nodes[0]
+    }
+
+    #[test]
+    fn group_and_ungroup_are_one_step_inverses() {
+        let mut editor = FlowEditor::new();
+        let a = add_shape(&mut editor, Vec2::ZERO, Vec2::new(100.0, 50.0));
+        let b = add_shape(&mut editor, Vec2::new(200.0, 100.0), Vec2::new(50.0, 100.0));
+        editor.set_node_selected(a, true);
+        editor.set_node_selected(b, true);
+        let depth = editor.history().undo_depth();
+
+        assert!(editor.group_selection());
+        let group = editor
+            .world()
+            .selection()
+            .single_node()
+            .expect("group selected");
+        assert!(matches!(
+            editor.world().nodes().kind(group),
+            ElementKind::Group
+        ));
+        assert_eq!(editor.world().children(group), &[a, b]);
+        assert_eq!(
+            editor.world().nodes().bounds(group),
+            crate::geometry::Rect::new(Vec2::ZERO, Vec2::new(250.0, 200.0)),
+        );
+        assert!(editor.history().undo_depth() > depth);
+
+        // Several inverse deltas share one gesture id; one undo peels the
+        // whole grouping operation.
+        assert!(editor.undo());
+        assert!(!editor.world().node_is_live(group));
+        assert_eq!(editor.world().nodes().cold(a).parent, None);
+        assert_eq!(editor.world().nodes().cold(b).parent, None);
+        assert!(editor.redo());
+        assert!(editor.world().node_is_live(group));
+        assert_eq!(editor.world().children(group), &[a, b]);
+    }
+
+    #[test]
+    fn ungroup_peels_one_level_and_keeps_a_child_group_intact() {
+        let mut editor = FlowEditor::new();
+        let a = add_shape(&mut editor, Vec2::ZERO, Vec2::new(50.0, 50.0));
+        let b = add_shape(&mut editor, Vec2::new(60.0, 0.0), Vec2::new(50.0, 50.0));
+        let c = add_shape(&mut editor, Vec2::new(120.0, 0.0), Vec2::new(50.0, 50.0));
+        editor.set_node_selected(a, true);
+        editor.set_node_selected(b, true);
+        assert!(editor.group_selection());
+        let inner = editor.world().selection().single_node().unwrap();
+        editor.set_node_selected(c, true);
+        assert!(editor.group_selection());
+        let outer = editor.world().selection().single_node().unwrap();
+
+        assert!(editor.ungroup_selection());
+        assert!(!editor.world().node_is_live(outer));
+        assert!(editor.world().node_is_live(inner));
+        assert_eq!(editor.world().children(inner), &[a, b]);
+        assert_eq!(editor.world().nodes().cold(inner).parent, None);
+        assert_eq!(editor.world().nodes().cold(c).parent, None);
+    }
+
+    #[test]
+    fn drill_in_selects_one_direct_child_and_escape_steps_back_out() {
+        let mut editor = FlowEditor::new();
+        let a = add_shape(&mut editor, Vec2::ZERO, Vec2::new(50.0, 50.0));
+        let b = add_shape(&mut editor, Vec2::new(100.0, 0.0), Vec2::new(50.0, 50.0));
+        editor.set_node_selected(a, true);
+        editor.set_node_selected(b, true);
+        assert!(editor.group_selection());
+        let group = editor.world().selection().single_node().unwrap();
+
+        assert!(editor.drill_into_group(
+            group,
+            Vec2::new(25.0, 25.0),
+            crate::runtime::HitTolerance::new(1.0),
+            1.0,
+        ));
+        assert_eq!(editor.world().selection().single_node(), Some(a));
+        assert!(editor.step_out_selection());
+        assert_eq!(editor.world().selection().single_node(), Some(group));
+    }
+
+    #[test]
+    fn a_group_panel_is_the_intersection_of_its_descendants() {
+        let mut editor = FlowEditor::new();
+        let shape = add_shape(&mut editor, Vec2::ZERO, Vec2::new(100.0, 50.0));
+        let mut text = NodeSpec::new(
+            ElementId::NONE,
+            ElementKind::Text,
+            Vec2::new(120.0, 0.0),
+            Vec2::new(100.0, 50.0),
+        );
+        text.label = Some("text".into());
+        let text = editor
+            .apply(EditCommand::AddNodes(vec![NodeDraft::new(text)]))
+            .unwrap()
+            .added_nodes[0];
+        editor.set_node_selected(shape, true);
+        editor.set_node_selected(text, true);
+        assert!(editor.group_selection());
+
+        let items = crate::properties::selection_items(editor.world());
+        let sections = crate::properties::sections_for(&items);
+        assert!(!sections.contains(&crate::properties::PanelSection::Background));
+        assert!(sections.contains(&crate::properties::PanelSection::Align));
+    }
+
+    #[test]
+    fn group_resize_and_rotation_transform_descendants_but_not_their_style() {
+        let mut editor = FlowEditor::new();
+        let a = add_shape(&mut editor, Vec2::ZERO, Vec2::new(100.0, 50.0));
+        let b = add_shape(&mut editor, Vec2::new(200.0, 50.0), Vec2::new(50.0, 50.0));
+        let mut styled = editor.world().nodes().style(a).clone();
+        styled.stroke.width = 7.0;
+        styled.font.size = crate::models::FontSize::ExtraLarge;
+        editor
+            .apply(EditCommand::SetNodeStyles(vec![(a, styled.clone())]))
+            .unwrap();
+        editor.set_node_selected(a, true);
+        editor.set_node_selected(b, true);
+        assert!(editor.group_selection());
+        let group = editor.world().selection().single_node().unwrap();
+        let before = editor.world().nodes().bounds(group);
+
+        assert!(editor.resize_node_or_group(
+            group,
+            crate::geometry::Rect::new(before.origin, before.size * 2.0),
+        ));
+        assert_eq!(editor.world().nodes().size(a), Vec2::new(200.0, 100.0));
+        assert_eq!(editor.world().nodes().position(b), Vec2::new(400.0, 100.0));
+        assert_eq!(editor.world().nodes().style(a), &styled);
+
+        let centre = editor.world().nodes().bounds(group).center();
+        let old = editor.world().nodes().bounds(a).center();
+        assert!(editor.rotate_node_or_group(group, std::f32::consts::FRAC_PI_2));
+        let moved = editor.world().nodes().bounds(a).center();
+        assert!((moved - old.rotated_about(centre, std::f32::consts::FRAC_PI_2)).length() < 1e-3);
+        assert!((editor.world().nodes().angle(a) - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+        assert_eq!(editor.world().nodes().style(a), &styled);
+    }
+
+    #[test]
+    fn align_and_distribute_move_subjects_in_one_undo_step() {
+        let mut editor = FlowEditor::new();
+        let a = add_shape(&mut editor, Vec2::new(10.0, 10.0), Vec2::new(40.0, 30.0));
+        let b = add_shape(&mut editor, Vec2::new(160.0, 80.0), Vec2::new(60.0, 30.0));
+        let c = add_shape(&mut editor, Vec2::new(400.0, 140.0), Vec2::new(80.0, 30.0));
+        for node in [a, b, c] {
+            editor.set_node_selected(node, true);
+        }
+        let before = [a, b, c].map(|node| editor.world().nodes().position(node));
+
+        assert!(editor.align_selection(crate::properties::Alignment::Left));
+        assert!(
+            [a, b, c]
+                .map(|node| editor.world().nodes().rotated_bounds(node).min().x)
+                .windows(2)
+                .all(|pair| (pair[0] - pair[1]).abs() < 1e-4)
+        );
+        assert!(editor.undo());
+        assert_eq!(
+            [a, b, c].map(|node| editor.world().nodes().position(node)),
+            before
+        );
+
+        assert!(editor.align_selection(crate::properties::Alignment::DistributeHorizontal,));
+        let bounds = [a, b, c].map(|node| editor.world().nodes().bounds(node));
+        let first_gap = bounds[1].min().x - bounds[0].max().x;
+        let second_gap = bounds[2].min().x - bounds[1].max().x;
+        assert!((first_gap - second_gap).abs() < 1e-4);
+        assert!(editor.undo());
+        assert_eq!(
+            [a, b, c].map(|node| editor.world().nodes().position(node)),
+            before
+        );
+    }
+
+    #[test]
+    fn a_selected_group_aligns_its_direct_children() {
+        let mut editor = FlowEditor::new();
+        let a = add_shape(&mut editor, Vec2::new(10.0, 10.0), Vec2::new(40.0, 30.0));
+        let b = add_shape(&mut editor, Vec2::new(160.0, 80.0), Vec2::new(60.0, 30.0));
+        editor.set_node_selected(a, true);
+        editor.set_node_selected(b, true);
+        assert!(editor.group_selection());
+        let group = editor.world().selection().single_node().unwrap();
+
+        assert_eq!(editor.alignment_subject_count(), 2);
+        assert!(editor.align_selection(crate::properties::Alignment::Top));
+        assert!(
+            (editor.world().nodes().bounds(a).min().y - editor.world().nodes().bounds(b).min().y)
+                .abs()
+                < 1e-4
+        );
+        assert_eq!(editor.world().selection().single_node(), Some(group));
+    }
+
+    #[test]
+    fn only_an_edge_whose_both_ends_are_inside_joins_the_group() {
+        let mut editor = FlowEditor::new();
+        editor.set_rules(crate::runtime::ConnectionRules::PERMISSIVE);
+        let a = add_shape(&mut editor, Vec2::ZERO, Vec2::new(50.0, 50.0));
+        let b = add_shape(&mut editor, Vec2::new(100.0, 0.0), Vec2::new(50.0, 50.0));
+        let outside = add_shape(&mut editor, Vec2::new(300.0, 0.0), Vec2::new(50.0, 50.0));
+        let edges = editor
+            .apply(EditCommand::Connect(vec![
+                crate::runtime::EdgeSpec::new(ElementId::NONE, EdgeEnd::node(a), EdgeEnd::node(b)),
+                crate::runtime::EdgeSpec::new(
+                    ElementId::NONE,
+                    EdgeEnd::node(b),
+                    EdgeEnd::node(outside),
+                ),
+            ]))
+            .unwrap()
+            .added_edges;
+        editor.set_node_selected(a, true);
+        editor.set_node_selected(b, true);
+
+        assert!(editor.group_selection());
+        let group = editor.world().selection().single_node().unwrap();
+        assert_eq!(editor.world().child_edges(group), &[edges[0]]);
+        assert_eq!(editor.world().edges().parent(edges[1]), None);
+    }
+
     // ---- straight connectors -------------------------------------------
 
     /// Two boxes and an arrow between them, both ends bound, through the same
@@ -1373,6 +2186,49 @@ mod tests {
             .expect("adding a node cannot fail")
             .added_nodes[0];
         (editor, arrow, c)
+    }
+
+    #[test]
+    fn a_connector_joins_only_when_both_attached_ends_are_inside() {
+        let (mut editor, inside, outside) = editor_with_a_bound_arrow();
+        let a = NodeIndex::new(0);
+        let b = NodeIndex::new(1);
+        let external = editor.connector_between(
+            Vec2::new(100.0, 50.0),
+            Vec2::new(600.0, 50.0),
+            Some(a),
+            Some(outside),
+        );
+        let mut spec = NodeSpec::new(
+            ElementId::NONE,
+            ElementKind::Linear(crate::models::LinearKind::Arrow),
+            Vec2::ZERO,
+            Vec2::ZERO,
+        );
+        spec.connector = Some(external);
+        let external = editor
+            .apply(EditCommand::AddNodes(vec![NodeDraft::new(spec)]))
+            .unwrap()
+            .added_nodes[0];
+        editor.set_node_selected(a, true);
+        editor.set_node_selected(b, true);
+
+        assert!(editor.group_selection());
+        let group = editor.world().selection().single_node().unwrap();
+        assert_eq!(editor.world().parent_of_node(inside), Some(group));
+        assert_eq!(editor.world().parent_of_node(external), None);
+
+        let before = connector_of(&editor, external);
+        assert!(editor.move_node_or_group(group, Vec2::new(50.0, 20.0)));
+        let after = connector_of(&editor, external);
+        assert_ne!(
+            after.start.point, before.start.point,
+            "the inside endpoint did not reroute"
+        );
+        assert_eq!(
+            after.end.point, before.end.point,
+            "the outside endpoint moved"
+        );
     }
 
     fn connector_of(editor: &FlowEditor, node: NodeIndex) -> crate::models::Connector {

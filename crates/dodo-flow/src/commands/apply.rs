@@ -218,6 +218,100 @@ pub fn apply(world: &mut GraphWorld, command: EditCommand) -> Result<EditOutcome
             Ok(EditOutcome::from_inverse(EditCommand::ResizeNodes(before)))
         }
 
+        EditCommand::RotateElements {
+            nodes,
+            edges,
+            delta,
+        } => {
+            let mut rotated_nodes = Vec::with_capacity(nodes.len());
+            let mut rotated_edges = Vec::with_capacity(edges.len());
+            for node in nodes {
+                if world.node_is_live(node) {
+                    world.set_node_angle(node, world.nodes().angle(node) + delta);
+                    rotated_nodes.push(node);
+                }
+            }
+            for edge in edges {
+                if world.edge_is_live(edge) {
+                    world.set_edge_angle(edge, world.edges().angle(edge) + delta);
+                    rotated_edges.push(edge);
+                }
+            }
+
+            Ok(EditOutcome::from_inverse(EditCommand::RotateElements {
+                nodes: rotated_nodes,
+                edges: rotated_edges,
+                delta: -delta,
+            }))
+        }
+
+        EditCommand::Group {
+            group,
+            nodes,
+            edges,
+        } => {
+            if !world.nodes().contains(group) {
+                return Err(EditError::UnknownNode(group));
+            }
+            let restored = world.restore_node(group);
+            let group_id = world.nodes().id(group);
+            let mut node_parents = Vec::with_capacity(nodes.len());
+            let mut edge_parents = Vec::with_capacity(edges.len());
+            for node in nodes {
+                if !world.node_is_live(node) || node == group {
+                    continue;
+                }
+                let parent = world.nodes().cold(node).parent;
+                if parent != Some(group_id) {
+                    node_parents.push((node, parent));
+                    world.set_node_parent(node, Some(group_id));
+                }
+            }
+            for edge in edges {
+                if !world.edge_is_live(edge) {
+                    continue;
+                }
+                let parent = world.edges().parent(edge);
+                if parent != Some(group_id) {
+                    edge_parents.push((edge, parent));
+                    world.set_edge_parent(edge, Some(group_id));
+                }
+            }
+            if !restored && node_parents.is_empty() && edge_parents.is_empty() {
+                return Ok(EditOutcome::unchanged());
+            }
+            Ok(EditOutcome::from_inverse(EditCommand::Ungroup {
+                group,
+                nodes: node_parents,
+                edges: edge_parents,
+            }))
+        }
+
+        EditCommand::Ungroup {
+            group,
+            nodes,
+            edges,
+        } => {
+            if !world.node_is_live(group) {
+                return Err(EditError::UnknownNode(group));
+            }
+            let grouped_nodes: Vec<NodeIndex> = nodes.iter().map(|(node, _)| *node).collect();
+            let grouped_edges: Vec<EdgeIndex> = edges.iter().map(|(edge, _)| *edge).collect();
+            for (node, parent) in nodes {
+                world.set_node_parent(node, parent);
+            }
+            for (edge, parent) in edges {
+                world.set_edge_parent(edge, parent);
+            }
+            let mut cascaded = Vec::new();
+            world.remove_node(group, &mut cascaded);
+            Ok(EditOutcome::from_inverse(EditCommand::Group {
+                group,
+                nodes: grouped_nodes,
+                edges: grouped_edges,
+            }))
+        }
+
         EditCommand::SetNodeConnectors(items) => {
             let mut before = Vec::with_capacity(items.len());
             for (node, connector) in items {
@@ -564,6 +658,11 @@ mod tests {
             }),
             Box::new(|_| {
                 EditCommand::resize_node(crate::models::NodeIndex::new(0), Vec2::new(11.0, 13.0))
+            }),
+            Box::new(|_| EditCommand::RotateElements {
+                nodes: vec![crate::models::NodeIndex::new(0)],
+                edges: vec![crate::models::EdgeIndex::new(0)],
+                delta: 0.4,
             }),
             Box::new(|_| {
                 let mut style = ElementStyle::default();

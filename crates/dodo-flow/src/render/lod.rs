@@ -407,7 +407,10 @@ fn sample_nodes(world: &GraphWorld, visible: &VisibleSet, viewport: &Viewport) -
     let (mut sampled, mut paths, mut size) = (0u32, 0u32, 0.0f32);
     for &node in nodes.iter().step_by(stride) {
         sampled += 1;
-        if !crate::render::shapes::node_prefers_quad(world.nodes().shape(node)) {
+        if !crate::render::shapes::node_prefers_quad(
+            world.nodes().shape(node),
+            world.nodes().angle(node),
+        ) {
             paths += 1;
         }
         let bounds = world.nodes().bounds(node);

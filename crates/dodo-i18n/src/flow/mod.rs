@@ -80,6 +80,7 @@ pub enum Text {
     SectionTextAlign,
     SectionOpacity,
     SectionLayers,
+    SectionAlign,
     SectionActions,
 
     // Fill.
@@ -144,6 +145,16 @@ pub enum Text {
     AlignMiddle,
     AlignBottom,
 
+    // Element alignment.
+    ElementsAlignLeft,
+    ElementsAlignHorizontalCenter,
+    ElementsAlignRight,
+    ElementsAlignTop,
+    ElementsAlignVerticalMiddle,
+    ElementsAlignBottom,
+    ElementsDistributeHorizontal,
+    ElementsDistributeVertical,
+
     // Layers.
     LayerSendToBack,
     LayerSendBackward,
@@ -152,6 +163,8 @@ pub enum Text {
 
     // Actions. `Delete` is Phase 9's and is reused rather than duplicated.
     ActionDuplicate,
+    ActionGroup,
+    ActionUngroup,
     /// **Inserts §10's picture** — an action beside the tools rather than a
     /// tool, because it opens a file picker instead of changing what the next
     /// press means. See `dodo_flow::views::palette`.

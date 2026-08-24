@@ -342,6 +342,7 @@ pub fn prepaint(
 
         pictures.push(PictureElement {
             node: canvas.node,
+            angle: canvas.angle,
             element,
         });
     }

@@ -24,6 +24,16 @@
 //! `Vec`-of-structs because it is walked twice in a document's life — once on
 //! load, once on save — and clarity beats layout at that frequency. The engine
 //! never iterates it per frame.
+//!
+//! # Rotation belongs beside the rectangle, not in style
+//!
+//! Every element carries an `angle` in radians. Position and size remain the
+//! authoritative axis-aligned rectangle, and the angle rotates that rectangle
+//! about its centre. Rotation is geometry: hit-testing, culling and attachment
+//! positions all read it, so hiding it inside `ElementStyle` would make a style
+//! copy capable of moving an element and would put geometry behind the warm
+//! painter-only row in the runtime stores. Keeping it beside the rectangle
+//! gives those stores one hot scalar and leaves stroke/font styling independent.
 
 use std::collections::BTreeMap;
 
@@ -115,7 +125,13 @@ impl Handle {
     /// model; the transform to screen space is `geometry/transform.rs`'s job
     /// and this never does it.
     pub fn world_position(&self, node_bounds: Rect) -> Vec2 {
+        self.world_position_rotated(node_bounds, 0.0)
+    }
+
+    /// Where the handle sits after its host rotates about its centre.
+    pub fn world_position_rotated(&self, node_bounds: Rect, angle: f32) -> Vec2 {
         handle_world_position(self.placement, self.offset, node_bounds)
+            .rotated_about(node_bounds.center(), angle)
     }
 }
 
@@ -270,6 +286,8 @@ pub struct FlowNode {
     /// The node's top-left corner in world space.
     pub position: Vec2,
     pub size: Vec2,
+    /// Counter-clockwise radians about [`FlowNode::bounds`]'s centre.
+    pub angle: f32,
     /// Paint order among siblings; higher is nearer the viewer. Hit-testing
     /// walks it in reverse, which is why it is stored rather than implied by
     /// the `Vec` order — reordering a `Vec` invalidates every index into it.
@@ -318,6 +336,7 @@ impl Default for FlowNode {
             kind: ElementKind::default(),
             position: Vec2::ZERO,
             size: Vec2::new(150.0, 40.0),
+            angle: 0.0,
             z: 0,
             parent: None,
             label: None,
@@ -356,6 +375,11 @@ impl FlowNode {
         self.connector
             .map(Connector::bounds)
             .unwrap_or_else(|| Rect::new(self.position, self.size))
+    }
+
+    /// The axis-aligned culling bound after rotation.
+    pub fn rotated_bounds(&self) -> Rect {
+        self.bounds().rotated_bound(self.angle)
     }
 
     pub fn handle(&self, id: &HandleId) -> Option<&Handle> {
@@ -402,6 +426,10 @@ pub struct FlowEdge {
     pub routing: EdgeRouting,
     pub label: Option<String>,
     pub style: ElementStyle,
+    /// Counter-clockwise radians about the derived route bound's centre.
+    pub angle: f32,
+    /// The container this edge belongs to, if any.
+    pub parent: Option<ElementId>,
     /// A hyperlink on the edge. See [`FlowNode::link`].
     pub link: Option<String>,
     pub z: i32,
@@ -417,6 +445,8 @@ impl Default for FlowEdge {
             routing: EdgeRouting::default(),
             label: None,
             style: ElementStyle::default(),
+            angle: 0.0,
+            parent: None,
             link: None,
             z: 0,
             hidden: false,
@@ -583,7 +613,7 @@ impl FlowDocument {
     /// Hidden nodes count. They are hidden, not absent, and framing the
     /// document must not move when a layer is toggled.
     pub fn content_bounds(&self) -> Option<Rect> {
-        Rect::of_rects(self.nodes.iter().map(FlowNode::bounds))
+        Rect::of_rects(self.nodes.iter().map(FlowNode::rotated_bounds))
     }
 
     /// Lifts the id watermark above every id present.
@@ -720,6 +750,25 @@ mod tests {
             node.bounds(),
             Rect::new(Vec2::new(10.0, 20.0), Vec2::new(30.0, 40.0))
         );
+    }
+
+    #[test]
+    fn rotation_changes_only_the_derived_bound() {
+        let mut node = FlowNode::new(
+            ElementId::new(1),
+            ElementKind::default(),
+            Vec2::new(10.0, 20.0),
+            Vec2::new(80.0, 40.0),
+        );
+        node.angle = std::f32::consts::FRAC_PI_2;
+
+        assert_eq!(
+            node.bounds(),
+            Rect::new(Vec2::new(10.0, 20.0), Vec2::new(80.0, 40.0))
+        );
+        let rotated = node.rotated_bounds();
+        assert!((rotated.width() - 40.0).abs() < 1e-4, "{rotated:?}");
+        assert!((rotated.height() - 80.0).abs() < 1e-4, "{rotated:?}");
     }
 
     #[test]

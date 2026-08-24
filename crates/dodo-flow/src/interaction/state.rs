@@ -216,6 +216,14 @@ pub enum InteractionState {
         /// anything actually changed.
         current: Rect,
     },
+    /// A rotation grip is being dragged around the element's centre.
+    Rotating {
+        node: NodeIndex,
+        centre: Vec2,
+        start_pointer_angle: f32,
+        /// Total delta already emitted, snapped or free as the last event asked.
+        applied: f32,
+    },
     /// One of a straight connector's two ordered endpoints is being moved.
     DraggingConnectorEndpoint {
         node: NodeIndex,
@@ -302,6 +310,17 @@ pub enum InteractionEvent {
         /// [`resize_keeps_aspect`](super::resize_keeps_aspect)'s answer, which
         /// folds the element's own default together with the modifier.
         keeps_aspect: bool,
+    },
+    /// The selected element's rotation grip was pressed.
+    BeginRotate {
+        node: NodeIndex,
+        centre: Vec2,
+        pointer: Vec2,
+    },
+    /// A rotation drag moved. Shift snaps the total to 15° increments.
+    MoveRotate {
+        world: Vec2,
+        shift: bool,
     },
     /// One of exactly two connector endpoint handles was pressed.
     BeginConnectorEndpointDrag {
@@ -462,6 +481,18 @@ pub enum InteractionEffect {
         node: NodeIndex,
         rect: Rect,
     },
+    BeginRotate {
+        node: NodeIndex,
+    },
+    RotateBy {
+        node: NodeIndex,
+        delta: f32,
+    },
+    EndRotate {
+        node: NodeIndex,
+        changed: bool,
+    },
+    CancelRotate,
 
     /// **An edge was clicked** (Phase 10.5): make it the selection, or add it
     /// to the selection under shift.
@@ -567,6 +598,7 @@ impl InteractionEffect {
                 | InteractionEffect::BeginConnect(_)
                 | InteractionEffect::BeginCreate { .. }
                 | InteractionEffect::BeginResize { .. }
+                | InteractionEffect::BeginRotate { .. }
                 | InteractionEffect::BeginConnectorEndpointDrag { .. }
         )
     }
@@ -584,6 +616,9 @@ impl InteractionEffect {
             additive: false,
         },
         || InteractionEffect::BeginResize {
+            node: NodeIndex::new(0),
+        },
+        || InteractionEffect::BeginRotate {
             node: NodeIndex::new(0),
         },
     ];
@@ -692,6 +727,10 @@ impl InteractionMachine {
 
     pub fn is_panning(&self) -> bool {
         matches!(self.state, InteractionState::Panning { .. })
+    }
+
+    pub fn is_rotating(&self) -> bool {
+        matches!(self.state, InteractionState::Rotating { .. })
     }
 
     /// The node being dragged, for a painter that wants to show it differently.
@@ -827,9 +866,9 @@ impl InteractionMachine {
                     // a grip and then sent the press anyway, and starting a
                     // rubber band from a corner of the selection would be the
                     // worst of the available guesses.
-                    PointerTarget::ResizeGrip { .. } | PointerTarget::ConnectorEndpoint { .. } => {
-                        InteractionEffect::None
-                    }
+                    PointerTarget::ResizeGrip { .. }
+                    | PointerTarget::RotationGrip { .. }
+                    | PointerTarget::ConnectorEndpoint { .. } => InteractionEffect::None,
                     PointerTarget::Empty => {
                         self.state = InteractionState::BoxSelecting {
                             anchor_world: world,
@@ -874,6 +913,51 @@ impl InteractionMachine {
                 InteractionEffect::BeginResize { node }
             }
             (_, InteractionEvent::BeginResize { .. }) => InteractionEffect::None,
+
+            (
+                InteractionState::Idle,
+                InteractionEvent::BeginRotate {
+                    node,
+                    centre,
+                    pointer,
+                },
+            ) => {
+                self.state = InteractionState::Rotating {
+                    node,
+                    centre,
+                    start_pointer_angle: pointer_angle(centre, pointer),
+                    applied: 0.0,
+                };
+                InteractionEffect::BeginRotate { node }
+            }
+            (_, InteractionEvent::BeginRotate { .. }) => InteractionEffect::None,
+
+            (
+                InteractionState::Rotating {
+                    node,
+                    centre,
+                    start_pointer_angle,
+                    applied,
+                },
+                InteractionEvent::MoveRotate { world, shift },
+            ) => {
+                let raw = normalize_angle(pointer_angle(centre, world) - start_pointer_angle);
+                let total = if shift { snap_rotation(raw) } else { raw };
+                self.state = InteractionState::Rotating {
+                    node,
+                    centre,
+                    start_pointer_angle,
+                    applied: total,
+                };
+                InteractionEffect::RotateBy {
+                    node,
+                    delta: total - applied,
+                }
+            }
+            (_, InteractionEvent::MoveRotate { .. }) => InteractionEffect::None,
+            (InteractionState::Rotating { .. }, InteractionEvent::PointerMove { .. }) => {
+                InteractionEffect::None
+            }
 
             (
                 InteractionState::Idle,
@@ -968,6 +1052,25 @@ impl InteractionMachine {
                 InteractionEffect::CancelResize { node, rect: start }
             }
 
+            (
+                InteractionState::Rotating { node, applied, .. },
+                InteractionEvent::PointerUp { button, .. },
+            ) => {
+                if button == PointerButton::Left {
+                    self.state = InteractionState::Idle;
+                    InteractionEffect::EndRotate {
+                        node,
+                        changed: applied != 0.0,
+                    }
+                } else {
+                    InteractionEffect::None
+                }
+            }
+            (InteractionState::Rotating { .. }, InteractionEvent::Cancel) => {
+                self.state = InteractionState::Idle;
+                InteractionEffect::CancelRotate
+            }
+
             // ---- a press while a caret is out ----
             //
             // **Commits, rather than being ignored.** Clicking away from a text
@@ -1008,6 +1111,7 @@ impl InteractionMachine {
                     // it means the resize the first one started rather than a
                     // caret on whatever is underneath.
                     PointerTarget::ResizeGrip { node, .. }
+                    | PointerTarget::RotationGrip { node }
                     | PointerTarget::ConnectorEndpoint { node, .. } => TextTarget::Node(node),
                     // **Empty canvas creates text**, centred on the pointer,
                     // exactly as a click with the Text tool does — one rule,
@@ -1369,6 +1473,28 @@ impl InteractionMachine {
     }
 }
 
+/// Fifteen degrees, matching Shift's existing role as the constrain modifier.
+pub const ROTATION_SNAP_RADIANS: f32 = std::f32::consts::PI / 12.0;
+
+fn pointer_angle(centre: Vec2, point: Vec2) -> f32 {
+    let delta = point - centre;
+    delta.y.atan2(delta.x)
+}
+
+fn normalize_angle(angle: f32) -> f32 {
+    let mut angle = angle % std::f32::consts::TAU;
+    if angle > std::f32::consts::PI {
+        angle -= std::f32::consts::TAU;
+    } else if angle < -std::f32::consts::PI {
+        angle += std::f32::consts::TAU;
+    }
+    angle
+}
+
+fn snap_rotation(angle: f32) -> f32 {
+    (angle / ROTATION_SNAP_RADIANS).round() * ROTATION_SNAP_RADIANS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1376,6 +1502,29 @@ mod tests {
 
     const NODE: NodeIndex = NodeIndex::new(7);
     const HANDLE: HandleIndex = HandleIndex::new(3);
+
+    #[test]
+    fn shift_snaps_rotation_to_fifteen_degree_increments() {
+        let mut machine = InteractionMachine::new();
+        assert_eq!(
+            machine.handle(InteractionEvent::BeginRotate {
+                node: NODE,
+                centre: Vec2::ZERO,
+                pointer: Vec2::new(10.0, 0.0),
+            }),
+            InteractionEffect::BeginRotate { node: NODE },
+        );
+
+        let angle = 22.0_f32.to_radians();
+        let effect = machine.handle(InteractionEvent::MoveRotate {
+            world: Vec2::new(angle.cos(), angle.sin()) * 10.0,
+            shift: true,
+        });
+        let InteractionEffect::RotateBy { delta, .. } = effect else {
+            panic!("rotation move did not rotate: {effect:?}");
+        };
+        assert!((delta - ROTATION_SNAP_RADIANS).abs() < 1e-5, "{delta}");
+    }
 
     /// **Every gesture that opens a state is captured**, or it stops the moment
     /// the pointer leaves the pane.

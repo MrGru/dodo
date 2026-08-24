@@ -106,6 +106,9 @@ pub const HATCH_STROKE_PIXELS: f32 = 1.0;
 /// screen rather than in world units, so selection stays visible at any zoom.
 pub const SELECTED_STROKE_PIXELS: f32 = 2.0;
 
+/// How far the selection ring sits outside an element, in screen pixels.
+pub const SELECTION_RING_INSET_PIXELS: f32 = 3.0;
+
 /// The narrowest an **open** shape's stroke may be drawn, in screen pixels.
 ///
 /// A closed body whose stroke is dropped still reads as itself — §15 drops it
@@ -271,6 +274,7 @@ pub fn plan_scene(
 
     plan_bodies(plan, world, snapshot, viewport, ink, &mut stats);
     plan.set_images_after_paths(images_belong_above_paths(world, snapshot));
+    plan_selection_chrome(plan, world, snapshot, ink);
     plan_handles(plan, world, snapshot, viewport, ink, &mut stats);
     plan_labels(plan, world, snapshot, viewport, ink, &mut stats);
     plan_edge_labels(plan, world, snapshot, viewport, ink, &mut stats);
@@ -278,6 +282,51 @@ pub fn plan_scene(
 }
 
 use crate::render::grid;
+
+fn plan_selection_chrome(
+    plan: &mut PaintPlan,
+    world: &GraphWorld,
+    snapshot: &RenderSnapshot,
+    ink: SceneInk,
+) {
+    let quality = world.settings().render_quality;
+    for member in snapshot.member_outlines() {
+        if let Some(outline) = shapes::outline_for_node(NodeShape::Rectangle, member.screen, 0.0) {
+            plan.push_path(PathPrimitive::stroke(
+                outline.rotated_about(member.screen.center(), member.angle),
+                ink.accent,
+                1.0,
+                quality,
+            ));
+        }
+    }
+
+    let Some(overlay) = snapshot.overlay() else {
+        return;
+    };
+    if !overlay.dashed && overlay.angle.abs() <= 1e-4 {
+        return;
+    }
+    let ring = overlay.screen.inflate(SELECTION_RING_INSET_PIXELS);
+    let Some(outline) = shapes::outline_for_node(NodeShape::Rectangle, ring, 0.0) else {
+        return;
+    };
+    let outline = outline.rotated_about(ring.center(), overlay.angle);
+    let path = if overlay.dashed {
+        PathPrimitive::dashed_stroke(outline, ink.accent, 1.0, DashSpec::new(4.0, 4.0), quality)
+    } else {
+        PathPrimitive::stroke(outline, ink.accent, 1.0, quality)
+    };
+    plan.push_path(path);
+
+    let top = Vec2::new(ring.center().x, ring.min().y).rotated_about(ring.center(), overlay.angle);
+    plan.push_path(PathPrimitive::stroke(
+        shapes::line_between(top, overlay.rotation_grip),
+        ink.accent,
+        1.0,
+        quality,
+    ));
+}
 
 /// Every edge the snapshot kept, from its **derived** route at the frame's LOD
 /// rung.
@@ -343,6 +392,7 @@ fn plan_one_edge(
             quality,
             detail: lod.edges,
             owner: Some((planned.edge, planned.version)),
+            angle: planned.angle,
             // The seed is the edge's own id, so an edge wobbles the same way
             // for the life of the document and differently from its neighbour
             // — see `render::sketch::element_seed`.
@@ -428,6 +478,7 @@ struct NodeBody {
     /// The geometry version, for §23's cache key.
     version: u32,
     screen: Rect,
+    angle: f32,
     selected: bool,
     /// **§44's hover, and it only ever comes from the rich half.** A canvas
     /// node has no element to hover, and the snapshot answers the question for
@@ -452,9 +503,10 @@ impl NodeBody {
             filled: canvas.filled,
             version: canvas.version,
             screen: canvas.screen,
+            angle: canvas.angle,
             selected: canvas.selected,
             hovered: false,
-            boxed: boxed == Some(canvas.node),
+            boxed: canvas.selected && boxed.is_some(),
             detailed: canvas.detailed,
             rich: false,
         }
@@ -467,9 +519,10 @@ impl NodeBody {
             filled: rich.visual.filled,
             version: rich.version,
             screen: rich.screen,
+            angle: rich.angle,
             selected: rich.selected,
             hovered: rich.hovered,
-            boxed: boxed == Some(rich.node),
+            boxed: rich.selected && boxed.is_some(),
             // A node is only `rich_capable` when it is already detailed — see
             // `RenderSnapshot::extract_nodes` — so this is a restatement rather
             // than an assumption.
@@ -562,9 +615,10 @@ fn plan_one_node(
         let style = nodes.style(canvas.node);
         let screen = canvas.screen;
         let connector = nodes.connector(canvas.node).map(|connector| {
+            let centre = connector.bounds().center();
             [
-                viewport.world_to_screen(connector.start.point),
-                viewport.world_to_screen(connector.end.point),
+                viewport.world_to_screen(connector.start.point.rotated_about(centre, canvas.angle)),
+                viewport.world_to_screen(connector.end.point.rotated_about(centre, canvas.angle)),
             ]
         });
 
@@ -673,6 +727,7 @@ fn plan_one_node(
                     body: canvas.body,
                     version: canvas.version,
                     screen,
+                    angle: canvas.angle,
                     connector,
                     radius,
                     fill,
@@ -694,7 +749,7 @@ fn plan_one_node(
         // rectangle's 24, so below `curve_to_quad_zoom` a curved body is
         // painted as its bounding quad rather than tessellated.
         let as_quad = !open
-            && (shapes::node_prefers_quad(canvas.body)
+            && (shapes::node_prefers_quad(canvas.body, canvas.angle)
                 || (lod.degrade_curves && canvas.body != NodeShape::Diamond)
                 || !canvas.detailed)
             && !promotes_to_path(world, &canvas, lod);
@@ -852,15 +907,27 @@ fn plan_image(
                 image,
                 opacity: style.opacity.clamp(0.0, 1.0),
                 corner_radius: radius,
+                angle: canvas.angle,
             });
             stats.images += 1;
         }
         None => {
-            plan.push_quad(
-                QuadPrimitive::filled(screen, Color::TRANSPARENT)
-                    .with_corner_radius(radius)
-                    .with_border(1.0, fade(ink.stroke, style.opacity)),
-            );
+            if canvas.angle.abs() <= 1e-4 {
+                plan.push_quad(
+                    QuadPrimitive::filled(screen, Color::TRANSPARENT)
+                        .with_corner_radius(radius)
+                        .with_border(1.0, fade(ink.stroke, style.opacity)),
+                );
+            } else if let Some(outline) =
+                shapes::outline_for_node(NodeShape::RoundedRectangle, screen, radius)
+            {
+                plan.push_path(PathPrimitive::stroke(
+                    outline.rotated_about(screen.center(), canvas.angle),
+                    fade(ink.stroke, style.opacity),
+                    1.0,
+                    quality,
+                ));
+            }
         }
     }
 
@@ -870,6 +937,7 @@ fn plan_image(
             screen.inflate(SELECTED_STROKE_PIXELS),
             radius,
         )
+        .map(|outline| outline.rotated_about(screen.center(), canvas.angle))
     {
         plan.push_path(
             PathPrimitive::stroke(outline, ink.accent, SELECTED_STROKE_PIXELS, quality).keyed(
@@ -913,7 +981,8 @@ fn outline_for_body(
 ) -> Option<shapes::Outline> {
     match connector {
         Some([start, end]) => shapes::outline_for_connector(body.body, start, end),
-        None => shapes::outline_for_node(body.body, body.screen, radius),
+        None => shapes::outline_for_node(body.body, body.screen, radius)
+            .map(|outline| outline.rotated_about(body.screen.center(), body.angle)),
     }
 }
 
@@ -969,7 +1038,9 @@ fn images_belong_above_paths(world: &GraphWorld, snapshot: &RenderSnapshot) -> b
     for canvas in snapshot.canvas() {
         if canvas.body == NodeShape::Image {
             highest_image = Some(highest_image.map_or(canvas.z, |it: i32| it.max(canvas.z)));
-        } else if !shapes::node_prefers_quad(canvas.body) && canvas.body != NodeShape::Text {
+        } else if !shapes::node_prefers_quad(canvas.body, canvas.angle)
+            && canvas.body != NodeShape::Text
+        {
             // Only the bodies that really are painted as paths count. A
             // rectangle is a quad and is *already* below the pictures, so
             // letting one vote here would move the run for a body the run was
@@ -1108,6 +1179,7 @@ struct SketchedBody {
     body: NodeShape,
     version: u32,
     screen: Rect,
+    angle: f32,
     connector: Option<[Vec2; 2]>,
     radius: f32,
     fill: Color,
@@ -1139,7 +1211,8 @@ fn plan_sketched_body(
 ) -> bool {
     let Some(outline) = (match body.connector {
         Some([start, end]) => shapes::outline_for_connector(body.body, start, end),
-        None => shapes::outline_for_node(body.body, body.screen, body.radius),
+        None => shapes::outline_for_node(body.body, body.screen, body.radius)
+            .map(|outline| outline.rotated_about(body.screen.center(), body.angle)),
     }) else {
         return false;
     };
@@ -1148,7 +1221,7 @@ fn plan_sketched_body(
     let sketch_key = style.cache_key();
     let sketch_quality = style.quality(quality);
 
-    if shapes::node_prefers_quad(body.body) {
+    if shapes::node_prefers_quad(body.body, body.angle) {
         plan.push_quad(
             QuadPrimitive::filled(body.screen, body.fill).with_corner_radius(body.radius),
         );
@@ -1349,11 +1422,41 @@ fn plan_labels(
         return;
     }
 
-    for canvas in snapshot.canvas() {
-        let Some(font_size) = canvas.label_font_size else {
+    let canvas_labels = snapshot.canvas().iter().map(|canvas| {
+        (
+            canvas.node,
+            canvas.body,
+            canvas.screen,
+            canvas.angle,
+            canvas.label_font_size,
+            canvas.text_version,
+        )
+    });
+    // A general GPUI element has no rotation transform at this revision. A
+    // rotated rich node keeps its real interactive wrapper, while its label
+    // joins the canvas half so the same angle reaches the text painter.
+    let rotated_rich_labels = snapshot
+        .rich()
+        .iter()
+        .filter(|rich| rich.angle.abs() > 1e-4)
+        .map(|rich| {
+            (
+                rich.node,
+                rich.visual.body,
+                rich.screen,
+                rich.angle,
+                rich.label_font_size,
+                world.nodes().text_version(rich.node),
+            )
+        });
+
+    for (node, body, screen, angle, label_font_size, text_version) in
+        canvas_labels.chain(rotated_rich_labels)
+    {
+        let Some(font_size) = label_font_size else {
             continue;
         };
-        let Some(label) = world.nodes().cold(canvas.node).label.as_ref() else {
+        let Some(label) = world.nodes().cold(node).label.as_ref() else {
             continue;
         };
 
@@ -1370,16 +1473,21 @@ fn plan_labels(
         // arrow. It gets the same treatment an edge label does: a box of its
         // own, centred on the *actual* segment midpoint (§9), so the label sits
         // where the caret was and where `views::flow`'s editor was drawn.
-        let inner = match world.nodes().connector(canvas.node) {
-            Some(connector) => boxless_label_box(viewport.world_to_screen(connector.midpoint())),
-            None if canvas.body == NodeShape::Text => canvas.screen,
-            None => canvas.screen.inflate(-LABEL_PADDING_PIXELS),
+        let inner = match world.nodes().connector(node) {
+            Some(connector) => {
+                let centre = connector.bounds().center();
+                boxless_label_box(
+                    viewport.world_to_screen(connector.midpoint().rotated_about(centre, angle)),
+                )
+            }
+            None if body == NodeShape::Text => screen,
+            None => screen.inflate(-LABEL_PADDING_PIXELS),
         };
         if inner.size.x <= 0.0 || inner.size.y <= 0.0 {
             continue;
         }
 
-        let style = world.nodes().style(canvas.node);
+        let style = world.nodes().style(node);
         let font = &style.font;
         // **Node text wraps to its host's width** (§9), which is the inner
         // rectangle above: a text element uses its whole box and every other
@@ -1408,13 +1516,15 @@ fn plan_labels(
             // `ElementStyle::text_color` is the one answer, and it is what makes
             // a stroke change move the label with it.
             color: fade(style.text_color().unwrap_or(ink.text), style.opacity),
-            key: TextKey::node(canvas.node, canvas.text_version, font_size, wrap_width),
+            key: TextKey::node(node, text_version, font_size, wrap_width),
             max_width: inner.size.x,
             wrap_width,
             family: font.family,
             align: font.align,
             max_height: inner.size.y,
             vertical_align: font.vertical_align,
+            angle,
+            rotation_center: screen.center(),
         });
         stats.labels += 1;
     }
@@ -1463,7 +1573,12 @@ fn plan_edge_labels(
             continue;
         };
 
-        let center = viewport.world_to_screen(route.midpoint(flatten));
+        let route_bounds = route.bounds();
+        let center = viewport.world_to_screen(
+            route
+                .midpoint(flatten)
+                .rotated_about(route_bounds.center(), planned.angle),
+        );
         // The box is the label's own, centred on the route: an edge has no
         // rectangle of its own to lay text into, so one is made the size of the
         // space a label is allowed to take. Wider than a node's would be, on
@@ -1507,6 +1622,8 @@ fn plan_edge_labels(
             align: font.align,
             max_height: inner.size.y,
             vertical_align: font.vertical_align,
+            angle: planned.angle,
+            rotation_center: center,
         });
         stats.labels += 1;
     }
@@ -1673,6 +1790,84 @@ mod tests {
         let mut plan = PaintPlan::new();
         let stats = plan_scene(&mut plan, world, &snapshot, viewport, ink(), &options());
         (plan, stats)
+    }
+
+    #[test]
+    fn grouped_selection_has_no_member_outlines_and_loose_multi_selection_does() {
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(800.0, 600.0));
+        let mut loose = GraphWorld::new();
+        let a = loose.create_node(
+            ElementKind::Shape(crate::models::ShapeKind::Rectangle),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(100.0, 80.0),
+        );
+        let b = loose.create_node(
+            ElementKind::Shape(crate::models::ShapeKind::Rectangle),
+            Vec2::new(300.0, 160.0),
+            Vec2::new(100.0, 80.0),
+        );
+        loose.set_node_selected(a, true);
+        loose.set_node_selected(b, true);
+        loose.clear_spatial_updates();
+        let (loose_plan, _) = frame(&loose, &viewport);
+        let loose_chrome = loose_plan
+            .paths()
+            .iter()
+            .filter(|path| path.key.is_none())
+            .count();
+
+        let mut grouped = loose.clone();
+        grouped.clear_selection();
+        let group = grouped.create_node(ElementKind::Group, Vec2::ZERO, Vec2::ZERO);
+        let group_id = grouped.nodes().id(group);
+        grouped.set_node_parent(a, Some(group_id));
+        grouped.set_node_parent(b, Some(group_id));
+        grouped.select_only(Some(group));
+        grouped.clear_spatial_updates();
+        let (grouped_plan, _) = frame(&grouped, &viewport);
+        let grouped_chrome = grouped_plan
+            .paths()
+            .iter()
+            .filter(|path| path.key.is_none())
+            .count();
+
+        assert_eq!(loose_chrome, 4, "two members, outer box and stalk");
+        assert_eq!(grouped_chrome, 2, "outer box and stalk only");
+    }
+
+    #[test]
+    fn rotation_reaches_canvas_bodies_and_labels() {
+        let mut world = GraphWorld::new();
+        let node = world.create_node(
+            ElementKind::Shape(crate::models::ShapeKind::Ellipse),
+            Vec2::new(100.0, 100.0),
+            Vec2::new(160.0, 60.0),
+        );
+        world.set_node_label(node, Some("rotated".into()));
+        world.set_node_angle(node, std::f32::consts::FRAC_PI_2);
+        world.clear_spatial_updates();
+        let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(800.0, 600.0));
+
+        let (plan, _) = frame(&world, &viewport);
+        let body = plan
+            .paths()
+            .iter()
+            .find(|path| {
+                path.key.is_some_and(|key| {
+                    key.owner == crate::render::cache::GeometryOwner::Node(node)
+                        && key.part == GeometryPart::Fill
+                })
+            })
+            .expect("the rotated body reaches the path painter");
+        let bounds = body.outline.bounds().unwrap();
+        assert!(bounds.height() > bounds.width(), "{bounds:?}");
+        assert_eq!(
+            plan.texts()
+                .iter()
+                .find(|text| text.text.as_ref() == "rotated")
+                .map(|text| text.angle),
+            Some(std::f32::consts::FRAC_PI_2)
+        );
     }
 
     /// **What the painter is handed, in the order it is handed it.**
@@ -4006,17 +4201,10 @@ mod tests {
         );
     }
 
-    /// **The two cases that still take the accent, stated so a change to either
-    /// is deliberate.**
-    ///
-    /// Both are elements §44 draws no bounding box around, so for both the
-    /// accent is the only thing on screen saying anything at all — see
-    /// [`NodeBody::accented`]. A multiple selection is the case the fix above
-    /// would otherwise have made invisible; hover has no box either, and a
-    /// *drawn shape* has no handle elements to fall back on
-    /// (`commands::gesture`'s `handles_for`).
+    /// Selection chrome preserves the styled border; hover, which has no box,
+    /// still takes the accent.
     #[test]
-    fn an_element_with_no_bounding_box_still_takes_the_accent() {
+    fn selection_chrome_preserves_ink_and_hover_still_takes_the_accent() {
         let viewport = Viewport::new(Vec2::ZERO, 1.0, Vec2::new(900.0, 600.0));
 
         let mut world = GraphWorld::new();
@@ -4073,11 +4261,12 @@ mod tests {
                 .border_color
         };
 
-        // Two selected: no overlay, so the accent is the only signal.
+        // Two selected: the dashed outer box and per-member outlines are the
+        // signal, so the body keeps the colour the panel is editing.
         world.set_node_selected(nodes[0], true);
         world.set_node_selected(nodes[1], true);
         assert!(world.selection().single_node().is_none());
-        assert_eq!(border_of(&world, None, nodes[0]), ink().accent);
+        assert_ne!(border_of(&world, None, nodes[0]), ink().accent);
 
         // One selected: the bounding box says it, so the border is its own.
         world.set_node_selected(nodes[1], false);

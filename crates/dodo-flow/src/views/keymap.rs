@@ -100,6 +100,8 @@ actions!(
         /// — and, like Delete, it is what the palette button names in its
         /// tooltip so the keystroke beside the label is the real binding.
         InsertImage,
+        Group,
+        Ungroup,
         /// **Finishes the label a caret is open on** — see
         /// [`keys::EditAction::CommitText`](crate::commands::keys::EditAction::CommitText).
         ///
@@ -144,6 +146,8 @@ fn binding(row: keys::Binding) -> KeyBinding {
             KeyBinding::new(row.keystroke, ToggleToolLock, Some(scope))
         }
         keys::EditAction::InsertImage => KeyBinding::new(row.keystroke, InsertImage, Some(scope)),
+        keys::EditAction::Group => KeyBinding::new(row.keystroke, Group, Some(scope)),
+        keys::EditAction::Ungroup => KeyBinding::new(row.keystroke, Ungroup, Some(scope)),
         keys::EditAction::CommitText => KeyBinding::new(row.keystroke, CommitText, Some(scope)),
         keys::EditAction::Tool(tool) => {
             KeyBinding::new(row.keystroke, SelectTool { tool }, Some(scope))

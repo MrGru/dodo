@@ -137,6 +137,8 @@ pub enum PointerTarget {
         node: NodeIndex,
         corner: ResizeCorner,
     },
+    /// The rotation grip above a selected element's top edge.
+    RotationGrip { node: NodeIndex },
     /// One of exactly two ordered endpoint handles on a selected straight
     /// connector.
     ConnectorEndpoint { node: NodeIndex, end: ConnectorEnd },
@@ -149,6 +151,7 @@ impl PointerTarget {
             PointerTarget::Node(node) => Some(node),
             PointerTarget::Handle { node, .. } => Some(node),
             PointerTarget::ResizeGrip { node, .. }
+            | PointerTarget::RotationGrip { node }
             | PointerTarget::ConnectorEndpoint { node, .. } => Some(node),
         }
     }
@@ -157,6 +160,13 @@ impl PointerTarget {
     pub fn resize_grip(self) -> Option<(NodeIndex, ResizeCorner)> {
         match self {
             PointerTarget::ResizeGrip { node, corner } => Some((node, corner)),
+            _ => None,
+        }
+    }
+
+    pub fn rotation_grip(self) -> Option<NodeIndex> {
+        match self {
+            PointerTarget::RotationGrip { node } => Some(node),
             _ => None,
         }
     }
@@ -194,6 +204,8 @@ impl PointerTarget {
 /// idea, that the target a person aims at is bigger than the thing they see.
 /// The view converts from screen pixels, because a fixed world tolerance would
 /// grow to cover the whole node when zoomed out.
+///
+/// The rotation grip sits [`ROTATION_GRIP_SCREEN_OFFSET`] above its ring.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HitTolerance {
     /// How far from a handle's centre still counts as hitting it.
@@ -216,6 +228,9 @@ pub struct HitTolerance {
     /// would make whichever was tested first swallow the other.
     pub grip_radius: f32,
 }
+
+/// Distance from the selection ring to its rotation grip, in screen pixels.
+pub const ROTATION_GRIP_SCREEN_OFFSET: f32 = 24.0;
 
 impl HitTolerance {
     /// The screen-pixel radius the view converts into world units. Matched to

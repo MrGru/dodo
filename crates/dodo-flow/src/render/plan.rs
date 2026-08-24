@@ -420,6 +420,10 @@ pub struct TextPrimitive {
     pub max_height: f32,
     /// Where the block sits inside [`max_height`](TextPrimitive::max_height).
     pub vertical_align: VerticalAlign,
+    /// Counter-clockwise radians about the carrier's centre.
+    pub angle: f32,
+    /// The carrier centre this run rotates about, in pane-relative pixels.
+    pub rotation_center: Vec2,
 }
 
 impl TextPrimitive {
@@ -501,6 +505,8 @@ pub struct ImagePrimitive {
     pub opacity: f32,
     /// The frame's corner radius in **screen** pixels — the panel's Edges row.
     pub corner_radius: f32,
+    /// Counter-clockwise radians about [`ImagePrimitive::bounds`]'s centre.
+    pub angle: f32,
 }
 
 /// What one frame actually painted.
@@ -719,7 +725,11 @@ impl PaintPlan {
     /// and for the same reason: the frame is the whole painted extent, because
     /// the picture is drawn inside it and clipped to it.
     pub fn push_image(&mut self, image: ImagePrimitive) {
-        if !image.bounds.normalized().intersects(self.clip) {
+        if !image
+            .bounds
+            .rotated_bound(image.angle)
+            .intersects(self.clip)
+        {
             self.culled_images += 1;
             return;
         }
@@ -1000,6 +1010,8 @@ mod tests {
             align: TextAlign::default(),
             max_height: 40.0,
             vertical_align: VerticalAlign::default(),
+            angle: 0.0,
+            rotation_center: Vec2::ZERO,
         }
     }
 
@@ -1148,6 +1160,7 @@ mod tests {
             image: crate::models::NodeImage::new(crate::models::ImageHandle::of(b"x")),
             opacity: 1.0,
             corner_radius: 0.0,
+            angle: 0.0,
         }
     }
 

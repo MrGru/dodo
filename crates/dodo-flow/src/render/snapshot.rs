@@ -118,6 +118,8 @@ pub struct RichNode {
     pub node: NodeIndex,
     /// Pane-relative screen pixels.
     pub screen: Rect,
+    /// Counter-clockwise radians about `screen`'s centre.
+    pub angle: f32,
     pub visual: NodeVisual,
     /// The node's appearance version — §23's cache key, carried so a view can
     /// tell whether anything about this node actually changed.
@@ -138,6 +140,8 @@ pub struct RichNode {
 pub struct CanvasNode {
     pub node: NodeIndex,
     pub screen: Rect,
+    /// Counter-clockwise radians about `screen`'s centre.
+    pub angle: f32,
     /// The body to paint — **from the registry when it overrode one**, which is
     /// how a registered kind gets a diamond without a new taxonomy variant.
     pub body: NodeShape,
@@ -167,6 +171,8 @@ pub struct CanvasNode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlannedEdge {
     pub edge: EdgeIndex,
+    /// Counter-clockwise radians about the derived route bound's centre.
+    pub angle: f32,
     /// The route's geometry version — §23's cache key.
     pub version: u32,
     pub selected: bool,
@@ -197,11 +203,25 @@ pub struct SnapshotOverlay {
     pub node: NodeIndex,
     /// The selected node's screen rectangle.
     pub screen: Rect,
+    /// Counter-clockwise radians about `screen`'s centre.
+    pub angle: f32,
+    /// The rotation grip's centre, in pane-relative screen pixels.
+    pub rotation_grip: Vec2,
+    /// Group and loose multi-selection chrome is dashed; a single leaf keeps
+    /// the existing solid ring.
+    pub dashed: bool,
     /// Exactly two ordered endpoint handles for a straight connector.
     pub connector_endpoints: Option<[Vec2; 2]>,
     /// Whether the node is large enough on screen for four resize grips not to
     /// cover it. Always false for a connector.
     pub shows_resize_grips: bool,
+}
+
+/// One loose multi-selection member's thin solid outline.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SelectionOutline {
+    pub screen: Rect,
+    pub angle: f32,
 }
 
 /// What one extraction decided, in counts. What a benchmark prints and what
@@ -240,6 +260,7 @@ pub struct RenderSnapshot {
     edges: Vec<PlannedEdge>,
     interactive_handles: Vec<InteractiveHandle>,
     overlay: Option<SnapshotOverlay>,
+    member_outlines: Vec<SelectionOutline>,
     counts: SnapshotCounts,
     /// Scratch for the layered path only — see
     /// [`extract_nodes`](RenderSnapshot::extract_nodes). Held on the snapshot
@@ -257,6 +278,7 @@ pub struct RenderSnapshot {
 struct MeasuredNode {
     node: NodeIndex,
     screen: Rect,
+    angle: f32,
     visual: NodeVisual,
     version: u32,
     text_version: u32,
@@ -318,6 +340,7 @@ impl RenderSnapshot {
         self.interactive_handles.clear();
         self.pending.clear();
         self.overlay = None;
+        self.member_outlines.clear();
         self.counts = SnapshotCounts::default();
 
         self.extract_edges(world, visible, viewport, budgets, editing, &lod);
@@ -388,6 +411,7 @@ impl RenderSnapshot {
 
             self.edges.push(PlannedEdge {
                 edge,
+                angle: world.edges().angle(edge),
                 version: world.geometry().version(edge),
                 selected: world.edges().is_selected(edge),
                 label_font_size,
@@ -435,6 +459,7 @@ impl RenderSnapshot {
         for &node in visible.nodes() {
             let shape = nodes.shape(node);
             let screen = viewport.world_rect_to_screen(nodes.bounds(node));
+            let angle = nodes.angle(node);
             let connector = nodes.connector(node);
             let detailed = lod.node_deserves_detail(screen, &thresholds);
             let selected = nodes.is_selected(node);
@@ -504,6 +529,7 @@ impl RenderSnapshot {
             let measured = MeasuredNode {
                 node,
                 screen,
+                angle,
                 visual,
                 version,
                 text_version: nodes.text_version(node),
@@ -514,8 +540,7 @@ impl RenderSnapshot {
                 z: nodes.z(node),
                 rich_capable: lod.detail == DetailLevel::Full
                     && detailed
-                    && is_rectangular(visual.body)
-                    && nodes.cold(node).parent.is_none(),
+                    && is_rectangular(visual.body),
             };
 
             if layered {
@@ -539,6 +564,7 @@ impl RenderSnapshot {
                 self.rich.push(RichNode {
                     node: measured.node,
                     screen: measured.screen,
+                    angle: measured.angle,
                     visual: measured.visual,
                     version: measured.version,
                     selected: measured.selected,
@@ -553,6 +579,7 @@ impl RenderSnapshot {
         self.canvas.push(CanvasNode {
             node: measured.node,
             screen: measured.screen,
+            angle: measured.angle,
             body: measured.visual.body,
             filled: measured.visual.filled,
             version: measured.version,
@@ -622,44 +649,99 @@ impl RenderSnapshot {
             return;
         }
 
-        // Selected first, hovered second: a user who has selected one node and
-        // is passing the pointer over another is working on the selection.
-        let active = world.selection().single_node().or(hovered);
-        let Some(active) = active else {
+        let selection = world.selection();
+        let active = selection.nodes().first().copied().or(hovered);
+        let Some(active) = active.filter(|node| world.nodes().contains(*node)) else {
             return;
         };
-        if !world.nodes().contains(active) {
+
+        if selection.len() <= 1 {
+            for handle in world.nodes().handles(active) {
+                if world.handles().is_hidden(handle) {
+                    continue;
+                }
+                self.interactive_handles.push(InteractiveHandle {
+                    node: active,
+                    handle,
+                    center: viewport.world_to_screen(world.handle_position(handle)),
+                });
+            }
+        }
+
+        if selection.is_empty() {
             return;
         }
 
-        let screen = viewport.world_rect_to_screen(world.nodes().bounds(active));
-        for handle in world.nodes().handles(active) {
-            if world.handles().is_hidden(handle) {
-                continue;
-            }
-            self.interactive_handles.push(InteractiveHandle {
-                node: active,
-                handle,
-                center: viewport.world_to_screen(world.handle_position(handle)),
+        let grouped = selection.single_node().is_some_and(|node| {
+            matches!(world.nodes().kind(node), crate::models::ElementKind::Group)
+        });
+        let loose_multi = selection.len() >= 2;
+        let world_bounds = if loose_multi {
+            let node_bounds = selection
+                .nodes()
+                .iter()
+                .copied()
+                .filter(|node| world.node_is_live(*node))
+                .map(|node| world.nodes().rotated_bounds(node));
+            let edge_bounds = selection.edges().iter().copied().filter_map(|edge| {
+                let route = world
+                    .edge_is_live(edge)
+                    .then(|| world.route(edge))
+                    .flatten()?;
+                Some(route.bounds().rotated_bound(world.edges().angle(edge)))
             });
-        }
-
-        if world.selection().single_node() == Some(active) {
-            let connector_endpoints = world.nodes().connector(active).map(|connector| {
+            Rect::of_rects(node_bounds.chain(edge_bounds))
+        } else {
+            Some(world.nodes().bounds(active))
+        };
+        let Some(world_bounds) = world_bounds else {
+            return;
+        };
+        let screen = viewport.world_rect_to_screen(world_bounds);
+        let angle = if loose_multi {
+            0.0
+        } else {
+            world.nodes().angle(active)
+        };
+        let centre = screen.center();
+        let rotation_grip = Vec2::new(centre.x, screen.min().y).rotated_about(centre, angle)
+            + Vec2::new(0.0, -crate::runtime::hit::ROTATION_GRIP_SCREEN_OFFSET).rotated(angle);
+        let connector_endpoints = (!loose_multi)
+            .then(|| world.nodes().connector(active))
+            .flatten()
+            .map(|connector| {
+                let centre = connector.bounds().center();
                 [
-                    viewport.world_to_screen(connector.start.point),
-                    viewport.world_to_screen(connector.end.point),
+                    viewport.world_to_screen(connector.start.point.rotated_about(centre, angle)),
+                    viewport.world_to_screen(connector.end.point.rotated_about(centre, angle)),
                 ]
             });
-            self.overlay = Some(SnapshotOverlay {
-                node: active,
-                screen,
-                connector_endpoints,
-                shows_resize_grips: connector_endpoints.is_none()
-                    && screen.size.x >= budgets.lod.min_detailed_node_px
-                    && screen.size.y >= budgets.lod.min_detailed_node_px,
-            });
+
+        if loose_multi {
+            self.member_outlines.extend(
+                selection
+                    .nodes()
+                    .iter()
+                    .copied()
+                    .filter(|node| world.node_is_live(*node))
+                    .map(|node| SelectionOutline {
+                        screen: viewport.world_rect_to_screen(world.nodes().bounds(node)),
+                        angle: world.nodes().angle(node),
+                    }),
+            );
         }
+
+        self.overlay = Some(SnapshotOverlay {
+            node: active,
+            screen,
+            angle,
+            rotation_grip,
+            dashed: loose_multi || grouped,
+            connector_endpoints,
+            shows_resize_grips: connector_endpoints.is_none()
+                && screen.size.x >= budgets.lod.min_detailed_node_px
+                && screen.size.y >= budgets.lod.min_detailed_node_px,
+        });
     }
 
     /// The ladder this frame was extracted under, or `None` before the first
@@ -705,6 +787,10 @@ impl RenderSnapshot {
         self.overlay
     }
 
+    pub fn member_outlines(&self) -> &[SelectionOutline] {
+        &self.member_outlines
+    }
+
     pub fn counts(&self) -> SnapshotCounts {
         self.counts
     }
@@ -740,6 +826,7 @@ impl RenderSnapshot {
         self.edges.clear();
         self.interactive_handles.clear();
         self.overlay = None;
+        self.member_outlines.clear();
         self.counts = SnapshotCounts::default();
         self.lod = None;
         self.anchor = None;
@@ -1100,13 +1187,12 @@ mod tests {
 
         assert!(size_of::<RichNode>() <= 48, "{}", size_of::<RichNode>());
         assert!(size_of::<CanvasNode>() <= 48, "{}", size_of::<CanvasNode>());
-        // 24 rather than 16 since §9's edge labels: a `PlannedEdge` carries
-        // the quantised size its label is shaped at, which is an `Option<f32>`
-        // and pads the struct to three words. Still `Copy`, still no heap, and
+        // 32 since rotation joined §9's edge-label row: the angle is one more
+        // scalar beside the quantised size. Still `Copy`, still no heap, and
         // still one row per *visible* edge — which is the property the bound is
         // guarding.
         assert!(
-            size_of::<PlannedEdge>() <= 24,
+            size_of::<PlannedEdge>() <= 32,
             "{}",
             size_of::<PlannedEdge>()
         );

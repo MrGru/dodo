@@ -171,7 +171,9 @@ use crate::{
     spatial::{SpatialIndex, SyncReport, VisibleSet},
     views::{
         images::{self, ImageCache},
-        keymap::{CommitText, Delete, InsertImage, Redo, SelectTool, ToggleToolLock, Undo},
+        keymap::{
+            CommitText, Delete, Group, InsertImage, Redo, SelectTool, ToggleToolLock, Undo, Ungroup,
+        },
         nodes, palette, properties,
     },
 };
@@ -1070,7 +1072,11 @@ impl FlowView {
         }
 
         let items = crate::properties::selection_items(world);
-        let sections = crate::properties::sections_for(&items);
+        let align_count = self.editor.alignment_subject_count();
+        let mut sections = crate::properties::sections_for(&items);
+        if align_count < 2 {
+            sections.retain(|section| *section != crate::properties::PanelSection::Align);
+        }
         if sections.is_empty() {
             return None;
         }
@@ -1080,17 +1086,33 @@ impl FlowView {
         // `crate::properties`' decision 3. A selection holding an image and a
         // shape has no Crop, because `sections_for` intersects and the two
         // kinds' action lists differ.
-        let actions = crate::properties::ElementAction::for_kind(
-            items
-                .first()
-                .map(|item| item.kind)
-                .unwrap_or(SelectionKind::Node),
+        let leading_kind = items
+            .first()
+            .map(|item| item.kind)
+            .unwrap_or(SelectionKind::Node);
+        let grouped = selection
+            .single_node()
+            .is_some_and(|node| matches!(world.nodes().kind(node), ElementKind::Group));
+        let actions = crate::properties::ElementAction::for_selection(
+            leading_kind,
+            selection.len() >= 2,
+            grouped,
         );
 
         let style = nodes
             .iter()
             .find(|&&node| world.node_is_live(node))
-            .map(|&node| world.nodes().style(node))
+            .and_then(|&node| {
+                if matches!(world.nodes().kind(node), ElementKind::Group) {
+                    world
+                        .descendants(node)
+                        .into_iter()
+                        .find(|child| !matches!(world.nodes().kind(*child), ElementKind::Group))
+                        .map(|child| world.nodes().style(child))
+                } else {
+                    Some(world.nodes().style(node))
+                }
+            })
             .or_else(|| {
                 edges
                     .iter()
@@ -1114,6 +1136,7 @@ impl FlowView {
             has_link: self.editor.selection_link().is_some(),
             crop: self.editor.selection_crop(),
             actions,
+            align_count,
         })
     }
 
@@ -1137,9 +1160,12 @@ impl FlowView {
         let changed = match &change {
             properties::Change::Arrow(kind) => self.editor.reroute_selection(kind.routing()),
             properties::Change::Layer(action) => self.editor.reorder_selection(*action),
+            properties::Change::Arrange(alignment) => self.editor.align_selection(*alignment),
             properties::Change::Action(action) => match action {
                 crate::properties::ElementAction::Duplicate => self.editor.duplicate_selection(),
                 crate::properties::ElementAction::Delete => self.editor.delete_selection(),
+                crate::properties::ElementAction::Group => self.editor.group_selection(),
+                crate::properties::ElementAction::Ungroup => self.editor.ungroup_selection(),
                 // **§10's crop, and the whole of it is one call.** What a press
                 // means is decided per element by
                 // `properties::crop_choice`, and a press when it would mean
@@ -1951,6 +1977,20 @@ impl FlowView {
             command: modifiers.platform,
         };
 
+        if let Some(node) = target.rotation_grip() {
+            let centre = self
+                .snapshot
+                .overlay()
+                .filter(|overlay| overlay.node == node)
+                .map(|overlay| self.viewport.screen_to_world(overlay.screen.center()))
+                .unwrap_or_else(|| self.editor.world().nodes().bounds(node).center());
+            return InteractionEvent::BeginRotate {
+                node,
+                centre,
+                pointer: world,
+            };
+        }
+
         // **An endpoint press is its own event too**, and for the same reason a
         // grip press is: the machine is world-free, so the geometry the drag
         // has to be able to cancel back to is handed to it here.
@@ -1973,7 +2013,12 @@ impl FlowView {
             return InteractionEvent::BeginResize {
                 node,
                 corner,
-                frame: self.editor.world().nodes().bounds(node),
+                frame: self
+                    .snapshot
+                    .overlay()
+                    .filter(|overlay| overlay.node == node)
+                    .map(|overlay| self.viewport.screen_rect_to_world(overlay.screen))
+                    .unwrap_or_else(|| self.editor.world().nodes().bounds(node)),
                 keeps_aspect: resize_keeps_aspect(
                     self.editor.world().nodes().shape(node),
                     modifiers.shift,
@@ -2052,6 +2097,14 @@ impl FlowView {
         let tolerance = HitTolerance::at_zoom(self.viewport.zoom());
         let radius = tolerance.handle_radius;
 
+        let screen = self.viewport.world_to_screen(world);
+        if let Some(overlay) = self.snapshot.overlay()
+            && (overlay.rotation_grip - screen).length_squared()
+                <= HitTolerance::GRIP_SCREEN_RADIUS * HitTolerance::GRIP_SCREEN_RADIUS
+        {
+            return PointerTarget::RotationGrip { node: overlay.node };
+        }
+
         // A selected connector has exactly two endpoint handles. They replace
         // rectangle resize corners and are hit-tested from the same snapshot
         // that drew them.
@@ -2080,10 +2133,20 @@ impl FlowView {
         // stealing every press near a corner.
         if let Some(overlay) = self.snapshot.overlay()
             && overlay.shows_resize_grips
-            && let Some(corner) = self
-                .editor
-                .world()
-                .hit_test_grip(world, overlay.node, tolerance)
+            && let Some(corner) = crate::geometry::ResizeCorner::ALL
+                .iter()
+                .copied()
+                .map(|corner| {
+                    let point = corner
+                        .of(overlay.screen)
+                        .rotated_about(overlay.screen.center(), overlay.angle);
+                    (corner, (point - screen).length_squared())
+                })
+                .filter(|(_, distance)| {
+                    *distance <= HitTolerance::GRIP_SCREEN_RADIUS * HitTolerance::GRIP_SCREEN_RADIUS
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(corner, _)| corner)
         {
             return PointerTarget::ResizeGrip {
                 node: overlay.node,
@@ -2193,10 +2256,23 @@ impl FlowView {
                     let interaction = if button == PointerButton::Left && event.click_count >= 2 {
                         let screen = this.local(event.position, bounds);
                         let world = this.viewport.screen_to_world(screen);
-                        InteractionEvent::DoubleClick {
-                            world,
-                            target: this.target_at(world),
+                        let target = this.target_at(world);
+                        // A group owns double-click before the label editor:
+                        // enter one level; once the target is a leaf, the
+                        // existing event below opens its caret.
+                        if let PointerTarget::Node(group) = target
+                            && matches!(this.editor.world().nodes().kind(group), ElementKind::Group)
+                            && this.editor.drill_into_group(
+                                group,
+                                world,
+                                HitTolerance::at_zoom(this.viewport.zoom()),
+                                this.viewport.screen_to_world_length(1.0),
+                            )
+                        {
+                            cx.notify();
+                            return;
                         }
+                        InteractionEvent::DoubleClick { world, target }
                     } else {
                         this.pointer_event(event.position, bounds, button, event.modifiers)
                     };
@@ -2251,6 +2327,11 @@ impl FlowView {
                             .connector_snap_at(world, opposite, Some(node))
                             .map(|snap| snap.target);
                         InteractionEvent::MoveConnectorEndpoint { world, target }
+                    } else if this.interaction.is_rotating() {
+                        InteractionEvent::MoveRotate {
+                            world,
+                            shift: event.modifiers.shift,
+                        }
                     } else {
                         InteractionEvent::PointerMove { screen, world }
                     };
@@ -2399,6 +2480,18 @@ impl FlowView {
     /// method rather than two that have to agree.
     fn on_delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
         self.delete_selection(window, cx);
+    }
+
+    fn on_group(&mut self, _: &Group, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.group_selection() {
+            cx.notify();
+        }
+    }
+
+    fn on_ungroup(&mut self, _: &Ungroup, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.ungroup_selection() {
+            cx.notify();
+        }
     }
 
     /// `i`, and the palette's Insert image button.
@@ -2619,6 +2712,14 @@ impl FlowView {
         match event.keystroke.key.as_str() {
             PAN_KEY => self.pan_key_held = true,
             "escape" => {
+                if self.interaction.is_idle()
+                    && self.interaction.tool() == CanvasTool::Select
+                    && self.editor.step_out_selection()
+                {
+                    self.focus_handle.clone().focus(window, cx);
+                    cx.notify();
+                    return;
+                }
                 let cancelled = self.interaction.handle(InteractionEvent::Cancel);
                 let mut repaint = cancelled.needs_repaint();
                 if repaint {
@@ -2818,7 +2919,13 @@ impl FlowView {
                     return None;
                 }
                 if let Some(connector) = nodes.connector(node) {
-                    Some(self.boxless_label_bounds(connector.midpoint()))
+                    Some(
+                        self.boxless_label_bounds(
+                            connector
+                                .midpoint()
+                                .rotated_about(connector.bounds().center(), nodes.angle(node)),
+                        ),
+                    )
                 } else if *nodes.kind(node) == ElementKind::Text {
                     // A text element has no border to keep clear of, so its
                     // label is laid into its whole box — `plan_labels` says so
@@ -2837,7 +2944,12 @@ impl FlowView {
                     .viewport
                     .screen_to_world_length(1.0)
                     .max(f32::MIN_POSITIVE);
-                Some(self.boxless_label_bounds(route.midpoint(flatten)))
+                Some(
+                    self.boxless_label_bounds(route.midpoint(flatten).rotated_about(
+                        route.bounds().center(),
+                        self.editor.world().edges().angle(edge),
+                    )),
+                )
             }
         }
     }
@@ -2897,20 +3009,20 @@ impl FlowView {
     fn text_edit_ink(&self, target: TextTarget, cx: &App) -> EditorInk {
         let world = self.editor.world();
         let theme = cx.theme();
-        let style = match target {
-            TextTarget::New(_) => &world.settings().default_style,
+        let (style, angle) = match target {
+            TextTarget::New(_) => (&world.settings().default_style, 0.0),
             TextTarget::Node(node) => {
                 if world.nodes().contains(node) && world.node_is_live(node) {
-                    world.nodes().style(node)
+                    (world.nodes().style(node), world.nodes().angle(node))
                 } else {
-                    &world.settings().default_style
+                    (&world.settings().default_style, 0.0)
                 }
             }
             TextTarget::Edge(edge) => {
                 if world.edges().contains(edge) && world.edge_is_live(edge) {
-                    world.edges().style(edge)
+                    (world.edges().style(edge), world.edges().angle(edge))
                 } else {
-                    &world.settings().default_style
+                    (&world.settings().default_style, 0.0)
                 }
             }
         };
@@ -2931,6 +3043,7 @@ impl FlowView {
             family: style.font.family,
             align: style.font.align,
             vertical_align: style.font.vertical_align,
+            angle,
         }
     }
 
@@ -2987,6 +3100,10 @@ impl FlowView {
             .text_edit_bounds(editing.target)
             .unwrap_or(editing.world);
         let ink = self.text_edit_ink(editing.target, cx);
+        // GPUI has no transform on a general element; retaining the angle here
+        // keeps the inline renderer on the same authoritative value as the
+        // canvas and rich paths, ready for the framework's transform support.
+        let _angle = ink.angle;
         let line = editor_line_height(ink.font_size);
         let band = editor_band(
             self.viewport.world_rect_to_screen(world),
@@ -3064,6 +3181,7 @@ struct EditorInk {
     family: FontFamily,
     align: TextAlign,
     vertical_align: VerticalAlign,
+    angle: f32,
 }
 
 /// One line of label text, in screen pixels.
@@ -3221,6 +3339,8 @@ impl Render for FlowView {
             .on_action(cx.listener(Self::on_redo))
             .on_action(cx.listener(Self::on_select_tool))
             .on_action(cx.listener(Self::on_delete))
+            .on_action(cx.listener(Self::on_group))
+            .on_action(cx.listener(Self::on_ungroup))
             .on_action(cx.listener(Self::on_insert_image))
             .on_action(cx.listener(Self::on_toggle_tool_lock))
             .on_action(cx.listener(Self::on_commit_text))

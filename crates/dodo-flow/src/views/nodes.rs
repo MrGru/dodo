@@ -55,7 +55,7 @@ use crate::{
     render::{
         painter::{FontSet, to_hsla},
         registry::{AccentRole, NodeGlyph, NodeVisual},
-        scene::{GRAPH_NODE_RADIUS, LABEL_PADDING_PIXELS},
+        scene::{GRAPH_NODE_RADIUS, LABEL_PADDING_PIXELS, SELECTION_RING_INSET_PIXELS},
         snapshot::{InteractiveHandle, RenderSnapshot, RichNode},
     },
     runtime::GraphWorld,
@@ -71,18 +71,12 @@ const ACCENT_BAR_PIXELS: f32 = 3.0;
 /// one that is smaller than it looks is not.
 const HANDLE_HIT_PIXELS: f32 = 14.0;
 
-/// How far outside the element the selection ring sits, in screen pixels.
-///
-/// A named constant rather than a literal because §12's grips are placed on the
-/// same rectangle: a ring and a set of grips that disagreed by three pixels
-/// would put the handles a user aims at off the box they can see.
-const SELECTION_RING_INSET: f32 = 3.0;
-
 /// One resize grip's side, in screen pixels. Smaller than a connection handle's
 /// target, because a corner is aimed at deliberately — and matched to
 /// [`HitTolerance::GRIP_SCREEN_RADIUS`](crate::runtime::HitTolerance::GRIP_SCREEN_RADIUS),
 /// which is what decides whether a press on one lands.
 const GRIP_PIXELS: f32 = 9.0;
+const ROTATION_GRIP_PIXELS: f32 = 10.0;
 
 /// **Every rich node's element, for one frame.**
 ///
@@ -176,10 +170,12 @@ fn decorated(
         );
     }
 
-    if let (Some(font_size), Some(label)) = (
-        rich.label_font_size,
-        world.nodes().cold(rich.node).label.as_ref(),
-    ) {
+    if rich.angle.abs() <= 1e-4
+        && let (Some(font_size), Some(label)) = (
+            rich.label_font_size,
+            world.nodes().cold(rich.node).label.as_ref(),
+        )
+    {
         // **Every text property is read here as well as on the canvas**, and
         // that is the whole point of this block rather than a refinement of it.
         // A rectangle at working zoom is a *rich* node, so this element is what
@@ -355,58 +351,72 @@ pub fn resize_grips(snapshot: &RenderSnapshot, cx: &App) -> Vec<AnyElement> {
         return Vec::new();
     };
     let theme = cx.theme();
+    let mut grips = vec![
+        div()
+            .absolute()
+            .left(px(overlay.rotation_grip.x - ROTATION_GRIP_PIXELS * 0.5))
+            .top(px(overlay.rotation_grip.y - ROTATION_GRIP_PIXELS * 0.5))
+            .w(px(ROTATION_GRIP_PIXELS))
+            .h(px(ROTATION_GRIP_PIXELS))
+            .rounded_full()
+            .bg(theme.background)
+            .border(px(1.5))
+            .border_color(theme.selection)
+            // GPUI exposes no circular-arrow cursor; crosshair is its native
+            // precision cursor and is distinct from every resize direction.
+            .cursor_crosshair()
+            .into_any_element(),
+    ];
     if let Some(endpoints) = overlay.connector_endpoints {
-        return endpoints
-            .into_iter()
-            .map(|center| {
-                div()
-                    .absolute()
-                    .left(px(center.x - GRIP_PIXELS * 0.5))
-                    .top(px(center.y - GRIP_PIXELS * 0.5))
-                    .w(px(GRIP_PIXELS))
-                    .h(px(GRIP_PIXELS))
-                    .rounded(px(GRIP_PIXELS * 0.5))
-                    .bg(theme.background)
-                    .border(px(1.5))
-                    .border_color(theme.selection)
-                    .into_any_element()
-            })
-            .collect();
-    }
-
-    // An element a few pixels across has no room for four grips, and drawing
-    // them would cover the thing they resize.
-    if !overlay.shows_resize_grips {
-        return Vec::new();
-    }
-
-    let ring = overlay.screen.inflate(SELECTION_RING_INSET);
-
-    ResizeCorner::ALL
-        .iter()
-        .copied()
-        .map(|corner| {
-            let center = corner.of(ring);
+        grips.extend(endpoints.into_iter().map(|center| {
             div()
                 .absolute()
                 .left(px(center.x - GRIP_PIXELS * 0.5))
                 .top(px(center.y - GRIP_PIXELS * 0.5))
                 .w(px(GRIP_PIXELS))
                 .h(px(GRIP_PIXELS))
-                .rounded(px(2.0))
+                .rounded(px(GRIP_PIXELS * 0.5))
                 .bg(theme.background)
                 .border(px(1.5))
                 .border_color(theme.selection)
                 .into_any_element()
-        })
-        .collect()
+        }));
+        return grips;
+    }
+
+    // An element a few pixels across has no room for four grips, and drawing
+    // them would cover the thing they resize.
+    if !overlay.shows_resize_grips {
+        return grips;
+    }
+
+    let ring = overlay.screen.inflate(SELECTION_RING_INSET_PIXELS);
+
+    grips.extend(ResizeCorner::ALL.iter().copied().map(|corner| {
+        let center = corner.of(ring).rotated_about(ring.center(), overlay.angle);
+        div()
+            .absolute()
+            .left(px(center.x - GRIP_PIXELS * 0.5))
+            .top(px(center.y - GRIP_PIXELS * 0.5))
+            .w(px(GRIP_PIXELS))
+            .h(px(GRIP_PIXELS))
+            .rounded(px(2.0))
+            .bg(theme.background)
+            .border(px(1.5))
+            .border_color(theme.selection)
+            .into_any_element()
+    }));
+    grips
 }
 
 /// §44's bounding box for the selected element: a ring outside the node, so it
 /// reads as a selection rather than as a thicker border.
 pub fn selection_box(snapshot: &RenderSnapshot, cx: &App) -> Option<AnyElement> {
     let overlay = snapshot.overlay()?;
-    let ring = overlay.screen.inflate(SELECTION_RING_INSET);
+    if overlay.dashed || overlay.angle.abs() > 1e-4 {
+        return None;
+    }
+    let ring = overlay.screen.inflate(SELECTION_RING_INSET_PIXELS);
 
     Some(
         placed(ring)

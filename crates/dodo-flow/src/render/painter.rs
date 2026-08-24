@@ -275,6 +275,8 @@ pub struct PictureElement {
     /// [`ImagePrimitive::node`], rather than trusting two independently built
     /// lists to be in the same order.
     pub node: NodeIndex,
+    /// Rotation consumed by this render half; prepaint and plan must agree.
+    pub angle: f32,
     pub element: AnyElement,
 }
 
@@ -463,6 +465,7 @@ impl PrimitiveSink for WindowPainter<'_> {
             return 0;
         };
 
+        debug_assert_eq!(entry.angle, image.angle);
         entry.element.paint(self.window, self.cx);
         1
     }
@@ -571,10 +574,13 @@ impl PrimitiveSink for WindowPainter<'_> {
         // the first, which is `TextPrimitive::vertical_offset` and is zero for
         // one line.
         let lift = text.vertical_offset(wrapped.visual_lines);
-        let mut origin = to_point(text.origin + Vec2::new(indent, lift) + self.origin);
+        let mut local_origin = text.origin + Vec2::new(indent, lift);
         let line_height = px(text.line_height());
 
         for line in wrapped.lines.iter() {
+            let origin = to_point(
+                local_origin.rotated_about(text.rotation_center, text.angle) + self.origin,
+            );
             // `align` is `Left` and `bounds` `None` because both alignments are
             // already in `origin` above; handing GPUI a second answer here is
             // exactly how the two would drift.
@@ -589,7 +595,7 @@ impl PrimitiveSink for WindowPainter<'_> {
             // Each hard line advances by its own wrapped height, so a paragraph
             // after a long one starts below it rather than on top of it.
             let lines = line.wrap_boundaries.len() as f32 + 1.0;
-            origin.y += line_height * lines;
+            local_origin.y += line_height.as_f32() * lines;
         }
 
         wrapped.glyphs

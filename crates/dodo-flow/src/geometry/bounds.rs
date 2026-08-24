@@ -166,6 +166,25 @@ impl Rect {
         Rect::new(self.origin + delta, self.size)
     }
 
+    /// The axis-aligned bound of this rectangle after rotation about its centre.
+    ///
+    /// The rectangle itself remains the position/size authority; this derived
+    /// box is what an axis-aligned spatial index must store.
+    pub fn rotated_bound(&self, angle: f32) -> Rect {
+        if angle == 0.0 {
+            return self.normalized();
+        }
+        let rect = self.normalized();
+        let centre = rect.center();
+        Rect::of_points([
+            rect.min().rotated_about(centre, angle),
+            Vec2::new(rect.max().x, rect.min().y).rotated_about(centre, angle),
+            rect.max().rotated_about(centre, angle),
+            Vec2::new(rect.min().x, rect.max().y).rotated_about(centre, angle),
+        ])
+        .expect("four corners")
+    }
+
     /// Every component is finite — see [`Vec2::is_finite`] for why a loaded
     /// document is checked.
     pub fn is_finite(&self) -> bool {
@@ -483,6 +502,25 @@ mod tests {
             r.translated(Vec2::new(10.0, 20.0)),
             rect(11.0, 22.0, 3.0, 4.0)
         );
+    }
+
+    #[test]
+    fn rotated_bound_contains_all_four_rotated_corners() {
+        let source = rect(10.0, 20.0, 80.0, 40.0);
+        let angle = std::f32::consts::FRAC_PI_4;
+        let bound = source.rotated_bound(angle);
+        let centre = source.center();
+
+        for corner in [
+            source.min(),
+            Vec2::new(source.max().x, source.min().y),
+            source.max(),
+            Vec2::new(source.min().x, source.max().y),
+        ] {
+            assert!(bound.contains_point(corner.rotated_about(centre, angle)));
+        }
+        assert!(bound.width() > source.height());
+        assert!(bound.height() > source.height());
     }
 
     /// The oracle for the exact segment test: sample the segment densely and

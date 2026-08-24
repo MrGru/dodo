@@ -79,6 +79,8 @@ pub struct EdgePaint {
     /// The edge's index and route version, for the geometry cache key. `None`
     /// for a path that is not a document edge — the connection preview.
     pub owner: Option<(EdgeIndex, u32)>,
+    /// Counter-clockwise radians about the route's derived bound centre.
+    pub angle: f32,
     /// **§13's hand, and the seed it draws this edge with.** `None` is a clean
     /// line — which is also what a rung below [`EdgeDetail::Coarse`] gets, see
     /// [`EdgeDetail::keeps_sketch`].
@@ -112,6 +114,7 @@ impl EdgePaint {
             quality,
             detail: EdgeDetail::Full,
             owner: None,
+            angle: 0.0,
             sketch: None,
         }
     }
@@ -233,7 +236,10 @@ pub fn plan_edge(plan: &mut PaintPlan, route: &EdgeRoute, paint: &EdgePaint, vie
     let width = viewport
         .world_to_screen_length(paint.width)
         .max(MIN_STROKE_PIXELS);
-    let outline = route_outline_at(route, viewport, paint.detail);
+    let outline = route_outline_at(route, viewport, paint.detail).rotated_about(
+        viewport.world_to_screen(route.bounds().center()),
+        paint.angle,
+    );
     let quality = paint.effective_quality();
 
     if let Some(hand) = paint.hand() {
@@ -330,16 +336,21 @@ fn plan_markers(
     // the line it decorates at every zoom rather than shrinking to a speck.
     let length = arrow::marker_length(screen_width);
 
+    let centre = viewport.world_to_screen(route.bounds().center());
     let markers = [
         (
             paint.start_marker,
-            viewport.world_to_screen(route.start()),
-            Vec2::ZERO - route.start_tangent(),
+            viewport
+                .world_to_screen(route.start())
+                .rotated_about(centre, paint.angle),
+            (Vec2::ZERO - route.start_tangent()).rotated(paint.angle),
         ),
         (
             paint.end_marker,
-            viewport.world_to_screen(route.end()),
-            route.end_tangent(),
+            viewport
+                .world_to_screen(route.end())
+                .rotated_about(centre, paint.angle),
+            route.end_tangent().rotated(paint.angle),
         ),
     ];
 
@@ -429,6 +440,7 @@ pub fn plan_connection_preview(
         // Never cached: it changes every frame by definition, which is exactly
         // what §23 says not to cache.
         owner: None,
+        angle: 0.0,
         // **Never sketched either**, and for the same reason: a preview is
         // regenerated on every pointer move, so a hand drawn over it would be a
         // fresh squiggle per frame — the one thing §13 forbids — and it would

@@ -1590,6 +1590,110 @@
 //! build reads the paragraph and draws it as one. Nothing is discarded, which
 //! is exactly the rule [`models::serialization::CURRENT_VERSION`] moves by.
 //!
+//! # What the fifteenth slice added: rotation is geometry
+//!
+//! Every persisted node and graph edge now carries an `angle`, in radians,
+//! beside its rectangle rather than inside [`models::ElementStyle`]. The
+//! rectangle is still the authority for position and size; rotation is about
+//! its centre. That placement is load-bearing: hit testing, handles, connector
+//! anchors and culling all read the angle, while copying a style cannot move an
+//! element. Document format version 6 writes zero into every older element.
+//!
+//! [`geometry::Rect::rotated_bound`] is the one four-corner calculation. The
+//! spatial grid remains axis-aligned and stores that derived bound, so a corner
+//! visible at the edge of the pane cannot disappear in the broad phase. The
+//! narrow phase does the opposite transform: rotate the pointer into the
+//! element's local frame and test the original geometry. Canvas bodies are real
+//! rotated outlines — a rotated rectangle leaves the quad run, because GPUI has
+//! no rotated quad — and the same angle is carried by rich rows, images, canvas
+//! text and the inline editor.
+//!
+//! [`commands::EditCommand::RotateElements`] is its own inverse with the sign
+//! reversed and consecutive ticks over the same members merge. The round grip
+//! above the selection ring starts that gesture; Shift snaps the total to 15°,
+//! and an abandoned drag applies the recorded inverses and leaves no history.
+//!
+//! **One framework boundary remains visible.** The pinned GPUI exposes a
+//! transform for monochrome SVGs, but not for a general element, a polychrome
+//! sprite or a glyph run. The engine rotates all geometry and text placement
+//! origins and carries one angle through all three label paths; the bitmap and
+//! glyph raster quads themselves remain upright until GPUI exposes that
+//! transform. The frame tests assert the data each painter receives rather than
+//! claiming a capability the backend does not have.
+//!
+//! # What the sixteenth slice added: groups are a hierarchy
+//!
+//! [`models::ElementKind::Group`] is now a real, bodyless document element.
+//! [`runtime::NodeCold::parent`] remains the authority and graph edges gained
+//! the same field; `GraphWorld` derives direct-child maps on load, validates and
+//! detaches missing/non-container/cyclic parents, and resolves children,
+//! descendants and ancestors without a document scan. Format version 7 is the
+//! compatibility line: its migration is the identity because older files could
+//! create no group, while older builds must refuse a hierarchy they would
+//! discard.
+//!
+//! A group's rectangle is derived from the union of its direct members'
+//! rotated bounds. Public position, size and angle writes refuse a group; child
+//! mutations refresh its ancestors and spatial entries. Move translates every
+//! leaf descendant, resize scales descendant centres and rectangles, and rotate
+//! moves centres about the group centre and adds the delta to each leaf angle.
+//! None touches stroke width or font size. Nesting therefore needs no second
+//! transform rule, and Ungroup reparents direct members to the outer parent and
+//! peels exactly one level.
+//!
+//! Group and Ungroup are inverse edits. Initial grouping creates the group slot
+//! and reparents through those edits inside one gesture; undo removes it and
+//! redo restores the same slot and relationships. An ordinary member hit
+//! resolves to the outermost group. Double-click owns the conflict with §9
+//! deliberately: on a group it selects the direct child under the pointer; on
+//! a leaf it follows the existing path into the label editor. Escape selects
+//! the parent one level out after text/prompt cancellation has had priority.
+//!
+//! Graph edges whose two endpoint nodes are inside join the group. A straight
+//! connector joins only when both semantic endpoint attachments are inside;
+//! one outside leaves it at the outer level, where the existing binding index
+//! keeps rerouting its inside endpoint. Restyling a group expands to every leaf
+//! descendant, and the panel rows are their intersection — a rectangle plus a
+//! text element has no Background row. Members are made contiguous in depth,
+//! including an intact nested subtree, before the existing quad/path/image/rich
+//! placement rules see them.
+//!
+//! The selection chrome follows the captain's Excalidraw references. A group is
+//! one dashed outer rectangle with corner grips and a round rotation grip on a
+//! short stalk, with no member outlines. A loose multi-selection adds one thin
+//! solid outline per member. The test is on the paint plan: four chrome paths
+//! for two loose members, two for the same members grouped.
+//!
+//! # What the seventeenth slice added: Align and the grouping chords
+//!
+//! [`properties::PanelSection::Align`] is inserted exactly between Layers and
+//! Actions for two or more loose subjects and for a selected group, whose
+//! direct children are the subjects. The six alignments are two rows of three.
+//! Distribution appears as a third row only at three or more; it is absent at
+//! two, not muted, because element count is ordinary panel context while
+//! Sloppiness in Clean mode is a document setting disabling a real row.
+//!
+//! Each operation computes absolute positions from rotated bounds and travels
+//! the existing position/move vocabulary inside one gesture, so one press is
+//! one undo step. Distribution keeps the outside extents and equalises the gaps
+//! between unequal-sized subjects. A direct child that is itself a group moves
+//! its subtree and stays intact.
+//!
+//! The Actions row's third button is Group on a loose multi-selection and
+//! Ungroup on a selected group; a single ordinary element keeps Link there.
+//! [`commands::keys`] gives the same methods `Cmd+G` / `Cmd+Shift+G` on macOS
+//! and `Ctrl+G` / `Ctrl+Shift+G` elsewhere as values of `HostOs`, so every
+//! platform's answer is built and asserted on any machine.
+//!
+//! Everything geometric, serialized and historical above is covered without a
+//! window: migrations, rotated broad/narrow phases, painter primitives, nested
+//! inverses, transforms, edge membership, drill/escape selection, selection
+//! chrome, align/distribute arithmetic and every host's key table. What still
+//! needs a person in the launcher is the feel and appearance: the rotation
+//! cursor and Shift snap, drag-time group resize/rerouting, drill-in ergonomics,
+//! the three-row panel at a short window, and the platform shortcuts reaching
+//! their handlers.
+//!
 //! # Where the budget numbers come from, and what they are not
 //!
 //! [`budgets`] is the one named place for every render ceiling and LOD

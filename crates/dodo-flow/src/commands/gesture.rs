@@ -154,9 +154,7 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
             let changed = if editor.world().nodes().connector(node).is_some() {
                 editor.translate_connector(node, delta)
             } else {
-                editor
-                    .apply(EditCommand::move_node(node, delta))
-                    .is_ok_and(|summary| summary.changed)
+                editor.move_node_or_group(node, delta)
             };
             GestureReport::changed(changed)
         }
@@ -211,22 +209,27 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
         // ticks of a drag are two history entries in total, whichever corner is
         // being pulled.
         InteractionEffect::ResizeNodeTo { node, rect } => {
-            let rect = rect.normalized();
-            GestureReport::changed(editor.in_one_step(|editor| {
-                let mut changed = editor
-                    .apply(EditCommand::SetNodePositions(vec![(node, rect.origin)]))
-                    .is_ok_and(|summary| summary.changed);
-                changed |= editor
-                    .apply(EditCommand::resize_node(node, rect.size))
-                    .is_ok_and(|summary| summary.changed);
-                changed
-            }))
+            GestureReport::changed(editor.resize_node_or_group(node, rect))
         }
 
         InteractionEffect::EndResize { .. } => {
             editor.end_gesture();
             GestureReport::changed(false)
         }
+
+        InteractionEffect::BeginRotate { node } => {
+            editor.begin_gesture();
+            editor.select_only(Some(node));
+            GestureReport::changed(true)
+        }
+        InteractionEffect::RotateBy { node, delta } => {
+            GestureReport::changed(editor.rotate_node_or_group(node, delta))
+        }
+        InteractionEffect::EndRotate { .. } => {
+            editor.end_gesture();
+            GestureReport::changed(false)
+        }
+        InteractionEffect::CancelRotate => GestureReport::changed(editor.abandon_gesture()),
 
         InteractionEffect::BeginConnectorEndpointDrag { node } => {
             editor.begin_gesture();
@@ -291,6 +294,7 @@ pub fn apply_gesture(editor: &mut FlowEditor, effect: InteractionEffect) -> Gest
                 PointerTarget::Empty
                 | PointerTarget::Edge(_)
                 | PointerTarget::ResizeGrip { .. }
+                | PointerTarget::RotationGrip { .. }
                 | PointerTarget::ConnectorEndpoint { .. } => {
                     return GestureReport::default();
                 }
@@ -493,6 +497,44 @@ mod tests {
                 "{what}: the end followed the wrong rule"
             );
         }
+    }
+
+    #[test]
+    fn a_rotation_drag_is_one_undo_step() {
+        let (mut editor, node, _) = editor_with_two_nodes();
+        let depth = editor.history().undo_depth();
+        let mut machine = InteractionMachine::new();
+        apply_gesture(
+            &mut editor,
+            machine.handle(InteractionEvent::BeginRotate {
+                node,
+                centre: Vec2::new(80.0, 40.0),
+                pointer: Vec2::new(80.0, -20.0),
+            }),
+        );
+        for degrees in [5.0_f32, 15.0, 30.0, 45.0] {
+            let angle = (-90.0 + degrees).to_radians();
+            apply_gesture(
+                &mut editor,
+                machine.handle(InteractionEvent::MoveRotate {
+                    world: Vec2::new(80.0, 40.0) + Vec2::new(angle.cos(), angle.sin()) * 60.0,
+                    shift: false,
+                }),
+            );
+        }
+        apply_gesture(
+            &mut editor,
+            machine.handle(InteractionEvent::PointerUp {
+                button: PointerButton::Left,
+                world: Vec2::ZERO,
+                target: PointerTarget::Empty,
+            }),
+        );
+
+        assert!((editor.world().nodes().angle(node) - 45.0_f32.to_radians()).abs() < 1e-4);
+        assert_eq!(editor.history().undo_depth(), depth + 1);
+        assert!(editor.undo());
+        assert!(editor.world().nodes().angle(node).abs() < 1e-5);
     }
 
     /// Drives one whole resize the way a person performs it, through the real

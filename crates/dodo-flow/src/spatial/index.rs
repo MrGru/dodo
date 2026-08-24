@@ -388,7 +388,7 @@ pub fn node_painted_bounds(world: &GraphWorld, node: NodeIndex) -> Rect {
     let style = world.nodes().style(node);
     world
         .nodes()
-        .bounds(node)
+        .rotated_bounds(node)
         .inflate(style.stroke.width.max(0.0) * 0.5)
 }
 
@@ -411,7 +411,12 @@ pub fn edge_painted_bounds(world: &GraphWorld, edge: EdgeIndex) -> Option<Rect> 
         arrow::marker_length(width)
     };
 
-    Some(route.bounds().inflate(width * 0.5 + marker))
+    Some(
+        route
+            .bounds()
+            .rotated_bound(world.edges().angle(edge))
+            .inflate(width * 0.5 + marker),
+    )
 }
 
 /// A cell size derived from the document rather than guessed.
@@ -768,6 +773,29 @@ mod tests {
         let mut far = Vec::new();
         index.nodes_near(Vec2::new(80.0, 30.0), 10.0, &mut far);
         assert!(far.len() < near.len());
+    }
+
+    #[test]
+    fn a_rotated_corner_is_indexed_outside_the_unrotated_rectangle() {
+        let mut world = GraphWorld::new();
+        let node = world.create_node(
+            ElementKind::GraphNode(GraphNodeKind::Default),
+            Vec2::ZERO,
+            Vec2::new(160.0, 60.0),
+        );
+        world.set_node_angle(node, std::f32::consts::FRAC_PI_2);
+        let index = SpatialIndex::for_world(&world);
+
+        let mut candidates = Vec::new();
+        index.nodes_at(Vec2::new(80.0, -40.0), 1.0, &mut candidates);
+
+        assert!(candidates.contains(&node));
+        assert!(
+            !world
+                .nodes()
+                .bounds(node)
+                .contains_point(Vec2::new(80.0, -40.0))
+        );
     }
 
     #[test]

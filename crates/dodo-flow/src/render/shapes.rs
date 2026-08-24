@@ -106,6 +106,30 @@ impl Outline {
         self
     }
 
+    /// Rotates every point in this outline about `centre`.
+    pub fn rotated_about(mut self, centre: Vec2, angle: f32) -> Outline {
+        if angle == 0.0 {
+            return self;
+        }
+        for command in &mut self.commands {
+            *command = match *command {
+                SubpathCommand::MoveTo(point) => {
+                    SubpathCommand::MoveTo(point.rotated_about(centre, angle))
+                }
+                SubpathCommand::LineTo(point) => {
+                    SubpathCommand::LineTo(point.rotated_about(centre, angle))
+                }
+                SubpathCommand::CubicTo { c1, c2, to } => SubpathCommand::CubicTo {
+                    c1: c1.rotated_about(centre, angle),
+                    c2: c2.rotated_about(centre, angle),
+                    to: to.rotated_about(centre, angle),
+                },
+                SubpathCommand::Close => SubpathCommand::Close,
+            };
+        }
+        self
+    }
+
     /// The outline's bounding box, control points included.
     ///
     /// A cubic never leaves its control hull, so this is a true bound rather
@@ -281,11 +305,12 @@ pub fn prefers_quad(kind: ShapeKind, rotation: f32) -> bool {
 /// A graph node's body is a rounded rectangle, so it is a quad too — and that
 /// matters more than the drawn shapes do, because a graph of 100,000 nodes is
 /// 100,000 of these and Phase 0 measured quads at twice the throughput.
-pub fn node_prefers_quad(shape: NodeShape) -> bool {
-    matches!(
-        shape,
-        NodeShape::Rectangle | NodeShape::RoundedRectangle | NodeShape::GraphNode
-    )
+pub fn node_prefers_quad(shape: NodeShape, rotation: f32) -> bool {
+    rotation.abs() <= 1e-4
+        && matches!(
+            shape,
+            NodeShape::Rectangle | NodeShape::RoundedRectangle | NodeShape::GraphNode
+        )
 }
 
 /// The outline for a runtime node shape, or `None` for one whose painter is a
@@ -894,7 +919,7 @@ mod tests {
     fn an_open_shape_is_never_routed_to_a_quad() {
         for shape in [NodeShape::Line, NodeShape::Arrow] {
             assert!(is_open(shape));
-            assert!(!node_prefers_quad(shape));
+            assert!(!node_prefers_quad(shape, 0.0));
             assert!(
                 outline_for_node(shape, Rect::new(Vec2::ZERO, Vec2::splat(50.0)), 0.0).is_some()
             );

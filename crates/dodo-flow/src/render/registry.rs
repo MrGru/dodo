@@ -405,6 +405,17 @@ impl NodeRendererRegistry {
                 filled: false,
                 ..NodeVisual::FALLBACK
             },
+            // A group has no body of its own. Its derived rectangle exists for
+            // selection, grips, hit testing and the spatial broad phase only;
+            // painting a fallback rectangle would cover its members.
+            ElementKind::Group => NodeVisual {
+                body: NodeShape::Other,
+                glyph: NodeGlyph::None,
+                shows_label: false,
+                shows_accent_bar: false,
+                filled: false,
+                ..NodeVisual::FALLBACK
+            },
             _ => NodeVisual::FALLBACK,
         }
     }

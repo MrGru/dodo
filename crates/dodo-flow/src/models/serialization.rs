@@ -91,7 +91,16 @@ use crate::{
 /// once**. Without a rung the choice is between doing it on every load (which
 /// would silently undo a user's own alignment the moment they picked one) and
 /// not doing it at all. See `labels_centred_on_their_element`.
-pub const CURRENT_VERSION: u32 = 5;
+///
+/// **Version 6 adds rotation to every element.** The rung writes zero rather
+/// than relying only on serde's default so the migrated JSON states the new
+/// geometric authority explicitly before it reaches the typed document.
+///
+/// **Version 7 makes groups real.** The existing node `parent` field finally
+/// has runtime meaning and edges gain the same relationship. The migration is
+/// the identity because older files could not create a group; the version is
+/// for older builds, which must not silently discard a hierarchy.
+pub const CURRENT_VERSION: u32 = 7;
 
 /// One rung of the ladder: rewrites a document body written by version `from`
 /// into the shape version `from + 1` expects.
@@ -113,6 +122,8 @@ pub const MIGRATIONS: &[(u32, MigrationStep)] = &[
     (2, images_arrived),
     (3, connectors_gained_ordered_endpoints),
     (4, labels_centred_on_their_element),
+    (5, elements_gained_rotation),
+    (6, groups_became_structural),
 ];
 
 /// **Version 1 ▸ 2**: a font's continuous `size` became one of four steps, and
@@ -335,6 +346,27 @@ fn centre_label(element: &mut Value, centred: &Value) {
     if let Some(font) = font.as_object_mut() {
         font.insert("align".into(), centred.clone());
     }
+}
+
+/// **Version 5 ▸ 6**: every element gained an angle about its rectangle centre.
+fn elements_gained_rotation(value: &mut Value) -> Result<(), LoadError> {
+    for key in ["nodes", "edges"] {
+        let Some(elements) = value.get_mut(key).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for element in elements {
+            if let Some(object) = element.as_object_mut() {
+                object.entry("angle").or_insert_with(|| Value::from(0.0));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// **Version 6 ▸ 7**: group and edge-parent semantics arrived. Older files
+/// could contain neither through the UI, so defaults are the exact migration.
+fn groups_became_structural(_value: &mut Value) -> Result<(), LoadError> {
+    Ok(())
 }
 
 /// Why a document could not be loaded.
@@ -1050,6 +1082,55 @@ mod tests {
 
         assert!(document.images.is_empty());
         assert_eq!(document.nodes[0].image, None);
+    }
+
+    #[test]
+    fn version_five_elements_migrate_to_zero_rotation() {
+        let json = r#"{
+            "version": 5,
+            "nodes": [{"id": 1, "position": {"x": 0.0, "y": 0.0}}],
+            "edges": [{"id": 2}]
+        }"#;
+
+        let document = FlowDocument::from_json(json).expect("version five migrates");
+
+        assert_eq!(document.nodes[0].angle, 0.0);
+        assert_eq!(document.edges[0].angle, 0.0);
+    }
+
+    #[test]
+    fn rotation_round_trips_for_nodes_and_edges() {
+        let mut original = document();
+        original.nodes[0].angle = 0.75;
+        original.edges[0].angle = -1.25;
+
+        let loaded = FlowDocument::from_json(&original.to_json().unwrap()).unwrap();
+
+        assert_eq!(loaded.nodes[0].angle, 0.75);
+        assert_eq!(loaded.edges[0].angle, -1.25);
+    }
+
+    #[test]
+    fn groups_and_edge_parents_round_trip() {
+        let mut original = FlowDocument::new();
+        let group = original.add_node(ElementKind::Group, Vec2::ZERO, Vec2::ZERO);
+        let child = original.add_node(
+            ElementKind::Shape(ShapeKind::Rectangle),
+            Vec2::new(10.0, 20.0),
+            Vec2::new(100.0, 50.0),
+        );
+        original.node_mut(child).unwrap().parent = Some(group);
+        let edge = original.add_edge(Endpoint::node(child), Endpoint::node(child));
+        original
+            .edges
+            .iter_mut()
+            .find(|item| item.id == edge)
+            .unwrap()
+            .parent = Some(group);
+
+        let loaded = FlowDocument::from_json(&original.to_json().unwrap()).unwrap();
+
+        assert_eq!(loaded, original);
     }
 
     #[test]

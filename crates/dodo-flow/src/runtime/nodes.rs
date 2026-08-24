@@ -9,7 +9,7 @@
 //! paint loop touches**:
 //!
 //! ```text
-//! hot   positions  sizes  shapes  flags      one indexed load each, per visible node
+//! hot   positions  sizes  angles  shapes  flags  one indexed load each, per visible node
 //! warm  ids  z  handles  styles              read per painted node, not per node
 //! cold  kind  label  parent                  read on load, on save, by the registry
 //! ```
@@ -255,6 +255,7 @@ pub struct NodeSpec {
     pub kind: ElementKind,
     pub position: Vec2,
     pub size: Vec2,
+    pub angle: f32,
     pub z: i32,
     pub style: ElementStyle,
     pub label: Option<String>,
@@ -280,6 +281,7 @@ impl NodeSpec {
             kind,
             position,
             size,
+            angle: 0.0,
             z: 0,
             style: ElementStyle::default(),
             label: None,
@@ -299,6 +301,7 @@ pub struct NodeStore {
     // ---- hot ----
     positions: Vec<Vec2>,
     sizes: Vec<Vec2>,
+    angles: Vec<f32>,
     shapes: Vec<NodeShape>,
     flags: Vec<NodeFlags>,
 
@@ -365,6 +368,7 @@ impl NodeStore {
     pub fn reserve(&mut self, additional: usize) {
         self.positions.reserve(additional);
         self.sizes.reserve(additional);
+        self.angles.reserve(additional);
         self.shapes.reserve(additional);
         self.flags.reserve(additional);
         self.versions.reserve(additional);
@@ -385,6 +389,7 @@ impl NodeStore {
 
         self.positions.push(bounds.origin);
         self.sizes.push(bounds.size);
+        self.angles.push(spec.angle);
         self.shapes.push(NodeShape::of(&spec.kind));
         let mut flags = NodeFlags::NONE;
         if spec.hidden {
@@ -428,6 +433,15 @@ impl NodeStore {
     /// what Phase 4's spatial index will store.
     pub fn bounds(&self, node: NodeIndex) -> Rect {
         Rect::new(self.positions[node.index()], self.sizes[node.index()])
+    }
+
+    /// The axis-aligned culling/hit broad-phase bound after rotation.
+    pub fn rotated_bounds(&self, node: NodeIndex) -> Rect {
+        self.bounds(node).rotated_bound(self.angle(node))
+    }
+
+    pub fn angle(&self, node: NodeIndex) -> f32 {
+        self.angles[node.index()]
     }
 
     pub fn shape(&self, node: NodeIndex) -> NodeShape {
@@ -494,6 +508,10 @@ impl NodeStore {
         &self.sizes
     }
 
+    pub fn angles(&self) -> &[f32] {
+        &self.angles
+    }
+
     // ---- warm and cold reads --------------------------------------------
 
     pub fn id(&self, node: NodeIndex) -> ElementId {
@@ -552,6 +570,11 @@ impl NodeStore {
         self.touch_text(node);
     }
 
+    pub fn set_angle(&mut self, node: NodeIndex, angle: f32) {
+        self.angles[node.index()] = angle;
+        self.touch(node);
+    }
+
     pub fn set_style(&mut self, node: NodeIndex, style: ElementStyle) {
         self.styles[node.index()] = style;
         self.touch(node);
@@ -582,6 +605,11 @@ impl NodeStore {
         self.cold[node.index()].label = label.map(Arc::from);
         self.touch(node);
         self.touch_text(node);
+    }
+
+    pub fn set_parent(&mut self, node: NodeIndex, parent: Option<ElementId>) {
+        self.cold[node.index()].parent = parent;
+        self.touch(node);
     }
 
     /// **The node's place in the paint order.**

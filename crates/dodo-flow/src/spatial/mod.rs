@@ -14,6 +14,14 @@
 //! - [`index`] — [`SpatialIndex`] and [`VisibleSet`], the typed layer that
 //!   knows about nodes and edges and about *painted* bounds.
 //!
+//! # Rotation keeps the index axis-aligned
+//!
+//! The grid still stores axis-aligned rectangles. A rotated element is inserted
+//! under the axis-aligned bound of its four rotated corners, never under its
+//! unrotated rectangle: otherwise a corner can be visible at a viewport edge
+//! while the broad phase says the element is absent. Rotation changes the input
+//! bound, not the index or its query complexity.
+//!
 //! # The measured numbers
 //!
 //! Measured on an **Apple M1 laptop, release profile, 2026-08-19**, in a

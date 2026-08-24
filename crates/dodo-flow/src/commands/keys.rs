@@ -83,6 +83,8 @@ pub enum EditAction {
     /// binding table and a second one for one row would be a second place a
     /// keystroke collision could hide.
     InsertImage,
+    Group,
+    Ungroup,
     /// §45's tool activation. **Not an edit**, despite the type's name: picking
     /// a tool changes what the next press means and touches no document. It is
     /// here because this is the binding table, and a second table for one kind
@@ -131,6 +133,8 @@ impl EditAction {
             EditAction::Delete => "delete",
             EditAction::ToggleToolLock => "toggle-tool-lock",
             EditAction::InsertImage => "insert-image",
+            EditAction::Group => "group",
+            EditAction::Ungroup => "ungroup",
             EditAction::CommitText => "commit-text",
             EditAction::Tool(tool) => tool.name(),
         }
@@ -160,6 +164,14 @@ const MACOS: &[Binding] = &[
     Binding {
         keystroke: "cmd-enter",
         action: EditAction::CommitText,
+    },
+    Binding {
+        keystroke: "cmd-g",
+        action: EditAction::Group,
+    },
+    Binding {
+        keystroke: "cmd-shift-g",
+        action: EditAction::Ungroup,
     },
 ];
 
@@ -256,6 +268,14 @@ const PC: &[Binding] = &[
         keystroke: "ctrl-enter",
         action: EditAction::CommitText,
     },
+    Binding {
+        keystroke: "ctrl-g",
+        action: EditAction::Group,
+    },
+    Binding {
+        keystroke: "ctrl-shift-g",
+        action: EditAction::Ungroup,
+    },
 ];
 
 /// **The canvas's default bindings on a given host.** A total function, so the
@@ -310,6 +330,24 @@ mod tests {
 
     /// A keystroke bound to two different actions is a binding the user cannot
     /// predict; whichever one GPUI resolves, the other looks broken.
+    #[test]
+    fn every_host_uses_its_platform_modifier_for_grouping() {
+        for (host, modifier) in [
+            (HostOs::MacOs, "cmd"),
+            (HostOs::Windows, "ctrl"),
+            (HostOs::Unix, "ctrl"),
+        ] {
+            let bindings = for_host(host);
+            assert!(bindings.iter().any(|binding| {
+                binding.action == EditAction::Group && binding.keystroke == format!("{modifier}-g")
+            }));
+            assert!(bindings.iter().any(|binding| {
+                binding.action == EditAction::Ungroup
+                    && binding.keystroke == format!("{modifier}-shift-g")
+            }));
+        }
+    }
+
     #[test]
     fn no_keystroke_is_bound_to_two_actions() {
         for host in EVERY_HOST {

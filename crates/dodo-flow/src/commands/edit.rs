@@ -22,13 +22,10 @@
 //! §30's list is `AddElements`, `RemoveElements`, `MoveElements`,
 //! `ResizeElements`, `RotateElements`, `UpdateStyle`, `Connect`, `Disconnect`,
 //! `EditText`, `Group`, `Ungroup`. Everything on it that the engine can perform
-//! today is here. Three are **not**, and are left out rather than stubbed:
+//! today is here. Rotation joined once every element had an angle and every
+//! geometry consumer could apply it. Two are still left out rather than
+//! stubbed:
 //!
-//! - **`Rotate`** — nothing in the engine has an angle. A node is a
-//!   [`Rect`](crate::geometry::Rect), the hit test is a rectangle containment,
-//!   the spatial bounds are axis-aligned, and rotation is on the plan's
-//!   deferred list. A `RotateElements` variant would be a variant nobody could
-//!   apply.
 //! - **`Group` / `Ungroup`** — [`NodeCold::parent`](crate::runtime::NodeCold)
 //!   records the relationship and nothing resolves it; §11's hierarchy is a
 //!   later cycle. Groups as a user-facing feature are explicitly deferred.
@@ -136,6 +133,33 @@ pub enum EditCommand {
 
     /// §30's `ResizeElements`, as the size each node should end up with.
     ResizeNodes(Vec<(NodeIndex, Vec2)>),
+
+    /// §30's `RotateElements`, in counter-clockwise radians.
+    ///
+    /// Its inverse is this command with the negative delta. Consecutive ticks
+    /// over the same members merge by summing, so a drag occupies one history
+    /// entry rather than one per pointer move.
+    RotateElements {
+        nodes: Vec<NodeIndex>,
+        edges: Vec<EdgeIndex>,
+        delta: f32,
+    },
+
+    /// Reparents these elements under an existing group slot. The slot is
+    /// restored when this is the inverse of [`Ungroup`](EditCommand::Ungroup).
+    Group {
+        group: NodeIndex,
+        nodes: Vec<NodeIndex>,
+        edges: Vec<EdgeIndex>,
+    },
+
+    /// Peels one group level, restoring each direct member's requested parent,
+    /// then tombstones the group. Its inverse is [`Group`](EditCommand::Group).
+    Ungroup {
+        group: NodeIndex,
+        nodes: Vec<(NodeIndex, Option<crate::models::ElementId>)>,
+        edges: Vec<(EdgeIndex, Option<crate::models::ElementId>)>,
+    },
 
     /// Ordered straight-connector geometry and semantic endpoint bindings.
     /// Absolute so endpoint drags coalesce to the latest geometry while undo
@@ -285,6 +309,9 @@ impl EditCommand {
             EditCommand::MoveNodes { .. } => "move-nodes",
             EditCommand::SetNodePositions(_) => "place-nodes",
             EditCommand::ResizeNodes(_) => "resize-nodes",
+            EditCommand::RotateElements { .. } => "rotate-elements",
+            EditCommand::Group { .. } => "group",
+            EditCommand::Ungroup { .. } => "ungroup",
             EditCommand::SetNodeConnectors(_) => "connectors",
             EditCommand::SetNodeStyles(_) => "style-nodes",
             EditCommand::SetEdgeStyles(_) => "style-edges",
@@ -313,6 +340,13 @@ impl EditCommand {
             }
             EditCommand::SetNodePositions(items) => items.is_empty(),
             EditCommand::ResizeNodes(items) => items.is_empty(),
+            EditCommand::RotateElements {
+                nodes,
+                edges,
+                delta,
+            } => (nodes.is_empty() && edges.is_empty()) || *delta == 0.0,
+            EditCommand::Group { nodes, edges, .. } => nodes.is_empty() && edges.is_empty(),
+            EditCommand::Ungroup { nodes, edges, .. } => nodes.is_empty() && edges.is_empty(),
             EditCommand::SetNodeConnectors(items) => items.is_empty(),
             EditCommand::SetNodeStyles(items) => items.is_empty(),
             EditCommand::SetEdgeStyles(items) => items.is_empty(),
@@ -365,6 +399,21 @@ impl EditCommand {
             {
                 // Deliberately a no-op on the payload: the earliest recorded
                 // position is the one the whole gesture undoes to.
+                true
+            }
+            (
+                EditCommand::RotateElements {
+                    nodes,
+                    edges,
+                    delta,
+                },
+                EditCommand::RotateElements {
+                    nodes: next_nodes,
+                    edges: next_edges,
+                    delta: next_delta,
+                },
+            ) if nodes == next_nodes && edges == next_edges => {
+                *delta += *next_delta;
                 true
             }
             _ => false,
@@ -558,6 +607,34 @@ mod tests {
             "if this ever holds, the float model changed, not the design"
         );
         assert!((walked - 120.0 - start).abs() < 1e-5);
+    }
+
+    #[test]
+    fn rotate_ticks_merge_only_for_the_same_elements() {
+        let node = NodeIndex::new(0);
+        let mut first = EditCommand::RotateElements {
+            nodes: vec![node],
+            edges: Vec::new(),
+            delta: 0.1,
+        };
+        assert!(first.merge(&EditCommand::RotateElements {
+            nodes: vec![node],
+            edges: Vec::new(),
+            delta: 0.2,
+        }));
+        assert_eq!(
+            first,
+            EditCommand::RotateElements {
+                nodes: vec![node],
+                edges: Vec::new(),
+                delta: 0.3,
+            }
+        );
+        assert!(!first.merge(&EditCommand::RotateElements {
+            nodes: vec![NodeIndex::new(1)],
+            edges: Vec::new(),
+            delta: 0.1,
+        }));
     }
 
     #[test]

@@ -141,6 +141,8 @@ pub struct EdgeSpec {
     pub style: ElementStyle,
     pub label: Option<String>,
     pub link: Option<String>,
+    pub angle: f32,
+    pub parent: Option<ElementId>,
     pub z: i32,
     pub hidden: bool,
 }
@@ -155,6 +157,8 @@ impl EdgeSpec {
             style: ElementStyle::default(),
             label: None,
             link: None,
+            angle: 0.0,
+            parent: None,
             z: 0,
             hidden: false,
         }
@@ -183,6 +187,7 @@ pub struct EdgeStore {
     // ---- warm ----
     ids: Vec<ElementId>,
     z: Vec<i32>,
+    angles: Vec<f32>,
     styles: Vec<ElementStyle>,
 
     // ---- cold ----
@@ -197,6 +202,7 @@ pub struct EdgeStore {
     /// reason [`NodeCold::link`](crate::runtime::NodeCold::link) gives: nothing
     /// per frame carries a clone of it.
     links: Vec<Option<String>>,
+    parents: Vec<Option<ElementId>>,
 }
 
 impl EdgeStore {
@@ -230,9 +236,11 @@ impl EdgeStore {
         self.flags.reserve(additional);
         self.ids.reserve(additional);
         self.z.reserve(additional);
+        self.angles.reserve(additional);
         self.styles.reserve(additional);
         self.labels.reserve(additional);
         self.links.reserve(additional);
+        self.parents.reserve(additional);
     }
 
     pub fn push(&mut self, spec: EdgeSpec) -> EdgeIndex {
@@ -249,9 +257,11 @@ impl EdgeStore {
 
         self.ids.push(spec.id);
         self.z.push(spec.z);
+        self.angles.push(spec.angle);
         self.styles.push(spec.style);
         self.labels.push(spec.label.map(Arc::from));
         self.links.push(spec.link);
+        self.parents.push(spec.parent);
 
         index
     }
@@ -309,6 +319,14 @@ impl EdgeStore {
         &self.styles[edge.index()]
     }
 
+    pub fn angle(&self, edge: EdgeIndex) -> f32 {
+        self.angles[edge.index()]
+    }
+
+    pub fn parent(&self, edge: EdgeIndex) -> Option<ElementId> {
+        self.parents[edge.index()]
+    }
+
     /// The edge's label (§9), or `None`.
     ///
     /// Returns the `Arc` rather than a `&str` because the paint loop clones it
@@ -345,6 +363,14 @@ impl EdgeStore {
 
     pub fn set_style(&mut self, edge: EdgeIndex, style: ElementStyle) {
         self.styles[edge.index()] = style;
+    }
+
+    pub fn set_angle(&mut self, edge: EdgeIndex, angle: f32) {
+        self.angles[edge.index()] = angle;
+    }
+
+    pub fn set_parent(&mut self, edge: EdgeIndex, parent: Option<ElementId>) {
+        self.parents[edge.index()] = parent;
     }
 
     /// **The edge's place in the paint order.** See

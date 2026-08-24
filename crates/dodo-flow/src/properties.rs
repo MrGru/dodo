@@ -25,7 +25,16 @@
 //! | Vertical align | — | ● | — | ● | ● | — |
 //! | Opacity | ● | ● | ● | ● | ● | ● |
 //! | Layers | ● | ● | ● | ● | ● | ● |
+//! | Align¹ | — | — | — | — | — | — |
 //! | Actions | ● | ● | ● | ● | ● | ● |
+//!
+//! ¹ Align is selection-contextual rather than kind-contextual: it is inserted
+//! between Layers and Actions for two or more loose elements, or for a selected
+//! group whose direct children are its subjects. Two subjects show the six
+//! alignment controls; three or more add distribution as a third row. The two
+//! distribution controls are **absent**, not muted, at two — count-dependent
+//! controls are ordinary contextual behaviour, unlike Sloppiness being disabled
+//! by a document setting.
 //!
 //! So a node gets Background, Fill and a corner style; an edge gets Arrow type
 //! and Arrowheads instead; text gets the four text rows and nothing about
@@ -384,6 +393,9 @@ pub enum PanelSection {
     Opacity,
     /// The four depth buttons.
     Layers,
+    /// Six alignment controls and, for three or more subjects, two distribute
+    /// controls. Inserted contextually by [`sections_for`].
+    Align,
     /// Duplicate, delete, link — and, on an edge, edit points.
     Actions,
 }
@@ -408,6 +420,7 @@ impl PanelSection {
             PanelSection::VerticalAlignRow => "vertical-align",
             PanelSection::Opacity => "opacity",
             PanelSection::Layers => "layers",
+            PanelSection::Align => "align",
             PanelSection::Actions => "actions",
         }
     }
@@ -431,12 +444,20 @@ pub fn sections_for(items: &[SelectionItem]) -> Vec<PanelSection> {
         return Vec::new();
     };
 
-    first
+    let mut sections: Vec<PanelSection> = first
         .sections()
         .iter()
         .copied()
         .filter(|section| rest.iter().all(|item| item.sections().contains(section)))
-        .collect()
+        .collect();
+    if items.len() >= 2
+        && let Some(actions) = sections
+            .iter()
+            .position(|section| *section == PanelSection::Actions)
+    {
+        sections.insert(actions, PanelSection::Align);
+    }
+    sections
 }
 
 /// **What is selected, read off a world** — the step between §28's selection
@@ -454,30 +475,58 @@ pub fn sections_for(items: &[SelectionItem]) -> Vec<PanelSection> {
 /// a panel that offered to restyle one would be offering to edit what nobody
 /// can see.
 pub fn selection_items(world: &crate::runtime::GraphWorld) -> Vec<SelectionItem> {
-    let selection = world.selection();
-    selection
-        .nodes()
-        .iter()
-        .filter(|&&node| world.node_is_live(node))
-        .map(|&node| {
-            SelectionItem::new(
-                SelectionKind::of_kind(world.nodes().kind(node)),
-                Labelled::of(world.nodes().cold(node).label.as_deref()),
-            )
-        })
-        .chain(
-            selection
-                .edges()
-                .iter()
-                .filter(|&&edge| world.edge_is_live(edge))
-                .map(|&edge| {
-                    SelectionItem::new(
-                        SelectionKind::Edge,
-                        Labelled::of(world.edges().label(edge).map(|it| it.as_ref())),
-                    )
-                }),
-        )
-        .collect()
+    let mut items = Vec::new();
+    let mut add_node = |node| {
+        items.push(SelectionItem::new(
+            SelectionKind::of_kind(world.nodes().kind(node)),
+            Labelled::of(world.nodes().cold(node).label.as_deref()),
+        ));
+    };
+
+    for &node in world.selection().nodes() {
+        if !world.node_is_live(node) {
+            continue;
+        }
+        if matches!(world.nodes().kind(node), ElementKind::Group) {
+            for child in world.descendants(node) {
+                if !matches!(world.nodes().kind(child), ElementKind::Group) {
+                    add_node(child);
+                }
+            }
+        } else {
+            add_node(node);
+        }
+    }
+    for &edge in world.selection().edges() {
+        if world.edge_is_live(edge) {
+            items.push(SelectionItem::new(
+                SelectionKind::Edge,
+                Labelled::of(world.edges().label(edge).map(|it| it.as_ref())),
+            ));
+        }
+    }
+    for &group in world.selection().nodes() {
+        if !world.node_is_live(group) || !matches!(world.nodes().kind(group), ElementKind::Group) {
+            continue;
+        }
+        let mut groups = vec![group];
+        groups.extend(
+            world
+                .descendants(group)
+                .into_iter()
+                .filter(|node| matches!(world.nodes().kind(*node), ElementKind::Group)),
+        );
+        for edge in groups
+            .into_iter()
+            .flat_map(|group| world.child_edges(group).iter().copied())
+        {
+            items.push(SelectionItem::new(
+                SelectionKind::Edge,
+                Labelled::of(world.edges().label(edge).map(|it| it.as_ref())),
+            ));
+        }
+    }
+    items
 }
 
 /// Whether a control can be used, and — when it cannot — the reason, so the
@@ -506,6 +555,61 @@ impl Availability {
             Availability::Live
         } else {
             Availability::NeedsSketchMode
+        }
+    }
+}
+
+/// One of the align section's controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Alignment {
+    Left,
+    HorizontalCenter,
+    Right,
+    Top,
+    VerticalMiddle,
+    Bottom,
+    DistributeHorizontal,
+    DistributeVertical,
+}
+
+impl Alignment {
+    pub const SIX: &'static [Alignment] = &[
+        Alignment::Left,
+        Alignment::HorizontalCenter,
+        Alignment::Right,
+        Alignment::Top,
+        Alignment::VerticalMiddle,
+        Alignment::Bottom,
+    ];
+    pub const EIGHT: &'static [Alignment] = &[
+        Alignment::Left,
+        Alignment::HorizontalCenter,
+        Alignment::Right,
+        Alignment::Top,
+        Alignment::VerticalMiddle,
+        Alignment::Bottom,
+        Alignment::DistributeHorizontal,
+        Alignment::DistributeVertical,
+    ];
+
+    pub fn for_count(count: usize) -> &'static [Alignment] {
+        if count >= 3 {
+            Alignment::EIGHT
+        } else {
+            Alignment::SIX
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Alignment::Left => "align-left",
+            Alignment::HorizontalCenter => "align-horizontal-center",
+            Alignment::Right => "align-right",
+            Alignment::Top => "align-top",
+            Alignment::VerticalMiddle => "align-vertical-middle",
+            Alignment::Bottom => "align-bottom",
+            Alignment::DistributeHorizontal => "distribute-horizontal",
+            Alignment::DistributeVertical => "distribute-vertical",
         }
     }
 }
@@ -751,6 +855,8 @@ pub enum ElementAction {
     Duplicate,
     /// **Phase 9's**, reused rather than rewritten.
     Delete,
+    Group,
+    Ungroup,
     /// Set, change or clear the element's hyperlink.
     Link,
     /// An edge only: edit the route's waypoints. **Deferred** — see
@@ -790,10 +896,36 @@ impl ElementAction {
         }
     }
 
+    /// The captain's contextual third action: Group for a loose multi-
+    /// selection, Ungroup for a selected group, Link otherwise.
+    pub fn for_selection(
+        kind: SelectionKind,
+        loose_multi: bool,
+        grouped: bool,
+    ) -> &'static [ElementAction] {
+        if grouped {
+            &[
+                ElementAction::Duplicate,
+                ElementAction::Delete,
+                ElementAction::Ungroup,
+            ]
+        } else if loose_multi {
+            &[
+                ElementAction::Duplicate,
+                ElementAction::Delete,
+                ElementAction::Group,
+            ]
+        } else {
+            ElementAction::for_kind(kind)
+        }
+    }
+
     pub const fn name(self) -> &'static str {
         match self {
             ElementAction::Duplicate => "duplicate",
             ElementAction::Delete => "delete",
+            ElementAction::Group => "group",
+            ElementAction::Ungroup => "ungroup",
             ElementAction::Link => "link",
             ElementAction::EditPoints => "edit-points",
             ElementAction::Crop => "crop",
@@ -1225,6 +1357,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn align_is_contextual_between_layers_and_actions_and_distribution_starts_at_three() {
+        let node = SelectionItem::new(SelectionKind::Node, Labelled::No);
+        assert!(!sections_for(&[node]).contains(&PanelSection::Align));
+        let two = sections_for(&[node, node]);
+        let align = two
+            .iter()
+            .position(|section| *section == PanelSection::Align)
+            .unwrap();
+        assert_eq!(two[align - 1], PanelSection::Layers);
+        assert_eq!(two[align + 1], PanelSection::Actions);
+
+        assert_eq!(Alignment::for_count(2), Alignment::SIX);
+        assert_eq!(Alignment::for_count(3), Alignment::EIGHT);
+        assert!(!Alignment::for_count(2).contains(&Alignment::DistributeHorizontal));
+        assert!(Alignment::for_count(3).contains(&Alignment::DistributeHorizontal));
+    }
+
     /// Decision 1: a control that applies to half of what is selected is worse
     /// than a control that is not there.
     #[test]
@@ -1237,6 +1387,7 @@ mod tests {
                 PanelSection::Stroke,
                 PanelSection::Opacity,
                 PanelSection::Layers,
+                PanelSection::Align,
                 PanelSection::Actions
             ]
         );
@@ -1246,6 +1397,7 @@ mod tests {
                 PanelSection::Corners,
                 PanelSection::Opacity,
                 PanelSection::Layers,
+                PanelSection::Align,
                 PanelSection::Actions
             ]
         );
@@ -1264,18 +1416,21 @@ mod tests {
         let labelled = SelectionItem::new(SelectionKind::Node, Labelled::Yes);
         let bare = SelectionItem::new(SelectionKind::Node, Labelled::No);
 
-        assert_eq!(
-            sections_for(&[labelled, bare]),
-            SelectionKind::Node.sections(Labelled::No).to_vec()
-        );
+        let with_align = |labelled| {
+            let mut sections = SelectionKind::Node.sections(labelled).to_vec();
+            let actions = sections.len() - 1;
+            sections.insert(actions, PanelSection::Align);
+            sections
+        };
+        assert_eq!(sections_for(&[labelled, bare]), with_align(Labelled::No));
         assert_eq!(
             sections_for(&[bare, labelled]),
-            SelectionKind::Node.sections(Labelled::No).to_vec(),
+            with_align(Labelled::No),
             "and the order of the selection must not change the answer"
         );
         assert_eq!(
             sections_for(&[labelled, labelled]),
-            SelectionKind::Node.sections(Labelled::Yes).to_vec()
+            with_align(Labelled::Yes)
         );
 
         // A labelled shape beside a labelled edge keeps the text rows: they are
@@ -1478,6 +1633,26 @@ mod tests {
 
     /// **The image row's fourth button**, stated on its own: Crop is an image's
     /// and nobody else's, and the three every panel has are still there.
+    #[test]
+    fn the_actions_third_button_is_contextual_group_or_ungroup() {
+        assert_eq!(
+            ElementAction::for_selection(SelectionKind::Node, true, false),
+            &[
+                ElementAction::Duplicate,
+                ElementAction::Delete,
+                ElementAction::Group,
+            ],
+        );
+        assert_eq!(
+            ElementAction::for_selection(SelectionKind::Node, false, true),
+            &[
+                ElementAction::Duplicate,
+                ElementAction::Delete,
+                ElementAction::Ungroup,
+            ],
+        );
+    }
+
     #[test]
     fn only_an_image_offers_crop() {
         assert_eq!(

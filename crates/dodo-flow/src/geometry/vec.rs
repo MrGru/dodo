@@ -68,6 +68,17 @@ impl Vec2 {
         self.x * self.x + self.y * self.y
     }
 
+    /// Rotates this vector counter-clockwise by `angle` radians.
+    pub fn rotated(self, angle: f32) -> Vec2 {
+        let (sin, cos) = angle.sin_cos();
+        Vec2::new(self.x * cos - self.y * sin, self.x * sin + self.y * cos)
+    }
+
+    /// Rotates this point counter-clockwise about `centre`.
+    pub fn rotated_about(self, centre: Vec2, angle: f32) -> Vec2 {
+        centre + (self - centre).rotated(angle)
+    }
+
     /// Every component is finite. The document format lets any `f32` through
     /// serde, so a loaded document is checked with this before it can poison a
     /// bounds union with a `NaN`.
@@ -168,5 +179,14 @@ mod tests {
         assert!(Vec2::new(1.0, 2.0).is_finite());
         assert!(!Vec2::new(f32::NAN, 0.0).is_finite());
         assert!(!Vec2::new(0.0, f32::INFINITY).is_finite());
+    }
+
+    #[test]
+    fn rotation_is_about_the_requested_centre() {
+        let point =
+            Vec2::new(12.0, 10.0).rotated_about(Vec2::new(10.0, 10.0), std::f32::consts::FRAC_PI_2);
+
+        assert!((point.x - 10.0).abs() < 1e-5, "{point:?}");
+        assert!((point.y - 12.0).abs() < 1e-5, "{point:?}");
     }
 }

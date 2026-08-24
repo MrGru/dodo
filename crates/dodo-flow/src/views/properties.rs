@@ -64,9 +64,9 @@ use crate::{
         Sloppiness, TextAlign, VerticalAlign,
     },
     properties::{
-        ArrowEnd, ArrowKind, Availability, BACKGROUND_SWATCHES, ControlState, CornerStyle,
-        CropChoice, ElementAction, PanelSection, STROKE_SWATCHES, StrokeDashStep, StrokeWidthStep,
-        hex,
+        Alignment, ArrowEnd, ArrowKind, Availability, BACKGROUND_SWATCHES, ControlState,
+        CornerStyle, CropChoice, ElementAction, PanelSection, STROKE_SWATCHES, StrokeDashStep,
+        StrokeWidthStep, hex,
     },
     render::{
         hatch,
@@ -157,6 +157,8 @@ pub struct PanelState {
     /// nothing else does — and deciding that in a `render` is precisely what
     /// `crate::properties` exists to prevent.
     pub actions: &'static [ElementAction],
+    /// Direct alignment subjects; six buttons at two, eight at three or more.
+    pub align_count: usize,
 }
 
 impl PanelState {
@@ -459,6 +461,7 @@ fn row(
             view,
             cx,
         ),
+        PanelSection::Align => align_row(state.align_count, view, cx),
         // **The one row whose button list depends on the selection's kind**
         // (Phase 12): an image gets a fourth, Crop. The list is
         // `ElementAction::for_kind`'s and is not restated here, for the reason
@@ -476,6 +479,8 @@ fn row(
                             (flow::Text::ActionDuplicate, Availability::Live)
                         }
                         ElementAction::Delete => (flow::Text::Delete, Availability::Live),
+                        ElementAction::Group => (flow::Text::ActionGroup, Availability::Live),
+                        ElementAction::Ungroup => (flow::Text::ActionUngroup, Availability::Live),
                         // Two labels and a muted third state, all from one
                         // pure answer — see `properties::crop_choice`.
                         ElementAction::Crop => match crop {
@@ -547,6 +552,7 @@ fn label_for(section: PanelSection) -> Option<flow::Text> {
         PanelSection::VerticalAlignRow => return None,
         PanelSection::Opacity => flow::Text::SectionOpacity,
         PanelSection::Layers => flow::Text::SectionLayers,
+        PanelSection::Align => flow::Text::SectionAlign,
         PanelSection::Actions => flow::Text::SectionActions,
     })
 }
@@ -584,6 +590,7 @@ pub enum Change {
     /// A whole-number percent, `0..=100`.
     Opacity(u8),
     Layer(LayerAction),
+    Arrange(Alignment),
     Action(ElementAction),
     /// Open one of the two single-line editors.
     Prompt(PromptKind),
@@ -638,7 +645,11 @@ impl Change {
             Change::Opacity(percent) => Some(Box::new(move |style: &mut ElementStyle| {
                 style.opacity = crate::properties::opacity_of(*percent)
             })),
-            Change::Arrow(_) | Change::Layer(_) | Change::Action(_) | Change::Prompt(_) => None,
+            Change::Arrow(_)
+            | Change::Layer(_)
+            | Change::Arrange(_)
+            | Change::Action(_)
+            | Change::Prompt(_) => None,
         }
     }
 }
@@ -674,6 +685,42 @@ fn choices<T>(
                 view.clone(),
                 cx,
             )
+        }))
+        .into_any_element()
+}
+
+fn align_row(count: usize, view: Entity<FlowView>, cx: &App) -> gpui::AnyElement {
+    let label = |alignment| match alignment {
+        Alignment::Left => flow::Text::ElementsAlignLeft,
+        Alignment::HorizontalCenter => flow::Text::ElementsAlignHorizontalCenter,
+        Alignment::Right => flow::Text::ElementsAlignRight,
+        Alignment::Top => flow::Text::ElementsAlignTop,
+        Alignment::VerticalMiddle => flow::Text::ElementsAlignVerticalMiddle,
+        Alignment::Bottom => flow::Text::ElementsAlignBottom,
+        Alignment::DistributeHorizontal => flow::Text::ElementsDistributeHorizontal,
+        Alignment::DistributeVertical => flow::Text::ElementsDistributeVertical,
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .children(Alignment::for_count(count).chunks(3).map(|row| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .children(row.iter().map(|alignment| {
+                    button(
+                        PanelGlyph::Arrange(*alignment),
+                        false,
+                        Availability::Live,
+                        label(*alignment),
+                        Change::Arrange(*alignment),
+                        view.clone(),
+                        cx,
+                    )
+                }))
         }))
         .into_any_element()
 }
@@ -970,6 +1017,7 @@ pub enum PanelGlyph {
     Align(TextAlign),
     VerticalAlign(VerticalAlign),
     Layer(LayerAction),
+    Arrange(Alignment),
     Action(ElementAction),
 }
 
@@ -988,6 +1036,7 @@ impl PanelGlyph {
             PanelGlyph::Align(it) => format!("align-{}", it.name()),
             PanelGlyph::VerticalAlign(it) => format!("align-{}", it.name()),
             PanelGlyph::Layer(it) => it.name().to_owned(),
+            PanelGlyph::Arrange(it) => format!("elements-{}", it.name()),
             PanelGlyph::Action(it) => format!("action-{}", it.name()),
         }
     }
@@ -1013,6 +1062,7 @@ impl PanelGlyph {
                     .map(|it| PanelGlyph::VerticalAlign(*it)),
             )
             .chain(LayerAction::ALL.iter().map(|it| PanelGlyph::Layer(*it)))
+            .chain(Alignment::EIGHT.iter().map(|it| PanelGlyph::Arrange(*it)))
             .chain(
                 ElementAction::for_kind(crate::properties::SelectionKind::Node)
                     .iter()
@@ -1270,6 +1320,61 @@ fn strokes(glyph: PanelGlyph, box_: Rect, ink: Color) -> Vec<(Outline, PathPaint
             vec![(marks, stroke(1.8))]
         }
 
+        PanelGlyph::Arrange(alignment) => {
+            let mut marks = Outline::with_capacity(12);
+            match alignment {
+                Alignment::Left | Alignment::HorizontalCenter | Alignment::Right => {
+                    let x = match alignment {
+                        Alignment::Left => 0.08,
+                        Alignment::HorizontalCenter => 0.5,
+                        Alignment::Right => 0.92,
+                        _ => unreachable!(),
+                    };
+                    marks.move_to(at(x, 0.0)).line_to(at(x, 1.0));
+                    for (y, length) in [(0.28, 0.58), (0.72, 0.78)] {
+                        let from = match alignment {
+                            Alignment::Left => x,
+                            Alignment::HorizontalCenter => x - length * 0.5,
+                            Alignment::Right => x - length,
+                            _ => unreachable!(),
+                        };
+                        marks.move_to(at(from, y)).line_to(at(from + length, y));
+                    }
+                }
+                Alignment::Top | Alignment::VerticalMiddle | Alignment::Bottom => {
+                    let y = match alignment {
+                        Alignment::Top => 0.08,
+                        Alignment::VerticalMiddle => 0.5,
+                        Alignment::Bottom => 0.92,
+                        _ => unreachable!(),
+                    };
+                    marks.move_to(at(0.0, y)).line_to(at(1.0, y));
+                    for (x, length) in [(0.3, 0.58), (0.7, 0.78)] {
+                        let from = match alignment {
+                            Alignment::Top => y,
+                            Alignment::VerticalMiddle => y - length * 0.5,
+                            Alignment::Bottom => y - length,
+                            _ => unreachable!(),
+                        };
+                        marks.move_to(at(x, from)).line_to(at(x, from + length));
+                    }
+                }
+                Alignment::DistributeHorizontal => {
+                    marks.move_to(at(0.05, 0.15)).line_to(at(0.05, 0.85));
+                    marks.move_to(at(0.5, 0.15)).line_to(at(0.5, 0.85));
+                    marks.move_to(at(0.95, 0.15)).line_to(at(0.95, 0.85));
+                    marks.move_to(at(0.05, 0.5)).line_to(at(0.95, 0.5));
+                }
+                Alignment::DistributeVertical => {
+                    marks.move_to(at(0.15, 0.05)).line_to(at(0.85, 0.05));
+                    marks.move_to(at(0.15, 0.5)).line_to(at(0.85, 0.5));
+                    marks.move_to(at(0.15, 0.95)).line_to(at(0.85, 0.95));
+                    marks.move_to(at(0.5, 0.05)).line_to(at(0.5, 0.95));
+                }
+            }
+            vec![(marks, stroke(1.6))]
+        }
+
         // An arrow, plus a bar at the end it travels to for the two that go all
         // the way. The bar is what tells "to back" from "backward" at 16 px.
         PanelGlyph::Layer(action) => {
@@ -1309,6 +1414,19 @@ fn strokes(glyph: PanelGlyph, box_: Rect, ink: Color) -> Vec<(Outline, PathPaint
             ElementAction::Delete => palette::trash_glyph(box_)
                 .map(|outline| (outline, thin))
                 .collect(),
+            ElementAction::Group | ElementAction::Ungroup => {
+                let inset = if action == ElementAction::Group {
+                    0.08
+                } else {
+                    0.0
+                };
+                let first = Rect::new(at(inset, inset), s * 0.42);
+                let second = Rect::new(at(0.58 - inset, 0.58 - inset), s * 0.42);
+                vec![
+                    (shapes::rectangle(first), thin),
+                    (shapes::rectangle(second), thin),
+                ]
+            }
             // A chain of two links: two rounded ends and the bar between them.
             _ => {
                 let mut chain = Outline::with_capacity(10);

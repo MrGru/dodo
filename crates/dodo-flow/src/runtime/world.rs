@@ -39,9 +39,12 @@
 //! - **No spatial index.** [`DirtyState::spatial_updates`] collects what Phase
 //!   4's uniform grid will consume. `hit_test` takes its candidates as an
 //!   argument for the same reason — see [`crate::runtime::hit`].
-//! - **No hierarchy index.** §11's frames and groups move their children;
-//!   [`NodeCold::parent`](crate::runtime::NodeCold::parent) records the
-//!   relationship and nothing resolves it yet.
+//! - **Hierarchy is derived, not duplicated in the document.**
+//!   [`NodeCold::parent`](crate::runtime::NodeCold::parent) remains the
+//!   authority; the two parent-to-child maps below are rebuilt on load and kept
+//!   current by the one parent mutator. They make descendant transforms and
+//!   ancestor bounds proportional to the hierarchy they touch rather than to
+//!   the whole document.
 //!
 //! **This file names no UI framework.**
 
@@ -86,6 +89,9 @@ pub struct LoadReport {
     /// connector, or otherwise invalid target. The endpoint is kept at its
     /// persisted point and safely detached.
     pub unresolved_connector_attachments: Vec<ElementId>,
+    /// Elements whose parent was missing, not a container, or cyclic. They are
+    /// kept at the root rather than making the whole document unloadable.
+    pub unresolved_parents: Vec<ElementId>,
 }
 
 impl LoadReport {
@@ -93,6 +99,7 @@ impl LoadReport {
         self.dangling_edges.is_empty()
             && self.unresolved_handles.is_empty()
             && self.unresolved_connector_attachments.is_empty()
+            && self.unresolved_parents.is_empty()
     }
 }
 
@@ -106,6 +113,10 @@ pub struct GraphWorld {
     /// Target node -> bound straight-connector endpoints. The connector
     /// counterpart of `adjacency`, so moving a target never scans the document.
     connector_bindings: Vec<Vec<(NodeIndex, ConnectorEnd)>>,
+    /// Derived from `NodeCold::parent`; direct children only.
+    node_children: HashMap<ElementId, Vec<NodeIndex>>,
+    /// The edge half of the same derived hierarchy.
+    edge_children: HashMap<ElementId, Vec<EdgeIndex>>,
     geometry: EdgeGeometryStore,
     dirty: DirtyState,
     rules: ConnectionRules,
@@ -199,6 +210,7 @@ impl GraphWorld {
                 kind: node.kind.clone(),
                 position: node.position,
                 size: node.size,
+                angle: node.angle,
                 z: node.z,
                 style: node.style.clone(),
                 label: node.label.clone(),
@@ -254,6 +266,8 @@ impl GraphWorld {
                 style: edge.style.clone(),
                 label: edge.label.clone(),
                 link: edge.link.clone(),
+                angle: edge.angle,
+                parent: edge.parent,
                 z: edge.z,
                 hidden: edge.hidden,
             };
@@ -268,6 +282,8 @@ impl GraphWorld {
         }
 
         world.rules = rules;
+        world.rebuild_hierarchy(&mut report);
+        world.refresh_all_group_bounds();
         world.nonzero_z = document
             .nodes
             .iter()
@@ -303,6 +319,7 @@ impl GraphWorld {
                 kind: cold.kind.clone(),
                 position: self.nodes.position(node),
                 size: self.nodes.size(node),
+                angle: self.nodes.angle(node),
                 z: self.nodes.z(node),
                 parent: cold.parent,
                 label: cold.label.as_deref().map(str::to_owned),
@@ -355,6 +372,8 @@ impl GraphWorld {
                 routing: self.edges.routing(edge),
                 label: self.edges.label(edge).map(|it| it.to_string()),
                 style: self.edges.style(edge).clone(),
+                angle: self.edges.angle(edge),
+                parent: self.edges.parent(edge),
                 link: self.edges.link(edge).map(str::to_owned),
                 z: self.edges.z(edge),
                 hidden: self.edges.is_hidden(edge),
@@ -521,6 +540,220 @@ impl GraphWorld {
         self.edge_by_id.get(&id).copied()
     }
 
+    /// The direct node children of a container, in document order.
+    pub fn children(&self, group: NodeIndex) -> &[NodeIndex] {
+        self.node_children
+            .get(&self.nodes.id(group))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The direct graph edges belonging to a container.
+    pub fn child_edges(&self, group: NodeIndex) -> &[EdgeIndex] {
+        self.edge_children
+            .get(&self.nodes.id(group))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    pub fn parent_of_node(&self, node: NodeIndex) -> Option<NodeIndex> {
+        self.nodes
+            .cold(node)
+            .parent
+            .and_then(|parent| self.node_index(parent))
+            .filter(|parent| self.node_is_live(*parent))
+    }
+
+    pub fn parent_of_edge(&self, edge: EdgeIndex) -> Option<NodeIndex> {
+        self.edges
+            .parent(edge)
+            .and_then(|parent| self.node_index(parent))
+            .filter(|parent| self.node_is_live(*parent))
+    }
+
+    /// Ancestors nearest first. Invalid/cyclic files are detached on load, so
+    /// the length guard is a backstop for hand-built test worlds only.
+    pub fn ancestors(&self, node: NodeIndex) -> Vec<NodeIndex> {
+        let mut ancestors = Vec::new();
+        let mut current = self.parent_of_node(node);
+        while let Some(parent) = current
+            && ancestors.len() < self.nodes.len()
+        {
+            ancestors.push(parent);
+            current = self.parent_of_node(parent);
+        }
+        ancestors
+    }
+
+    /// Every live node below `group`, depth-first and without the group itself.
+    pub fn descendants(&self, group: NodeIndex) -> Vec<NodeIndex> {
+        fn collect(world: &GraphWorld, group: NodeIndex, out: &mut Vec<NodeIndex>) {
+            for child in world.children(group).iter().copied() {
+                if !world.node_is_live(child) || out.contains(&child) {
+                    continue;
+                }
+                out.push(child);
+                if world.nodes.kind(child).is_container() {
+                    collect(world, child, out);
+                }
+            }
+        }
+
+        let mut descendants = Vec::new();
+        collect(self, group, &mut descendants);
+        descendants
+    }
+
+    /// The outermost group ordinary selection resolves a member to.
+    pub fn outermost_group(&self, node: NodeIndex) -> NodeIndex {
+        self.ancestors(node)
+            .into_iter()
+            .rfind(|ancestor| matches!(self.nodes.kind(*ancestor), ElementKind::Group))
+            .unwrap_or(node)
+    }
+
+    pub fn is_descendant_of(&self, node: NodeIndex, group: NodeIndex) -> bool {
+        self.ancestors(node).contains(&group)
+    }
+
+    /// Changes the authoritative parent and the derived child map together.
+    pub fn set_node_parent(&mut self, node: NodeIndex, parent: Option<ElementId>) {
+        if !self.node_is_live(node) || self.nodes.cold(node).parent == parent {
+            return;
+        }
+        let old = self.nodes.cold(node).parent;
+        if let Some(old) = old
+            && let Some(children) = self.node_children.get_mut(&old)
+        {
+            children.retain(|child| *child != node);
+        }
+        self.nodes.set_parent(node, parent);
+        if let Some(parent) = parent {
+            self.node_children.entry(parent).or_default().push(node);
+        }
+        if let Some(old) = old {
+            self.refresh_group_and_ancestors(old);
+        }
+        if let Some(parent) = parent {
+            self.refresh_group_and_ancestors(parent);
+        }
+    }
+
+    pub fn set_edge_parent(&mut self, edge: EdgeIndex, parent: Option<ElementId>) {
+        if !self.edge_is_live(edge) || self.edges.parent(edge) == parent {
+            return;
+        }
+        let old = self.edges.parent(edge);
+        if let Some(old) = old
+            && let Some(children) = self.edge_children.get_mut(&old)
+        {
+            children.retain(|child| *child != edge);
+        }
+        self.edges.set_parent(edge, parent);
+        if let Some(parent) = parent {
+            self.edge_children.entry(parent).or_default().push(edge);
+        }
+        if let Some(old) = old {
+            self.refresh_group_and_ancestors(old);
+        }
+        if let Some(parent) = parent {
+            self.refresh_group_and_ancestors(parent);
+        }
+    }
+
+    /// The group rectangle derived from its direct members' rotated bounds.
+    pub fn group_bounds(&self, group: NodeIndex) -> Option<Rect> {
+        let nodes = self
+            .children(group)
+            .iter()
+            .copied()
+            .filter(|child| self.node_is_live(*child))
+            .map(|child| self.nodes.rotated_bounds(child));
+        let edges = self.child_edges(group).iter().copied().filter_map(|edge| {
+            let route = self
+                .edge_is_live(edge)
+                .then(|| self.route(edge))
+                .flatten()?;
+            Some(route.bounds().rotated_bound(self.edges.angle(edge)))
+        });
+        Rect::of_rects(nodes.chain(edges))
+    }
+
+    fn refresh_group_and_ancestors(&mut self, mut id: ElementId) {
+        for _ in 0..self.nodes.len() {
+            let Some(group) = self.node_index(id) else {
+                break;
+            };
+            if !matches!(self.nodes.kind(group), ElementKind::Group) {
+                break;
+            }
+            if let Some(bounds) = self.group_bounds(group)
+                && self.nodes.bounds(group) != bounds
+            {
+                self.nodes.set_position(group, bounds.origin);
+                self.nodes.set_size(group, bounds.size);
+                self.dirty
+                    .mark_node(group, NodeDirty::POSITION | NodeDirty::SPATIAL);
+                self.refresh_bound_connectors(group);
+            }
+            let Some(parent) = self.nodes.cold(group).parent else {
+                break;
+            };
+            id = parent;
+        }
+    }
+
+    fn refresh_all_group_bounds(&mut self) {
+        for _ in 0..self.nodes.len() {
+            let groups: Vec<ElementId> = self
+                .nodes
+                .live_indices()
+                .filter(|node| matches!(self.nodes.kind(*node), ElementKind::Group))
+                .map(|node| self.nodes.id(node))
+                .collect();
+            for group in groups {
+                self.refresh_group_and_ancestors(group);
+            }
+        }
+    }
+
+    fn rebuild_hierarchy(&mut self, report: &mut LoadReport) {
+        self.node_children.clear();
+        self.edge_children.clear();
+
+        let nodes: Vec<NodeIndex> = self.nodes.live_indices().collect();
+        for node in nodes {
+            let Some(parent_id) = self.nodes.cold(node).parent else {
+                continue;
+            };
+            let valid = self.node_index(parent_id).is_some_and(|parent| {
+                parent != node
+                    && self.nodes.kind(parent).is_container()
+                    && !self.ancestors(parent).contains(&node)
+            });
+            if valid {
+                self.node_children.entry(parent_id).or_default().push(node);
+            } else {
+                report.unresolved_parents.push(self.nodes.id(node));
+                self.nodes.set_parent(node, None);
+            }
+        }
+
+        let edges: Vec<EdgeIndex> = self.edges.live_indices().collect();
+        for edge in edges {
+            let Some(parent_id) = self.edges.parent(edge) else {
+                continue;
+            };
+            if self
+                .node_index(parent_id)
+                .is_some_and(|parent| self.nodes.kind(parent).is_container())
+            {
+                self.edge_children.entry(parent_id).or_default().push(edge);
+            } else {
+                report.unresolved_parents.push(self.edges.id(edge));
+                self.edges.set_parent(edge, None);
+            }
+        }
+    }
+
     /// A node's handle by its document name. Walks the node's own handles —
     /// proportional to that node's handle count, never to the world's.
     pub fn handle_index(&self, node: NodeIndex, id: &HandleId) -> Option<HandleIndex> {
@@ -534,7 +767,7 @@ impl GraphWorld {
         Rect::of_rects(
             self.nodes
                 .live_indices()
-                .map(|node| self.nodes.bounds(node)),
+                .map(|node| self.nodes.rotated_bounds(node)),
         )
     }
 
@@ -543,7 +776,9 @@ impl GraphWorld {
         self.adjacency.reserve(nodes);
         self.connector_bindings.reserve(nodes);
         self.node_by_id.reserve(nodes);
+        self.node_children.reserve(nodes);
         self.edges.reserve(edges);
+        self.edge_children.reserve(edges);
         self.geometry.reserve(edges);
         self.edge_by_id.reserve(edges);
     }
@@ -567,6 +802,9 @@ impl GraphWorld {
         self.connector_bindings.push(Vec::new());
         self.dirty.push_node();
         self.node_by_id.insert(id, index);
+        if let Some(parent) = self.nodes.cold(index).parent {
+            self.node_children.entry(parent).or_default().push(index);
+        }
         self.bind_connector(index);
         self.refresh_connector(index);
 
@@ -599,7 +837,9 @@ impl GraphWorld {
     /// Where a handle sits in world space, right now.
     pub fn handle_position(&self, handle: HandleIndex) -> Vec2 {
         let node = self.handles.owner(handle);
-        self.handles.world_position(handle, self.nodes.bounds(node))
+        self.handles
+            .world_position(handle, self.nodes.bounds(node))
+            .rotated_about(self.nodes.bounds(node).center(), self.nodes.angle(node))
     }
 
     // ---- connecting ------------------------------------------------------
@@ -626,6 +866,9 @@ impl GraphWorld {
         self.geometry.push_edge();
         self.dirty.push_edge();
         self.edge_by_id.insert(id, edge);
+        if let Some(parent) = self.edges.parent(edge) {
+            self.edge_children.entry(parent).or_default().push(edge);
+        }
         self.adjacency.connect(edge, source.node, target.node);
         self.dirty.mark_edge(edge, EdgeDirty::GEOMETRY);
 
@@ -776,9 +1019,13 @@ impl GraphWorld {
     /// a bound endpoint is pulled back onto its target afterwards, because the
     /// attachment outranks a translation nobody aimed at it.
     pub fn set_node_position(&mut self, node: NodeIndex, position: Vec2) {
-        if !self.nodes.contains(node) || self.nodes.position(node) == position {
+        if !self.nodes.contains(node)
+            || matches!(self.nodes.kind(node), ElementKind::Group)
+            || self.nodes.position(node) == position
+        {
             return;
         }
+        let parent = self.nodes.cold(node).parent;
 
         match self.nodes.connector(node) {
             Some(connector) => {
@@ -791,6 +1038,9 @@ impl GraphWorld {
         }
         self.invalidate_geometry_of(node, NodeDirty::POSITION);
         self.refresh_bound_connectors(node);
+        if let Some(parent) = parent {
+            self.refresh_group_and_ancestors(parent);
+        }
     }
 
     /// Resizes a node. Its handles are fractions of its edges, so every
@@ -800,9 +1050,13 @@ impl GraphWorld {
     /// pushed through [`Connector::with_bounds`] so its two ordered endpoints
     /// land on the corners they already occupied.
     pub fn set_node_size(&mut self, node: NodeIndex, size: Vec2) {
-        if !self.nodes.contains(node) || self.nodes.size(node) == size {
+        if !self.nodes.contains(node)
+            || matches!(self.nodes.kind(node), ElementKind::Group)
+            || self.nodes.size(node) == size
+        {
             return;
         }
+        let parent = self.nodes.cold(node).parent;
 
         match self.nodes.connector(node) {
             Some(connector) => {
@@ -815,6 +1069,39 @@ impl GraphWorld {
         }
         self.invalidate_geometry_of(node, NodeDirty::SIZE);
         self.refresh_bound_connectors(node);
+        if let Some(parent) = parent {
+            self.refresh_group_and_ancestors(parent);
+        }
+    }
+
+    /// Sets a node's rotation about its rectangle centre.
+    pub fn set_node_angle(&mut self, node: NodeIndex, angle: f32) {
+        if !self.nodes.contains(node)
+            || matches!(self.nodes.kind(node), ElementKind::Group)
+            || self.nodes.angle(node) == angle
+        {
+            return;
+        }
+        let parent = self.nodes.cold(node).parent;
+        self.nodes.set_angle(node, angle);
+        self.invalidate_geometry_of(node, NodeDirty::POSITION);
+        self.refresh_bound_connectors(node);
+        if let Some(parent) = parent {
+            self.refresh_group_and_ancestors(parent);
+        }
+    }
+
+    /// Sets an edge's rotation about its derived route bound centre.
+    pub fn set_edge_angle(&mut self, edge: EdgeIndex, angle: f32) {
+        if !self.edges.contains(edge) || self.edges.angle(edge) == angle {
+            return;
+        }
+        self.edges.set_angle(edge, angle);
+        self.dirty
+            .mark_edge(edge, EdgeDirty::GEOMETRY | EdgeDirty::SPATIAL);
+        if let Some(parent) = self.edges.parent(edge) {
+            self.refresh_group_and_ancestors(parent);
+        }
     }
 
     /// Replaces a straight connector's ordered geometry and endpoint bindings.
@@ -831,6 +1118,9 @@ impl GraphWorld {
         self.bind_connector(node);
         self.refresh_connector(node);
         self.invalidate_geometry_of(node, NodeDirty::SIZE);
+        if let Some(parent) = self.nodes.cold(node).parent {
+            self.refresh_group_and_ancestors(parent);
+        }
     }
 
     /// Builds the persisted attachment and its resolved point on `target`'s
@@ -845,16 +1135,19 @@ impl GraphWorld {
         }
 
         let bounds = self.nodes.bounds(target).normalized();
-        let side = Side::facing(bounds, toward);
-        let point = floating_point(bounds, side, toward);
+        let angle = self.nodes.angle(target);
+        let local_toward = toward.rotated_about(bounds.center(), -angle);
+        let side = Side::facing(bounds, local_toward);
+        let local_point = floating_point(bounds, side, local_toward);
+        let point = local_point.rotated_about(bounds.center(), angle);
         let anchor = Vec2::new(
             if bounds.width() > f32::EPSILON {
-                (point.x - bounds.origin.x) / bounds.width()
+                (local_point.x - bounds.origin.x) / bounds.width()
             } else {
                 0.5
             },
             if bounds.height() > f32::EPSILON {
-                (point.y - bounds.origin.y) / bounds.height()
+                (local_point.y - bounds.origin.y) / bounds.height()
             } else {
                 0.5
             },
@@ -884,7 +1177,10 @@ impl GraphWorld {
             attachment.anchor.x.clamp(0.0, 1.0),
             attachment.anchor.y.clamp(0.0, 1.0),
         );
-        Some(bounds.origin + Vec2::new(bounds.width() * anchor.x, bounds.height() * anchor.y))
+        Some(
+            (bounds.origin + Vec2::new(bounds.width() * anchor.x, bounds.height() * anchor.y))
+                .rotated_about(bounds.center(), self.nodes.angle(target)),
+        )
     }
 
     fn bind_connector(&mut self, connector: NodeIndex) {
@@ -1180,6 +1476,9 @@ impl GraphWorld {
         // invalidation — nothing about the node's *position* changed.
         self.dirty
             .mark_node(node, NodeDirty::STYLE | NodeDirty::SPATIAL);
+        if let Some(parent) = self.nodes.cold(node).parent {
+            self.refresh_group_and_ancestors(parent);
+        }
         true
     }
 
@@ -1197,6 +1496,9 @@ impl GraphWorld {
         self.nodes.set_flag(node, NodeFlags::REMOVED, false);
         self.dirty
             .mark_node(node, NodeDirty::POSITION | NodeDirty::SPATIAL);
+        if let Some(parent) = self.nodes.cold(node).parent {
+            self.refresh_group_and_ancestors(parent);
+        }
         true
     }
 
@@ -1214,6 +1516,9 @@ impl GraphWorld {
         // rather than re-places. It is also what stops a stale route being
         // painted in the frame between the edit and the next rebuild.
         self.invalidate_edge_geometry(edge);
+        if let Some(parent) = self.edges.parent(edge) {
+            self.refresh_group_and_ancestors(parent);
+        }
         true
     }
 
@@ -1227,6 +1532,9 @@ impl GraphWorld {
 
         self.edges.set_flag(edge, EdgeFlags::REMOVED, false);
         self.invalidate_edge_geometry(edge);
+        if let Some(parent) = self.edges.parent(edge) {
+            self.refresh_group_and_ancestors(parent);
+        }
         true
     }
 
@@ -1337,14 +1645,17 @@ impl GraphWorld {
             {
                 continue;
             }
-            let bounds = self.nodes.bounds(node);
+            let bounds = self.nodes.rotated_bounds(node);
             let inside = match query.mode {
                 BoxSelectMode::Touch => rect.intersects(bounds),
                 BoxSelectMode::Enclose => rect.contains_rect(bounds),
             };
             if inside {
-                self.set_node_selected(node, true);
-                changed += 1;
+                let selected = self.outermost_group(node);
+                if !self.selection.contains_node(selected) {
+                    self.set_node_selected(selected, true);
+                    changed += 1;
+                }
             }
         }
 
@@ -1361,16 +1672,23 @@ impl GraphWorld {
             let Some(route) = self.geometry.route(edge) else {
                 continue;
             };
+            let rotated_bounds = route.bounds().rotated_bound(self.edges.angle(edge));
             let inside = match query.mode {
-                BoxSelectMode::Touch => route.intersects_rect(rect, query.tolerance),
-                // The control hull, not the curve: "entirely inside" is only
-                // *stricter* if the bound is the outer one, and the hull
-                // contains the curve.
-                BoxSelectMode::Enclose => rect.contains_rect(route.bounds()),
+                BoxSelectMode::Touch => rect.intersects(rotated_bounds.inflate(query.tolerance)),
+                // The rotated control-hull bound contains the rotated curve.
+                BoxSelectMode::Enclose => rect.contains_rect(rotated_bounds),
             };
             if inside {
-                self.set_edge_selected(edge, true);
-                changed += 1;
+                if let Some(group) = self.parent_of_edge(edge) {
+                    let group = self.outermost_group(group);
+                    if !self.selection.contains_node(group) {
+                        self.set_node_selected(group, true);
+                        changed += 1;
+                    }
+                } else {
+                    self.set_edge_selected(edge, true);
+                    changed += 1;
+                }
             }
         }
 
@@ -1489,6 +1807,9 @@ impl GraphWorld {
 
         self.geometry
             .rebuild(edge, routing, source_attachment, target_attachment);
+        if let Some(parent) = self.edges.parent(edge) {
+            self.refresh_group_and_ancestors(parent);
+        }
     }
 
     /// The point an end is "at" for the purpose of aiming the other end: its
@@ -1509,6 +1830,9 @@ impl GraphWorld {
     /// snapping between corners.
     pub fn attachment(&self, end: EdgeEnd, toward: Vec2) -> Attachment {
         let bounds = self.nodes.bounds(end.node);
+        let angle = self.nodes.angle(end.node);
+        let centre = bounds.center();
+        let local_toward = toward.rotated_about(centre, -angle);
 
         match end.handle.get() {
             Some(handle) => Attachment::new(
@@ -1516,12 +1840,16 @@ impl GraphWorld {
                     self.handles.placement(handle),
                     self.handles.offset(handle),
                     bounds,
-                ),
+                )
+                .rotated_about(centre, angle),
                 side_of(self.handles.placement(handle)),
             ),
             None => {
-                let side = Side::facing(bounds, toward);
-                Attachment::new(floating_point(bounds, side, toward), side)
+                let side = Side::facing(bounds, local_toward);
+                Attachment::new(
+                    floating_point(bounds, side, local_toward).rotated_about(centre, angle),
+                    side,
+                )
             }
         }
     }
@@ -1549,12 +1877,20 @@ impl GraphWorld {
         candidates: impl IntoIterator<Item = NodeIndex>,
         tolerance: HitTolerance,
     ) -> PointerTarget {
+        let drill_parent = match (self.selection.nodes(), self.selection.edges()) {
+            ([node], []) => self.nodes.cold(*node).parent,
+            ([], [edge]) => self.edges.parent(*edge),
+            _ => None,
+        };
         let radius_squared = tolerance.handle_radius * tolerance.handle_radius;
         let mut best_handle: Option<(HandleIndex, NodeIndex, f32)> = None;
         let mut best_node: Option<(NodeIndex, i32)> = None;
 
         for node in candidates {
-            if !self.nodes.is_live(node) || self.nodes.is_hidden(node) {
+            if !self.nodes.is_live(node)
+                || self.nodes.is_hidden(node)
+                || drill_parent.is_some_and(|parent| self.nodes.cold(node).parent != Some(parent))
+            {
                 continue;
             }
 
@@ -1567,10 +1903,12 @@ impl GraphWorld {
                 }
             }
 
+            let bounds = self.nodes.bounds(node);
+            let local_point = point.rotated_about(bounds.center(), -self.nodes.angle(node));
             let hits_body = self.nodes.connector(node).map_or_else(
-                || self.nodes.bounds(node).contains_point(point),
+                || bounds.contains_point(local_point),
                 |connector| {
-                    distance_to_segment(point, connector.start.point, connector.end.point)
+                    distance_to_segment(local_point, connector.start.point, connector.end.point)
                         <= tolerance.edge_radius
                 },
             );
@@ -1584,13 +1922,61 @@ impl GraphWorld {
 
         match (best_handle, best_node) {
             (Some((handle, node, _)), _) => PointerTarget::Handle { node, handle },
-            (None, Some((node, _))) => PointerTarget::Node(node),
+            (None, Some((node, _))) => PointerTarget::Node(if drill_parent.is_some() {
+                node
+            } else {
+                self.outermost_group(node)
+            }),
             (None, None) => PointerTarget::Empty,
         }
     }
 
     /// Which of a selected straight connector's two ordered endpoints is under
     /// the pointer. Exactly two candidates; rectangle corners never enter.
+    /// The direct child under `point`, without resolving it back to `group`.
+    /// Used only by double-click drill-in.
+    pub fn hit_test_in_group(
+        &self,
+        group: NodeIndex,
+        point: Vec2,
+        tolerance: HitTolerance,
+        flatten: f32,
+    ) -> PointerTarget {
+        let mut best: Option<(NodeIndex, i32)> = None;
+        for node in self.children(group).iter().copied() {
+            if !self.node_is_live(node) || self.nodes.is_hidden(node) {
+                continue;
+            }
+            let bounds = self.nodes.bounds(node);
+            let local = point.rotated_about(bounds.center(), -self.nodes.angle(node));
+            let hit = self.nodes.connector(node).map_or_else(
+                || bounds.contains_point(local),
+                |connector| {
+                    distance_to_segment(local, connector.start.point, connector.end.point)
+                        <= tolerance.edge_radius
+                },
+            );
+            if hit {
+                let z = self.nodes.z(node);
+                if best.is_none_or(|(current, current_z)| {
+                    (z, node.raw()) >= (current_z, current.raw())
+                }) {
+                    best = Some((node, z));
+                }
+            }
+        }
+        if let Some((node, _)) = best {
+            return PointerTarget::Node(node);
+        }
+        self.hit_test_edge(
+            point,
+            self.child_edges(group).iter().copied(),
+            tolerance,
+            flatten,
+        )
+        .map_or(PointerTarget::Empty, PointerTarget::Edge)
+    }
+
     pub fn hit_test_connector_endpoint(
         &self,
         point: Vec2,
@@ -1601,14 +1987,14 @@ impl GraphWorld {
             return None;
         }
         let connector = self.nodes.connector(node)?;
+        let centre = connector.bounds().center();
+        let angle = self.nodes.angle(node);
         let radius_squared = tolerance.grip_radius * tolerance.grip_radius;
         [ConnectorEnd::Start, ConnectorEnd::End]
             .into_iter()
             .map(|end| {
-                (
-                    end,
-                    (connector.endpoint(end).point - point).length_squared(),
-                )
+                let grip = connector.endpoint(end).point.rotated_about(centre, angle);
+                (end, (grip - point).length_squared())
             })
             .filter(|(_, distance)| *distance <= radius_squared)
             .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -1690,12 +2076,16 @@ impl GraphWorld {
         }
 
         let frame = self.nodes.bounds(node);
+        let angle = self.nodes.angle(node);
         let radius_squared = tolerance.grip_radius * tolerance.grip_radius;
 
         ResizeCorner::ALL
             .iter()
             .copied()
-            .map(|corner| (corner, (corner.of(frame) - point).length_squared()))
+            .map(|corner| {
+                let grip = corner.of(frame).rotated_about(frame.center(), angle);
+                (corner, (grip - point).length_squared())
+            })
             .filter(|&(_, distance)| distance <= radius_squared)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(corner, _)| corner)
@@ -1719,6 +2109,26 @@ impl GraphWorld {
     /// Nearest rather than topmost, because two edges crossing have no
     /// meaningful z between them at the crossing point and the one whose line
     /// the pointer is actually closest to is the one it was aimed at.
+    /// Whether `point` lands on the selected node's rotation grip.
+    pub fn hit_test_rotation_grip(
+        &self,
+        point: Vec2,
+        node: NodeIndex,
+        tolerance: HitTolerance,
+    ) -> bool {
+        if !self.node_is_live(node) || self.nodes.is_hidden(node) || self.nodes.is_locked(node) {
+            return false;
+        }
+        let frame = self.nodes.bounds(node).normalized();
+        let angle = self.nodes.angle(node);
+        let centre = frame.center();
+        let offset = crate::runtime::hit::ROTATION_GRIP_SCREEN_OFFSET
+            * (tolerance.grip_radius / HitTolerance::GRIP_SCREEN_RADIUS);
+        let grip = Vec2::new(centre.x, frame.min().y).rotated_about(centre, angle)
+            + Vec2::new(0.0, -offset).rotated(angle);
+        (grip - point).length_squared() <= tolerance.grip_radius * tolerance.grip_radius
+    }
+
     pub fn hit_test_edge(
         &self,
         point: Vec2,
@@ -1737,7 +2147,9 @@ impl GraphWorld {
             let Some(route) = self.geometry.route(edge) else {
                 continue;
             };
-            let Some(distance) = route.distance_to_point(point, tolerance.edge_radius, flatten)
+            let local_point = point.rotated_about(route.bounds().center(), -self.edges.angle(edge));
+            let Some(distance) =
+                route.distance_to_point(local_point, tolerance.edge_radius, flatten)
             else {
                 continue;
             };
@@ -2943,6 +3355,32 @@ mod tests {
     }
 
     #[test]
+    fn rotated_hit_testing_uses_the_elements_local_frame() {
+        let (mut world, node, _) = pair();
+        world.set_node_angle(node, std::f32::consts::FRAC_PI_2);
+
+        let inside_rotated_only = Vec2::new(90.0, 90.0);
+        assert_eq!(
+            world.hit_test(
+                inside_rotated_only,
+                world.nodes().indices(),
+                HitTolerance::new(1.0),
+            ),
+            PointerTarget::Node(node),
+        );
+        assert!(
+            world
+                .hit_test(
+                    Vec2::new(150.0, 0.0),
+                    world.nodes().indices(),
+                    HitTolerance::new(1.0),
+                )
+                .is_empty(),
+            "an empty corner of the old axis-aligned box was still a hit"
+        );
+    }
+
+    #[test]
     fn a_press_near_a_handle_hits_the_handle_rather_than_the_body() {
         let (world, a, _) = pair();
         let out_handle = world.handle_index(a, &HandleId::new("out")).unwrap();
@@ -3223,6 +3661,25 @@ mod tests {
             ConnectionRules::DEFAULT,
             "the permissive rules are for the load, not for what follows it"
         );
+    }
+
+    #[test]
+    fn cyclic_and_non_container_parents_are_reported_and_detached() {
+        let mut document = FlowDocument::new();
+        let group = document.add_node(ElementKind::Group, Vec2::ZERO, Vec2::ZERO);
+        let leaf = document.add_node(
+            ElementKind::Shape(crate::models::ShapeKind::Rectangle),
+            Vec2::ZERO,
+            Vec2::ONE,
+        );
+        document.node_mut(group).unwrap().parent = Some(group);
+        document.node_mut(leaf).unwrap().parent = Some(leaf);
+
+        let (world, report) = GraphWorld::from_document(&document);
+
+        assert_eq!(report.unresolved_parents.len(), 2);
+        assert_eq!(world.nodes().cold(NodeIndex::new(0)).parent, None);
+        assert_eq!(world.nodes().cold(NodeIndex::new(1)).parent, None);
     }
 
     #[test]
