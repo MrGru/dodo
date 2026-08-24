@@ -1419,9 +1419,9 @@ impl FlowView {
     /// element will use, from the same rectangle
     /// [`creation_rect`](crate::interaction::creation_rect) resolved — so the
     /// preview is not an approximation of the result, it is the result drawn
-    /// early. A click's default-size box appears the moment the button goes
-    /// down, which is also what tells the user a click is going to place
-    /// something.
+    /// early. A potential click stays invisible while held; only crossing the
+    /// screen-space drag threshold makes this preview appear, while release
+    /// still resolves a click to the default-size box.
     ///
     /// Not cached, for the same reason the rubber band is not: §23 says not to
     /// cache what changes every frame.

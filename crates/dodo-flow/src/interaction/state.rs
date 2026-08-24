@@ -504,14 +504,15 @@ pub enum InteractionEffect {
     /// The tool lock was switched. Nothing about the document changed; the
     /// repaint is for the toggle's own state.
     ToolLockChanged(bool),
-    /// A creation drag started. The rectangle is already the one
-    /// [`creation_rect`] resolved, so a painter draws exactly what will be
-    /// committed.
+    /// A creation gesture started. The rectangle is its release geometry; the
+    /// painter reads [`InteractionMachine::creation_preview`] and draws
+    /// nothing until the gesture has become a drag.
     BeginCreate {
         tool: CanvasTool,
         rect: Rect,
     },
-    /// The pending element's bounding box changed; repaint the preview.
+    /// The pending element's bounding box changed; repaint if it is now a
+    /// visible drag preview.
     UpdateCreate {
         tool: CanvasTool,
         rect: Rect,
@@ -631,12 +632,13 @@ impl InteractionMachine {
         self.tool_locked
     }
 
-    /// The element being drawn and the box it currently occupies, or `None`.
-    /// The painter's only question about a creation in progress, and the same
-    /// shape [`selection_rect`](InteractionMachine::selection_rect) takes.
+    /// The element being drawn and the box it currently occupies, or `None`
+    /// while the gesture is still a potential click. The painter's only
+    /// question about a creation in progress, and the same shape
+    /// [`selection_rect`](InteractionMachine::selection_rect) takes.
     pub fn creation_preview(&self) -> Option<(CanvasTool, Rect)> {
         match self.state {
-            InteractionState::CreatingShape { tool, gesture, .. } => {
+            InteractionState::CreatingShape { tool, gesture, .. } if gesture.has_become_drag() => {
                 Some((tool, creation_rect(tool, gesture)))
             }
             _ => None,
@@ -1370,6 +1372,7 @@ impl InteractionMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interaction::MIN_DRAG_PIXELS;
 
     const NODE: NodeIndex = NodeIndex::new(7);
     const HANDLE: HandleIndex = HandleIndex::new(3);
@@ -2299,26 +2302,121 @@ mod tests {
         assert!(machine.is_idle());
     }
 
-    /// A click with a creating tool places the tool's default size — the
-    /// gesture the brief names for the graph node, and the one every other
-    /// creating tool answers too.
+    /// Pressing with any creating tool starts the gesture but paints nothing
+    /// until it has become a drag.
     #[test]
-    fn a_click_with_a_creating_tool_places_a_default_sized_element() {
-        let mut machine = InteractionMachine::new();
-        machine.handle(InteractionEvent::SelectTool(CanvasTool::GraphNode));
-        machine.handle(press(
-            PointerButton::Left,
-            PointerTarget::Empty,
-            Vec2::new(100.0, 100.0),
-            InputModifiers::NONE,
-        ));
+    fn a_press_without_movement_has_no_creation_preview() {
+        for tool in CanvasTool::ALL.iter().filter(|tool| tool.creates()) {
+            let mut machine = InteractionMachine::new();
+            machine.handle(InteractionEvent::SelectTool(*tool));
+            machine.handle(press(
+                PointerButton::Left,
+                PointerTarget::Empty,
+                Vec2::new(100.0, 100.0),
+                InputModifiers::NONE,
+            ));
 
-        let InteractionEffect::CommitCreate { rect, .. } = machine.handle(up(PointerButton::Left))
-        else {
-            panic!("a click must still create");
-        };
-        assert_eq!(rect.size, CanvasTool::GraphNode.default_size());
-        assert_eq!(rect.center(), Vec2::new(100.0, 100.0));
+            assert_eq!(
+                machine.creation_preview(),
+                None,
+                "{} previewed a click before release",
+                tool.name()
+            );
+        }
+    }
+
+    /// Release still resolves a potential click to the tool's default size,
+    /// centred on the press. Text opens its editor over that same rectangle.
+    #[test]
+    fn a_click_with_each_creating_tool_uses_its_default_rectangle_on_release() {
+        for tool in CanvasTool::ALL.iter().filter(|tool| tool.creates()) {
+            let at = Vec2::new(100.0, 100.0);
+            let mut machine = InteractionMachine::new();
+            machine.handle(InteractionEvent::SelectTool(*tool));
+            machine.handle(press(
+                PointerButton::Left,
+                PointerTarget::Empty,
+                at,
+                InputModifiers::NONE,
+            ));
+
+            let rect = match machine.handle(up(PointerButton::Left)) {
+                InteractionEffect::CommitCreate { rect, .. } => rect,
+                InteractionEffect::BeginTextEdit(TextTarget::New(rect)) => rect,
+                effect => panic!("{} did not finish a click: {effect:?}", tool.name()),
+            };
+            assert_eq!(rect.size, tool.default_size(), "{}", tool.name());
+            assert_eq!(rect.center(), at, "{}", tool.name());
+        }
+    }
+
+    /// The first preview is the dragged geometry anchored at pointer-down,
+    /// never the click fallback it replaces.
+    #[test]
+    fn one_pixel_past_the_threshold_previews_from_the_press_point() {
+        for tool in CanvasTool::ALL.iter().filter(|tool| tool.creates()) {
+            let anchor = Vec2::new(10.0, 20.0);
+            let current_world = Vec2::new(30.0, 35.0);
+            let mut machine = InteractionMachine::new();
+            machine.handle(InteractionEvent::SelectTool(*tool));
+            machine.handle(press(
+                PointerButton::Left,
+                PointerTarget::Empty,
+                anchor,
+                InputModifiers::NONE,
+            ));
+            machine.handle(move_to(
+                anchor + Vec2::new(MIN_DRAG_PIXELS + 1.0, 0.0),
+                current_world,
+            ));
+
+            let (_, rect) = machine
+                .creation_preview()
+                .unwrap_or_else(|| panic!("{} did not preview a drag", tool.name()));
+            assert_eq!(
+                rect,
+                Rect::from_corners(anchor, current_world),
+                "{}",
+                tool.name()
+            );
+        }
+    }
+
+    /// Only screen travel crosses the click threshold: zoom can make tiny hand
+    /// movement span a huge world distance without revealing a preview.
+    #[test]
+    fn creation_preview_threshold_is_measured_in_screen_space() {
+        let anchor_screen = Vec2::new(100.0, 100.0);
+        let anchor_world = Vec2::new(10.0, 10.0);
+        let mut machine = InteractionMachine::new();
+        machine.handle(InteractionEvent::SelectTool(CanvasTool::Rectangle));
+        machine.handle(InteractionEvent::PointerDown {
+            screen: anchor_screen,
+            world: anchor_world,
+            button: PointerButton::Left,
+            modifiers: InputModifiers::NONE,
+            pan_key_held: false,
+            target: PointerTarget::Empty,
+        });
+
+        machine.handle(move_to(
+            anchor_screen + Vec2::new(MIN_DRAG_PIXELS - 1.0, 0.0),
+            anchor_world + Vec2::new(2_000.0, 0.0),
+        ));
+        assert_eq!(machine.creation_preview(), None);
+
+        let current_world = anchor_world + Vec2::new(2.0, 0.0);
+        machine.handle(move_to(
+            anchor_screen + Vec2::new(MIN_DRAG_PIXELS + 1.0, 0.0),
+            current_world,
+        ));
+        assert_eq!(
+            machine.creation_preview(),
+            Some((
+                CanvasTool::Rectangle,
+                Rect::from_corners(anchor_world, current_world)
+            ))
+        );
     }
 
     /// Shift held at the press squares the box, and it stays squared for the
@@ -2370,11 +2468,12 @@ mod tests {
     /// **Picking a tool arms it, with no second click.**
     ///
     /// The requirement reads like a behaviour to add and is really a property
-    /// to protect: one `SelectTool` and the very next press is already a
-    /// creation. An "arm the tool" step would show up here as a first press
-    /// that produced something other than `BeginCreate`.
+    /// to protect: one `SelectTool` and the very next press starts a creation.
+    /// An "arm the tool" step would show up here as a first press that produced
+    /// something other than `BeginCreate`; the preview remains hidden until
+    /// the gesture becomes a drag.
     #[test]
-    fn a_tool_draws_on_the_first_press_after_it_is_picked_up() {
+    fn a_tool_starts_on_the_first_press_after_it_is_picked_up() {
         for tool in CanvasTool::ALL.iter().filter(|tool| tool.creates()) {
             let mut machine = InteractionMachine::new();
             machine.handle(InteractionEvent::SelectTool(*tool));
@@ -2390,7 +2489,7 @@ mod tests {
                 "{} needed a second press before it drew: {effect:?}",
                 tool.name()
             );
-            assert!(machine.creation_preview().is_some());
+            assert_eq!(machine.creation_preview(), None);
         }
     }
 

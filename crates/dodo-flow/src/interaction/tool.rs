@@ -300,8 +300,8 @@ impl TextTarget {
     }
 }
 
-/// **The rectangle a creation gesture produces**, from where it started, where
-/// it is now, and whether the constraint was held.
+/// **The rectangle a completed creation gesture produces**, from where it
+/// started, where it ended, and whether the constraint was held.
 ///
 /// Pure, total, and the only place the three rules meet:
 ///
@@ -395,6 +395,13 @@ pub struct CreationGesture {
 impl CreationGesture {
     pub fn screen_travel(&self) -> f32 {
         (self.current_screen - self.anchor_screen).length()
+    }
+
+    /// Whether this potential click has travelled far enough to preview as a
+    /// drag. Geometry still resolves a shorter gesture to the click fallback
+    /// when it is committed on release.
+    pub fn has_become_drag(&self) -> bool {
+        self.screen_travel() >= MIN_DRAG_PIXELS
     }
 }
 
