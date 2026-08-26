@@ -17,6 +17,7 @@ pub enum Text {
     JwtPattern,
     JsonPattern,
     Base64Pattern,
+    MermaidPattern,
     PatternInvalid(String),
     PatternTooLong { length: usize, limit: usize },
     StoreError(String),

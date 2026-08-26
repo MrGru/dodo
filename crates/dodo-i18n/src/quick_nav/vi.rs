@@ -11,6 +11,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::JwtPattern => "Mẫu JWT".into(),
         Text::JsonPattern => "Mẫu JSON".into(),
         Text::Base64Pattern => "Mẫu Base64".into(),
+        Text::MermaidPattern => "Mẫu Mermaid".into(),
         Text::PatternInvalid(detail) => {
             format!("Mẫu này không hợp lệ nên dodo đang dùng mẫu dựng sẵn: {detail}").into()
         }

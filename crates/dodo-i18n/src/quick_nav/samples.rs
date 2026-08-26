@@ -13,6 +13,7 @@ samples! {
     plain JwtPattern;
     plain JsonPattern;
     plain Base64Pattern;
+    plain MermaidPattern;
     with PatternInvalid(DETAIL.into()) [DETAIL];
     with PatternTooLong { length: NUMBER, limit: 512 } [NUMBER_TEXT, "512"];
     with StoreError(DETAIL.into()) [DETAIL];

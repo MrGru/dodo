@@ -38,6 +38,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::ApiExplorerTitle => "Khám phá API".into(),
         Text::CleanerTitle => "Dọn dẹp".into(),
         Text::DiagramTitle => "Sơ đồ".into(),
+        Text::MermaidTitle => "Mermaid".into(),
         Text::RunScripts => "Chạy kịch bản".into(),
         Text::RunScriptsDescription => {
                 "API Explorer có chạy kịch bản đi kèm yêu cầu hay không. Kịch bản đến từ bộ \

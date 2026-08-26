@@ -77,6 +77,9 @@ use dodo_input_method as input_method;
 // The JSON formatter is a feature crate whose only consumer is the tool table.
 use dodo_json_formatter as json_formatter;
 mod layout;
+// The Mermaid workspace: a feature crate born whole (root `AGENTS.md`'s
+// per-tool-crate convention), never lifted out of the binary.
+use dodo_mermaid as mermaid;
 // Where dodo writes its files. Every rule is in `crates/dodo-paths`, which is
 // pure, has no dependencies and no build script; what cannot be pure is the one
 // impure input — which platform *this binary* was compiled for — so it is read
@@ -297,6 +300,9 @@ fn main() {
         database::init(cx);
         // Binds undo, redo and the drawing-tool keys inside the Flow Canvas.
         flow::init(cx);
+        // Binds the Mermaid preview's zoom shortcuts, scoped to the workspace.
+        // Same post-`gpui_component::init` ordering as the others.
+        mermaid::init(cx);
         // Binds quick navigation's paste chords and Escape, and starts the
         // `quick-nav.json` load. Same post-`gpui_component::init` ordering as
         // the four above, and it matters more here than for any of them: the

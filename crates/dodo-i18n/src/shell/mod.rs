@@ -38,6 +38,7 @@ pub enum Text {
     ApiExplorerTitle,
     CleanerTitle,
     DiagramTitle,
+    MermaidTitle,
 
     // API Explorer — the consent gate and its setting.
     RunScripts,

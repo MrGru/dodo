@@ -198,6 +198,7 @@ pub mod encoder_decoder;
 pub mod flow;
 pub mod input_method;
 pub mod json_formatter;
+pub mod mermaid;
 pub mod quick_nav;
 pub mod session;
 pub mod shared;
@@ -226,6 +227,7 @@ areas! {
     flow => Flow,
     input_method => InputMethod,
     json_formatter => JsonFormatter,
+    mermaid => Mermaid,
     quick_nav => QuickNav,
     session => Session,
     shared => Shared,

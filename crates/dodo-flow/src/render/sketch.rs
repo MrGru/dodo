@@ -158,8 +158,8 @@ pub fn element_seed(style: &SketchStyle, element: ElementId, part: u64) -> u64 {
 
 /// A seed for something that has no [`ElementId`] — a marker, an overlay, a
 /// synthetic outline in a cost estimate.
-pub fn derived_seed(seed: u64, salt: u64) -> u64 {
-    mix(seed, salt)
+pub fn derived_seed(seed: u64, part: u64) -> u64 {
+    mix(seed, part)
 }
 
 /// **The generator.** One pass of the pen over `outline`.
