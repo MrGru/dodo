@@ -30,6 +30,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::{geometry::PerimeterShape, models::style::GRAPH_NODE_RADIUS};
+
 /// What an element *is*. One serialized field per element, matched on by the
 /// renderer, the hit-tester and the inspector.
 ///
@@ -88,6 +90,61 @@ impl ElementKind {
         )
     }
 
+    /// **The outline this kind actually draws**, as
+    /// [`geometry::perimeter`](crate::geometry::perimeter)'s vocabulary — the
+    /// silhouette a connector endpoint binds to, and the one the painter
+    /// strokes.
+    ///
+    /// **The authority for the whole crate.** The runtime's one-byte
+    /// projection has its own copy for the hot path
+    /// ([`NodeShape::perimeter`](crate::runtime::NodeShape::perimeter)), which
+    /// exists so that routing an edge does not have to touch a cold row, and
+    /// `the_hot_projection_agrees_with_the_document_kind` beside it asserts the
+    /// two answer identically for every kind. That is the same relationship
+    /// [`NodeShape::of`](crate::runtime::NodeShape::of) already has with this
+    /// enum.
+    ///
+    /// **Every kind answers something**, including the ones no painter draws.
+    /// A painter that does not know a kind must draw nothing; a binding still
+    /// has to put the arrow somewhere, and the rectangle the element occupies
+    /// is the honest answer for a picture, a frame and a freehand stroke alike
+    /// — and for standalone text it is the only one, since a paragraph's true
+    /// silhouette is its glyphs.
+    pub fn perimeter(&self, corner_radius: f32) -> PerimeterShape {
+        match self {
+            ElementKind::Shape(kind) => kind.perimeter(corner_radius),
+            // A graph node's body is a rounded rectangle with a radius of its
+            // own when its style names none — the same fallback
+            // `render::scene` paints it with, because a binding resolved
+            // against a square corner the painter rounded away is an endpoint
+            // hanging in space.
+            ElementKind::GraphNode(
+                GraphNodeKind::Default
+                | GraphNodeKind::Input
+                | GraphNodeKind::Output
+                | GraphNodeKind::Group,
+            ) => PerimeterShape::RoundedRectangle {
+                radius: if corner_radius > 0.0 {
+                    corner_radius
+                } else {
+                    GRAPH_NODE_RADIUS
+                },
+            },
+            // A kind §43's registry has yet to draw is a rectangle, not a
+            // rounded one: nothing paints a rounded body for it, so binding to
+            // one would put the endpoint inside a corner that is not there.
+            ElementKind::GraphNode(GraphNodeKind::Custom(_))
+            | ElementKind::Linear(_)
+            | ElementKind::Text
+            | ElementKind::Image
+            | ElementKind::Frame
+            | ElementKind::Group
+            | ElementKind::FreeDraw
+            | ElementKind::Embed
+            | ElementKind::Custom(_) => PerimeterShape::Rectangle,
+        }
+    }
+
     /// The registered name a [`Custom`](ElementKind::Custom) kind carries, at
     /// any nesting depth — the key §43's renderer registry looks up.
     pub fn custom_name(&self) -> Option<&str> {
@@ -134,6 +191,24 @@ pub enum ShapeKind {
     Diamond,
     Triangle,
     Custom(CustomKind),
+}
+
+impl ShapeKind {
+    /// The outline this drawn shape has. A custom kind answers a rectangle for
+    /// the reason [`ElementKind::Custom`] exists: a document naming a shape
+    /// this build has never heard of must still open, and a visible box is a
+    /// better answer than an invisible element nobody can find.
+    pub fn perimeter(&self, corner_radius: f32) -> PerimeterShape {
+        match self {
+            ShapeKind::Rectangle | ShapeKind::Custom(_) => PerimeterShape::Rectangle,
+            ShapeKind::RoundedRectangle => PerimeterShape::RoundedRectangle {
+                radius: corner_radius,
+            },
+            ShapeKind::Ellipse => PerimeterShape::Ellipse,
+            ShapeKind::Diamond => PerimeterShape::Diamond,
+            ShapeKind::Triangle => PerimeterShape::Triangle,
+        }
+    }
 }
 
 /// Free linear elements (§7, §8).

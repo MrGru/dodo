@@ -53,6 +53,6 @@ pub use kind::{CustomKind, ElementKind, GraphNodeKind, LinearKind, ShapeKind};
 pub use serialization::{CURRENT_VERSION, LoadError, SaveError};
 pub use style::{
     ArrowMarker, Color, DashPattern, EdgeRouting, ElementStyle, FillStyle, FontFamily, FontSize,
-    FontStyle, RenderQuality, RenderStyle, SketchStyle, Sloppiness, StrokeStyle, TextAlign,
-    VerticalAlign,
+    FontStyle, GRAPH_NODE_RADIUS, RenderQuality, RenderStyle, SketchStyle, Sloppiness, StrokeStyle,
+    TextAlign, VerticalAlign,
 };

@@ -598,6 +598,17 @@ pub struct ElementStyle {
     pub end_marker: ArrowMarker,
 }
 
+/// **A graph node's own corner radius**, used when its style names none.
+///
+/// Here rather than beside the painter that reads it because it is no longer
+/// only a painter's business: a connector bound to a graph node resolves
+/// against that node's *silhouette*, and a silhouette built with a radius of
+/// zero would put the endpoint on a corner the painter rounded away. `runtime`
+/// resolves the binding, `render::scene` paints the body, `views::nodes` draws
+/// the rich element — three readers, so one owner, in the layer all three can
+/// see. `render::scene` re-exports it under its historical name.
+pub const GRAPH_NODE_RADIUS: f32 = 6.0;
+
 impl Default for ElementStyle {
     fn default() -> ElementStyle {
         ElementStyle {

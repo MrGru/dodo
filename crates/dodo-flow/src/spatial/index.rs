@@ -33,7 +33,7 @@
 //! (`GraphWorld::move_node`, `set_node_position`, `set_node_size`), and an edge
 //! whose geometry is invalidated does. **A style change that widens a stroke
 //! does not yet**, because nothing in the crate mutates a style through the
-//! world — `NodeStore::style_mut` is the only route and it bypasses the dirty
+//! world — `NodeStore::edit_style` is the only route and it bypasses the dirty
 //! state entirely. Phase 7's command layer is what closes that, and this
 //! paragraph is the note it needs.
 //!

@@ -14,6 +14,10 @@
 //! - [`curve`] — cubic evaluation and flattening. One step-count formula, used
 //!   by the vertex estimate in `render::shapes` and by the world-space
 //!   narrow phase that asks whether a route crosses a rectangle.
+//! - [`perimeter`] — [`Perimeter`], **the one silhouette**: every shape the
+//!   canvas draws as a closed unit-square boundary, so the outline the painter
+//!   strokes and the outline a connector binds to are the same geometry. The
+//!   binding itself is one normalised arc length round it.
 //! - [`route`] — [`EdgeRoute`], the five edge routings of §8 as derived
 //!   world-space geometry, kept strictly apart from the logical edge.
 //! - [`arrow`] — §8's endpoint decorations, allocation-free, with the dot
@@ -33,6 +37,7 @@
 pub mod arrow;
 pub mod bounds;
 pub mod curve;
+pub mod perimeter;
 pub mod route;
 pub mod transform;
 pub mod vec;
@@ -42,6 +47,10 @@ pub use bounds::{
     MIN_RESIZE_EXTENT, Rect, ResizeCorner, resize_from_corner, segment_intersects_rect,
 };
 pub use curve::{cubic_point, cubic_segments, flatten_cubic};
+pub use perimeter::{
+    MAX_PERIMETER_SEGMENTS, Perimeter, PerimeterHit, PerimeterSegment, PerimeterShape,
+    floating_perimeter_point, nearest_perimeter_point, perimeter_point,
+};
 pub use route::{Attachment, EdgeRoute, RouteOptions, RouteSegment, Side, distance_to_segment};
 pub use transform::Viewport;
 pub use vec::Vec2;

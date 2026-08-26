@@ -208,10 +208,9 @@
 //!    because the direction was the bounding box's diagonal.
 //! 2. **Draw from one box to another.** Start the drag near a shape and end it
 //!    near another: both ends highlight as you approach and the arrow snaps
-//!    onto the facing edges. Then drag either box around — the arrow follows,
-//!    and the attachment **walks round to the side facing the other end**
-//!    rather than staying pinned to one face. Resize a box and it follows that
-//!    too.
+//!    onto the outline **exactly where you aimed** — see the free-binding list
+//!    below, which is what that sentence used to say something different
+//!    about. Then drag either box around, and resize it: the arrow follows.
 //! 3. **Select the arrow and look at its handles.** Exactly **two**, one per
 //!    end, not four corners of a box. Drag one onto a third element: only that
 //!    end rebinds. Drag it out to empty canvas: only that end detaches, and it
@@ -229,6 +228,43 @@
 //!    load pointing the way they were drawn on screen — the migration writes
 //!    the diagonal those files displayed, because the direction they were
 //!    *drawn* was never stored and cannot be recovered.
+//!
+//! # Free perimeter binding, and the six things only a person can check
+//!
+//! An arrow endpoint no longer binds to a point on its target's bounding box
+//! chosen by which side faces the other end. It binds to the point of the
+//! target's **drawn outline** nearest where you are pointing, and it stays on
+//! that spot of the outline through everything you can do to the shape. The
+//! geometry, the round trip and the migration are all covered by tests; these
+//! are the parts that need eyes.
+//!
+//! 1. **Aim anywhere.** Pick the Arrow tool and drag onto the **ellipse**, then
+//!    the **diamond**, then a **rounded** box, then a graph node. Release on a
+//!    flank, a corner, the top — the head has to be **on the outline where the
+//!    preview showed it**, not beside a circle and not buried in a fill. The
+//!    preview during the drag is the committed geometry, so if they ever differ
+//!    that is the bug.
+//! 2. **Drag the same endpoint round one shape.** Select the arrow, grab its
+//!    end handle and walk it round a circle. It has to track the pointer round
+//!    the curve continuously. Before this slice it snapped between four places.
+//! 3. **Move, resize, rotate.** Drag the bound shape about, stretch it thin,
+//!    then rotate it with the rotation grip. The endpoint stays on the **same
+//!    visible spot** of the outline the whole time and the arrow re-routes with
+//!    no jump. A rotated ellipse is the one worth staring at.
+//! 4. **Restyle it.** Bind an arrow at the corner of a plain rectangle, then
+//!    raise **Corners** in the property panel. The corner the arrow is on is
+//!    being rounded away underneath it, and the endpoint has to ride onto the
+//!    new curve rather than hang in the gap.
+//! 5. **Handles still win.** A graph node is born with a source handle right
+//!    and a target left. Drag a *connection* out of a handle onto another
+//!    node's handle and it connects handle-to-handle exactly as before; drop it
+//!    on the node's body instead and the route attaches to the body. Nothing
+//!    about ports changed.
+//! 6. **Save, reopen, undo, redo.** Every binding comes back where it was. A
+//!    diagram saved before this slice opens too — its arrows were bound to box
+//!    coordinates and the migration puts each one on the nearest real outline
+//!    point, so an arrow that was floating beside an ellipse should now be
+//!    touching it.
 //!
 //! # Centred labels and the text rows, and the seven things only a person can
 //! check
@@ -563,7 +599,9 @@ fn demo_document(nodes: usize) -> FlowDocument {
 
     // §4's whole-node connection mode: neither end names a handle, so the
     // router picks a floating point on the border facing the other node —
-    // drag either one and watch the attachment slide around it.
+    // drag either one and watch the attachment slide around it. Since the
+    // silhouette slice that point is kept on the node's *rounded* body rather
+    // than on its box, so it stops on the shape at a corner too.
     let floating_a = graph_node(&mut document, "floating", Vec2::new(60.0, 760.0));
     let floating_b = graph_node(&mut document, "floating", Vec2::new(460.0, 830.0));
     let floating = document.add_edge(Endpoint::node(floating_a), Endpoint::node(floating_b));

@@ -1467,7 +1467,7 @@ impl FlowView {
         let shape = crate::runtime::NodeShape::of(&kind);
         let radius = self.viewport.world_to_screen_length(GRAPH_NODE_RADIUS);
         let outline = if let Some((_, mut creation)) = self.interaction.connector_creation() {
-            let end_snap = self.connector_snap_at(creation.end, creation.start, None);
+            let end_snap = self.connector_snap_at(creation.end, None);
             creation.end_target = end_snap.map(|snap| snap.target);
             let connector = self.editor.connector_between(
                 creation.start,
@@ -1631,7 +1631,7 @@ impl FlowView {
         self.plan_connection_preview(ink);
         self.plan_selection_rect(ink);
         self.plan_creation_preview(ink);
-        if let Some((_, _, _, Some(target))) = self.interaction.dragging_connector_endpoint() {
+        if let Some((_, _, Some(target))) = self.interaction.dragging_connector_endpoint() {
             self.plan_connector_snap_feedback(target, ink);
         }
         self.instruments.record(Probe::RenderExtract, timer);
@@ -1967,7 +1967,7 @@ impl FlowView {
             self.interaction.tool(),
             CanvasTool::Line | CanvasTool::Arrow
         ) {
-            self.connector_snap_at(world, world, None)
+            self.connector_snap_at(world, None)
                 .map_or(PointerTarget::Empty, |snap| {
                     PointerTarget::Node(snap.target)
                 })
@@ -2069,18 +2069,19 @@ impl FlowView {
         true
     }
 
-    fn connector_snap_at(
-        &self,
-        world: Vec2,
-        toward: Vec2,
-        exclude: Option<NodeIndex>,
-    ) -> Option<ConnectorSnap> {
+    /// **What an endpoint at `world` would bind to**, aimed at `world` itself.
+    ///
+    /// The second argument used to be the connector's other end, and dropping
+    /// it is the free binding in one line: the endpoint lands on the outline
+    /// under the pointer, so the same position answers *which node* and *where
+    /// on it*.
+    fn connector_snap_at(&self, world: Vec2, exclude: Option<NodeIndex>) -> Option<ConnectorSnap> {
         let radius = self.viewport.screen_to_world_length(CONNECTOR_SNAP_PIXELS);
         let mut candidates = Vec::new();
         self.spatial.nodes_at(world, radius, &mut candidates);
         self.editor
             .world()
-            .snap_connector_endpoint(world, toward, candidates, exclude, radius)
+            .snap_connector_endpoint(world, candidates, exclude, radius)
     }
 
     /// **What is under the pointer** — §29's two phases, both of them present.
@@ -2324,11 +2325,11 @@ impl FlowView {
                     }
                     let screen = this.local(event.position, bounds);
                     let world = this.viewport.screen_to_world(screen);
-                    let interaction_event = if let Some((node, _, opposite, _)) =
+                    let interaction_event = if let Some((node, _, _)) =
                         this.interaction.dragging_connector_endpoint()
                     {
                         let target = this
-                            .connector_snap_at(world, opposite, Some(node))
+                            .connector_snap_at(world, Some(node))
                             .map(|snap| snap.target);
                         InteractionEvent::MoveConnectorEndpoint { world, target }
                     } else if this.interaction.is_rotating() {
@@ -2369,7 +2370,7 @@ impl FlowView {
                     // `interaction::tool::connector_endpoints`.
                     let target = if let Some((_, creation)) = this.interaction.connector_creation()
                     {
-                        this.connector_snap_at(creation.end, creation.start, None)
+                        this.connector_snap_at(creation.end, None)
                             .map_or(PointerTarget::Empty, |snap| {
                                 PointerTarget::Node(snap.target)
                             })

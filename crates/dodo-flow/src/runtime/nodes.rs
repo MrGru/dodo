@@ -55,10 +55,10 @@
 use std::sync::Arc;
 
 use crate::{
-    geometry::{Rect, Vec2},
+    geometry::{PerimeterShape, Rect, Vec2},
     models::{
-        Connector, ElementId, ElementKind, ElementStyle, GraphNodeKind, HandleIndex, LinearKind,
-        NodeImage, NodeIndex, ShapeKind,
+        Connector, ElementId, ElementKind, ElementStyle, GRAPH_NODE_RADIUS, GraphNodeKind,
+        HandleIndex, LinearKind, NodeImage, NodeIndex, ShapeKind,
     },
     runtime::CompactList,
 };
@@ -183,6 +183,40 @@ impl NodeShape {
         }
     }
 
+    /// **The silhouette a connector binds to**, for this body at a style
+    /// corner radius of `corner_radius`.
+    ///
+    /// The hot-path twin of
+    /// [`ElementKind::perimeter`](crate::models::ElementKind::perimeter), which
+    /// is the authority. It exists because routing an edge and planning a frame
+    /// read this one byte and must not touch the cold row the full kind lives
+    /// in — the same reason [`NodeShape::of`] exists at all — and
+    /// `the_hot_projection_agrees_with_the_document_kind` asserts the two never
+    /// diverge.
+    pub fn perimeter(self, corner_radius: f32) -> PerimeterShape {
+        match self {
+            NodeShape::Ellipse => PerimeterShape::Ellipse,
+            NodeShape::Diamond => PerimeterShape::Diamond,
+            NodeShape::Triangle => PerimeterShape::Triangle,
+            NodeShape::GraphNode => PerimeterShape::RoundedRectangle {
+                radius: if corner_radius > 0.0 {
+                    corner_radius
+                } else {
+                    GRAPH_NODE_RADIUS
+                },
+            },
+            NodeShape::RoundedRectangle => PerimeterShape::RoundedRectangle {
+                radius: corner_radius,
+            },
+            NodeShape::Rectangle
+            | NodeShape::Line
+            | NodeShape::Arrow
+            | NodeShape::Text
+            | NodeShape::Image
+            | NodeShape::Other => PerimeterShape::Rectangle,
+        }
+    }
+
     /// **Whether a resize of this body keeps its proportions by default**
     /// (§10's aspect-ratio lock).
     ///
@@ -303,6 +337,26 @@ pub struct NodeStore {
     sizes: Vec<Vec2>,
     angles: Vec<f32>,
     shapes: Vec<NodeShape>,
+
+    /// **The corner radius, mirrored out of the style**, because the
+    /// silhouette is now hot.
+    ///
+    /// [`ElementStyle::corner_radius`](crate::models::ElementStyle::corner_radius)
+    /// is the authority and this is a copy of it, maintained by the two writes
+    /// that can change it. The copy exists for one measurement: routing an edge
+    /// asks for its end's outline, `styles` is a warm array of a large struct,
+    /// and reading it twice per edge took `flow_graph_bench`'s
+    /// "route every edge once" from **36 ms to 69 ms** across 500,000 edges.
+    /// Four bytes per node — 400 KB at a hundred thousand — brought it back to
+    /// 38 ms.
+    ///
+    /// The same argument [`shapes`](NodeStore::shape) already makes about the
+    /// cold kind, and the invariant is closed the same way it is for the
+    /// versions beside it: [`set_style`](NodeStore::set_style) and
+    /// [`edit_style`](NodeStore::edit_style) are the only ways a style changes,
+    /// and both refresh this. There is deliberately no `style_mut` handing out
+    /// a reference nobody can see the end of.
+    corner_radii: Vec<f32>,
     flags: Vec<NodeFlags>,
 
     /// **§23's cache version, per node.** Bumped by every write that changes
@@ -370,6 +424,7 @@ impl NodeStore {
         self.sizes.reserve(additional);
         self.angles.reserve(additional);
         self.shapes.reserve(additional);
+        self.corner_radii.reserve(additional);
         self.flags.reserve(additional);
         self.versions.reserve(additional);
         self.text_versions.reserve(additional);
@@ -391,6 +446,7 @@ impl NodeStore {
         self.sizes.push(bounds.size);
         self.angles.push(spec.angle);
         self.shapes.push(NodeShape::of(&spec.kind));
+        self.corner_radii.push(spec.style.corner_radius);
         let mut flags = NodeFlags::NONE;
         if spec.hidden {
             flags = flags | NodeFlags::HIDDEN;
@@ -442,6 +498,17 @@ impl NodeStore {
 
     pub fn angle(&self, node: NodeIndex) -> f32 {
         self.angles[node.index()]
+    }
+
+    /// The node's style corner radius, from the hot mirror rather than from
+    /// the style itself — see [`corner_radii`](NodeStore::corner_radius).
+    pub fn corner_radius(&self, node: NodeIndex) -> f32 {
+        self.corner_radii[node.index()]
+    }
+
+    /// **The silhouette this node draws**, from two hot reads and no style.
+    pub fn perimeter(&self, node: NodeIndex) -> crate::geometry::PerimeterShape {
+        self.shapes[node.index()].perimeter(self.corner_radii[node.index()])
     }
 
     pub fn shape(&self, node: NodeIndex) -> NodeShape {
@@ -576,19 +643,26 @@ impl NodeStore {
     }
 
     pub fn set_style(&mut self, node: NodeIndex, style: ElementStyle) {
+        self.corner_radii[node.index()] = style.corner_radius;
         self.styles[node.index()] = style;
         self.touch(node);
         self.touch_text(node);
     }
 
-    /// A mutable style. **Bumps the version on the way out**, unconditionally,
-    /// because the caller may or may not write and this store cannot tell —
-    /// a spurious cache miss is a rebuilt path, a missed one is a stale
-    /// picture.
-    pub fn style_mut(&mut self, node: NodeIndex) -> &mut ElementStyle {
+    /// Edits a style in place. **Bumps the version afterwards**,
+    /// unconditionally, because the caller may or may not write and this store
+    /// cannot tell — a spurious cache miss is a rebuilt path, a missed one is a
+    /// stale picture.
+    ///
+    /// A closure rather than the `&mut ElementStyle` this used to hand out, so
+    /// that the hot [`corner_radii`](NodeStore::corner_radius) mirror is
+    /// refreshed when the edit is *finished*. A borrow has no such moment, and
+    /// a mirror that a caller can leave stale is not a mirror.
+    pub fn edit_style(&mut self, node: NodeIndex, edit: impl FnOnce(&mut ElementStyle)) {
+        edit(&mut self.styles[node.index()]);
+        self.corner_radii[node.index()] = self.styles[node.index()].corner_radius;
         self.versions[node.index()] = self.versions[node.index()].wrapping_add(1);
         self.text_versions[node.index()] = self.text_versions[node.index()].wrapping_add(1);
-        &mut self.styles[node.index()]
     }
 
     pub fn set_flag(&mut self, node: NodeIndex, flag: NodeFlags, on: bool) {
@@ -711,8 +785,8 @@ mod version_tests {
             ("set_style", |s| {
                 s.set_style(NodeIndex::new(0), ElementStyle::default())
             }),
-            ("style_mut", |s| {
-                s.style_mut(NodeIndex::new(0)).opacity = 0.5;
+            ("edit_style", |s| {
+                s.edit_style(NodeIndex::new(0), |style| style.opacity = 0.5);
             }),
             ("set_flag", |s| {
                 s.set_flag(NodeIndex::new(0), NodeFlags::SELECTED, true)
@@ -760,8 +834,10 @@ mod version_tests {
             ("set_style", |s| {
                 s.set_style(NodeIndex::new(0), ElementStyle::default())
             }),
-            ("style_mut", |s| {
-                s.style_mut(NodeIndex::new(0)).font.size = crate::models::FontSize::Large;
+            ("edit_style", |s| {
+                s.edit_style(NodeIndex::new(0), |style| {
+                    style.font.size = crate::models::FontSize::Large
+                });
             }),
             ("set_label", |s| {
                 s.set_label(NodeIndex::new(0), Some("x".into()))
@@ -867,6 +943,54 @@ mod tests {
         // And an image left it the same way in Phase 12.
         assert_eq!(NodeShape::of(&ElementKind::Image), NodeShape::Image);
         assert_eq!(NodeShape::of(&ElementKind::Frame), NodeShape::Other);
+    }
+
+    /// **The one-byte projection and the document kind answer the same
+    /// silhouette.**
+    ///
+    /// [`ElementKind::perimeter`](crate::models::ElementKind::perimeter) is the
+    /// authority and [`NodeShape::perimeter`] is the copy the hot path reads,
+    /// for the same reason [`NodeShape::of`] exists at all. Two tables is what
+    /// this crate normally refuses; here it buys an edge route that never
+    /// touches a cold row, and the price is this assertion — every kind, and a
+    /// radius on each side of the graph-node fallback.
+    #[test]
+    fn the_hot_projection_agrees_with_the_document_kind() {
+        use crate::models::{CustomKind, LinearKind, ShapeKind};
+
+        let kinds = [
+            ElementKind::GraphNode(GraphNodeKind::Default),
+            ElementKind::GraphNode(GraphNodeKind::Input),
+            ElementKind::GraphNode(GraphNodeKind::Output),
+            ElementKind::GraphNode(GraphNodeKind::Group),
+            ElementKind::GraphNode(GraphNodeKind::Custom(CustomKind::new("dodo.sticky"))),
+            ElementKind::Shape(ShapeKind::Rectangle),
+            ElementKind::Shape(ShapeKind::RoundedRectangle),
+            ElementKind::Shape(ShapeKind::Ellipse),
+            ElementKind::Shape(ShapeKind::Diamond),
+            ElementKind::Shape(ShapeKind::Triangle),
+            ElementKind::Shape(ShapeKind::Custom(CustomKind::new("dodo.cloud"))),
+            ElementKind::Linear(LinearKind::Line),
+            ElementKind::Linear(LinearKind::Arrow),
+            ElementKind::Linear(LinearKind::Elbow),
+            ElementKind::Text,
+            ElementKind::Image,
+            ElementKind::Frame,
+            ElementKind::Group,
+            ElementKind::FreeDraw,
+            ElementKind::Embed,
+            ElementKind::Custom(CustomKind::new("dodo.mermaid.actor")),
+        ];
+
+        for kind in kinds {
+            for radius in [0.0, 9.0] {
+                assert_eq!(
+                    NodeShape::of(&kind).perimeter(radius),
+                    kind.perimeter(radius),
+                    "{kind:?} at radius {radius}"
+                );
+            }
+        }
     }
 
     #[test]

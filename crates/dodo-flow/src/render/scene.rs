@@ -94,7 +94,11 @@ pub const HANDLE_SCREEN_RADIUS: f32 = 4.5;
 /// A default rather than a hard-coded look: `ElementStyle::corner_radius` wins
 /// whenever a document says anything, and this is only what an unstyled node
 /// falls back to so it reads as a node rather than as a drawn rectangle.
-pub const GRAPH_NODE_RADIUS: f32 = 6.0;
+///
+/// **Owned by [`models::style`](crate::models::style) since the silhouette
+/// binding**, which resolves against the same radius from a layer that cannot
+/// see `render`. Re-exported here under the name every painter already knows.
+pub use crate::models::GRAPH_NODE_RADIUS;
 
 /// The width a hatch line is stroked at, in screen pixels.
 ///
