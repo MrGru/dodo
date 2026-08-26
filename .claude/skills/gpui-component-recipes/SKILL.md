@@ -112,6 +112,29 @@ would guess:
 import. (`gpui_component::Colorize` also defines `opacity` plus `divide`/`invert`/`lighten`; only
 import it if you want those.)
 
+## `h_flex()` is a toolbar, not a split — it bakes in `items_center()`
+
+`h_flex()` is `flex().flex_row().items_center()`; `v_flex()` is `flex().flex_col()` and sets no
+`align_items` at all. That asymmetry is the trap, because in a **row** the cross axis is *height*:
+
+- A child's `.flex_1()` sets grow/shrink/`flex-basis: 0%` along the **main** axis. In a row that is
+  width. It says nothing whatever about height.
+- So under `h_flex()`'s inherited `items_center()`, a child with no explicit height collapses to its
+  *content* height and is centred — panes one line tall floating in the vertical middle of an empty
+  window, with the empty-state text defining the pane's height instead of sitting inside it.
+
+A row whose children must fill the height needs `.items_stretch()` on the **row**. That is the layer
+to fix; pasting `h_full()` onto each child treats the symptom and breaks again on the next child
+added. `dodo-encoder-decoder`'s `PaneLayout::Horizontal`, `dodo-docker`'s rail and body, and
+`dodo-mermaid`'s editor/preview split all carry it.
+
+In a `v_flex()` column none of this arises: `flex_1()` there sizes height directly (which is why
+`dodo-json-formatter`'s `div().flex_1().min_h_0().child(Input::…size_full())` works as written), and
+the unset `align_items` defaults to stretch across the width.
+
+Keep `min_h_0()` / `min_w_0()` on panes regardless — they set `min_size` to 0, removing the flex
+automatic-minimum-size floor that otherwise stops a pane shrinking when the window does.
+
 ## Text input and multi-line code editor
 
 `InputState::new` and `set_value` both need `&mut Window`, so any view holding one must be

@@ -187,6 +187,7 @@ cargo run -p dodo-api-explorer    --example api_explorer    --locked
 cargo run -p dodo-json-formatter  --example json_formatter  --locked
 cargo run -p dodo-encoder-decoder --example encoder_decoder --locked
 cargo run -p dodo-flow            --example flow            --locked
+cargo run -p dodo-mermaid         --example mermaid         --locked
 ```
 
 Vietnamese input engine:

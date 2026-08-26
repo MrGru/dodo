@@ -369,8 +369,18 @@ tools! {
         pastes: [DatabaseUri],
     }
 
-    /// Last, which is also where its settings page sat. Linux stays hidden
-    /// until it has an implementation.
+    Mermaid {
+        code: "mermaid",
+        title: shell::Text::MermaidTitle,
+        icon: AppIcon::Mermaid,
+        pane: mermaid: crate::mermaid::MermaidView,
+        pastes: [Mermaid],
+    }
+
+    /// Last, which is also where its settings page sat. It is the one tool most
+    /// people will open once, install from, and never come back to — and the
+    /// one that exists only where a native host does. Linux stays hidden until
+    /// it has its own host rather than showing a dead install row.
     InputMethod {
         code: "input-method",
         title: shell::Text::InputMethod,
@@ -470,7 +480,7 @@ mod tests {
                 title: shell::Text::JsonFormatterTitle,
                 icon: AppIcon::Json,
                 pane: everywhere: crate::json_formatter::JsonFormatter,
-                pastes: [Json, Jwt, Base64],
+                pastes: [Json, Jwt, Base64, Mermaid],
             }
 
             /// `cfg(all())` is true on every target, so this compiles the
@@ -575,6 +585,7 @@ mod tests {
                 "cleaner",
                 "docker",
                 "database",
+                "mermaid",
                 "input-method",
                 "diagram",
             ]
@@ -601,6 +612,7 @@ mod tests {
             "cleaner",
             "docker",
             "database",
+            "mermaid",
         ];
         if INPUT_METHOD_HOST {
             expected.push("input-method");
@@ -625,6 +637,7 @@ mod tests {
                 View::Cleaner,
                 View::Docker,
                 View::Database,
+                View::Mermaid,
                 View::InputMethod,
                 View::Diagram,
             ]
@@ -640,6 +653,7 @@ mod tests {
                 View::Cleaner,
                 View::Docker,
                 View::Database,
+                View::Mermaid,
                 View::InputMethod,
                 View::Diagram,
             ]
@@ -655,14 +669,15 @@ mod tests {
                 View::Docker,
                 View::Database,
                 View::Diagram,
+                View::Mermaid,
             ]
         );
 
         // One row per tool: Docker and Database are each a single entry, not a
         // group of children — an icon-collapsed sidebar renders no children at
         // all, which is what made Docker's four pages unreachable.
-        assert_eq!(View::DECLARED.len(), 8);
-        assert_eq!(View::ALL.len(), if INPUT_METHOD_HOST { 8 } else { 7 });
+        assert_eq!(View::DECLARED.len(), 9);
+        assert_eq!(View::ALL.len(), if INPUT_METHOD_HOST { 9 } else { 8 });
         assert_eq!(AVAILABLE, View::ALL.len());
     }
 
@@ -808,7 +823,7 @@ mod tests {
         let mut features = everything();
         features
             .set_enabled(View::JsonFormatter.code(), false)
-            .expect("five others remain");
+            .expect("six others remain");
 
         assert_eq!(
             View::shown(&features, Some(View::JsonFormatter.code())),
@@ -823,7 +838,7 @@ mod tests {
         features.move_to(View::Database.code(), 0);
         features
             .set_enabled(View::Docker.code(), false)
-            .expect("five others remain");
+            .expect("six others remain");
 
         assert_eq!(View::shown(&features, None), View::Database);
         assert_eq!(
@@ -887,6 +902,7 @@ mod tests {
             (Detector::Jwt, View::EncoderDecoder),
             (Detector::Json, View::JsonFormatter),
             (Detector::Base64, View::EncoderDecoder),
+            (Detector::Mermaid, View::Mermaid),
         ] {
             assert_eq!(View::for_detector(detector), view);
             assert_ne!(view, View::Diagram, "Diagram has no paste route");
@@ -953,7 +969,8 @@ mod tests {
 
         let features = Features::resolve(workspace.tools.as_deref(), &View::codes());
 
-        let mut expected: Vec<(&str, bool)> = vec![("docker", true), ("database", true)];
+        let mut expected: Vec<(&str, bool)> =
+            vec![("docker", true), ("database", true), ("mermaid", true)];
         if INPUT_METHOD_HOST {
             // Beside its default neighbour, not at an absolute index: the list
             // it is joining is the user's order, and an absolute index means
@@ -983,7 +1000,7 @@ mod tests {
 
         // …and the sidebar draws the four they left on, in their order.
         let visible: Vec<View> = features.visible().filter_map(View::lookup).collect();
-        let mut wanted = vec![View::Docker, View::Database];
+        let mut wanted = vec![View::Docker, View::Database, View::Mermaid];
         if INPUT_METHOD_HOST {
             wanted.push(View::InputMethod);
         }
@@ -1024,7 +1041,7 @@ mod tests {
         let document = parse_document(REORDERED).expect("a version-3 session parses");
         let features = Features::resolve(document.workspace.tools.as_deref(), &View::codes());
 
-        let mut expected = vec!["api-explorer", "database"];
+        let mut expected = vec!["api-explorer", "database", "mermaid"];
         if INPUT_METHOD_HOST {
             expected.push("input-method");
         }

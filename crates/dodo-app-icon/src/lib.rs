@@ -141,6 +141,29 @@ pub enum AppIcon {
     /// the canvas is both a drawing surface and a connected node graph.
     Workflow,
 
+    /// The Mermaid workspace's sidebar row. Ships as our own
+    /// `icons/mermaid.svg`: three connected boxes rather than the project's
+    /// actual logo — an alpha-masked trace of it would not survive being
+    /// tinted to the element's text colour anyway, the same reason
+    /// `PostgreSql`/`Sqlite` above draw plain outline glyphs instead.
+    Mermaid,
+
+    /// The Mermaid toolbar's Copy SVG action. Ships as our own
+    /// `icons/copy-image.svg`: `Copy`'s two-sheet motif with a picture — frame,
+    /// sun and ridge — as the front sheet. The toolbar's four file actions are
+    /// two verbs over two payloads, and neither our set nor the pinned library
+    /// has a picture glyph *at all*, so the payload had nowhere to be drawn:
+    /// copy-source and copy-SVG were both plain `Copy`, leaving the tooltip as
+    /// the only thing that told them apart.
+    CopyImage,
+    /// The Mermaid toolbar's Save SVG action, and the other half of the pair
+    /// above: the same picture mark, with a download arrow in the corner the
+    /// frame opens to make room for it. The mark is what carries "the rendered
+    /// picture, not the source you typed" — it is on exactly these two variants
+    /// and on neither `Copy` nor `Save`, so a glance reads the payload from the
+    /// mark and the verb from the motif around it.
+    ImageDown,
+
     // Cleaner's section and category rows. Most resolve through `Assets`'
     // fallback to `gpui_component_assets`.
     /// The Cleanup section. Ships as our own `icons/brush-cleaning.svg`:
@@ -227,6 +250,9 @@ impl IconNamed for AppIcon {
             Self::GripVertical => "icons/grip-vertical.svg",
             Self::Keyboard => "icons/keyboard.svg",
             Self::Workflow => "icons/workflow.svg",
+            Self::Mermaid => "icons/mermaid.svg",
+            Self::CopyImage => "icons/copy-image.svg",
+            Self::ImageDown => "icons/image-down.svg",
             Self::BrushCleaning => "icons/brush-cleaning.svg",
             Self::LayoutDashboard => "icons/layout-dashboard.svg",
             Self::Bot => "icons/bot.svg",

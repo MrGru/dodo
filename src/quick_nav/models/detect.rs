@@ -31,6 +31,16 @@
 //!    a naive Base64 pattern, so this one is not allowed to accept on shape: it
 //!    must decode canonically *and* produce readable UTF-8. See
 //!    [`detect_base64`].
+//! 6. **Mermaid** — after Base64, and the one position in this list *not*
+//!    forced by an overlap: Mermaid source shares no shape with any format
+//!    above it. It is never a single token (database URI's gate), never
+//!    starts with `{`/`[`/`"` (JSON's gate), never starts with the word
+//!    `curl`, and its own syntax — `-->`, `{`, `}` — falls outside both
+//!    Base64 alphabets, so [`detect_base64`]'s canonical-decode step already
+//!    refuses it before Mermaid is ever reached. Appended last is therefore
+//!    the safe default: nothing above it can be affected by an addition
+//!    nothing above it overlaps with, and no existing test in this module had
+//!    to change for Mermaid to be added.
 //!
 //! When nothing matches confidently the answer is `None` and dodo does nothing.
 //! A wrong jump throws away whatever the user was looking at; not jumping costs
@@ -39,8 +49,9 @@
 //! **This order is not the sidebar's**, and the two must never be conflated.
 //! The Features settings page lets the user drag the sidebar's tools into any
 //! order they like; that is a preference. This list is a correctness property —
-//! every position above is forced by an overlap with something below it — so
-//! [`detect_among`] iterates `ORDER` whatever order its caller's slice of
+//! every position above is forced by an overlap with something below it, save
+//! Mermaid's, argued where it sits — so [`detect_among`] iterates `ORDER`
+//! whatever order its caller's slice of
 //! allowed detectors is in. What the sidebar *does* decide is which detectors
 //! are allowed at all: a tool the user switched off is not a paste target, so
 //! its detector is skipped and the text falls through to the next one.
@@ -53,17 +64,25 @@
 //! `services::curl::parse` understands shell quoting, `models::uri::parse`
 //! understands four engines' URI dialects across 36 tests, and `serde_json` is
 //! the definition of the format. Replacing one of those with a regex would be a
-//! regression wearing configurability as a disguise.
+//! regression wearing configurability as a disguise. Mermaid joined this group
+//! rather than the pattern-shaped one below for the same reason: `dodo-mermaid`
+//! already owns a real parser (`mermaid-rs-renderer`, embedded — see that
+//! crate's own module docs), and a regex could only ever approximate what a
+//! successful render already proves.
 //!
 //! So the rule here, uniformly, is:
 //!
 //! > **A pattern selects candidates; the parser confirms.**
 //!
-//! - Where a real parser exists (cURL, database URI, JSON) the user's pattern is
-//!   an optional **gate**: set it and the text must match before the parser is
-//!   even attempted. Leave it empty — the default — and the parser is attempted
-//!   directly. A gate can only ever narrow, so a pattern cannot make detection
-//!   *wronger*, only quieter.
+//! - Where a real parser exists (cURL, database URI, JSON, Mermaid) the user's
+//!   pattern is an optional **gate**: set it and the text must match before the
+//!   parser is even attempted. Leave it empty — the default — and the parser is
+//!   attempted directly. A gate can only ever narrow, so a pattern cannot make
+//!   detection *wronger*, only quieter. Mermaid's own stage-1 keyword check
+//!   ([`looks_like_mermaid`]) runs regardless of the gate — it is not
+//!   user-editable, the same way `curl::parse`'s internal shell-quoting rules
+//!   are not — and exists only to keep an obviously-not-Mermaid clipboard from
+//!   paying for a render at all.
 //! - Where the format genuinely is pattern-shaped (JWT, Base64) the pattern is
 //!   the **shape test** and carries a real default the user may replace. The
 //!   confirming step is still there: the JWT header must decode to a JOSE header
@@ -81,6 +100,7 @@ use regex::Regex;
 use crate::api_explorer::services::curl;
 use crate::database::models::uri;
 use crate::i18n::{Str, quick_nav};
+use crate::mermaid::{DefaultMermaidRenderer, MermaidRenderer, MermaidTheme};
 
 use super::config::QuickNavDocument;
 use super::pattern::{self, PatternError};
@@ -130,7 +150,7 @@ const B64_JWT: GeneralPurpose = GeneralPurpose::new(
 /// accept a paste adds a variant here, a row in [`Detector::ORDER`], its arm in
 /// [`Detector::detect`], a [`Route`] variant, and an arm in
 /// `Layout::apply_route`. There is no registry to register with and no dynamic
-/// dispatch — an ordered list of five is not a plugin system and should not
+/// dispatch — an ordered list of six is not a plugin system and should not
 /// grow into one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Detector {
@@ -139,17 +159,19 @@ pub enum Detector {
     Jwt,
     Json,
     Base64,
+    Mermaid,
 }
 
 impl Detector {
     /// **The detection order.** The module doc above is the reasoning; this is
     /// the list, and it is the only place the order is written down.
-    pub const ORDER: [Detector; 5] = [
+    pub const ORDER: [Detector; 6] = [
         Detector::Curl,
         Detector::DatabaseUri,
         Detector::Jwt,
         Detector::Json,
         Detector::Base64,
+        Detector::Mermaid,
     ];
 
     /// The id a saved pattern is filed under in `quick-nav.json`, and the value
@@ -163,6 +185,7 @@ impl Detector {
             Detector::Jwt => "jwt",
             Detector::Json => "json",
             Detector::Base64 => "base64",
+            Detector::Mermaid => "mermaid",
         }
     }
 
@@ -174,6 +197,7 @@ impl Detector {
             Detector::Jwt => quick_nav::Text::JwtPattern.into(),
             Detector::Json => quick_nav::Text::JsonPattern.into(),
             Detector::Base64 => quick_nav::Text::Base64Pattern.into(),
+            Detector::Mermaid => quick_nav::Text::MermaidPattern.into(),
         }
     }
 
@@ -187,12 +211,12 @@ impl Detector {
     /// The pattern used when the user has set none — or has set one that does
     /// not compile.
     ///
-    /// `None` for the three detectors backed by a real parser: their default is
+    /// `None` for the four detectors backed by a real parser: their default is
     /// *no gate at all*, because attempting the parser is already the most
     /// accurate test available.
     pub fn default_pattern(self) -> Option<&'static str> {
         match self {
-            Detector::Curl | Detector::DatabaseUri | Detector::Json => None,
+            Detector::Curl | Detector::DatabaseUri | Detector::Json | Detector::Mermaid => None,
             // Three dot-separated base64url segments. The signature may be
             // empty — that is what an `alg: none` token looks like — and `=` is
             // allowed because some encoders pad. The confirming decode is what
@@ -246,6 +270,7 @@ impl Detector {
             Detector::Jwt => detect_jwt(text, pattern?),
             Detector::Json => detect_json(text, pattern),
             Detector::Base64 => detect_base64(text, pattern?),
+            Detector::Mermaid => detect_mermaid(text, pattern),
         }
     }
 }
@@ -341,7 +366,7 @@ pub fn detect_among(text: &str, patterns: &Patterns, allowed: &[Detector]) -> Op
         .find_map(|detector| detector.detect(text, patterns.pattern(detector)))
 }
 
-// ---- the five detectors ---------------------------------------------------
+// ---- the six detectors ------------------------------------------------
 //
 // Each one normalizes the candidate its own way — trimmed, whitespace-stripped
 // — and applies its pattern to *that*, so a user editing a Base64 pattern is
@@ -464,6 +489,124 @@ fn detect_base64(text: &str, shape: &Regex) -> Option<Route> {
         text: candidate,
         url_safe,
     })
+}
+
+/// Mermaid's own first-line keywords — the candidates [`looks_like_mermaid`]
+/// tests for, aligned with `mermaid-rs-renderer` 0.3.1. Not required to be
+/// exhaustive of every reserved word the renderer understands: this is a
+/// candidate filter, not the test, so a keyword this list misses only costs a
+/// render that would have succeeded anyway — the same "quieter, never
+/// wronger" property a user's gate pattern has.
+const MERMAID_KEYWORDS: [&str; 28] = [
+    "flowchart",
+    "graph",
+    "sequenceDiagram",
+    "classDiagram",
+    "stateDiagram-v2",
+    "stateDiagram",
+    "erDiagram",
+    "gantt",
+    "journey",
+    "timeline",
+    "mindmap",
+    "gitGraph",
+    "pie",
+    "quadrantChart",
+    "xychart-beta",
+    "sankey-beta",
+    "kanban",
+    "C4Context",
+    "C4Container",
+    "C4Component",
+    "C4Deployment",
+    "block-beta",
+    "architecture-beta",
+    "requirementDiagram",
+    "zenuml",
+    "packet-beta",
+    "radar-beta",
+    "treemap",
+];
+
+/// Mermaid's direction tokens — the only words `graph`/`flowchart` may be
+/// followed by on their opening line.
+///
+/// Without this, `graph database is unavailable` would pass a bare prefix
+/// check: it does start with `graph`. `mermaid-rs-renderer` is lenient enough
+/// — a bare `flowchart` with nothing else is a valid, empty diagram — that
+/// stage 2 cannot be trusted to refuse it either, so the direction check is
+/// what actually keeps this detector's promise of "low false-positive".
+const MERMAID_DIRECTIONS: [&str; 5] = ["TB", "TD", "BT", "RL", "LR"];
+
+/// Stage 1: does `candidate` open the way a Mermaid diagram does.
+///
+/// A word-boundary prefix match — `graphical` must not match `graph` — with
+/// one extra rule for `graph`/`flowchart` alone, argued at
+/// [`MERMAID_DIRECTIONS`]. Cheap on purpose: this runs before the parser in
+/// [`detect_mermaid`], on every clipboard string quick navigation considers.
+fn looks_like_mermaid(candidate: &str) -> bool {
+    for keyword in MERMAID_KEYWORDS {
+        let Some(rest) = candidate.strip_prefix(keyword) else {
+            continue;
+        };
+        if rest.starts_with(|c: char| c.is_alphanumeric() || c == '-' || c == '_') {
+            continue; // `keyword` was only a prefix of a longer word.
+        }
+        if keyword != "graph" && keyword != "flowchart" {
+            return true;
+        }
+        let opening_line = rest.split(['\n', '\r']).next().unwrap_or("").trim();
+        return opening_line.is_empty() || MERMAID_DIRECTIONS.contains(&opening_line);
+    }
+    false
+}
+
+/// Strips a UTF-8 BOM and surrounding whitespace, then — only when the fence's
+/// language is exactly `mermaid` or `mmd` — one outer Markdown code fence.
+///
+/// Every other fenced block is left alone: a ` ```rust ` fence around some
+/// other language is not Mermaid source with an unlucky wrapper, and
+/// stripping it on a hunch would turn ordinary code snippets into false
+/// positives.
+fn strip_mermaid_fence(text: &str) -> &str {
+    let trimmed = text.trim_start_matches('\u{feff}').trim();
+    let Some(opened) = trimmed.strip_prefix("```") else {
+        return trimmed;
+    };
+    let Some((language, rest)) = opened.split_once('\n') else {
+        return trimmed;
+    };
+    if !matches!(language.trim(), "mermaid" | "mmd") {
+        return trimmed;
+    }
+    rest.strip_suffix("```").unwrap_or(rest).trim()
+}
+
+/// Attempting the parser is the detector, same shape as cURL and the database
+/// URI — except the "parser" here is a full `mermaid-rs-renderer` render
+/// rather than a validate-only call, because `dodo-mermaid` exposes no cheaper
+/// one (see its own module docs). That is safe for the same reason
+/// [`MAX_INPUT_BYTES`] is safe for JSON: a render measures in microseconds on
+/// `dodo-mermaid`'s own benchmarks, and [`looks_like_mermaid`] has already
+/// turned away everything that obviously is not a candidate, so this only
+/// runs for text that already looks like an opening Mermaid line.
+fn detect_mermaid(text: &str, gate: Option<&Regex>) -> Option<Route> {
+    if !passes(gate, text.trim()) {
+        return None;
+    }
+    let candidate = strip_mermaid_fence(text);
+    if !looks_like_mermaid(candidate) {
+        return None;
+    }
+    // This module is deliberately GPUI-free (see its own doc), so there is no
+    // window to read dodo's active appearance from — and it does not matter:
+    // confirmation only needs a successful render, and `open_tab`'s own first
+    // real render (`MermaidView::schedule_render`) is what actually chooses
+    // light or dark for the pane the user will see.
+    DefaultMermaidRenderer
+        .render(candidate, MermaidTheme::default())
+        .ok()?;
+    Some(Route::Mermaid(candidate.to_owned()))
 }
 
 /// Whether a decoded character reads as text rather than as a byte that
@@ -712,6 +855,88 @@ mod tests {
         assert_eq!(route("curl"), None);
     }
 
+    // ---- Mermaid ------------------------------------------------------------
+
+    #[test]
+    fn a_flowchart_routes_to_the_mermaid_workspace() {
+        let text = "flowchart LR\n  A[Request] --> B{Auth}\n  B --> C[API]";
+        assert_eq!(route(text), Some(Route::Mermaid(text.to_owned())));
+    }
+
+    #[test]
+    fn a_sequence_diagram_routes_to_the_mermaid_workspace() {
+        let text = "sequenceDiagram\n  Alice->>Bob: Hello\n";
+        assert_eq!(detector_of(text), Some(Detector::Mermaid));
+    }
+
+    /// A ```mermaid fence is very-high-confidence per the workspace plan: the
+    /// fence itself says what the content is, so the stripped source — not
+    /// the fence — is what lands in the new tab.
+    #[test]
+    fn a_fenced_mermaid_block_is_unwrapped_before_it_is_routed() {
+        let fenced = "```mermaid\nerDiagram\n    USER ||--o{ ORDER : places\n```";
+        assert_eq!(
+            route(fenced),
+            Some(Route::Mermaid(
+                "erDiagram\n    USER ||--o{ ORDER : places".to_owned()
+            )),
+        );
+    }
+
+    #[test]
+    fn an_mmd_fenced_block_is_also_unwrapped() {
+        let fenced = "```mmd\ngraph TD\n  A --> B\n```";
+        assert_eq!(
+            route(fenced),
+            Some(Route::Mermaid("graph TD\n  A --> B".to_owned())),
+        );
+    }
+
+    /// A fence around any other language is left exactly as it is — it is not
+    /// Mermaid source with an unlucky wrapper, and the fenced text here does
+    /// not even look like Mermaid once the (unstripped) fence is considered.
+    #[test]
+    fn a_non_mermaid_fence_is_not_stripped_or_routed() {
+        let fenced = "```rust\nflowchart LR\n  A --> B\n```";
+        assert_eq!(route(fenced), None);
+    }
+
+    /// The plan's own negative examples: prose that merely mentions a diagram
+    /// word, a bare arrow, and — the case stage 1's direction check exists
+    /// for — `graph` followed by an ordinary sentence rather than a
+    /// direction.
+    #[test]
+    fn mermaid_looking_prose_routes_nowhere() {
+        for text in [
+            "Please update this flowchart tomorrow.",
+            "A --> B",
+            "graph database is unavailable",
+        ] {
+            assert_eq!(route(text), None, "{text} must not route to Mermaid");
+        }
+    }
+
+    /// Mermaid must not steal a paste that belongs to an existing detector.
+    /// The two overlap-shaped ones, JSON and Base64, are the ones actually
+    /// worth checking: neither's clipboard shape happens to start with a
+    /// Mermaid keyword, but this is what would notice if it ever did.
+    #[test]
+    fn mermaid_does_not_steal_json_or_curl_or_database_pastes() {
+        assert_eq!(
+            detector_of("{\n  \"graph\": \"LR\"\n}"),
+            Some(Detector::Json)
+        );
+        assert_eq!(
+            detector_of("curl https://example.com"),
+            Some(Detector::Curl),
+            "a real cURL command must still win its own detector",
+        );
+        assert_eq!(
+            detector_of("postgresql://alice@db/shop"),
+            Some(Detector::DatabaseUri),
+        );
+    }
+
     #[test]
     fn nothing_at_all_routes_nowhere() {
         assert_eq!(route(""), None);
@@ -884,6 +1109,7 @@ mod tests {
                 Detector::Jwt,
                 Detector::Json,
                 Detector::Base64,
+                Detector::Mermaid,
             ]
         );
 
