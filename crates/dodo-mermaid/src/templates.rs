@@ -106,7 +106,8 @@ pub(crate) fn appended(existing: &str, template: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::{DefaultMermaidRenderer, MermaidRenderer, MermaidTheme};
+    use crate::render::{DefaultMermaidRenderer, MermaidRenderer};
+    use crate::theme::MermaidTheme;
 
     const FLOWCHART: &str = "flowchart LR\n  A --> B\n";
 
@@ -186,7 +187,7 @@ mod tests {
     fn every_template_renders() {
         for template in MermaidTemplate::ALL {
             let output = DefaultMermaidRenderer
-                .render(template.source(), MermaidTheme::Light)
+                .render(template.source(), MermaidTheme::default())
                 .unwrap_or_else(|error| panic!("{template:?} does not render: {error}"));
             assert!(output.svg.contains("<svg"), "{template:?}: {}", output.svg);
         }

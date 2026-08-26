@@ -68,4 +68,59 @@ pub enum Text {
     CopySvgTooltip,
     SaveSourceTooltip,
     SaveSvgTooltip,
+
+    // The editor's second floating button and the panel behind it: the
+    // per-tab diagram theme. The panel edits the *active tab*, which is why
+    // its title says "this diagram" rather than "diagrams".
+    ThemeTooltip,
+    ThemePanelTitle,
+    ThemeClosePanelTooltip,
+
+    // The preset picker. `ThemePresetAutomatic` is its first entry and the
+    // state every new tab starts in — the diagram follows dodo's own
+    // light/dark appearance until the user pins it. The other five are the
+    // renderer's own named presets and keep their upstream names.
+    ThemePresetLabel,
+    ThemePresetAutomatic,
+    ThemePresetModern,
+    ThemePresetDefault,
+    ThemePresetDark,
+    ThemePresetForest,
+    ThemePresetNeutral,
+
+    // The ten editable general fields. Named for what each does to a diagram,
+    // not for the renderer's own field name: `primaryColor` means nothing to
+    // somebody who has not read the renderer's `theme.rs`. Which ten they are
+    // was measured rather than assumed — `dodo-mermaid`'s `theme` module doc
+    // records why `text_color` and `secondary_color` are not among them.
+    ThemeFieldFontFamily,
+    ThemeFieldFontSize,
+    ThemeFieldShapeFill,
+    ThemeFieldShapeText,
+    ThemeFieldShapeBorder,
+    ThemeFieldLines,
+    ThemeFieldBackground,
+    ThemeFieldEdgeLabel,
+    ThemeFieldSubgraphFill,
+    ThemeFieldSubgraphBorder,
+
+    // The glyphs on the font-size stepper; both languages draw the same
+    // symbol, exactly like the zoom cluster's pair above.
+    ThemeFontSizeSmaller,
+    ThemeFontSizeLarger,
+
+    // Defaults and overrides. `ThemeDefaultValue` is the muted line a changed
+    // row grows so the value it was moved *off* is still readable, and
+    // `ThemeChangedTooltip` names the dot marking that row.
+    ThemeDefaultValue {
+        value: String,
+    },
+    ThemeChangedTooltip,
+    ThemeResetFieldTooltip,
+    ThemeResetAll,
+
+    /// Why there are twelve rows and not forty: the `sequence_*`, `git_*` and
+    /// `pie_*` groups follow the preset. Stated in the panel so their absence
+    /// reads as a decision rather than an omission.
+    ThemeDiagramSpecificNote,
 }

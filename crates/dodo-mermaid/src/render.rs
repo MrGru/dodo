@@ -20,6 +20,20 @@
 //!
 //! [`view`]: crate::view
 //!
+//! # Where the theme is, and is not
+//!
+//! [`MermaidTheme`] used to be a two-variant `Light`/`Dark` enum living here,
+//! and it is now [`crate::theme`]'s: a preset plus the general fields the user
+//! has moved off it. The split is the same boundary this file already draws,
+//! one step further out — [`crate::theme`] holds the *rules* (which fields are
+//! editable, what a valid colour is, what resetting means) with no dependency
+//! on `mermaid_rs_renderer` at all, and this file holds the only translation
+//! between those rules and the renderer's own 40-field `Theme`. Three
+//! functions make up that translation and each is an exhaustive `match`, so a
+//! field added to [`ThemeField`] cannot be forgotten in any of them:
+//! [`preset_defaults`] reads a preset out, [`write_field`] merges an override
+//! in, and [`renderer_theme`] is the pair applied in order.
+//!
 //! # Error isolation
 //!
 //! [`DefaultMermaidRenderer::render`] never panics on malformed input — Mermaid
@@ -32,28 +46,98 @@ use std::fmt;
 
 use mermaid_rs_renderer::{RenderOptions, Theme, render_with_timing};
 
-/// Which of the renderer's built-in colour themes to draw with.
+use crate::theme::{
+    MermaidTheme, MermaidThemePreset, ThemeDefaults, ThemeField, format_font_size, parse_font_size,
+};
+
+/// The five preset constructors, as one exhaustive `match`.
 ///
-/// Deliberately just these two — the workspace plan's "start simple" rule for
-/// theming (§20): dodo's own `Dodo`/`System` appearance already resolves to
-/// one of light or dark before it reaches here (see [`view`]'s call site), so
-/// there is nothing for a third variant to mean.
-///
-/// [`view`]: crate::view
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum MermaidTheme {
-    #[default]
-    Light,
-    Dark,
+/// `Theme::from_name(&str)` exists upstream and is deliberately not used: a
+/// preset that upstream renames or drops must break the build here rather than
+/// return `None` at runtime and silently fall back.
+fn renderer_preset(preset: MermaidThemePreset) -> Theme {
+    match preset {
+        MermaidThemePreset::Modern => Theme::modern(),
+        MermaidThemePreset::MermaidDefault => Theme::mermaid_default(),
+        MermaidThemePreset::Dark => Theme::dark(),
+        MermaidThemePreset::Forest => Theme::forest(),
+        MermaidThemePreset::Neutral => Theme::neutral(),
+    }
 }
 
-impl MermaidTheme {
-    fn into_renderer_theme(self) -> Theme {
-        match self {
-            MermaidTheme::Light => Theme::modern(),
-            MermaidTheme::Dark => Theme::dark(),
-        }
+/// The ten general fields `preset` ships with, for the theme panel to show
+/// and for [`crate::theme::TabTheme::set`] to compare against.
+///
+/// This is the whole reason [`ThemeDefaults`] is a table of `String`s rather
+/// than the renderer's own `Theme`: it is the one direction in which the
+/// renderer's type crosses out of this file, and it crosses as data.
+pub(crate) fn preset_defaults(preset: MermaidThemePreset) -> ThemeDefaults {
+    let theme = renderer_preset(preset);
+    ThemeDefaults::new(ThemeField::ALL.map(|field| read_field(&theme, field)))
+}
+
+/// One general field's value out of a renderer theme.
+///
+/// Paired with [`write_field`], and the pairing is asserted below
+/// (`every_field_reads_back_what_it_wrote`): a `read`/`write` mismatch would
+/// show up as a row whose control edits one thing and whose value displays
+/// another, which is exactly the "a style field no painter reads" failure
+/// `dodo-flow`'s `properties.rs` has met repeatedly.
+fn read_field(theme: &Theme, field: ThemeField) -> String {
+    match field {
+        ThemeField::FontFamily => theme.font_family.clone(),
+        ThemeField::FontSize => format_font_size(theme.font_size),
+        ThemeField::PrimaryColor => theme.primary_color.clone(),
+        ThemeField::PrimaryTextColor => theme.primary_text_color.clone(),
+        ThemeField::PrimaryBorderColor => theme.primary_border_color.clone(),
+        ThemeField::LineColor => theme.line_color.clone(),
+        ThemeField::Background => theme.background.clone(),
+        ThemeField::EdgeLabelBackground => theme.edge_label_background.clone(),
+        ThemeField::ClusterBackground => theme.cluster_background.clone(),
+        ThemeField::ClusterBorder => theme.cluster_border.clone(),
     }
+}
+
+/// One general field's value into a renderer theme.
+///
+/// A size that will not parse is *dropped* rather than written: values reach
+/// here only through [`ThemeField::canonical`], so an unparsable one is a bug
+/// in this crate rather than user input, and leaving the preset's own size in
+/// place renders a diagram while a `0.0` or a NaN would render none.
+///
+/// [`ThemeField::canonical`]: crate::theme::ThemeField::canonical
+fn write_field(theme: &mut Theme, field: ThemeField, value: &str) {
+    match field {
+        ThemeField::FontFamily => theme.font_family = value.to_string(),
+        ThemeField::FontSize => {
+            if let Some(size) = parse_font_size(value) {
+                theme.font_size = size;
+            }
+        }
+        ThemeField::PrimaryColor => theme.primary_color = value.to_string(),
+        ThemeField::PrimaryTextColor => theme.primary_text_color = value.to_string(),
+        ThemeField::PrimaryBorderColor => theme.primary_border_color = value.to_string(),
+        ThemeField::LineColor => theme.line_color = value.to_string(),
+        ThemeField::Background => theme.background = value.to_string(),
+        ThemeField::EdgeLabelBackground => theme.edge_label_background = value.to_string(),
+        ThemeField::ClusterBackground => theme.cluster_background = value.to_string(),
+        ThemeField::ClusterBorder => theme.cluster_border = value.to_string(),
+    }
+}
+
+/// A [`MermaidTheme`] as the renderer's own `Theme`: the preset, then the
+/// user's overrides merged on top.
+///
+/// **Merged, not rebuilt.** The preset's remaining ~30 fields — every
+/// `sequence_*`, `git_*` and `pie_*` value — are carried through untouched,
+/// which is what "the diagram-specific groups follow the preset" means in
+/// code. There is no second table of defaults anywhere in this crate.
+fn renderer_theme(theme: &MermaidTheme) -> Theme {
+    let mut resolved = renderer_preset(theme.base());
+    for (field, value) in theme.overrides() {
+        write_field(&mut resolved, field, value);
+    }
+    resolved
 }
 
 /// One successful render: the SVG text, plus the three timings the upstream
@@ -120,7 +204,7 @@ impl MermaidRenderer for DefaultMermaidRenderer {
         theme: MermaidTheme,
     ) -> Result<MermaidRenderOutput, MermaidError> {
         let options = RenderOptions {
-            theme: theme.into_renderer_theme(),
+            theme: renderer_theme(&theme),
             ..RenderOptions::default()
         };
         let timed =
@@ -138,6 +222,7 @@ impl MermaidRenderer for DefaultMermaidRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::{TabTheme, ThemeFieldKind};
 
     fn renderer() -> DefaultMermaidRenderer {
         DefaultMermaidRenderer
@@ -145,8 +230,19 @@ mod tests {
 
     fn render_ok(source: &str) -> MermaidRenderOutput {
         renderer()
-            .render(source, MermaidTheme::Light)
+            .render(source, MermaidTheme::default())
             .unwrap_or_else(|error| panic!("expected a render, got {error}: {source}"))
+    }
+
+    fn themed(preset: MermaidThemePreset, overrides: &[(ThemeField, &str)]) -> MermaidTheme {
+        let defaults = preset_defaults(preset);
+        let mut tab = TabTheme::default();
+        tab.choose_preset(preset);
+        for (field, value) in overrides {
+            tab.set(*field, value, preset, &defaults)
+                .unwrap_or_else(|error| panic!("{field:?} rejected {value:?}: {error:?}"));
+        }
+        tab.resolve(preset)
     }
 
     #[test]
@@ -199,14 +295,14 @@ mod tests {
 
     #[test]
     fn empty_source_is_a_controlled_error_not_a_panic() {
-        assert!(renderer().render("", MermaidTheme::Light).is_err());
+        assert!(renderer().render("", MermaidTheme::default()).is_err());
     }
 
     #[test]
     fn whitespace_only_source_is_a_controlled_error_not_a_panic() {
         assert!(
             renderer()
-                .render("   \n\t  \n", MermaidTheme::Light)
+                .render("   \n\t  \n", MermaidTheme::default())
                 .is_err()
         );
     }
@@ -218,13 +314,13 @@ mod tests {
     /// "malformed syntax produces `MermaidError`, not a panic".
     #[test]
     fn malformed_syntax_is_a_controlled_error_not_a_panic() {
-        let result = renderer().render("flowchart LR\n  --> --> -->\n", MermaidTheme::Light);
+        let result = renderer().render("flowchart LR\n  --> --> -->\n", MermaidTheme::default());
         assert!(result.is_err());
     }
 
     #[test]
     fn unrecognised_diagram_keyword_is_a_controlled_error() {
-        let result = renderer().render("notADiagramType\n  A --> B\n", MermaidTheme::Light);
+        let result = renderer().render("notADiagramType\n  A --> B\n", MermaidTheme::default());
         assert!(result.is_err());
     }
 
@@ -239,13 +335,151 @@ mod tests {
         let _ = (output.parse_us, output.layout_us, output.render_us);
     }
 
-    /// The whole point of [`MermaidTheme`]: the two variants must actually
-    /// produce visibly different SVGs, or "fits dodo's appearance" is a no-op.
+    /// The whole point of the appearance mapping: the two presets dodo's
+    /// light and dark appearances resolve to must actually produce visibly
+    /// different SVGs, or "fits dodo's appearance" is a no-op.
     #[test]
-    fn light_and_dark_themes_render_different_svgs() {
+    fn light_and_dark_appearances_render_different_svgs() {
         let source = "flowchart LR\n  A --> B\n";
-        let light = renderer().render(source, MermaidTheme::Light).unwrap();
-        let dark = renderer().render(source, MermaidTheme::Dark).unwrap();
+        let light = renderer()
+            .render(
+                source,
+                MermaidTheme::preset(MermaidThemePreset::for_appearance(false)),
+            )
+            .unwrap();
+        let dark = renderer()
+            .render(
+                source,
+                MermaidTheme::preset(MermaidThemePreset::for_appearance(true)),
+            )
+            .unwrap();
         assert_ne!(light.svg, dark.svg);
+    }
+
+    /// Every preset has to reach the renderer as itself. Rendering the same
+    /// source five times and finding two identical SVGs would mean a preset
+    /// arm pointing at the wrong constructor — a mistake nothing else here
+    /// could see.
+    #[test]
+    fn every_preset_renders_its_own_svg() {
+        let source = "flowchart LR\n  A[Start] --> B[End]\n";
+        let mut rendered: Vec<(MermaidThemePreset, String)> = Vec::new();
+        for preset in MermaidThemePreset::ALL {
+            let svg = renderer()
+                .render(source, MermaidTheme::preset(preset))
+                .unwrap_or_else(|error| panic!("{preset:?} failed to render: {error}"))
+                .svg;
+            for (other, other_svg) in &rendered {
+                assert_ne!(&svg, other_svg, "{preset:?} renders exactly like {other:?}");
+            }
+            rendered.push((preset, svg));
+        }
+    }
+
+    /// The panel's promise, checked at the only place it can be: a field the
+    /// user changed must reach the renderer, and the SVG must differ from the
+    /// untouched preset's.
+    #[test]
+    fn every_editable_field_changes_the_rendered_svg() {
+        // One source exercising a node, its label, an edge with a label, a
+        // subgraph and the page behind them, so every general field has
+        // something to colour.
+        let source = "flowchart LR\n  subgraph Group\n    A[Start] -->|go| B[End]\n  end\n";
+        let base = renderer()
+            .render(source, MermaidTheme::preset(MermaidThemePreset::Modern))
+            .unwrap()
+            .svg;
+
+        for field in ThemeField::ALL {
+            let value = match field.kind() {
+                ThemeFieldKind::FontStack => "Courier New, monospace",
+                ThemeFieldKind::Size => "26",
+                ThemeFieldKind::Colour => "#FF00FF",
+            };
+            let themed = themed(MermaidThemePreset::Modern, &[(field, value)]);
+            let svg = renderer()
+                .render(source, themed)
+                .unwrap_or_else(|error| panic!("{field:?} failed to render: {error}"))
+                .svg;
+            assert_ne!(
+                svg, base,
+                "{field:?} is offered in the theme panel but changes nothing the renderer draws"
+            );
+        }
+    }
+
+    /// The other half of the panel's promise: the groups it says it does not
+    /// touch really do follow the preset. `pie_colors` is the clearest probe —
+    /// it is derived from the preset's own base colours while the preset is
+    /// being *constructed*, so an override merged on afterwards must not move
+    /// it.
+    #[test]
+    fn overriding_a_general_field_leaves_the_diagram_specific_groups_alone() {
+        let base = renderer_preset(MermaidThemePreset::Modern);
+        let merged = renderer_theme(&themed(
+            MermaidThemePreset::Modern,
+            &[
+                (ThemeField::PrimaryColor, "#FF00FF"),
+                (ThemeField::ClusterBackground, "#00FF00"),
+            ],
+        ));
+
+        assert_eq!(merged.pie_colors, base.pie_colors);
+        assert_eq!(merged.git_colors, base.git_colors);
+        assert_eq!(merged.sequence_actor_fill, base.sequence_actor_fill);
+        assert_eq!(merged.sequence_note_fill, base.sequence_note_fill);
+        // …while the two fields that *were* overridden did move.
+        assert_eq!(merged.primary_color, "#FF00FF");
+        assert_eq!(merged.cluster_background, "#00FF00");
+    }
+
+    /// [`read_field`] and [`write_field`] are two exhaustive matches over one
+    /// enum, which is exactly the shape in which one arm quietly points at the
+    /// wrong renderer field.
+    #[test]
+    fn every_field_reads_back_what_it_wrote() {
+        for field in ThemeField::ALL {
+            let written = match field.kind() {
+                ThemeFieldKind::FontStack => "Sentinel Sans",
+                ThemeFieldKind::Size => "23",
+                ThemeFieldKind::Colour => "#0F0F0F",
+            };
+            let mut theme = renderer_preset(MermaidThemePreset::Modern);
+            write_field(&mut theme, field, written);
+            assert_eq!(read_field(&theme, field), written, "{field:?}");
+
+            // …and it wrote *only* that field: every other one still reads the
+            // preset's own value.
+            let pristine = renderer_preset(MermaidThemePreset::Modern);
+            for other in ThemeField::ALL {
+                if other == field {
+                    continue;
+                }
+                assert_eq!(
+                    read_field(&theme, other),
+                    read_field(&pristine, other),
+                    "writing {field:?} also moved {other:?}"
+                );
+            }
+        }
+    }
+
+    /// The theme panel paints a swatch for every colour row, including the
+    /// untouched ones, so every preset's own spelling of every colour field
+    /// has to be one [`crate::theme::canonical_colour`] understands — the
+    /// presets use bare names, `rgba(…)`, `hsl(…)` and 3-digit hex as well as
+    /// full hex.
+    #[test]
+    fn every_preset_default_parses() {
+        for preset in MermaidThemePreset::ALL {
+            let defaults = preset_defaults(preset);
+            for field in ThemeField::ALL {
+                let value = defaults.get(field);
+                assert!(
+                    field.canonical(value).is_ok(),
+                    "{preset:?}'s {field:?} is {value:?}, which the theme panel cannot show"
+                );
+            }
+        }
     }
 }

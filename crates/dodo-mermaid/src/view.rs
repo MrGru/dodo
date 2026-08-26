@@ -36,14 +36,32 @@
 //! |---|---|---|
 //! | [`MermaidView::render_preview_status`] — spinner, render error | preview | top-left |
 //! | [`MermaidView::render_zoom_controls`] — `-` / Fit / `+` | preview | bottom-right |
-//! | [`MermaidView::render_template_menu`] — insert a template | editor | top-right |
+//! | [`MermaidView::render_editor_controls`] — theme, templates | editor | top-right |
+//! | [`MermaidView::render_theme_panel`] — the theme panel itself | editor | under the cluster |
 //!
 //! Each is a *child element of its pane*, which is what makes
 //! [`crate::workspace::WorkspaceMode`]'s two predicates the only thing
 //! deciding whether it exists: a control cannot be stranded in a pane that is
-//! not drawn, because it is not drawn either. The one piece of state that
-//! could outlive its pane is the template menu's open flag, and
-//! [`MermaidView::set_mode`] closes it for that reason.
+//! not drawn, because it is not drawn either. The state that could outlive its
+//! pane is the three open flags — the template menu's, the theme panel's and
+//! the preset picker's — and [`MermaidView::set_mode`] closes all three for
+//! that reason.
+//!
+//! # The theme panel edits the tab, and its widgets belong to the view
+//!
+//! [`crate::theme`] owns every *rule* about a theme; this file owns the
+//! widgets and one piece of bookkeeping that only exists because those widgets
+//! are shared. The panel always edits the active tab, so there is one set of
+//! colour pickers and one font input on the view rather than a set per tab —
+//! and that is what
+//! [`MermaidView::theme_controls_dirty`] is for: anything that moves a value
+//! *behind* a widget (opening the panel, switching tab, choosing a preset,
+//! either reset, dodo's appearance changing) marks it, and
+//! [`MermaidView::sync_theme_controls`] pushes the new values in on the next
+//! frame. A widget reporting its own change deliberately does **not** mark it:
+//! `ColorPickerState::set_value` and `InputState::set_value` both `notify`,
+//! so syncing unconditionally from `render` is a repaint loop, and syncing on
+//! a widget's own event moves a text caret or re-quantises a slider mid-drag.
 //!
 //! # Why the preview is a rasterised image, not the `svg()` element
 //!
@@ -108,13 +126,20 @@ use dodo_app_icon::AppIcon;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonGroup, ButtonVariants};
+use gpui_component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
-use gpui_component::{ActiveTheme, Selectable, Sizable, h_flex, v_flex};
+use gpui_component::tooltip::Tooltip;
+use gpui_component::{
+    ActiveTheme, Colorize as _, Selectable, Sizable, StyledExt as _, h_flex, v_flex,
+};
 
 use crate::i18n::{Language, LanguageExt, Str, mermaid, t};
-use crate::render::{DefaultMermaidRenderer, MermaidRenderer, MermaidTheme};
+use crate::render::{DefaultMermaidRenderer, MermaidRenderer, preset_defaults};
 use crate::templates::{self, MermaidTemplate};
+use crate::theme::{
+    self, MermaidTheme, MermaidThemePreset, TabTheme, ThemeDefaults, ThemeField, ThemeFieldKind,
+};
 use crate::workspace::{self, CloseOutcome, WorkspaceMode};
 use crate::zoom;
 
@@ -146,6 +171,21 @@ const PREVIEW_SCALE: f32 = 2.0;
 /// to the edge sits on top of the track and takes the drag that was meant for
 /// it. The preview has no scrollbar and needs no such clearance.
 const EDITOR_OVERLAY_RIGHT: Pixels = px(16.);
+
+/// How far below the editor pane's top edge the theme panel hangs.
+///
+/// The floating control cluster sits at `top_2()` and is one `xsmall` button
+/// tall inside a `p_0p5` ground; this clears it, so the panel drops out of the
+/// button that opened it rather than over it.
+const THEME_PANEL_TOP: Pixels = px(44.);
+
+/// How wide the theme panel is.
+///
+/// Wide enough for a field label and its control on one line at `text_xs`, and
+/// narrow enough that it covers well under half of a Split-mode editor — the
+/// panel is an overlay over code somebody is in the middle of writing, so it
+/// is deliberately not a pane.
+const THEME_PANEL_WIDTH: Pixels = px(320.);
 
 /// The key-binding context the workspace establishes on its root. Scoped the
 /// same way `dodo_docker`'s `KEY_CONTEXT` is: bindings registered against it
@@ -179,7 +219,25 @@ struct MermaidTab {
     editor: Entity<InputState>,
     render_task: Option<Task<()>>,
     render_generation: u64,
-    last_rendered_hash: Option<u64>,
+    /// The [`render_key`] — source *and* theme — of the last render that was
+    /// allowed to start.
+    ///
+    /// Source alone would be wrong now that a tab has a theme: changing a
+    /// colour changes no character of the document, so a source-only guard
+    /// would treat every theme change as "nothing to do" and the preview would
+    /// never restyle. That is the single likeliest way this feature ships
+    /// broken, and the key is where it is prevented.
+    last_rendered_key: Option<u64>,
+    /// The preset the most recently *scheduled* render was scheduled for.
+    ///
+    /// Recorded synchronously in [`MermaidView::schedule_render`] rather than
+    /// when the debounced task finally runs, because [`MermaidView::render`]
+    /// compares it against the base in effect this frame to notice that dodo's
+    /// appearance has changed under a tab that follows it. Recording it inside
+    /// the task instead would leave the comparison false for the whole
+    /// debounce window, and every frame in it would schedule again — a
+    /// debounce that never expires.
+    scheduled_base: Option<MermaidThemePreset>,
     rendered_image: Option<Arc<RenderImage>>,
     /// The last successful render's raw SVG text — kept alongside the
     /// rasterised [`Self::rendered_image`] purely for Copy SVG / Save SVG
@@ -193,6 +251,10 @@ struct MermaidTab {
     zoom: f32,
     /// The manual pan offset from centred, in screen pixels at `zoom`.
     pan: Point<Pixels>,
+    /// What this tab is drawn in. Per tab, never shared: two tabs can carry
+    /// two themes at once, and [`crate::theme`]'s own tests are what assert
+    /// that rather than anything here.
+    theme: TabTheme,
 }
 
 /// The Mermaid workspace: one or more [`MermaidTab`]s, a tab bar, and the
@@ -213,11 +275,45 @@ pub struct MermaidView {
     panning_from: Option<Point<Pixels>>,
     /// Whether the editor's floating template button has its menu open.
     template_menu_open: bool,
+    /// Whether the editor's floating theme button has its panel open.
+    theme_panel_open: bool,
+    /// Whether the theme panel's preset picker has its menu open.
+    theme_preset_menu_open: bool,
+    /// The general-field defaults of the preset currently in effect, cached
+    /// against the preset they came from.
+    ///
+    /// Building this means constructing one of the renderer's 40-field
+    /// `Theme`s, which is 40 allocations — fine when the preset changes,
+    /// unacceptable once per frame, and the panel reads it once per row per
+    /// frame. Root `AGENTS.md`'s "stamp a revision and compare before redoing
+    /// the work" rule, with the preset itself as the stamp.
+    theme_defaults: Option<(MermaidThemePreset, ThemeDefaults)>,
+    /// One colour picker per colour field, on the *view* rather than per tab.
+    ///
+    /// The panel always edits the active tab and only one tab is ever active,
+    /// so a second set would be ten entities nothing could reach — the same
+    /// argument [`Self::panning_from`] makes one field up.
+    theme_colour_pickers: Vec<(ThemeField, Entity<ColorPickerState>)>,
+    /// The font-stack field's text input. Its *value* is the override and its
+    /// *placeholder* is the preset's default, which is what makes an emptied
+    /// box mean "back to the default" without a second control saying so.
+    theme_font_family: Entity<InputState>,
+    /// Whether the controls above still show a tab and theme that are current.
+    ///
+    /// Set by everything that can move a value behind a control's back —
+    /// opening the panel, switching tab, choosing a preset, either reset, and
+    /// dodo's appearance changing — and deliberately **not** by a control
+    /// reporting its own change: pushing a value back into the widget that
+    /// just emitted it re-enters its `set_value`, which moves a text caret and
+    /// re-quantises a slider mid-drag.
+    theme_controls_dirty: bool,
 }
 
 impl MermaidView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let language = Language::current(cx);
+        let theme_colour_pickers = Self::build_colour_pickers(window, cx);
+        let theme_font_family = Self::build_font_family_input(window, cx);
         let mut view = Self {
             tabs: Vec::new(),
             active: 0,
@@ -227,9 +323,69 @@ impl MermaidView {
             focus_handle: cx.focus_handle(),
             panning_from: None,
             template_menu_open: false,
+            theme_panel_open: false,
+            theme_preset_menu_open: false,
+            theme_defaults: None,
+            theme_colour_pickers,
+            theme_font_family,
+            theme_controls_dirty: true,
         };
         view.open_blank_tab(window, cx);
         view
+    }
+
+    /// One [`ColorPickerState`] per colour field, each subscribed to write its
+    /// own field back onto the active tab.
+    ///
+    /// The library's picker is the reason there is no hand-rolled hex box
+    /// here: it already carries a swatch trigger, a palette, HSLA sliders and
+    /// a hex input restricted by a regex, and it emits a real `Hsla` rather
+    /// than text — so no invalid colour can reach [`TabTheme::set`] from this
+    /// direction at all. The hex is what gets stored, because the renderer's
+    /// theme is a struct of CSS colour strings.
+    fn build_colour_pickers(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<(ThemeField, Entity<ColorPickerState>)> {
+        ThemeField::ALL
+            .into_iter()
+            .filter(|field| field.kind() == ThemeFieldKind::Colour)
+            .map(|field| {
+                let picker = cx.new(|cx| ColorPickerState::new(window, cx));
+                cx.subscribe(&picker, move |this, _, event: &ColorPickerEvent, cx| {
+                    let ColorPickerEvent::Change(Some(colour)) = event else {
+                        return;
+                    };
+                    this.set_theme_field(field, &colour.to_hex(), cx);
+                })
+                .detach();
+                (field, picker)
+            })
+            .collect()
+    }
+
+    /// The font-stack field's input.
+    ///
+    /// An emptied box is read as "back to the preset default" rather than as
+    /// an error, which is what lets the placeholder carry the default: a box
+    /// showing grey `Inter, ui-sans-serif, …` and a box showing black
+    /// `Comic Sans MS` are visibly different states, and clearing the second
+    /// returns to the first with no extra control.
+    fn build_font_family_input(window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
+        let input = cx.new(|cx| InputState::new(window, cx));
+        cx.subscribe(&input, |this, state, event: &InputEvent, cx| {
+            if !matches!(event, InputEvent::Change) {
+                return;
+            }
+            let value = state.read(cx).value().to_string();
+            if value.trim().is_empty() {
+                this.reset_theme_field(ThemeField::FontFamily, false, cx);
+            } else {
+                this.set_theme_field(ThemeField::FontFamily, &value, cx);
+            }
+        })
+        .detach();
+        input
     }
 
     /// Opens a new tab with `source` already in the editor, and selects it.
@@ -268,7 +424,8 @@ impl MermaidView {
             editor,
             render_task: None,
             render_generation: 0,
-            last_rendered_hash: None,
+            last_rendered_key: None,
+            scheduled_base: None,
             rendered_image: None,
             rendered_svg: None,
             render_error: None,
@@ -276,8 +433,9 @@ impl MermaidView {
             show_spinner: false,
             zoom: 1.0,
             pan: Point::default(),
+            theme: TabTheme::default(),
         });
-        self.active = self.tabs.len() - 1;
+        self.set_active(self.tabs.len() - 1);
         // A pasted diagram (`open_tab`'s other caller) should be on screen
         // already rendered, not waiting out the debounce.
         self.schedule_render(id, cx);
@@ -312,7 +470,7 @@ impl MermaidView {
             }
             CloseOutcome::RemoveThenActivate(active) => {
                 self.tabs.remove(index);
-                self.active = active;
+                self.set_active(active);
                 cx.notify();
             }
         }
@@ -322,13 +480,40 @@ impl MermaidView {
         self.tabs.iter_mut().find(|tab| tab.id == id)
     }
 
+    /// The one way `active` moves.
+    ///
+    /// A method rather than three assignments because the theme panel's
+    /// controls belong to the *view* and show the *active tab* — so every move
+    /// has to mark them stale, and a fourth call site that forgot would leave
+    /// the panel editing one tab while displaying another.
+    fn set_active(&mut self, index: usize) {
+        self.active = index;
+        self.theme_controls_dirty = true;
+    }
+
     /// Debounces, renders on the background executor, and discards the result
     /// if `id`'s tab has moved on to a newer generation or closed entirely by
     /// the time it finishes. See this module's doc for the shape.
+    ///
+    /// **Every theme change comes through here too**, and deliberately through
+    /// the same debounce rather than a second one beside it: dragging a
+    /// lightness slider emits a change per frame, which is exactly the traffic
+    /// this debounce was built for. What the theme *did* have to change is
+    /// [`MermaidTab::last_rendered_key`] — see its own doc.
     fn schedule_render(&mut self, id: u64, cx: &mut Context<Self>) {
+        let appearance = Self::appearance_preset(cx);
         let Some(tab) = self.tab_mut(id) else {
             return;
         };
+
+        // Resolved here rather than inside the task, for two reasons that both
+        // need the window: `cx.theme()` is the app's appearance, and a
+        // background task has no window to read it from. Snapshotting it now
+        // is also correct rather than merely convenient — every theme change
+        // re-enters this method and replaces the task, so the theme at
+        // schedule time is always the theme at expiry.
+        let theme = tab.theme.resolve(appearance);
+        tab.scheduled_base = Some(theme.base());
 
         tab.render_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(DEBOUNCE).await;
@@ -343,26 +528,16 @@ impl MermaidView {
                     tab.rendering = false;
                     return None;
                 }
-                let hash = hash_source(&source);
-                if tab.last_rendered_hash == Some(hash) {
+                let key = render_key(&source, &theme);
+                if tab.last_rendered_key == Some(key) {
                     return None;
                 }
                 tab.render_generation += 1;
                 tab.rendering = true;
-                // Read now, not from the background task: `cx.theme()` needs
-                // the window, and dodo's `Dodo`/`System` appearance already
-                // resolves to light or dark by the time anything reaches here
-                // — there is no separate Mermaid theme setting to keep in
-                // sync with it.
-                let theme = if cx.theme().is_dark() {
-                    MermaidTheme::Dark
-                } else {
-                    MermaidTheme::Light
-                };
                 cx.notify();
-                Some((source, hash, tab.render_generation, theme))
+                Some((source, key, tab.render_generation))
             });
-            let Ok(Some((source, hash, generation, theme))) = started else {
+            let Ok(Some((source, key, generation))) = started else {
                 return;
             };
 
@@ -397,7 +572,7 @@ impl MermaidView {
                 }
                 tab.rendering = false;
                 tab.show_spinner = false;
-                tab.last_rendered_hash = Some(hash);
+                tab.last_rendered_key = Some(key);
                 match output {
                     Ok(rendered) => {
                         tab.render_error = None;
@@ -449,6 +624,202 @@ impl MermaidView {
     fn set_mode(&mut self, mode: WorkspaceMode, cx: &mut Context<Self>) {
         self.mode = mode;
         self.template_menu_open = false;
+        self.theme_panel_open = false;
+        self.theme_preset_menu_open = false;
+        cx.notify();
+    }
+
+    /// Opens or closes the editor's theme panel.
+    ///
+    /// Opening marks the controls stale rather than syncing them here: the
+    /// sync needs the preset defaults, which are only resolved once
+    /// [`Self::render`] knows which base is in effect this frame.
+    fn toggle_theme_panel(&mut self, cx: &mut Context<Self>) {
+        self.theme_panel_open = !self.theme_panel_open;
+        self.theme_preset_menu_open = false;
+        self.theme_controls_dirty = true;
+        cx.notify();
+    }
+
+    /// The preset dodo's current appearance resolves to — the base of any tab
+    /// that has not been pinned.
+    fn appearance_preset(cx: &App) -> MermaidThemePreset {
+        MermaidThemePreset::for_appearance(cx.theme().is_dark())
+    }
+
+    /// The preset actually in effect for the active tab this frame.
+    fn active_base(&self, cx: &App) -> MermaidThemePreset {
+        let appearance = Self::appearance_preset(cx);
+        self.tabs
+            .get(self.active)
+            .map_or(appearance, |tab| tab.theme.base(appearance))
+    }
+
+    /// Rebuilds [`Self::theme_defaults`] if `base` is not the preset it was
+    /// built for. See that field's doc for why it is cached at all.
+    fn sync_theme_defaults(&mut self, base: MermaidThemePreset) {
+        if self.theme_defaults.as_ref().map(|(preset, _)| *preset) == Some(base) {
+            return;
+        }
+        self.theme_defaults = Some((base, preset_defaults(base)));
+        // A different base means different defaults behind every control,
+        // including the ones no override touches — which is also the only
+        // thing that has to mark the controls stale when the *preset* changes.
+        self.theme_controls_dirty = true;
+    }
+
+    /// The active tab's preset defaults, copied out.
+    ///
+    /// The copy is what lets a handler hold the table while it takes `&mut
+    /// self` to write a field: ten `String`s per click or keystroke, against a
+    /// re-render that follows immediately. The cache exists for the *frame*
+    /// path — the panel reading a value per row per frame — not for this one.
+    fn active_theme_defaults(&self) -> Option<ThemeDefaults> {
+        self.theme_defaults
+            .as_ref()
+            .map(|(_, defaults)| defaults.clone())
+    }
+
+    /// Pushes the active tab's current values into the panel's own widgets.
+    ///
+    /// Runs only while the panel is open and only when something has actually
+    /// moved a value behind a widget's back ([`Self::theme_controls_dirty`]).
+    /// Doing it unconditionally from `render` would be a repaint loop, not
+    /// merely wasteful: both `ColorPickerState::set_value` and
+    /// `InputState::set_value` `notify` their entity, so a sync per frame is a
+    /// frame per frame.
+    fn sync_theme_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.theme_controls_dirty {
+            return;
+        }
+        self.theme_controls_dirty = false;
+
+        let Some(defaults) = self.active_theme_defaults() else {
+            return;
+        };
+        // Collected before anything is updated: the loop below hands `cx` to
+        // other entities, and the borrow of `self.tabs` cannot outlive that.
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let font_value = if tab.theme.is_overridden(ThemeField::FontFamily) {
+            tab.theme
+                .value(ThemeField::FontFamily, &defaults)
+                .to_string()
+        } else {
+            String::new()
+        };
+        let font_placeholder = defaults.get(ThemeField::FontFamily).to_string();
+        let colours: Vec<(Entity<ColorPickerState>, Hsla)> = self
+            .theme_colour_pickers
+            .iter()
+            .filter_map(|(field, picker)| {
+                let value = tab.theme.value(*field, &defaults);
+                swatch_colour(value).map(|colour| (picker.clone(), colour))
+            })
+            .collect();
+
+        self.theme_font_family.update(cx, |state, cx| {
+            state.set_placeholder(font_placeholder, window, cx);
+            // `set_value` suppresses `InputEvent::Change`, which is what stops
+            // this write from re-entering the subscription that wrote it.
+            state.set_value(font_value, window, cx);
+        });
+        for (picker, colour) in colours {
+            picker.update(cx, |state, cx| state.set_value(colour, window, cx));
+        }
+    }
+
+    /// Pins the active tab to `preset`, or un-pins it back to dodo's own
+    /// appearance when `preset` is `None`.
+    fn choose_theme_preset(&mut self, preset: Option<MermaidThemePreset>, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        match preset {
+            Some(preset) => tab.theme.choose_preset(preset),
+            None => tab.theme.follow_appearance(),
+        }
+        self.theme_preset_menu_open = false;
+        self.theme_changed(cx);
+    }
+
+    /// Writes one field on the active tab, if `raw` is a value that field
+    /// accepts.
+    ///
+    /// A refusal is silent by design: every control the panel draws is
+    /// incapable of producing one (see [`crate::theme::ThemeFieldError`]), so
+    /// a message here would be a string no user can reach. It also does *not*
+    /// mark the controls stale — the control that reported this change is
+    /// already showing it, and writing back into it would move a caret or
+    /// re-quantise a slider mid-drag.
+    fn set_theme_field(&mut self, field: ThemeField, raw: &str, cx: &mut Context<Self>) {
+        let appearance = Self::appearance_preset(cx);
+        let Some(defaults) = self.active_theme_defaults() else {
+            return;
+        };
+        let accepted = self
+            .tabs
+            .get_mut(self.active)
+            .is_some_and(|tab| tab.theme.set(field, raw, appearance, &defaults).is_ok());
+        if accepted {
+            self.theme_changed(cx);
+        }
+    }
+
+    /// Puts one field back on the preset's default.
+    ///
+    /// `resync` is false only for the one caller that is *itself* the control
+    /// being reset — emptying the font box — where pushing the default back in
+    /// would fight the user's backspace.
+    fn reset_theme_field(&mut self, field: ThemeField, resync: bool, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        if !tab.theme.is_overridden(field) {
+            return;
+        }
+        tab.theme.reset_field(field);
+        self.theme_controls_dirty |= resync;
+        self.theme_changed(cx);
+    }
+
+    /// Puts every field back on the preset's defaults, leaving the preset
+    /// itself alone — see [`TabTheme::reset_overrides`] for why those are two
+    /// requests rather than one.
+    fn reset_theme(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        tab.theme.reset_overrides();
+        self.theme_controls_dirty = true;
+        self.theme_changed(cx);
+    }
+
+    /// One press of the font-size stepper. The clamp is
+    /// [`theme::stepped_font_size`]'s, not this method's.
+    fn step_font_size(&mut self, steps: f32, cx: &mut Context<Self>) {
+        let Some(defaults) = self.active_theme_defaults() else {
+            return;
+        };
+        let stepped = self.tabs.get(self.active).and_then(|tab| {
+            let current = theme::parse_font_size(tab.theme.value(ThemeField::FontSize, &defaults))?;
+            Some(theme::format_font_size(theme::stepped_font_size(
+                current, steps,
+            )))
+        });
+        if let Some(stepped) = stepped {
+            self.set_theme_field(ThemeField::FontSize, &stepped, cx);
+        }
+    }
+
+    /// What every theme mutation ends with: re-render the active tab through
+    /// the one debounced pipeline, and repaint the panel so the row that
+    /// changed shows it.
+    fn theme_changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.tabs.get(self.active).map(|tab| tab.id) {
+            self.schedule_render(id, cx);
+        }
         cx.notify();
     }
 
@@ -633,7 +1004,7 @@ impl MermaidView {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(position) = this.tabs.iter().position(|tab| tab.id == id) {
-                            this.active = position;
+                            this.set_active(position);
                             cx.notify();
                         }
                     }))
@@ -648,21 +1019,51 @@ impl MermaidView {
             )
     }
 
-    /// The editor's floating template button: [`MermaidTemplate::ALL`], each a
+    /// The editor's floating control cluster: the theme button, then the
+    /// template button.
+    ///
+    /// **One ground holding both, not two overlays at the same corner.** The
+    /// two buttons act on the same pane and are the same kind of object, so
+    /// they read as one cluster exactly the way the preview's `-`/Fit/`+` trio
+    /// does — and, more practically, two independently positioned overlays at
+    /// `top_2()`/`right(..)` would sit on top of each other.
+    ///
+    /// **Top-right, not the preview's bottom-right.** The two floating
+    /// clusters sit in adjacent panes in Split mode; matching corners would
+    /// read as one row of controls straddling the divider. Anchoring at the
+    /// top also means each popover opens *downwards* over the editor rather
+    /// than off the bottom of the window, and the right edge keeps it out of
+    /// the way of the caret, which starts at the left and travels down.
+    /// [`EDITOR_OVERLAY_RIGHT`] is what keeps it off the code editor's own
+    /// overlay scrollbar.
+    fn render_editor_controls(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        overlay_ground(cx)
+            .absolute()
+            .top_2()
+            .right(EDITOR_OVERLAY_RIGHT)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .p_0p5()
+            .child(
+                Button::new("mermaid-theme")
+                    .ghost()
+                    .xsmall()
+                    .icon(AppIcon::Palette)
+                    .selected(self.theme_panel_open)
+                    .tooltip(t(mermaid::Text::ThemeTooltip, cx))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_theme_panel(cx))),
+            )
+            .child(self.render_template_menu(cx))
+    }
+
+    /// The template button and its menu: [`MermaidTemplate::ALL`], each a
     /// plain row that appends its source into the buffer
     /// ([`Self::append_template`]) and closes the menu. A hand-rolled list
     /// inside a `Popover`, the same shape `dodo-api-explorer`'s per-row node
     /// menu uses — this library revision has no separate "popup menu" type
     /// worth reaching for over it.
-    ///
-    /// **Top-right, not the preview's bottom-right.** The two floating
-    /// clusters sit in adjacent panes in Split mode; matching corners would
-    /// read as one row of controls straddling the divider. Anchoring at the
-    /// top also means the popover opens *downwards* over the editor rather
-    /// than off the bottom of the window, and the right edge keeps it out of
-    /// the way of the caret, which starts at the left and travels down.
-    /// [`EDITOR_OVERLAY_RIGHT`] is what keeps it off the code editor's own
-    /// overlay scrollbar.
     fn render_template_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mut menu = v_flex().gap_0p5().p_1();
         for template in MermaidTemplate::ALL {
@@ -680,27 +1081,333 @@ impl MermaidView {
             );
         }
 
-        overlay_ground(cx)
-            .absolute()
-            .top_2()
-            .right(EDITOR_OVERLAY_RIGHT)
+        Popover::new("mermaid-template-menu")
+            .open(self.template_menu_open)
+            .on_open_change(cx.listener(|this, open, _, cx| {
+                this.template_menu_open = *open;
+                cx.notify();
+            }))
+            .trigger(
+                Button::new("mermaid-templates")
+                    .ghost()
+                    .xsmall()
+                    .icon(AppIcon::LayoutDashboard)
+                    .tooltip(t(mermaid::Text::TemplatesTooltip, cx)),
+            )
+            .w(px(140.))
+            .child(menu)
+    }
+
+    /// The theme panel: a preset picker, one row per editable field, and the
+    /// note saying why there are ten rows rather than forty.
+    ///
+    /// **A plain overlay, not a `Popover`.** Every colour row carries a
+    /// `ColorPicker`, which *is* a popover; nesting those inside one more
+    /// would make an outside-click on the inner one dismiss the outer. The
+    /// panel is still a child element of the editor pane, so the rule this
+    /// module's doc states still holds — it cannot be stranded in a pane that
+    /// is not drawn, because it is not drawn either.
+    ///
+    /// The body scrolls rather than the panel growing: ten rows are taller
+    /// than a short editor pane, and a panel that overflowed its pane would
+    /// put its last rows off the bottom of the window with no way to reach
+    /// them.
+    fn render_theme_panel(
+        &self,
+        tab: &MermaidTab,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        if !self.theme_panel_open {
+            return None;
+        }
+        let (_, defaults) = self.theme_defaults.as_ref()?;
+
+        let mut body = v_flex()
+            .id("mermaid-theme-fields")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .gap_2();
+        for field in ThemeField::ALL {
+            body = body.child(self.render_theme_field(tab, field, defaults, cx));
+        }
+
+        Some(
+            overlay_ground(cx)
+                .absolute()
+                .top(THEME_PANEL_TOP)
+                .right(EDITOR_OVERLAY_RIGHT)
+                .w(THEME_PANEL_WIDTH)
+                // Against the editor pane, so a short window shrinks the panel
+                // instead of pushing its tail off screen. The margin left over
+                // is what keeps `THEME_PANEL_TOP` from pushing the bottom edge
+                // back out again.
+                .max_h(relative(0.8))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_2()
+                .shadow_md()
+                .child(
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .font_semibold()
+                                .child(t(mermaid::Text::ThemePanelTitle, cx)),
+                        )
+                        .when(tab.theme.has_overrides(), |this| {
+                            this.child(
+                                Button::new("mermaid-theme-reset-all")
+                                    .ghost()
+                                    .xsmall()
+                                    .label(t(mermaid::Text::ThemeResetAll, cx))
+                                    .on_click(cx.listener(|this, _, _, cx| this.reset_theme(cx))),
+                            )
+                        })
+                        .child(
+                            Button::new("mermaid-theme-close")
+                                .ghost()
+                                .xsmall()
+                                .icon(AppIcon::Close)
+                                .tooltip(t(mermaid::Text::ThemeClosePanelTooltip, cx))
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.toggle_theme_panel(cx)),
+                                ),
+                        ),
+                )
+                .child(self.render_theme_preset_picker(tab, cx))
+                .child(rule(cx))
+                .child(body)
+                .child(rule(cx))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t(mermaid::Text::ThemeDiagramSpecificNote, cx)),
+                ),
+        )
+    }
+
+    /// The preset picker: "Automatic" first, then the renderer's five named
+    /// presets.
+    ///
+    /// A hand-rolled `Popover` list rather than the library's `Select`, for
+    /// the reason [`Self::render_template_menu`] already gives and one more:
+    /// `SelectState` caches the label strings it was built with, so a `Select`
+    /// here would need its own `sync_language` arm to re-translate. A list
+    /// rebuilt each frame from `t()` cannot go stale.
+    fn render_theme_preset_picker(
+        &self,
+        tab: &MermaidTab,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let follows = tab.theme.follows_appearance();
+        let pinned = tab.theme.base(Self::appearance_preset(cx));
+        let current = if follows {
+            mermaid::Text::ThemePresetAutomatic
+        } else {
+            pinned.label()
+        };
+
+        let mut menu = v_flex().gap_0p5().p_1().child(
+            Button::new("mermaid-theme-preset-auto")
+                .ghost()
+                .xsmall()
+                .w_full()
+                .justify_start()
+                .selected(follows)
+                .label(t(mermaid::Text::ThemePresetAutomatic, cx))
+                .on_click(cx.listener(|this, _, _, cx| this.choose_theme_preset(None, cx))),
+        );
+        for (index, preset) in MermaidThemePreset::ALL.into_iter().enumerate() {
+            let selected = !follows && pinned == preset;
+            menu = menu.child(
+                Button::new(("mermaid-theme-preset", index))
+                    .ghost()
+                    .xsmall()
+                    .w_full()
+                    .justify_start()
+                    .selected(selected)
+                    .label(t(preset.label(), cx))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.choose_theme_preset(Some(preset), cx)
+                    })),
+            );
+        }
+
+        h_flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
             .child(
-                Popover::new("mermaid-template-menu")
-                    .open(self.template_menu_open)
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t(mermaid::Text::ThemePresetLabel, cx)),
+            )
+            .child(
+                Popover::new("mermaid-theme-preset-menu")
+                    .open(self.theme_preset_menu_open)
                     .on_open_change(cx.listener(|this, open, _, cx| {
-                        this.template_menu_open = *open;
+                        this.theme_preset_menu_open = *open;
                         cx.notify();
                     }))
                     .trigger(
-                        Button::new("mermaid-templates")
-                            .ghost()
+                        Button::new("mermaid-theme-preset-trigger")
+                            .outline()
                             .xsmall()
-                            .icon(AppIcon::LayoutDashboard)
-                            .tooltip(t(mermaid::Text::TemplatesTooltip, cx)),
+                            .label(t(current, cx)),
                     )
-                    .w(px(140.))
+                    .w(px(200.))
                     .child(menu),
             )
+    }
+
+    /// One field's row: its label, whether it has been changed, its control,
+    /// and — only once it *has* been changed — the value it was changed away
+    /// from.
+    ///
+    /// **The default is what an untouched control already shows**, which is
+    /// the whole point of holding overrides sparsely: a row on its default is
+    /// the preset's own value, drawn by the same swatch, stepper or
+    /// placeholder that would draw an override. The extra "Default: …" line
+    /// appears only where that stops being true, so the panel teaches what is
+    /// adjustable without a second copy of every value.
+    fn render_theme_field(
+        &self,
+        tab: &MermaidTab,
+        field: ThemeField,
+        defaults: &ThemeDefaults,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let index = field as usize;
+        let overridden = tab.theme.is_overridden(field);
+
+        v_flex()
+            .gap_1()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .child(t(field.label(), cx)),
+                    )
+                    .when(overridden, |this| {
+                        let changed_marker = t(mermaid::Text::ThemeChangedTooltip, cx);
+                        this.child(
+                            div()
+                                .id(("mermaid-theme-changed", index))
+                                .size_1p5()
+                                .rounded_full()
+                                .bg(cx.theme().primary)
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(changed_marker.clone()).build(window, cx)
+                                }),
+                        )
+                        .child(
+                            Button::new(("mermaid-theme-reset", index))
+                                .ghost()
+                                .xsmall()
+                                .icon(AppIcon::Restart)
+                                .tooltip(t(mermaid::Text::ThemeResetFieldTooltip, cx))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.reset_theme_field(field, true, cx)
+                                })),
+                        )
+                    }),
+            )
+            .child(self.render_theme_control(tab, field, defaults, cx))
+            .when(overridden, |this| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t(
+                            mermaid::Text::ThemeDefaultValue {
+                                value: defaults.get(field).to_string(),
+                            },
+                            cx,
+                        )),
+                )
+            })
+    }
+
+    /// The control a row's [`ThemeFieldKind`] asks for.
+    fn render_theme_control(
+        &self,
+        tab: &MermaidTab,
+        field: ThemeField,
+        defaults: &ThemeDefaults,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let value = tab.theme.value(field, defaults);
+        match field.kind() {
+            // The value is the *placeholder* when the field is on its default;
+            // see `build_font_family_input` for why that is the whole
+            // "emptying the box resets it" mechanism.
+            ThemeFieldKind::FontStack => Input::new(&self.theme_font_family)
+                .xsmall()
+                .into_any_element(),
+            ThemeFieldKind::Size => h_flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    Button::new("mermaid-theme-font-smaller")
+                        .ghost()
+                        .xsmall()
+                        .label(t(mermaid::Text::ThemeFontSizeSmaller, cx))
+                        .on_click(cx.listener(|this, _, _, cx| this.step_font_size(-1.0, cx))),
+                )
+                .child(
+                    div()
+                        .w(px(32.))
+                        .text_xs()
+                        .text_center()
+                        .child(value.to_string()),
+                )
+                .child(
+                    Button::new("mermaid-theme-font-larger")
+                        .ghost()
+                        .xsmall()
+                        .label(t(mermaid::Text::ThemeFontSizeLarger, cx))
+                        .on_click(cx.listener(|this, _, _, cx| this.step_font_size(1.0, cx))),
+                )
+                .into_any_element(),
+            ThemeFieldKind::Colour => h_flex()
+                .items_center()
+                .gap_2()
+                .children(
+                    self.theme_colour_pickers
+                        .iter()
+                        .find(|(picker_field, _)| *picker_field == field)
+                        .map(|(_, picker)| ColorPicker::new(picker).xsmall()),
+                )
+                // The colour as the renderer will receive it. A swatch says
+                // *which* colour; this says which value, which is what a
+                // person comparing against the preset's own spelling needs.
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(value.to_string()),
+                )
+                .into_any_element(),
+        }
     }
 
     /// The Editor / Split / Preview switch, as one segmented control.
@@ -767,7 +1474,8 @@ impl MermaidView {
                     .text_size(cx.theme().mono_font_size)
                     .size_full(),
             )
-            .child(self.render_template_menu(cx))
+            .child(self.render_editor_controls(cx))
+            .children(self.render_theme_panel(tab, cx))
     }
 
     /// Paints the active tab's rasterised diagram at "fit × zoom", offset by
@@ -987,6 +1695,32 @@ impl MermaidView {
     }
 }
 
+impl MermaidView {
+    /// Re-renders the active tab when the preset in effect has moved since the
+    /// last render was scheduled.
+    ///
+    /// This is what makes the picker's "Automatic" entry mean something: a tab
+    /// following dodo's appearance has to restyle when that appearance
+    /// changes, and there is no event to hang that on — the theme is a global
+    /// and switching it merely refreshes the window. A tab pinned to a preset
+    /// is untouched by the same comparison, because its base did not move.
+    ///
+    /// Comparing `Copy` enums, never reading the editor's text: this runs in
+    /// `render`, and root `AGENTS.md`'s cheap-`render` contract is why the
+    /// source is not part of the comparison even though it is part of the
+    /// render key.
+    fn sync_appearance_render(&mut self, base: MermaidThemePreset, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if tab.scheduled_base == Some(base) {
+            return;
+        }
+        let id = tab.id;
+        self.schedule_render(id, cx);
+    }
+}
+
 impl Focusable for MermaidView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -996,6 +1730,18 @@ impl Focusable for MermaidView {
 impl Render for MermaidView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_language(window, cx);
+
+        // Three things that all hang off "which preset is in effect *this*
+        // frame", and all three are compare-then-maybe-work rather than work:
+        // rebuild the defaults table if the base moved, push the new values
+        // into the panel's widgets if anything moved them, and re-render the
+        // diagram if dodo's appearance changed under a tab that follows it.
+        let base = self.active_base(cx);
+        self.sync_theme_defaults(base);
+        if self.theme_panel_open {
+            self.sync_theme_controls(window, cx);
+        }
+        self.sync_appearance_render(base, cx);
 
         let root = v_flex()
             .id("mermaid-workspace")
@@ -1062,9 +1808,17 @@ impl Render for MermaidView {
     }
 }
 
-fn hash_source(source: &str) -> u64 {
+/// Everything a render's output depends on, as one number.
+///
+/// **The theme is half of it.** This used to hash the source alone, which was
+/// right while every tab drew in the appearance's own theme and wrong the
+/// moment a tab could carry one: a colour change alters no character of the
+/// document, so a source-only key makes "nothing changed" true for exactly the
+/// edit the user is watching for.
+fn render_key(source: &str, theme: &MermaidTheme) -> u64 {
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
+    theme.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1108,6 +1862,28 @@ fn overlay_ground(cx: &App) -> Div {
         .bg(cx.theme().popover)
         .border_1()
         .border_color(cx.theme().border)
+}
+
+/// A one-pixel horizontal rule in the theme panel.
+///
+/// Not `gpui-component`'s `Separator`: this needs to be a plain `Div` so it
+/// composes with the panel's `v_flex` the same way every other child does, and
+/// a rule is one line of style.
+fn rule(cx: &App) -> Div {
+    div().h(px(1.)).w_full().bg(cx.theme().border)
+}
+
+/// `value` as a colour a swatch can be painted in, or `None` if it is not one
+/// [`crate::theme::canonical_colour`] understands.
+///
+/// The two-step — canonicalise here, parse hex there — is why the theme model
+/// needs no GPUI: `Colorize::parse_hex` accepts only 6- and 8-digit hex, and
+/// the presets spell colours as names, `rgba(…)` and 3-digit hex too.
+/// `crate::render`'s `every_preset_default_parses` is what keeps the `None`
+/// arm unreachable for anything the presets actually ship.
+fn swatch_colour(value: &str) -> Option<Hsla> {
+    let hex = theme::canonical_colour(value)?;
+    Hsla::parse_hex(&hex).ok()
 }
 
 /// Paints `image` centred in `bounds` at "fit × `zoom`", offset by `pan`. Pure
