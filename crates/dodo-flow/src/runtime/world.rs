@@ -53,7 +53,8 @@ use std::sync::Arc;
 
 use crate::{
     geometry::{
-        Attachment, EdgeRoute, Rect, ResizeCorner, RouteOptions, Side, Vec2, distance_to_segment,
+        Attachment, EdgeRoute, PerimeterShape, Rect, ResizeCorner, RouteOptions, Side, Vec2,
+        distance_to_segment, floating_perimeter_point, nearest_perimeter_point, perimeter_point,
     },
     models::{
         Connector, ConnectorAttachment, ConnectorEnd, DocumentSettings, EdgeIndex, EdgeRouting,
@@ -1123,41 +1124,51 @@ impl GraphWorld {
         }
     }
 
-    /// Builds the persisted attachment and its resolved point on `target`'s
-    /// direction-appropriate edge.
+    /// **The silhouette a connector binds to on `node`**, style included.
+    ///
+    /// One line, and it exists so that the three places that ask — building a
+    /// binding, resolving one, and routing a whole-node edge end — cannot pick
+    /// three different shapes for the same element.
+    ///
+    /// It reads the store's **hot** corner-radius mirror rather than the style
+    /// itself, because the third of those callers runs for both ends of every
+    /// stale edge; see
+    /// [`NodeStore::corner_radius`](crate::runtime::NodeStore::corner_radius)
+    /// for the 36-versus-69 ms that bought the mirror.
+    fn node_perimeter(&self, node: NodeIndex) -> PerimeterShape {
+        self.nodes.perimeter(node)
+    }
+
+    /// Builds the persisted attachment for `target` and the world point it
+    /// resolves to, from **where the user is aiming**.
+    ///
+    /// `aim` is the pointer, not the connector's other end. That is the whole
+    /// of Excalidraw's free binding: the endpoint lands on the spot of the
+    /// outline the user is pointing at, on a rounded corner or the flank of an
+    /// ellipse as readily as on the middle of a side, and the preview drawn
+    /// during the drag is the same call, so it shows exactly what the release
+    /// commits.
     pub fn connector_attachment(
         &self,
         target: NodeIndex,
-        toward: Vec2,
+        aim: Vec2,
     ) -> Option<(ConnectorAttachment, Vec2)> {
         if !self.valid_connector_target(target, None) {
             return None;
         }
 
-        let bounds = self.nodes.bounds(target).normalized();
-        let angle = self.nodes.angle(target);
-        let local_toward = toward.rotated_about(bounds.center(), -angle);
-        let side = Side::facing(bounds, local_toward);
-        let local_point = floating_point(bounds, side, local_toward);
-        let point = local_point.rotated_about(bounds.center(), angle);
-        let anchor = Vec2::new(
-            if bounds.width() > f32::EPSILON {
-                (local_point.x - bounds.origin.x) / bounds.width()
-            } else {
-                0.5
-            },
-            if bounds.height() > f32::EPSILON {
-                (local_point.y - bounds.origin.y) / bounds.height()
-            } else {
-                0.5
-            },
+        let hit = nearest_perimeter_point(
+            self.node_perimeter(target),
+            self.nodes.bounds(target),
+            self.nodes.angle(target),
+            aim,
         );
         Some((
             ConnectorAttachment {
                 element: self.nodes.id(target),
-                anchor,
+                perimeter: hit.t,
             },
-            point,
+            hit.point,
         ))
     }
 
@@ -1167,20 +1178,24 @@ impl GraphWorld {
             && !matches!(self.nodes.kind(target), ElementKind::Linear(_))
     }
 
+    /// **The hot half of the binding**: where a persisted attachment sits right
+    /// now.
+    ///
+    /// Called for every bound endpoint whenever its target moves, resizes,
+    /// rotates or is restyled — so it goes straight to
+    /// [`perimeter_point`], which builds a fixed-size silhouette on the stack
+    /// and evaluates one segment of it. No allocation, per `budgets.rs`.
     fn attachment_point(&self, attachment: ConnectorAttachment) -> Option<Vec2> {
         let target = self.node_index(attachment.element)?;
         if !self.valid_connector_target(target, None) {
             return None;
         }
-        let bounds = self.nodes.bounds(target).normalized();
-        let anchor = Vec2::new(
-            attachment.anchor.x.clamp(0.0, 1.0),
-            attachment.anchor.y.clamp(0.0, 1.0),
-        );
-        Some(
-            (bounds.origin + Vec2::new(bounds.width() * anchor.x, bounds.height() * anchor.y))
-                .rotated_about(bounds.center(), self.nodes.angle(target)),
-        )
+        Some(perimeter_point(
+            self.node_perimeter(target),
+            self.nodes.bounds(target),
+            self.nodes.angle(target),
+            attachment.perimeter,
+        ))
     }
 
     fn bind_connector(&mut self, connector: NodeIndex) {
@@ -1302,14 +1317,25 @@ impl GraphWorld {
     /// [`node_painted_bounds`](crate::spatial::node_painted_bounds) inflates by
     /// half the stroke width — a thicker outline is a bigger painted rectangle,
     /// and an index that did not hear about it culls the node's own edge away.
+    ///
+    /// **And it refreshes the connectors bound to this node**, because
+    /// `corner_radius` is not decoration: it is part of the silhouette a
+    /// binding resolves against, so rounding a box's corners moves the outline
+    /// out from under every arrow attached near one. A style change is the
+    /// third thing that moves a bound endpoint, after a move and a resize, and
+    /// it is the one that looks like it should not.
     pub fn set_node_style(&mut self, node: NodeIndex, style: ElementStyle) {
         if !self.nodes.contains(node) || self.nodes.style(node) == &style {
             return;
         }
 
+        let reshaped = self.nodes.style(node).corner_radius != style.corner_radius;
         self.nodes.set_style(node, style);
         self.dirty
             .mark_node(node, NodeDirty::STYLE | NodeDirty::SPATIAL);
+        if reshaped {
+            self.refresh_bound_connectors(node);
+        }
     }
 
     /// Replaces an edge's style. `SPATIAL` for the same reason as
@@ -1823,11 +1849,22 @@ impl GraphWorld {
 
     /// Where an edge attaches to one of its ends, and which way it sets off.
     ///
-    /// A handle endpoint attaches at the handle and leaves along its placement.
+    /// **A handle wins wherever there is one.** A handle endpoint attaches at
+    /// the handle and leaves along its placement, exactly as before — the free
+    /// silhouette is what a *whole-node* endpoint falls back to, never a
+    /// replacement for a port somebody placed.
+    ///
     /// A whole-node endpoint is §4's **floating connection point**: the side
     /// facing the other end, at the point on that side nearest to it, so the
     /// attachment slides along the border as the nodes move rather than
-    /// snapping between corners.
+    /// snapping between corners — now kept on the node's real outline by
+    /// [`floating_perimeter_point`], so a route into a graph node's corner
+    /// stops on the body rather than in the curve that was rounded away.
+    ///
+    /// **Deliberately not the nearest-point search a connector endpoint gets.**
+    /// This runs for both ends of every stale edge, half a million times in one
+    /// pass of `flow_graph_bench`; the aim is the partner rather than a
+    /// pointer, so a clamp answers it, and a clamp is what it costs.
     pub fn attachment(&self, end: EdgeEnd, toward: Vec2) -> Attachment {
         let bounds = self.nodes.bounds(end.node);
         let angle = self.nodes.angle(end.node);
@@ -1847,7 +1884,13 @@ impl GraphWorld {
             None => {
                 let side = Side::facing(bounds, local_toward);
                 Attachment::new(
-                    floating_point(bounds, side, local_toward).rotated_about(centre, angle),
+                    floating_perimeter_point(
+                        self.node_perimeter(end.node),
+                        bounds,
+                        side,
+                        local_toward,
+                    )
+                    .rotated_about(centre, angle),
                     side,
                 )
             }
@@ -2001,12 +2044,19 @@ impl GraphWorld {
             .map(|(end, _)| end)
     }
 
-    /// The nearest valid non-connector target within `radius` of an endpoint,
-    /// with the direction-appropriate persisted anchor and resolved point.
+    /// The nearest valid non-connector target within `radius` of `point`, with
+    /// the binding that point resolves to on it.
+    ///
+    /// **`point` is both the proximity test and the aim.** One argument rather
+    /// than two, because the free binding has no use for a second one: the
+    /// endpoint lands where the pointer is over the outline, so "is this node
+    /// close enough?" and "where on it?" are the same question asked of the
+    /// same position. The `toward` parameter this used to take was the
+    /// connector's *other* end, and it is what made an endpoint dropped on the
+    /// top of a box jump round to the side facing its partner.
     pub fn snap_connector_endpoint(
         &self,
         point: Vec2,
-        toward: Vec2,
         candidates: impl IntoIterator<Item = NodeIndex>,
         exclude: Option<NodeIndex>,
         radius: f32,
@@ -2024,7 +2074,7 @@ impl GraphWorld {
             if distance > radius * radius {
                 continue;
             }
-            let Some((attachment, snapped)) = self.connector_attachment(target, toward) else {
+            let Some((attachment, snapped)) = self.connector_attachment(target, point) else {
                 continue;
             };
             let snap = ConnectorSnap {
@@ -2175,30 +2225,12 @@ fn side_of(placement: HandlePlacement) -> Side {
     }
 }
 
-/// The point on `side` of `bounds` nearest to `toward` — §4's floating
-/// connection point.
-///
-/// Clamped to the side's own extent, so the attachment slides along the border
-/// as the other end moves and stops at the corner rather than running off it.
-fn floating_point(bounds: Rect, side: Side, toward: Vec2) -> Vec2 {
-    let bounds = bounds.normalized();
-    let min = bounds.min();
-    let max = bounds.max();
-
-    match side {
-        Side::Top => Vec2::new(toward.x.clamp(min.x, max.x), min.y),
-        Side::Bottom => Vec2::new(toward.x.clamp(min.x, max.x), max.y),
-        Side::Left => Vec2::new(min.x, toward.y.clamp(min.y, max.y)),
-        Side::Right => Vec2::new(max.x, toward.y.clamp(min.y, max.y)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{GraphWorld, LoadReport};
     use crate::geometry::Rect;
     use crate::{
-        geometry::{Side, Vec2},
+        geometry::{Side, Vec2, perimeter_point},
         models::{
             Connector, ConnectorAttachment, ConnectorEnd, ConnectorEndpoint, EdgeRouting,
             ElementId, ElementKind, Endpoint, FlowDocument, GraphNodeKind, Handle, HandleDirection,
@@ -2241,6 +2273,212 @@ mod tests {
         spec.connector = Some(connector);
         let line = world.add_node(spec);
         (world, a, b, line)
+    }
+
+    /// **The acceptance criterion, on every shape the canvas draws.**
+    ///
+    /// Aim at eight places round a target — sides, corners and the flanks in
+    /// between — bind an arrow there, then move, resize, rotate and restyle the
+    /// target. The endpoint has to stay on the *same visible spot* of the
+    /// outline, which is checked as the same relative position in the
+    /// element's own frame, and the world has to have **re-resolved** it rather
+    /// than left a stale point behind, which is checked against
+    /// [`perimeter_point`] on the target's current geometry.
+    ///
+    /// Two tolerances, and the second one is a stated property rather than
+    /// slack. A silhouette whose unit form does not depend on the element's
+    /// size — a rectangle, an ellipse, a diamond, a triangle — holds its spot
+    /// **exactly** through any resize. A *rounded* one does not: its corner
+    /// radius is a world length, so stretching 160×120 into 400×60 genuinely
+    /// changes the outline's shape and the corners claim a different share of
+    /// the way round. The endpoint drifts a bounded fraction of a corner and
+    /// stays on the outline, which is the behaviour a person reads as "it
+    /// followed the shape"; see `geometry::perimeter`'s module doc.
+    #[test]
+    fn a_binding_holds_its_spot_through_a_move_a_resize_a_rotation_and_a_restyle() {
+        for kind in [
+            ElementKind::Shape(ShapeKind::Rectangle),
+            ElementKind::Shape(ShapeKind::RoundedRectangle),
+            ElementKind::Shape(ShapeKind::Ellipse),
+            ElementKind::Shape(ShapeKind::Diamond),
+            ElementKind::Shape(ShapeKind::Triangle),
+            ElementKind::GraphNode(GraphNodeKind::Default),
+        ] {
+            // Only a rounded outline's unit form depends on the size it is
+            // drawn at, because only a corner radius is a world length.
+            let rounded = matches!(
+                kind,
+                ElementKind::Shape(ShapeKind::RoundedRectangle) | ElementKind::GraphNode(_)
+            );
+
+            for step in 0..8 {
+                let mut world = GraphWorld::new();
+                let target = world.create_node(
+                    kind.clone(),
+                    Vec2::new(200.0, 100.0),
+                    Vec2::new(160.0, 120.0),
+                );
+                let mut style = world.nodes().style(target).clone();
+                style.corner_radius = 18.0;
+                world.set_node_style(target, style);
+
+                let angle = step as f32 / 8.0 * std::f32::consts::TAU;
+                let aim = Vec2::new(280.0, 160.0) + Vec2::new(angle.cos(), angle.sin()) * 90.0;
+                let (attachment, bound) = world
+                    .connector_attachment(target, aim)
+                    .expect("a drawn shape takes a binding");
+
+                let mut connector = Connector::new(bound, Vec2::new(900.0, 900.0));
+                connector.start.attachment = Some(attachment);
+                let id = world.next_id();
+                let mut spec = NodeSpec::new(
+                    id,
+                    ElementKind::Linear(LinearKind::Arrow),
+                    connector.bounds().origin,
+                    connector.bounds().size,
+                );
+                spec.connector = Some(connector);
+                let arrow = world.add_node(spec);
+
+                // Where the endpoint sits in the target's own frame, as a
+                // fraction of it — "the same visible spot" when the element
+                // itself has changed size.
+                let relative = |world: &GraphWorld| {
+                    let point = world.nodes().connector(arrow).unwrap().start.point;
+                    let bounds = world.nodes().bounds(target).normalized();
+                    let local = point.rotated_about(bounds.center(), -world.nodes().angle(target));
+                    Vec2::new(
+                        (local.x - bounds.origin.x) / bounds.width(),
+                        (local.y - bounds.origin.y) / bounds.height(),
+                    )
+                };
+                // The endpoint the world is *showing* is the one the binding
+                // resolves to right now — not a point left over from before.
+                let resolved = |world: &GraphWorld| {
+                    let stored = world
+                        .nodes()
+                        .connector(arrow)
+                        .unwrap()
+                        .start
+                        .attachment
+                        .expect("still bound");
+                    perimeter_point(
+                        world.node_perimeter(target),
+                        world.nodes().bounds(target),
+                        world.nodes().angle(target),
+                        stored.perimeter,
+                    )
+                };
+                let held = |world: &GraphWorld| {
+                    (world.nodes().connector(arrow).unwrap().start.point - resolved(world)).length()
+                };
+                let original = relative(&world);
+
+                world.set_node_position(target, Vec2::new(-800.0, 640.0));
+                assert!(
+                    (relative(&world) - original).length() < 1e-3 && held(&world) < 1e-3,
+                    "{kind:?} slipped when its target moved"
+                );
+
+                world.set_node_size(target, Vec2::new(400.0, 60.0));
+                let drift = (relative(&world) - original).length();
+                let allowed = if rounded { 0.08 } else { 1e-3 };
+                assert!(
+                    drift < allowed && held(&world) < 1e-3,
+                    "{kind:?} drifted {drift} across a stretch, past {allowed}"
+                );
+                let stretched = relative(&world);
+
+                world.set_node_angle(target, 1.1);
+                assert!(
+                    (relative(&world) - stretched).length() < 1e-3 && held(&world) < 1e-3,
+                    "{kind:?} slipped when its target rotated"
+                );
+                let bounds = world.nodes().bounds(target).normalized();
+                let turned = world.nodes().connector(arrow).unwrap().start.point;
+                assert!(
+                    (turned.rotated_about(bounds.center(), -1.1) - turned).length() > 1.0,
+                    "{kind:?} did not move at all when its target rotated"
+                );
+
+                let mut style = world.nodes().style(target).clone();
+                style.corner_radius = 25.0;
+                world.set_node_style(target, style);
+                let after = relative(&world);
+                assert!(
+                    held(&world) < 1e-3,
+                    "{kind:?} kept a stale point through a restyle"
+                );
+                assert!(
+                    (-1e-3..=1.0 + 1e-3).contains(&after.x)
+                        && (-1e-3..=1.0 + 1e-3).contains(&after.y),
+                    "{kind:?} left its own box after a restyle: {after:?}"
+                );
+            }
+        }
+    }
+
+    /// **The preview is the result.** The point `connector_attachment` hands
+    /// the drag to draw is the point the same call stores, so what is on screen
+    /// while the button is down is what the release commits — on a rotated
+    /// target as much as an upright one.
+    #[test]
+    fn what_the_drag_previews_is_what_the_release_resolves() {
+        let mut world = GraphWorld::new();
+        let target = world.create_node(
+            ElementKind::Shape(ShapeKind::Diamond),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(200.0, 120.0),
+        );
+        world.set_node_angle(target, 0.6);
+
+        for step in 0..12 {
+            let angle = step as f32 / 12.0 * std::f32::consts::TAU;
+            let aim = Vec2::new(100.0, 60.0) + Vec2::new(angle.cos(), angle.sin()) * 70.0;
+            let (attachment, previewed) = world.connector_attachment(target, aim).unwrap();
+
+            let mut connector = Connector::new(previewed, Vec2::new(-400.0, -400.0));
+            connector.start.attachment = Some(attachment);
+            let id = world.next_id();
+            let mut spec = NodeSpec::new(
+                id,
+                ElementKind::Linear(LinearKind::Arrow),
+                connector.bounds().origin,
+                connector.bounds().size,
+            );
+            spec.connector = Some(connector);
+            let arrow = world.add_node(spec);
+
+            let committed = world.nodes().connector(arrow).unwrap().start.point;
+            assert!(
+                (committed - previewed).length() < 1e-3,
+                "the preview drew {previewed:?} and the commit landed {committed:?}"
+            );
+        }
+    }
+
+    /// A rotated node is aimed at in *world* space, and the endpoint lands on
+    /// the outline the user can see — the rotated one.
+    #[test]
+    fn aiming_at_a_rotated_node_binds_to_the_rotated_outline() {
+        let mut world = GraphWorld::new();
+        let target = world.create_node(
+            ElementKind::Shape(ShapeKind::Rectangle),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(200.0, 100.0),
+        );
+        world.set_node_angle(target, std::f32::consts::FRAC_PI_2);
+
+        // Turned a quarter turn, the box occupies x 50..150, y -50..150 about
+        // its centre (100, 50); aiming to the right of that finds the side that
+        // is now on the right — the rectangle's own *top*.
+        let (_, point) = world
+            .connector_attachment(target, Vec2::new(400.0, 50.0))
+            .unwrap();
+        assert!(
+            (point - Vec2::new(150.0, 50.0)).length() < 1e-3,
+            "bound at {point:?}"
+        );
     }
 
     #[test]
@@ -2289,8 +2527,13 @@ mod tests {
         );
     }
 
+    /// **The binding lands where the pointer is**, not on the side facing
+    /// anything. Four aims at one rectangle, each answering the spot of the
+    /// outline it is pointing at, and the stored parameter that will bring it
+    /// back — a quarter of the way round per side, so the middle of the right
+    /// side is `0.375`.
     #[test]
-    fn connector_snap_chooses_directional_edges_and_reports_feedback() {
+    fn a_connector_binds_to_the_outline_point_the_pointer_aims_at() {
         let mut world = GraphWorld::new();
         let target = world.create_node(
             ElementKind::Shape(ShapeKind::Rectangle),
@@ -2298,28 +2541,37 @@ mod tests {
             Vec2::new(100.0, 80.0),
         );
         let cases = [
-            (Vec2::new(300.0, 140.0), Vec2::new(1.0, 0.5)),
-            (Vec2::new(0.0, 140.0), Vec2::new(0.0, 0.5)),
-            (Vec2::new(150.0, 0.0), Vec2::new(0.5, 0.0)),
-            (Vec2::new(150.0, 300.0), Vec2::new(0.5, 1.0)),
+            (Vec2::new(300.0, 140.0), Vec2::new(200.0, 140.0), 0.375),
+            (Vec2::new(0.0, 140.0), Vec2::new(100.0, 140.0), 0.875),
+            (Vec2::new(150.0, 0.0), Vec2::new(150.0, 100.0), 0.125),
+            (Vec2::new(150.0, 300.0), Vec2::new(150.0, 180.0), 0.625),
+            // Not a side centre and not a corner: two thirds along the top,
+            // which the old bounding-box rule could reach only by accident.
+            (
+                Vec2::new(166.666_67, 60.0),
+                Vec2::new(166.666_67, 100.0),
+                0.166_666_67,
+            ),
         ];
-        for (toward, expected_anchor) in cases {
-            let (attachment, _) = world.connector_attachment(target, toward).unwrap();
-            assert_eq!(attachment.anchor, expected_anchor);
+        for (aim, expected_point, expected_t) in cases {
+            let (attachment, point) = world.connector_attachment(target, aim).unwrap();
+            assert!(
+                (point - expected_point).length() < 1e-3,
+                "aiming at {aim:?} bound at {point:?}, not {expected_point:?}"
+            );
+            assert!(
+                (attachment.perimeter - expected_t).abs() < 1e-3,
+                "aiming at {aim:?} stored {}, not {expected_t}",
+                attachment.perimeter
+            );
         }
 
         let snap = world
-            .snap_connector_endpoint(
-                Vec2::new(205.0, 140.0),
-                Vec2::new(300.0, 140.0),
-                [target],
-                None,
-                12.0,
-            )
+            .snap_connector_endpoint(Vec2::new(205.0, 140.0), [target], None, 12.0)
             .expect("nearby target snaps");
         assert_eq!(snap.target, target);
         assert_eq!(snap.point, Vec2::new(200.0, 140.0));
-        assert_eq!(snap.attachment.anchor, Vec2::new(1.0, 0.5));
+        assert!((snap.attachment.perimeter - 0.375).abs() < 1e-3);
     }
 
     /// **A selected connector offers two grips and only two.** Four rectangle
@@ -2429,7 +2681,7 @@ mod tests {
             point: Vec2::new(7.0, 9.0),
             attachment: Some(ConnectorAttachment {
                 element: ElementId::new(999),
-                anchor: Vec2::new(1.0, 0.5),
+                perimeter: 0.375,
             }),
         };
         node.connector = Some(connector);

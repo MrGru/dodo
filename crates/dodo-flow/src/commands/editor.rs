@@ -452,6 +452,13 @@ impl FlowEditor {
 
     /// Resolves a newly drawn straight connector, preserving pointer-down as
     /// `start` and pointer-up as `end` while adding semantic attachments.
+    ///
+    /// **Each end is aimed at itself.** `start` binds where the press landed on
+    /// its target's outline and `end` where the release did — not at the
+    /// opposite endpoint, which is what used to slide a freshly drawn arrow
+    /// round to the side of a box facing the other end. This is the same call
+    /// `views::flow` makes to draw the preview, so what is on screen while the
+    /// button is down is what the release commits.
     pub fn connector_between(
         &self,
         start: Vec2,
@@ -461,7 +468,7 @@ impl FlowEditor {
     ) -> Connector {
         let mut connector = Connector::new(start, end);
         if let Some(target) = start_target
-            && let Some((attachment, point)) = self.world.connector_attachment(target, end)
+            && let Some((attachment, point)) = self.world.connector_attachment(target, start)
         {
             connector.start = ConnectorEndpoint {
                 point,
@@ -469,7 +476,7 @@ impl FlowEditor {
             };
         }
         if let Some(target) = end_target
-            && let Some((attachment, point)) = self.world.connector_attachment(target, start)
+            && let Some((attachment, point)) = self.world.connector_attachment(target, end)
         {
             connector.end = ConnectorEndpoint {
                 point,
@@ -481,6 +488,11 @@ impl FlowEditor {
 
     /// Moves exactly one ordered endpoint, rebinding it when `target` is valid
     /// and detaching it otherwise.
+    ///
+    /// `point` is where the pointer is, and it is what the binding is aimed at:
+    /// re-dragging an existing arrow's end onto a new spot of the same node
+    /// rebinds it there, rather than returning it to wherever the *other* end
+    /// happens to face.
     pub fn set_connector_endpoint(
         &mut self,
         node: NodeIndex,
@@ -491,9 +503,8 @@ impl FlowEditor {
         let Some(mut connector) = self.world.nodes().connector(node) else {
             return false;
         };
-        let opposite = connector.opposite(end).point;
         *connector.endpoint_mut(end) = target
-            .and_then(|target| self.world.connector_attachment(target, opposite))
+            .and_then(|target| self.world.connector_attachment(target, point))
             .map_or_else(
                 || ConnectorEndpoint::free(point),
                 |(attachment, point)| ConnectorEndpoint {
@@ -2340,6 +2351,9 @@ mod tests {
     /// either end rewrote an origin and a size, so the opposite end moved with
     /// it. Both directions are asserted because `start` and `end` are ordered
     /// and must not be interchangeable.
+    ///
+    /// The pointer stops just inside the new target's left edge, and that is
+    /// where the endpoint binds — the aim, not the direction of the other end.
     #[test]
     fn reconnecting_one_endpoint_never_moves_the_other() {
         for end in [
@@ -2352,7 +2366,7 @@ mod tests {
             assert!(editor.set_connector_endpoint(
                 arrow,
                 end,
-                Vec2::new(650.0, 50.0),
+                Vec2::new(605.0, 50.0),
                 Some(elsewhere),
             ));
 
@@ -2371,8 +2385,39 @@ mod tests {
             assert_eq!(
                 moved.point,
                 Vec2::new(600.0, 50.0),
-                "{end:?} did not land on the direction-appropriate edge"
+                "{end:?} did not land where the pointer aimed"
             );
+        }
+    }
+
+    /// **Re-dragging an endpoint round the same node moves it round the same
+    /// node.**
+    ///
+    /// The old rule aimed each end at its partner, so every drop on a given
+    /// target produced the same point and dragging an endpoint from a box's
+    /// left side to its top did nothing at all. Four aims, four different
+    /// bindings, each on the side aimed at — and the last one back where it
+    /// started, so the parameter is a position rather than a ratchet.
+    #[test]
+    fn dragging_an_endpoint_round_one_node_rebinds_it_round_that_node() {
+        let (mut editor, arrow, elsewhere) = editor_with_a_bound_arrow();
+        let end = crate::models::ConnectorEnd::End;
+        // Node `elsewhere` spans (600, 0) to (700, 100).
+        let aims = [
+            (Vec2::new(605.0, 50.0), Vec2::new(600.0, 50.0)),
+            (Vec2::new(650.0, 5.0), Vec2::new(650.0, 0.0)),
+            (Vec2::new(695.0, 25.0), Vec2::new(700.0, 25.0)),
+            (Vec2::new(620.0, 95.0), Vec2::new(620.0, 100.0)),
+            (Vec2::new(605.0, 50.0), Vec2::new(600.0, 50.0)),
+        ];
+        for (aim, expected) in aims {
+            assert!(editor.set_connector_endpoint(arrow, end, aim, Some(elsewhere)));
+            let moved = connector_of(&editor, arrow).endpoint(end);
+            assert_eq!(
+                moved.point, expected,
+                "aiming at {aim:?} did not bind at {expected:?}"
+            );
+            assert!(moved.attachment.is_some(), "aiming at {aim:?} detached");
         }
     }
 

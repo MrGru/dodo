@@ -45,7 +45,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    geometry::Vec2,
+    geometry::{PerimeterShape, Rect, Vec2, nearest_perimeter_point},
     models::{Connector, ElementKind, FlowDocument, LinearKind},
 };
 
@@ -100,7 +100,17 @@ use crate::{
 /// has runtime meaning and edges gain the same relationship. The migration is
 /// the identity because older files could not create a group; the version is
 /// for older builds, which must not silently discard a hierarchy.
-pub const CURRENT_VERSION: u32 = 7;
+///
+/// **Version 8 binds a connector endpoint to a silhouette rather than to a
+/// box**, and it is the first rung so far whose rewrite *cannot* be skipped:
+/// [`ConnectorAttachment`](crate::models::ConnectorAttachment) changed the type
+/// of the field that says where on the target the endpoint sits, from a
+/// normalised `{x, y}` in its bounding box to one normalised arc length round
+/// its outline. That is the case `#[serde(default)]` cannot cover — the field
+/// is present with the wrong shape — and it is the same kind of change as the
+/// font rung at the bottom of the ladder. See
+/// `connector_bindings_became_perimeter_parameters`.
+pub const CURRENT_VERSION: u32 = 8;
 
 /// One rung of the ladder: rewrites a document body written by version `from`
 /// into the shape version `from + 1` expects.
@@ -124,6 +134,7 @@ pub const MIGRATIONS: &[(u32, MigrationStep)] = &[
     (4, labels_centred_on_their_element),
     (5, elements_gained_rotation),
     (6, groups_became_structural),
+    (7, connector_bindings_became_perimeter_parameters),
 ];
 
 /// **Version 1 ▸ 2**: a font's continuous `size` became one of four steps, and
@@ -366,6 +377,109 @@ fn elements_gained_rotation(value: &mut Value) -> Result<(), LoadError> {
 /// **Version 6 ▸ 7**: group and edge-parent semantics arrived. Older files
 /// could contain neither through the UI, so defaults are the exact migration.
 fn groups_became_structural(_value: &mut Value) -> Result<(), LoadError> {
+    Ok(())
+}
+
+/// **Version 7 ▸ 8**: a bound connector endpoint stopped naming a point in its
+/// target's box and started naming a place on its target's outline.
+///
+/// The old value was `anchor: {x, y}`, each component a fraction of the
+/// bounding box; the new one is `perimeter`, a normalised arc length round the
+/// silhouette (see
+/// [`geometry::perimeter`](crate::geometry::perimeter)). A file whose `anchor`
+/// survived into a version-8 `ConnectorAttachment` would fail to parse — a
+/// float where an object was — so every attachment is rewritten, and the whole
+/// document is refused rather than silently losing its arrows.
+///
+/// **The rewrite is the honest one and it needs the target.** The old anchor
+/// says *where in the box*, which is a real position, so this resolves it
+/// against the target element's own kind, size and corner radius and asks the
+/// silhouette which parameter is nearest. An arrow bound to the middle of a
+/// rectangle's right edge stays exactly where it was; one bound to the corner
+/// of an ellipse's box — a point that was never on the ellipse — lands on the
+/// nearest place that is, which is the fix arriving rather than a loss.
+///
+/// A target the file does not contain leaves the endpoint at `0.0`, its
+/// target's own start point: `GraphWorld::rebuild_connector_bindings` detaches
+/// it a moment later and reports it in
+/// [`LoadReport`](crate::runtime::LoadReport), which is where a dangling
+/// binding is already handled.
+fn connector_bindings_became_perimeter_parameters(value: &mut Value) -> Result<(), LoadError> {
+    let Some(nodes) = value.get("nodes").and_then(Value::as_array) else {
+        return Ok(());
+    };
+
+    // The targets first, by id, because an attachment names one and the
+    // silhouette it resolves against is that element's. Read from a borrow so
+    // the rewrite below can take a mutable one.
+    let mut targets: Vec<(Value, PerimeterShape, Rect)> = Vec::new();
+    for node in nodes {
+        let (Some(id), Some(position), Some(size)) = (
+            node.get("id").cloned(),
+            node.get("position")
+                .cloned()
+                .and_then(|it| serde_json::from_value::<Vec2>(it).ok()),
+            node.get("size")
+                .cloned()
+                .and_then(|it| serde_json::from_value::<Vec2>(it).ok()),
+        ) else {
+            continue;
+        };
+        let kind = node
+            .get("kind")
+            .cloned()
+            .and_then(|it| serde_json::from_value::<ElementKind>(it).ok())
+            .unwrap_or_default();
+        let corner_radius = node
+            .get("style")
+            .and_then(|style| style.get("corner_radius"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0) as f32;
+        targets.push((id, kind.perimeter(corner_radius), Rect::new(position, size)));
+    }
+
+    let Some(nodes) = value.get_mut("nodes").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    for node in nodes {
+        let angle = node.get("angle").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+        let Some(connector) = node.get_mut("connector").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for end in ["start", "end"] {
+            let Some(endpoint) = connector.get_mut(end).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let Some(attachment) = endpoint
+                .get_mut("attachment")
+                .and_then(Value::as_object_mut)
+                .filter(|attachment| attachment.contains_key("anchor"))
+            else {
+                continue;
+            };
+            let anchor = attachment
+                .remove("anchor")
+                .and_then(|it| serde_json::from_value::<Vec2>(it).ok())
+                .unwrap_or(Vec2::new(0.5, 0.5));
+            let perimeter = attachment
+                .get("element")
+                .and_then(|element| {
+                    targets
+                        .iter()
+                        .find(|(id, _, _)| id == element)
+                        .map(|(_, shape, bounds)| {
+                            // The old anchor is a fraction of the box, so the
+                            // world point it named is the box's own lerp — and
+                            // *that* is what the silhouette is asked about.
+                            let aim = bounds.origin + anchor.scale(bounds.size);
+                            nearest_perimeter_point(*shape, *bounds, angle, aim).t
+                        })
+                })
+                .unwrap_or(0.0);
+            attachment.insert("perimeter".into(), Value::from(perimeter));
+        }
+    }
+
     Ok(())
 }
 
@@ -613,7 +727,7 @@ mod tests {
         let mut connector = node.connector.expect("a linear element has one");
         connector.start.attachment = Some(crate::models::ConnectorAttachment {
             element: target,
-            anchor: Vec2::new(1.0, 0.25),
+            perimeter: 0.3125,
         });
         node.connector = Some(connector);
 
@@ -662,6 +776,117 @@ mod tests {
         assert_eq!(connector.end.point, Vec2::new(230.0, 130.0));
         assert!(connector.start.attachment.is_none());
         assert!(connector.end.attachment.is_none());
+    }
+
+    /// **The rung that turns a box coordinate into a place on an outline.**
+    ///
+    /// Written against raw version-7 JSON rather than against a document this
+    /// build produced, because that is what is on disk and a version-7 file
+    /// cannot be re-saved by anything that would fix it up.
+    ///
+    /// Three attachments, three answers:
+    ///
+    /// - the rectangle's, at the middle of its right edge, is a point the
+    ///   outline already had and it comes back exactly there;
+    /// - the ellipse's, at the top-right corner of its *box*, was never on the
+    ///   ellipse at all — it lands on the nearest place that is, which is the
+    ///   fix arriving rather than a loss;
+    /// - the one naming an element the file does not contain survives the
+    ///   parse and is detached by the world, which is where a dangling binding
+    ///   has always been handled.
+    #[test]
+    fn a_version_seven_document_binds_its_connectors_to_real_outlines() {
+        let json = r#"{
+            "version": 7,
+            "nodes": [
+                {"id": 1, "kind": {"Shape": "Rectangle"},
+                 "position": {"x": 0.0, "y": 0.0}, "size": {"x": 100.0, "y": 100.0}},
+                {"id": 2, "kind": {"Shape": "Ellipse"},
+                 "position": {"x": 400.0, "y": 0.0}, "size": {"x": 100.0, "y": 100.0}},
+                {"id": 3, "kind": {"Linear": "Arrow"},
+                 "position": {"x": 100.0, "y": 50.0}, "size": {"x": 300.0, "y": 0.0},
+                 "connector": {
+                     "start": {"point": {"x": 100.0, "y": 50.0},
+                               "attachment": {"element": 1, "anchor": {"x": 1.0, "y": 0.5}}},
+                     "end": {"point": {"x": 400.0, "y": 0.0},
+                             "attachment": {"element": 2, "anchor": {"x": 1.0, "y": 0.0}}}}},
+                {"id": 4, "kind": {"Linear": "Line"},
+                 "position": {"x": 0.0, "y": 0.0}, "size": {"x": 10.0, "y": 10.0},
+                 "connector": {
+                     "start": {"point": {"x": 3.0, "y": 4.0},
+                               "attachment": {"element": 99, "anchor": {"x": 0.5, "y": 0.5}}},
+                     "end": {"point": {"x": 10.0, "y": 10.0}, "attachment": null}}}
+            ],
+            "edges": []
+        }"#;
+
+        let loaded = FlowDocument::from_json(json).expect("a version-7 file opens");
+        let arrow = loaded.node(crate::models::ElementId::new(3)).unwrap();
+        let connector = arrow.connector.expect("a linear element carries one");
+
+        // The rectangle: a quarter of the way round per side, so the middle of
+        // the right side is 0.375, and it resolves back to where it was.
+        let start = connector.start.attachment.expect("still bound");
+        assert!((start.perimeter - 0.375).abs() < 1e-3, "{start:?}");
+        assert_eq!(
+            crate::geometry::perimeter_point(
+                crate::geometry::PerimeterShape::Rectangle,
+                crate::geometry::Rect::new(Vec2::ZERO, Vec2::new(100.0, 100.0)),
+                0.0,
+                start.perimeter,
+            ),
+            Vec2::new(100.0, 50.0),
+        );
+
+        // The ellipse: the old anchor named its box's top-right corner, which
+        // the ellipse never touched. It lands on the circle instead.
+        let end = connector.end.attachment.expect("still bound");
+        let landed = crate::geometry::perimeter_point(
+            crate::geometry::PerimeterShape::Ellipse,
+            crate::geometry::Rect::new(Vec2::new(400.0, 0.0), Vec2::new(100.0, 100.0)),
+            0.0,
+            end.perimeter,
+        );
+        let radius = (landed - Vec2::new(450.0, 50.0)).length();
+        assert!(
+            (radius - 50.0).abs() < 0.1,
+            "{landed:?} is not on the circle"
+        );
+        assert!(
+            (landed - Vec2::new(500.0, 0.0)).length() > 10.0,
+            "it stayed on the box corner"
+        );
+
+        // A binding naming nothing parses, and the world is what detaches it.
+        let dangling = loaded
+            .node(crate::models::ElementId::new(4))
+            .unwrap()
+            .connector
+            .unwrap();
+        assert!(dangling.start.attachment.is_some());
+        let (world, report) = crate::runtime::GraphWorld::from_document(&loaded);
+        assert_eq!(report.unresolved_connector_attachments.len(), 1);
+        assert!(
+            world
+                .nodes()
+                .connector(crate::models::NodeIndex::new(3))
+                .unwrap()
+                .start
+                .attachment
+                .is_none()
+        );
+    }
+
+    /// The type change is the whole reason version 8 exists: a version-7
+    /// `anchor` reaching a version-8 `ConnectorAttachment` is an object where a
+    /// float belongs, and nothing but a rung can fix that.
+    #[test]
+    fn a_version_seven_attachment_would_not_parse_without_the_rung() {
+        let attachment = json!({"element": 1, "anchor": {"x": 1.0, "y": 0.5}});
+        assert!(
+            serde_json::from_value::<crate::models::ConnectorAttachment>(attachment).is_err(),
+            "the old shape has to be rewritten, not defaulted"
+        );
     }
 
     #[test]

@@ -29,6 +29,18 @@
 //! it costs what the tolerance says it costs, which is the property the budget
 //! needs.
 //!
+//! # One silhouette, and this is not where it lives
+//!
+//! The five closed shapes here are **not built in this file**. Each one walks a
+//! [`Perimeter`] — the same unit-square boundary a
+//! connector endpoint binds to — and turns it into drawing commands. That is
+//! the whole reason `geometry::perimeter` exists: an arrow that stops beside an
+//! ellipse instead of on it is what two silhouettes look like from the outside,
+//! and the only durable fix is for there to be one.
+//!
+//! `the_painters_outline_is_the_binding_silhouette` in the tests below is the
+//! assertion, and it is stated on the *points*, not on the source.
+//!
 //! # Screen space, not world space
 //!
 //! Outlines are built in **pane-relative screen pixels**, already transformed
@@ -39,7 +51,7 @@
 //! **This file names no UI framework.**
 
 use crate::{
-    geometry::{CIRCLE_KAPPA as KAPPA, Rect, Vec2},
+    geometry::{Perimeter, PerimeterShape, Rect, Vec2},
     models::{RenderQuality, ShapeKind},
     render::plan::PathPaint,
     runtime::NodeShape,
@@ -321,13 +333,15 @@ pub fn node_prefers_quad(shape: NodeShape, rotation: f32) -> bool {
 /// judgement [`NodeShape::of`] makes.
 pub fn outline_for_node(shape: NodeShape, rect: Rect, corner_radius: f32) -> Option<Outline> {
     Some(match shape {
-        NodeShape::Rectangle => rectangle(rect),
-        NodeShape::RoundedRectangle | NodeShape::GraphNode => {
-            rounded_rectangle(rect, corner_radius)
-        }
-        NodeShape::Ellipse => ellipse(rect),
-        NodeShape::Diamond => diamond(rect),
-        NodeShape::Triangle => triangle(rect),
+        // **Through [`NodeShape::perimeter`], not through a second `match`.**
+        // A graph node's fallback radius is decided there, so the body painted
+        // here and the silhouette an arrow binds to are the same curve.
+        NodeShape::Rectangle
+        | NodeShape::RoundedRectangle
+        | NodeShape::GraphNode
+        | NodeShape::Ellipse
+        | NodeShape::Diamond
+        | NodeShape::Triangle => outline_of(shape.perimeter(corner_radius), rect),
         NodeShape::Line => line(rect),
         NodeShape::Arrow => arrow(rect),
         // **A text element has no outline** — not an empty one and not its
@@ -450,20 +464,49 @@ pub fn outline_for_connector(shape: NodeShape, start: Vec2, end: Vec2) -> Option
     }
 }
 
-/// An axis-aligned rectangle, counter-clockwise from the top-left.
-pub fn rectangle(rect: Rect) -> Outline {
+/// **A [`Perimeter`] as drawing commands**, scaled out of the unit square into
+/// `rect`.
+///
+/// The one conversion between the two vocabularies, and it runs in the only
+/// direction that makes sense: a perimeter is a list of independent pieces that
+/// can be measured and projected onto, an outline is a pen with a current point
+/// and a `Close`.
+///
+/// The last segment is dropped when it is the straight run back to the start,
+/// because `Close` already draws it — which is what makes a rectangle four
+/// commands rather than five, and keeps every vertex estimate in the crate
+/// stated against the same shapes it was calibrated on.
+fn outline_of(shape: PerimeterShape, rect: Rect) -> Outline {
     let rect = rect.normalized();
-    let min = rect.min();
-    let max = rect.max();
+    let perimeter = Perimeter::of(shape, rect.size);
+    let segments = perimeter.segments();
+    let world = |unit: Vec2| rect.origin + unit.scale(rect.size);
 
-    let mut outline = Outline::with_capacity(5);
+    let mut outline = Outline::with_capacity(segments.len() + 2);
+    let Some(first) = segments.first() else {
+        return outline;
+    };
+    outline.move_to(world(first.from));
+
+    for (index, segment) in segments.iter().enumerate() {
+        let last = index + 1 == segments.len();
+        match segment.controls {
+            Some([c1, c2]) => {
+                outline.cubic_to(world(c1), world(c2), world(segment.to));
+            }
+            None if last && segment.to == first.from => {}
+            None => {
+                outline.line_to(world(segment.to));
+            }
+        }
+    }
+    outline.close();
     outline
-        .move_to(min)
-        .line_to(Vec2::new(max.x, min.y))
-        .line_to(max)
-        .line_to(Vec2::new(min.x, max.y))
-        .close();
-    outline
+}
+
+/// An axis-aligned rectangle, clockwise from the top-left.
+pub fn rectangle(rect: Rect) -> Outline {
+    outline_of(PerimeterShape::Rectangle, rect)
 }
 
 /// A rectangle with uniform rounded corners.
@@ -471,122 +514,30 @@ pub fn rectangle(rect: Rect) -> Outline {
 /// The radius is clamped to half the shorter side, so a radius larger than the
 /// rectangle produces a stadium rather than an inverted corner — the same rule
 /// CSS and GPUI's own quad use, and the reason the shape stays valid when a
-/// user drags a node smaller than its own corner radius.
+/// user drags a node smaller than its own corner radius. The clamp lives in
+/// [`Perimeter::of`], because the binding has to make exactly the same call.
 pub fn rounded_rectangle(rect: Rect, radius: f32) -> Outline {
-    let rect = rect.normalized();
-    let limit = rect.width().min(rect.height()) * 0.5;
-    let r = radius.clamp(0.0, limit.max(0.0));
-
-    if r <= 0.0 {
-        return rectangle(rect);
-    }
-
-    let min = rect.min();
-    let max = rect.max();
-    let k = r * KAPPA;
-
-    let mut outline = Outline::with_capacity(9);
-    outline
-        .move_to(Vec2::new(min.x + r, min.y))
-        .line_to(Vec2::new(max.x - r, min.y))
-        .cubic_to(
-            Vec2::new(max.x - r + k, min.y),
-            Vec2::new(max.x, min.y + r - k),
-            Vec2::new(max.x, min.y + r),
-        )
-        .line_to(Vec2::new(max.x, max.y - r))
-        .cubic_to(
-            Vec2::new(max.x, max.y - r + k),
-            Vec2::new(max.x - r + k, max.y),
-            Vec2::new(max.x - r, max.y),
-        )
-        .line_to(Vec2::new(min.x + r, max.y))
-        .cubic_to(
-            Vec2::new(min.x + r - k, max.y),
-            Vec2::new(min.x, max.y - r + k),
-            Vec2::new(min.x, max.y - r),
-        )
-        .line_to(Vec2::new(min.x, min.y + r))
-        .cubic_to(
-            Vec2::new(min.x, min.y + r - k),
-            Vec2::new(min.x + r - k, min.y),
-            Vec2::new(min.x + r, min.y),
-        )
-        .close();
-    outline
+    outline_of(PerimeterShape::RoundedRectangle { radius }, rect)
 }
 
 /// An ellipse inscribed in `rect`, as four cubics. See the module doc for why
 /// this is not two `arc_to` calls.
 pub fn ellipse(rect: Rect) -> Outline {
-    let rect = rect.normalized();
-    let center = rect.center();
-    let rx = rect.width() * 0.5;
-    let ry = rect.height() * 0.5;
-    let kx = rx * KAPPA;
-    let ky = ry * KAPPA;
-
-    let mut outline = Outline::with_capacity(6);
-    outline
-        .move_to(Vec2::new(center.x, center.y - ry))
-        .cubic_to(
-            Vec2::new(center.x + kx, center.y - ry),
-            Vec2::new(center.x + rx, center.y - ky),
-            Vec2::new(center.x + rx, center.y),
-        )
-        .cubic_to(
-            Vec2::new(center.x + rx, center.y + ky),
-            Vec2::new(center.x + kx, center.y + ry),
-            Vec2::new(center.x, center.y + ry),
-        )
-        .cubic_to(
-            Vec2::new(center.x - kx, center.y + ry),
-            Vec2::new(center.x - rx, center.y + ky),
-            Vec2::new(center.x - rx, center.y),
-        )
-        .cubic_to(
-            Vec2::new(center.x - rx, center.y - ky),
-            Vec2::new(center.x - kx, center.y - ry),
-            Vec2::new(center.x, center.y - ry),
-        )
-        .close();
-    outline
+    outline_of(PerimeterShape::Ellipse, rect)
 }
 
 /// A diamond inscribed in `rect`: the flowchart decision shape (§6).
 pub fn diamond(rect: Rect) -> Outline {
-    let rect = rect.normalized();
-    let center = rect.center();
-    let min = rect.min();
-    let max = rect.max();
-
-    let mut outline = Outline::with_capacity(5);
-    outline
-        .move_to(Vec2::new(center.x, min.y))
-        .line_to(Vec2::new(max.x, center.y))
-        .line_to(Vec2::new(center.x, max.y))
-        .line_to(Vec2::new(min.x, center.y))
-        .close();
-    outline
+    outline_of(PerimeterShape::Diamond, rect)
 }
 
 /// A triangle inscribed in `rect`, apex up.
 ///
 /// Present because [`ShapeKind`] has the variant and a `match` that silently
 /// fell through to a rectangle would be a wrong drawing rather than a missing
-/// one. It costs four lines and it is the same polygon machinery.
+/// one.
 pub fn triangle(rect: Rect) -> Outline {
-    let rect = rect.normalized();
-    let min = rect.min();
-    let max = rect.max();
-
-    let mut outline = Outline::with_capacity(4);
-    outline
-        .move_to(Vec2::new(rect.center().x, min.y))
-        .line_to(max)
-        .line_to(Vec2::new(min.x, max.y))
-        .close();
-    outline
+    outline_of(PerimeterShape::Triangle, rect)
 }
 
 /// The outline for a shape kind. `corner_radius` is used only by
@@ -596,20 +547,16 @@ pub fn triangle(rect: Rect) -> Outline {
 /// it is Phase 5's, and until then a visible box is a better answer than an
 /// invisible element the user cannot find or delete.
 pub fn outline_for(kind: &ShapeKind, rect: Rect, corner_radius: f32) -> Outline {
-    match kind {
-        ShapeKind::Rectangle => rectangle(rect),
-        ShapeKind::RoundedRectangle => rounded_rectangle(rect, corner_radius),
-        ShapeKind::Ellipse => ellipse(rect),
-        ShapeKind::Diamond => diamond(rect),
-        ShapeKind::Triangle => triangle(rect),
-        ShapeKind::Custom(_) => rectangle(rect),
-    }
+    outline_of(kind.perimeter(corner_radius), rect)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{Color, CustomKind};
+    use crate::{
+        geometry::Perimeter,
+        models::{Color, CustomKind},
+    };
 
     const EPSILON: f32 = 1e-3;
 
@@ -934,6 +881,134 @@ mod tests {
             NodeShape::Other,
         ] {
             assert!(!is_open(shape), "{shape:?}");
+        }
+    }
+
+    /// **The painter's outline and the binding's silhouette are one curve.**
+    ///
+    /// Stated on the points rather than on the source: every command this
+    /// module emits for a closed shape has to be a point of the same
+    /// [`Perimeter`] a connector endpoint resolves against, in the same order.
+    /// An arrow that stops beside an ellipse instead of on it is what two
+    /// silhouettes look like from the outside, and this is the assertion that
+    /// stops one being added back.
+    #[test]
+    fn the_painters_outline_is_the_binding_silhouette() {
+        let rect = rect();
+        for kind in [
+            ShapeKind::Rectangle,
+            ShapeKind::RoundedRectangle,
+            ShapeKind::Ellipse,
+            ShapeKind::Diamond,
+            ShapeKind::Triangle,
+            ShapeKind::Custom(CustomKind::new("dodo.unknown")),
+        ] {
+            let radius = 12.0;
+            let outline = outline_for(&kind, rect, radius);
+            let perimeter = Perimeter::of(kind.perimeter(radius), rect.size);
+            let world = |unit: Vec2| rect.origin + unit.scale(rect.size);
+
+            let mut drawn = Vec::new();
+            for command in outline.commands() {
+                match *command {
+                    SubpathCommand::MoveTo(p) | SubpathCommand::LineTo(p) => drawn.push(p),
+                    SubpathCommand::CubicTo { c1, c2, to } => {
+                        drawn.extend([c1, c2, to]);
+                    }
+                    SubpathCommand::Close => {}
+                }
+            }
+
+            let mut expected = vec![world(perimeter.segments()[0].from)];
+            for (index, segment) in perimeter.segments().iter().enumerate() {
+                let last = index + 1 == perimeter.segments().len();
+                match segment.controls {
+                    Some([c1, c2]) => {
+                        expected.extend([world(c1), world(c2), world(segment.to)]);
+                    }
+                    None if last => {}
+                    None => expected.push(world(segment.to)),
+                }
+            }
+
+            assert_eq!(
+                drawn.len(),
+                expected.len(),
+                "{kind:?} drew a different shape"
+            );
+            for (drawn, expected) in drawn.iter().zip(&expected) {
+                assert_near(*drawn, *expected);
+            }
+        }
+    }
+
+    /// **An arrow bound to a shape stops on it and points at it.**
+    ///
+    /// The two halves of the last acceptance criterion, and they are the same
+    /// fact seen twice: the head sits on the silhouette, so the shaft does not
+    /// run on into the fill, and it is built at the true ordered end, so it
+    /// points along the direction the arrow actually travels — at the shape,
+    /// whichever way round the outline the user aimed.
+    #[test]
+    fn an_arrow_bound_to_a_shape_stops_on_it_and_points_at_it() {
+        let bounds = Rect::new(Vec2::new(200.0, 200.0), Vec2::new(160.0, 100.0));
+        let shape = crate::geometry::PerimeterShape::Ellipse;
+        let tail = Vec2::new(-200.0, -400.0);
+
+        for step in 0..16 {
+            let angle = step as f32 / 16.0 * std::f32::consts::TAU;
+            let aim = bounds.center() + Vec2::new(angle.cos(), angle.sin()) * 200.0;
+            let tip = crate::geometry::nearest_perimeter_point(shape, bounds, 0.0, aim).point;
+
+            // On the outline, so the stroke does not enter the fill.
+            let radius = ((tip.x - bounds.center().x) / (bounds.width() * 0.5)).powi(2)
+                + ((tip.y - bounds.center().y) / (bounds.height() * 0.5)).powi(2);
+            assert!(
+                (radius - 1.0).abs() < 1e-2,
+                "the tip left the ellipse: {tip:?}"
+            );
+
+            let outline = outline_for_connector(NodeShape::Arrow, tail, tip)
+                .expect("an arrow has an outline");
+            let mut points = outline
+                .commands()
+                .iter()
+                .filter_map(|command| match command {
+                    SubpathCommand::MoveTo(p) | SubpathCommand::LineTo(p) => Some(*p),
+                    _ => None,
+                });
+            assert_eq!(points.next(), Some(tail), "the shaft starts at the tail");
+            assert_eq!(points.next(), Some(tip), "the shaft ends on the outline");
+
+            // Both barbs fall behind the tip, along the shaft — the head points
+            // the way the arrow is going.
+            let forward = tip - tail;
+            for barb in points.skip(1).step_by(2) {
+                let back = barb - tip;
+                assert!(
+                    back.x * forward.x + back.y * forward.y < 0.0,
+                    "a barb ran past the tip at {barb:?}"
+                );
+            }
+        }
+    }
+
+    /// A node body goes through the same table, graph-node radius fallback
+    /// included — so the rounded body the painter draws is the one an edge
+    /// stops on.
+    #[test]
+    fn a_node_body_is_drawn_from_the_same_table_as_its_binding() {
+        for shape in [
+            NodeShape::Rectangle,
+            NodeShape::RoundedRectangle,
+            NodeShape::GraphNode,
+            NodeShape::Ellipse,
+            NodeShape::Diamond,
+            NodeShape::Triangle,
+        ] {
+            let painted = outline_for_node(shape, rect(), 0.0).expect("a body has an outline");
+            let bound = outline_of(shape.perimeter(0.0), rect());
+            assert_eq!(painted, bound, "{shape:?}");
         }
     }
 }

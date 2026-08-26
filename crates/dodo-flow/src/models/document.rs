@@ -166,13 +166,35 @@ pub enum ConnectorEnd {
 
 /// A semantic attachment from a connector endpoint to another element.
 ///
-/// `anchor` is normalized in the target's bounds. Keeping the target id as
-/// well as the coincident point is what makes the endpoint follow a move or a
-/// resize after save/load and undo/redo.
+/// **Two numbers and nothing else: an id, and where round the target's
+/// silhouette the endpoint sits.** Keeping the id as well as the coincident
+/// point is what makes the endpoint follow a move or a resize after save/load
+/// and undo/redo; keeping the *where* as a perimeter parameter rather than as
+/// a world point is what makes it follow a rotation and a restyle too.
+///
+/// This used to be a [`Vec2`] normalised in the target's bounding box, and the
+/// two differences are the whole feature:
+///
+/// - a bounding box is not a silhouette, so an endpoint aimed at an ellipse, a
+///   diamond or a rounded corner bound to a point in mid-air beside the shape,
+///   or to one buried inside its fill;
+/// - a point in a box can be **anywhere in it**, so a slightly wrong value —
+///   from a file, from a migration, from an arithmetic slip — resolves to the
+///   middle of the element. A parameter cannot: every `f32` is a point on the
+///   outline, because [`Perimeter::point_at`](crate::geometry::Perimeter::point_at)
+///   wraps.
+///
+/// See [`geometry::perimeter`](crate::geometry::perimeter) for exactly what the
+/// parameter measures, and for why it is measured in the *unit square* rather
+/// than in world space — that is what makes a non-uniform resize keep the
+/// endpoint on the same visible spot instead of sliding it along the side it
+/// was pinned to.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ConnectorAttachment {
     pub element: ElementId,
-    pub anchor: Vec2,
+    /// Normalised position round the target's unit-square silhouette, measured
+    /// the way that shape's outline is drawn. Wraps, so it is never invalid.
+    pub perimeter: f32,
 }
 
 /// One ordered endpoint of a straight connector.

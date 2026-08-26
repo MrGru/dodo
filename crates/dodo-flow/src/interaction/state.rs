@@ -712,19 +712,19 @@ impl InteractionMachine {
         }
     }
 
-    /// The connector endpoint currently being dragged and the opposite point
-    /// used to choose a direction-appropriate snap anchor.
+    /// The connector endpoint currently being dragged, and what it is over.
+    ///
+    /// This used to hand back the *opposite* endpoint as well, because the snap
+    /// aimed at it to pick a direction-appropriate side. A free binding aims at
+    /// the pointer, so nothing reads that point any more and it is gone rather
+    /// than left for a future caller to believe.
     pub fn dragging_connector_endpoint(
         &self,
-    ) -> Option<(NodeIndex, ConnectorEnd, Vec2, Option<NodeIndex>)> {
+    ) -> Option<(NodeIndex, ConnectorEnd, Option<NodeIndex>)> {
         match self.state {
             InteractionState::DraggingConnectorEndpoint {
-                node,
-                end,
-                original,
-                target,
-                ..
-            } => Some((node, end, original.opposite(end).point, target)),
+                node, end, target, ..
+            } => Some((node, end, target)),
             _ => None,
         }
     }
