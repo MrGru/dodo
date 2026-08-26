@@ -627,3 +627,64 @@ Two traps that look like styling and are not:
 
 `Button::tooltip(impl Into<SharedString>)` exists and takes plain text — no `Tooltip::new` and no
 closure. Reach for it before hand-rolling one on a wrapper.
+
+### A segmented single-select is `ButtonGroup`, **not** `ToggleGroup`
+
+The two look interchangeable and are not, and picking the wrong one means re-deriving exclusivity
+by hand:
+
+- **`ButtonGroup`** (`button/button_group.rs`) defaults to `multiple(false)`, which *is*
+  single-select: on a click it clears the selection and hands `on_click` a `&Vec<usize>` holding
+  the one index that was clicked. It also joins adjacent children's borders into one segmented
+  outline. `ButtonGroup::new(id).outline().compact().small()` with
+  `Button::new(..).icon(..).tooltip(..).selected(cond)` children is upstream's own idiom for this
+  (`crates/story/src/stories/sidebar_story.rs`).
+- **`ToggleGroup`** (`button/toggle.rs`) is a set of *independent* toggles: `on_click` gives one
+  `bool` per item and is perfectly happy for two to be on at once. Use it for "which of these
+  filters are on", never for "which mode is this".
+
+Two things about the styling that are easy to get wrong:
+
+- **Borders are drawn only for the `Default` variant or under `.outline()`** (`self.variant.is_default() || self.outline`).
+  Mixing a `.primary()` child into a group that is neither leaves gaps in the segmented frame.
+- **Outline's selected state is a few per cent of opacity apart from its normal one**
+  (`outline_background(_, Active)`), which is not a selection anybody reads at a glance. The group
+  applies its own variant to children *only when it has one*, so leaving the group's variant unset
+  lets the chosen child carry `.primary()` while the rest stay `Default` — a strong selection
+  inside an intact frame. `dodo-mermaid`'s `render_mode_toggle` is the worked example.
+
+`Selectable` (`.selected(bool)`) is `gpui_component::Selectable`, not a `Button` inherent method,
+and it also sets `aria_selected` — which is the whole accessibility story once the labels are gone.
+
+### Floating a control inside a pane
+
+Three things, all of which fail silently:
+
+- The overlay's **parent** needs `.relative()`. Without it the child anchors to whichever ancestor
+  happens to be positioned — usually the view root, so the control lands in the wrong pane.
+- Make the overlay a **child element of the pane it acts on**, not a sibling gated by the same
+  condition. Then "is this control visible" and "is that pane visible" are one fact rather than two
+  that drift; the only state that can outlive the pane is a popover's open flag, so close it when
+  the layout changes.
+- Over a `gpui-component` code editor, leave **16px** of right-edge clearance: the editor paints
+  its scrollbar as an overlay *inside* the input's bounds (`scroll::Scrollbar`'s `WIDTH` is
+  `4·2 + 8`), so a control at `right_2()` sits on the track and eats the drag. A plain `canvas()`
+  pane has no scrollbar and needs none.
+
+Give a floating chip its own `bg`/`border` ground: whatever is behind it — a rendered diagram, or
+syntax-highlighted code — is arbitrary colour, and text with no ground of its own is unreadable
+over half of it.
+
+### Wheel events: `should_handle_scroll`, not `is_hovered`
+
+gpui says so itself (`Hitbox::is_hovered`'s doc): `is_hovered` is about what is *directly* under
+the pointer and goes false behind an overlay, while scrolling is about finding the outer scrollable
+container. A `ScrollWheelEvent` handler registered from a paint closure wants
+`hitbox.should_handle_scroll(window)`, and wants `cx.stop_propagation()` once it has handled the
+event — dodo's tools sit inside `main_pane()`'s scroll container, so without it every notch also
+scrolls the pane underneath.
+
+`event.delta.pixel_delta(px(LINE_HEIGHT))` normalises a mouse wheel's `Lines` and a trackpad's
+`Pixels` against a line height you choose. dodo's two zoomable surfaces — `dodo-flow`'s canvas and
+`dodo-mermaid`'s preview — both use `20.0`, and both bind **Cmd-or-Ctrl plus wheel to zoom, bare
+wheel to pan**. Copy that rule rather than choosing again.

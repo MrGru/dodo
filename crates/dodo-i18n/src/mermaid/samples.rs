@@ -18,11 +18,10 @@ samples! {
     plain Rendering;
     with RenderError { detail: DETAIL.into() } [DETAIL];
     plain EmptyPreviewHint;
-    term StatusLabel;
     term ZoomOutLabel;
     term ZoomInLabel;
     plain FitLabel;
-    plain TemplateBlank;
+    plain TemplatesTooltip;
     plain TemplateFlowchart;
     plain TemplateSequence;
     plain TemplateClass;

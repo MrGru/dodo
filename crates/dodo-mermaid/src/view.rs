@@ -1,7 +1,7 @@
-//! The Mermaid workspace view: a tab bar, an editor, a live SVG preview and a
-//! status line — GPUI's half of this crate. [`crate::render`]'s module doc is
-//! the other half of the boundary; nothing here calls `mermaid_rs_renderer`
-//! directly.
+//! The Mermaid workspace view: a tab bar, an editor and a live SVG preview —
+//! GPUI's half of this crate. [`crate::render`]'s module doc is the other half
+//! of the boundary; nothing here calls `mermaid_rs_renderer` directly, and
+//! nothing outside this file names a GPUI type.
 //!
 //! # The live-rendering pipeline
 //!
@@ -20,6 +20,30 @@
 //! [`MermaidTab::rendered_image`] exactly as it was — the workspace plan calls
 //! this out by name, because the alternative is a preview that blanks on every
 //! unbalanced bracket while the user is still typing the other half of it.
+//! That is also why [`MermaidView::render_preview_status`] exists: with the
+//! error nowhere on screen, a preserved preview silently stops matching what
+//! the user typed, which is strictly worse than blanking it.
+//!
+//! # Controls live in the pane they act on
+//!
+//! There is no status bar. A full-width row across the bottom held the word
+//! "Mermaid" — which the window title already says — beside controls that act
+//! on the preview and signals that describe it, none of which belong to a
+//! strip of chrome at the far end of the window. Each now floats inside its
+//! own pane:
+//!
+//! | Control | Pane | Corner |
+//! |---|---|---|
+//! | [`MermaidView::render_preview_status`] — spinner, render error | preview | top-left |
+//! | [`MermaidView::render_zoom_controls`] — `-` / Fit / `+` | preview | bottom-right |
+//! | [`MermaidView::render_template_menu`] — insert a template | editor | top-right |
+//!
+//! Each is a *child element of its pane*, which is what makes
+//! [`crate::workspace::WorkspaceMode`]'s two predicates the only thing
+//! deciding whether it exists: a control cannot be stranded in a pane that is
+//! not drawn, because it is not drawn either. The one piece of state that
+//! could outlive its pane is the template menu's open flag, and
+//! [`MermaidView::set_mode`] closes it for that reason.
 //!
 //! # Why the preview is a rasterised image, not the `svg()` element
 //!
@@ -50,6 +74,10 @@
 //! touched by [`MermaidView::schedule_render`], so it reads as "fit" until the
 //! user explicitly changes it, and resetting is just setting it back to `1.0`.
 //!
+//! The arithmetic itself is [`crate::zoom`]'s, not this file's — including for
+//! the wheel, whose modifier rule is `dodo-flow`'s canvas rule character for
+//! character (see [`install_preview_input`]).
+//!
 //! # No `#[gpui::test]` here, on purpose
 //!
 //! `dodo-flow`'s `views/flow.rs` — the other view in dodo built on a
@@ -61,10 +89,13 @@
 //! demand an ever-larger `#![recursion_limit]` that never converges. Isolated
 //! by bisection: a single three-line `#[gpui::test]` fn already triggers it,
 //! and `dodo-json-formatter` and `dodo-flow` — which have no `#[gpui::test]`
-//! either — are the closest working comparisons. [`crate::render`]'s 12 tests
-//! and the standalone `examples/mermaid.rs` launcher are this crate's
-//! evidence instead; re-attempt a GPUI-level test here only after confirming
-//! on a newer `gpui` revision that the crash is gone.
+//! either — are the closest working comparisons. [`crate::render`]'s,
+//! [`crate::workspace`]'s, [`crate::templates`]'s and [`crate::zoom`]'s plain
+//! `#[test]`s and the standalone `examples/mermaid.rs` launcher are this
+//! crate's evidence instead, which is the reason every rule this view obeys
+//! is stated in one of those four modules rather than here; re-attempt a
+//! GPUI-level test here only after confirming on a newer `gpui` revision that
+//! the crash is gone.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -76,13 +107,16 @@ use dodo_app_icon::AppIcon;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::button::{Button, ButtonGroup, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
-use gpui_component::{ActiveTheme, Sizable, h_flex, v_flex};
+use gpui_component::{ActiveTheme, Selectable, Sizable, h_flex, v_flex};
 
 use crate::i18n::{Language, LanguageExt, Str, mermaid, t};
 use crate::render::{DefaultMermaidRenderer, MermaidRenderer, MermaidTheme};
+use crate::templates::{self, MermaidTemplate};
+use crate::workspace::{self, CloseOutcome, WorkspaceMode};
+use crate::zoom;
 
 /// How long an edit waits before it is rendered. Within the workspace plan's
 /// 100–200ms guidance and short enough that typing does not feel like it is
@@ -103,16 +137,15 @@ const SPINNER_THRESHOLD: Duration = Duration::from_millis(150);
 /// re-rasterise.
 const PREVIEW_SCALE: f32 = 2.0;
 
-/// How far one `+`/`-` step or keystroke moves the zoom. Multiplicative, so
-/// repeated steps feel even whether zooming in or out.
-const ZOOM_STEP: f32 = 1.25;
-
-/// The zoom range, as a multiplier over "fit". `1.0` is fit; this is generous
-/// enough for a close read of a dense diagram or a wide view of a small one,
-/// without letting a stray scroll send it somewhere the user has to hunt for
-/// the reset button to escape.
-const MIN_ZOOM: f32 = 0.1;
-const MAX_ZOOM: f32 = 8.0;
+/// How far a floating control is inset from its pane's right edge when the
+/// pane is the editor.
+///
+/// Not the `2` (8px) the preview's overlays use: `gpui-component` paints the
+/// code editor's scrollbar as a 16px-wide overlay *inside* the input's own
+/// bounds (`scroll::Scrollbar`'s `WIDTH`, `4·2 + 8`), so a control any closer
+/// to the edge sits on top of the track and takes the drag that was meant for
+/// it. The preview has no scrollbar and needs no such clearance.
+const EDITOR_OVERLAY_RIGHT: Pixels = px(16.);
 
 /// The key-binding context the workspace establishes on its root. Scoped the
 /// same way `dodo_docker`'s `KEY_CONTEXT` is: bindings registered against it
@@ -131,81 +164,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd--", MermaidZoomOut, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-0", MermaidZoomReset, Some(KEY_CONTEXT)),
     ]);
-}
-
-/// The three ways to lay out the editor and the preview.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum WorkspaceMode {
-    Editor,
-    Split,
-    Preview,
-}
-
-/// The "+" button's fixed template set (workspace plan phase 6). Small and
-/// deliberately not extensible from the UI — the plan's own words are
-/// "discoverability, not a giant template marketplace" — so this is a plain
-/// enum over a `const` example each, not a registry.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum MermaidTemplate {
-    Blank,
-    Flowchart,
-    Sequence,
-    Class,
-    State,
-    Er,
-    Architecture,
-}
-
-impl MermaidTemplate {
-    const ALL: [MermaidTemplate; 7] = [
-        MermaidTemplate::Blank,
-        MermaidTemplate::Flowchart,
-        MermaidTemplate::Sequence,
-        MermaidTemplate::Class,
-        MermaidTemplate::State,
-        MermaidTemplate::Er,
-        MermaidTemplate::Architecture,
-    ];
-
-    fn label(self) -> mermaid::Text {
-        match self {
-            MermaidTemplate::Blank => mermaid::Text::TemplateBlank,
-            MermaidTemplate::Flowchart => mermaid::Text::TemplateFlowchart,
-            MermaidTemplate::Sequence => mermaid::Text::TemplateSequence,
-            MermaidTemplate::Class => mermaid::Text::TemplateClass,
-            MermaidTemplate::State => mermaid::Text::TemplateState,
-            MermaidTemplate::Er => mermaid::Text::TemplateEr,
-            MermaidTemplate::Architecture => mermaid::Text::TemplateArchitecture,
-        }
-    }
-
-    /// The example source the template inserts. Each was checked against the
-    /// real renderer during development (`mermaid-rs-renderer` 0.3.1) —
-    /// opening a template that immediately shows a syntax error would be
-    /// worse than no templates at all.
-    fn source(self) -> &'static str {
-        match self {
-            MermaidTemplate::Blank => "",
-            MermaidTemplate::Flowchart => {
-                "flowchart LR\n  A[Start] --> B{Decision}\n  B -->|Yes| C[Do it]\n  B -->|No| D[Skip]\n"
-            }
-            MermaidTemplate::Sequence => {
-                "sequenceDiagram\n  participant Alice\n  participant Bob\n  Alice->>Bob: Hello Bob\n  Bob-->>Alice: Hi Alice\n"
-            }
-            MermaidTemplate::Class => {
-                "classDiagram\n  Animal <|-- Duck\n  Animal : +String name\n  Animal : +makeSound()\n"
-            }
-            MermaidTemplate::State => {
-                "stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running : start\n  Running --> Idle : stop\n"
-            }
-            MermaidTemplate::Er => {
-                "erDiagram\n  CUSTOMER ||--o{ ORDER : places\n  ORDER ||--|{ LINE_ITEM : contains\n"
-            }
-            MermaidTemplate::Architecture => {
-                "architecture-beta\n  group api(cloud)[API]\n  service db(database)[Database] in api\n  service server(server)[Server] in api\n  server:R -- L:db\n"
-            }
-        }
-    }
 }
 
 /// One Mermaid document: its editor, its most recent render, and enough
@@ -253,7 +211,7 @@ pub struct MermaidView {
     /// the active tab's preview is ever visible, so only one drag can be live
     /// at a time.
     panning_from: Option<Point<Pixels>>,
-    /// Whether the "+" button's template menu is open.
+    /// Whether the editor's floating template button has its menu open.
     template_menu_open: bool,
 }
 
@@ -270,13 +228,13 @@ impl MermaidView {
             panning_from: None,
             template_menu_open: false,
         };
-        view.open_tab(String::new(), window, cx);
+        view.open_blank_tab(window, cx);
         view
     }
 
     /// Opens a new tab with `source` already in the editor, and selects it.
-    /// Used both by the "+" button and — from the day the clipboard detector
-    /// lands (workspace plan phase 5) — by a recognised paste.
+    /// Used by [`Self::open_blank_tab`] and by a recognised paste (the
+    /// workspace's `Route::Mermaid` entry point).
     pub fn open_tab(&mut self, source: String, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.next_id;
         self.next_id += 1;
@@ -326,25 +284,38 @@ impl MermaidView {
         cx.notify();
     }
 
-    fn close_tab(&mut self, id: u64, cx: &mut Context<Self>) {
+    /// The one way a blank tab is made.
+    ///
+    /// The tab bar's "+" and the last tab being closed are the same event as
+    /// far as the workspace is concerned — both must leave the user looking at
+    /// an empty editor that is active — so they are deliberately one call and
+    /// not two similar ones that can drift.
+    fn open_blank_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_tab(String::new(), window, cx);
+    }
+
+    /// Closes the tab with `id`. What that leaves behind is
+    /// [`workspace::close_outcome`]'s decision, not this method's — every case
+    /// of it is asserted there, which is the only place in this crate a test
+    /// can reach (see this module's doc).
+    fn close_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(index) = self.tabs.iter().position(|tab| tab.id == id) else {
             return;
         };
-        // At least one tab always exists — closing the last one replaces it
-        // with a fresh blank tab rather than leaving an empty workspace with
-        // no editor to type into.
-        if self.tabs.len() == 1 {
-            self.tabs.remove(index);
-            cx.notify();
-            return;
+        match workspace::close_outcome(self.tabs.len(), self.active, index) {
+            CloseOutcome::ReplaceWithBlank => {
+                self.tabs.remove(index);
+                // `open_blank_tab` sets `active` and notifies; a workspace
+                // with no tabs must not survive even until the end of this
+                // method, because `render` cannot draw one.
+                self.open_blank_tab(window, cx);
+            }
+            CloseOutcome::RemoveThenActivate(active) => {
+                self.tabs.remove(index);
+                self.active = active;
+                cx.notify();
+            }
         }
-        self.tabs.remove(index);
-        if self.active >= self.tabs.len() {
-            self.active = self.tabs.len() - 1;
-        } else if self.active > index {
-            self.active -= 1;
-        }
-        cx.notify();
     }
 
     fn tab_mut(&mut self, id: u64) -> Option<&mut MermaidTab> {
@@ -469,16 +440,28 @@ impl MermaidView {
         self.tabs.get_mut(self.active)
     }
 
+    /// Switches layout, and closes the template menu on the way.
+    ///
+    /// The menu's open flag is the one piece of floating-control state that
+    /// can outlive the pane holding it: leaving Split for Preview stops
+    /// drawing the editor and its popover, but the flag stays set, so coming
+    /// back would pop a menu open that nobody asked for.
+    fn set_mode(&mut self, mode: WorkspaceMode, cx: &mut Context<Self>) {
+        self.mode = mode;
+        self.template_menu_open = false;
+        cx.notify();
+    }
+
     fn zoom_in(&mut self, cx: &mut Context<Self>) {
         if let Some(tab) = self.active_tab_mut() {
-            tab.zoom = (tab.zoom * ZOOM_STEP).min(MAX_ZOOM);
+            tab.zoom = zoom::stepped_in(tab.zoom);
             cx.notify();
         }
     }
 
     fn zoom_out(&mut self, cx: &mut Context<Self>) {
         if let Some(tab) = self.active_tab_mut() {
-            tab.zoom = (tab.zoom / ZOOM_STEP).max(MIN_ZOOM);
+            tab.zoom = zoom::stepped_out(tab.zoom);
             cx.notify();
         }
     }
@@ -504,6 +487,49 @@ impl MermaidView {
 
     fn on_zoom_reset(&mut self, _: &MermaidZoomReset, _: &mut Window, cx: &mut Context<Self>) {
         self.zoom_reset(cx);
+    }
+
+    /// Appends `template`'s source to the active tab's editor, leaving the
+    /// caret at the end of what was inserted.
+    ///
+    /// **Appends, in this tab.** The templates used to open a new tab each;
+    /// they are just as often a reminder of a syntax halfway through a
+    /// document, and neither reading survives a button that throws the buffer
+    /// away. Where the blank line between old and new goes is
+    /// [`templates::appended`]'s rule, not this method's.
+    ///
+    /// Select-all-then-`replace` rather than `InputState::set_value`, for two
+    /// reasons that both bite silently: `set_value` clears the undo history,
+    /// so an accidental click could not be taken back, and it suppresses
+    /// `InputEvent::Change`, so the insertion would never reach the
+    /// subscription that calls [`Self::schedule_render`] and the preview would
+    /// sit there showing the diagram from before.
+    ///
+    /// The caret then lands at the end of the appended block, focused: what a
+    /// person does next is type into the diagram they just inserted. `replace`
+    /// leaves the selection there already but does not scroll to it, so the
+    /// position is re-set to the one it already holds — that round trip is
+    /// what runs `InputState::move_to`'s scroll-into-view and takes focus off
+    /// the popover.
+    fn append_template(
+        &mut self,
+        template: MermaidTemplate,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let editor = tab.editor.clone();
+        editor.update(cx, |state, cx| {
+            let existing = state.value().to_string();
+            let appended = templates::appended(&existing, template.source());
+            state.set_selected_range(0..existing.len(), cx);
+            state.replace(appended, window, cx);
+            let caret = state.cursor_position();
+            state.set_cursor_position(caret, window, cx);
+        });
+        cx.notify();
     }
 
     /// Copies the active tab's editor contents verbatim — not the last
@@ -572,6 +598,13 @@ impl MermaidView {
         .detach();
     }
 
+    /// The tab strip, ending in a "+" that opens a blank tab.
+    ///
+    /// **One click, one blank tab.** "+" used to drop a template menu, which
+    /// made the commonest gesture in the workspace — start a new diagram —
+    /// cost a click and a read; the templates are now the editor's own
+    /// floating button ([`Self::render_template_menu`]) where they append into
+    /// the document instead of demanding a tab of their own.
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         h_flex()
             .items_center()
@@ -594,8 +627,8 @@ impl MermaidView {
                             .xsmall()
                             .icon(AppIcon::Close)
                             .tooltip(t(mermaid::Text::CloseTabTooltip, cx))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.close_tab(id, cx);
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.close_tab(id, window, cx);
                             })),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -605,14 +638,31 @@ impl MermaidView {
                         }
                     }))
             }))
-            .child(self.render_template_menu(cx))
+            .child(
+                Button::new("mermaid-new-tab")
+                    .ghost()
+                    .xsmall()
+                    .icon(AppIcon::Plus)
+                    .tooltip(t(mermaid::Text::NewTabTooltip, cx))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_blank_tab(window, cx))),
+            )
     }
 
-    /// The "+" button's template menu: [`MermaidTemplate::ALL`], each a plain
-    /// row that opens a new tab with that template's source and closes the
-    /// menu. A hand-rolled list inside a `Popover`, the same shape
-    /// `dodo-api-explorer`'s per-row node menu uses — this library revision
-    /// has no separate "popup menu" type worth reaching for over it.
+    /// The editor's floating template button: [`MermaidTemplate::ALL`], each a
+    /// plain row that appends its source into the buffer
+    /// ([`Self::append_template`]) and closes the menu. A hand-rolled list
+    /// inside a `Popover`, the same shape `dodo-api-explorer`'s per-row node
+    /// menu uses — this library revision has no separate "popup menu" type
+    /// worth reaching for over it.
+    ///
+    /// **Top-right, not the preview's bottom-right.** The two floating
+    /// clusters sit in adjacent panes in Split mode; matching corners would
+    /// read as one row of controls straddling the divider. Anchoring at the
+    /// top also means the popover opens *downwards* over the editor rather
+    /// than off the bottom of the window, and the right edge keeps it out of
+    /// the way of the caret, which starts at the left and travels down.
+    /// [`EDITOR_OVERLAY_RIGHT`] is what keeps it off the code editor's own
+    /// overlay scrollbar.
     fn render_template_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mut menu = v_flex().gap_0p5().p_1();
         for template in MermaidTemplate::ALL {
@@ -625,68 +675,89 @@ impl MermaidView {
                     .label(t(template.label(), cx))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.template_menu_open = false;
-                        this.open_tab(template.source().to_owned(), window, cx);
+                        this.append_template(template, window, cx);
                     })),
             );
         }
 
-        Popover::new("mermaid-new-tab-menu")
-            .open(self.template_menu_open)
-            .on_open_change(cx.listener(|this, open, _, cx| {
-                this.template_menu_open = *open;
-                cx.notify();
-            }))
-            .trigger(
-                Button::new("mermaid-new-tab")
-                    .ghost()
-                    .xsmall()
-                    .icon(AppIcon::Plus)
-                    .tooltip(t(mermaid::Text::NewTabTooltip, cx)),
+        overlay_ground(cx)
+            .absolute()
+            .top_2()
+            .right(EDITOR_OVERLAY_RIGHT)
+            .child(
+                Popover::new("mermaid-template-menu")
+                    .open(self.template_menu_open)
+                    .on_open_change(cx.listener(|this, open, _, cx| {
+                        this.template_menu_open = *open;
+                        cx.notify();
+                    }))
+                    .trigger(
+                        Button::new("mermaid-templates")
+                            .ghost()
+                            .xsmall()
+                            .icon(AppIcon::LayoutDashboard)
+                            .tooltip(t(mermaid::Text::TemplatesTooltip, cx)),
+                    )
+                    .w(px(140.))
+                    .child(menu),
             )
-            .w(px(140.))
-            .child(menu)
     }
 
+    /// The Editor / Split / Preview switch, as one segmented control.
+    ///
+    /// `ButtonGroup` rather than `ToggleGroup`: the two look alike from the
+    /// outside and are not. `ToggleGroup` is a set of *independent* toggles —
+    /// its `on_click` hands back one `bool` per item and it is happy for two
+    /// to be on at once, so exclusivity would have to be re-derived here from
+    /// which flag moved. `ButtonGroup` with its default `multiple(false)`
+    /// already **is** single-select: it clears the selection and reports the
+    /// one index that was clicked, which is exactly what a mode is.
+    ///
+    /// Icons rather than labels, so tooltips are not optional. Both come from
+    /// [`WorkspaceMode::label`], the same three strings the buttons used to
+    /// draw — a tooltip that reworded them would be a second name for one
+    /// thing.
     fn render_mode_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let editor = self.mode_button(WorkspaceMode::Editor, mermaid::Text::ModeEditor, cx);
-        let split = self.mode_button(WorkspaceMode::Split, mermaid::Text::ModeSplit, cx);
-        let preview = self.mode_button(WorkspaceMode::Preview, mermaid::Text::ModePreview, cx);
-        h_flex()
-            .items_center()
-            .gap_1()
-            .child(editor)
-            .child(split)
-            .child(preview)
+        ButtonGroup::new("mermaid-mode")
+            .outline()
+            .compact()
+            .small()
+            .children(WorkspaceMode::ALL.map(|mode| {
+                let selected = self.mode == mode;
+                let button = Button::new(mode_button_id(mode))
+                    .icon(mode_icon(mode))
+                    .tooltip(t(mode.label(), cx))
+                    .selected(selected);
+                // The group applies its own variant to every child only when
+                // it has one, so leaving it unset is what lets the chosen
+                // segment carry `primary` while the rest stay default —
+                // outline's own selected tint is a few per cent of opacity
+                // apart from its normal one, which is not a selection anybody
+                // reads at a glance.
+                if selected { button.primary() } else { button }
+            }))
+            .on_click(cx.listener(|this, selected: &Vec<usize>, _, cx| {
+                let Some(index) = selected.first().copied() else {
+                    return;
+                };
+                let Some(mode) = WorkspaceMode::ALL.get(index).copied() else {
+                    return;
+                };
+                this.set_mode(mode, cx);
+            }))
     }
 
-    fn mode_button(
-        &self,
-        mode: WorkspaceMode,
-        label: mermaid::Text,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let id = match mode {
-            WorkspaceMode::Editor => "mermaid-mode-editor",
-            WorkspaceMode::Split => "mermaid-mode-split",
-            WorkspaceMode::Preview => "mermaid-mode-preview",
-        };
-        let button = Button::new(id).small().label(t(label, cx));
-        let button = if self.mode == mode {
-            button.primary()
-        } else {
-            button.ghost()
-        };
-        button.on_click(cx.listener(move |this, _, _, cx| {
-            this.mode = mode;
-            cx.notify();
-        }))
-    }
-
+    /// The editor pane, with the template button floating in it.
+    ///
+    /// `relative()` is what the overlay is positioned against; without it the
+    /// button anchors to whichever ancestor happens to be positioned, which is
+    /// the workspace root.
     fn render_editor(&self, tab: &MermaidTab, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .flex_1()
             .min_h_0()
             .min_w_0()
+            .relative()
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
@@ -696,10 +767,12 @@ impl MermaidView {
                     .text_size(cx.theme().mono_font_size)
                     .size_full(),
             )
+            .child(self.render_template_menu(cx))
     }
 
     /// Paints the active tab's rasterised diagram at "fit × zoom", offset by
-    /// `pan`, and installs the drag-to-pan mouse handlers over it.
+    /// `pan`, installs the pan/zoom mouse handlers over it, and floats the
+    /// zoom controls and the render status in its corners.
     ///
     /// A `canvas()` rather than `img()`, because centring "fit times a zoom
     /// the user controls" needs the container's actual pixel bounds at paint
@@ -709,6 +782,11 @@ impl MermaidView {
     /// [`MermaidView::schedule_render`] already produced, at whatever bounds
     /// this frame's zoom and pan say — the requirement the workspace plan's
     /// phase 4 states by name.
+    ///
+    /// The body is an `AnyElement` because its two arms are different element
+    /// types and the overlays have to be added to the frame once, after
+    /// either: a second copy of the overlay chain per arm is how one of them
+    /// ends up a version behind.
     fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let frame = div()
             .flex_1()
@@ -725,68 +803,115 @@ impl MermaidView {
             return frame;
         };
 
-        match tab.rendered_image.clone() {
+        let body = match tab.rendered_image.clone() {
             Some(image) => {
                 let zoom = tab.zoom;
                 let pan = tab.pan;
                 let view = cx.entity();
-                frame.child(
-                    canvas(
-                        |bounds, window, _cx| window.insert_hitbox(bounds, HitboxBehavior::Normal),
-                        move |bounds, hitbox, window, _cx| {
-                            paint_preview_image(&image, zoom, pan, bounds, window);
-                            install_preview_drag(view.clone(), &hitbox, window);
-                        },
-                    )
-                    .absolute()
-                    .size_full(),
+                canvas(
+                    |bounds, window, _cx| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                    move |bounds, hitbox, window, _cx| {
+                        paint_preview_image(&image, zoom, pan, bounds, window);
+                        install_preview_input(view.clone(), &hitbox, bounds, window);
+                    },
                 )
+                .absolute()
+                .size_full()
+                .into_any_element()
             }
-            None => frame.flex().items_center().justify_center().child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t(mermaid::Text::EmptyPreviewHint, cx)),
-            ),
-        }
+            None => div()
+                .absolute()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t(mermaid::Text::EmptyPreviewHint, cx)),
+                )
+                .into_any_element(),
+        };
+
+        frame
+            .child(body)
+            .child(self.render_preview_status(tab, cx))
+            .child(self.render_zoom_controls(cx))
     }
 
-    fn render_status_bar(
+    /// The rendering spinner and the render error, floating in the preview's
+    /// top-left corner.
+    ///
+    /// **This is where the deleted status bar's two real signals went.** The
+    /// bar was a full-width row holding the word "Mermaid" plus these two, and
+    /// the label was the only part of it with no job. The signals could not go
+    /// with it: the preview deliberately keeps the last good render when the
+    /// source stops parsing (this module's doc says why), so with the error
+    /// nowhere on screen the preview quietly stops matching the text beside
+    /// it.
+    ///
+    /// Top-left because the diagram is centred and the zoom cluster owns the
+    /// bottom-right: a message here crosses a wide diagram's corner rather
+    /// than its middle, and never the controls. Both signals are chips with a
+    /// ground of their own — a rendered diagram can put any colour at all
+    /// behind them — and both can be up at once, because a render that starts
+    /// does not clear the previous error until it succeeds.
+    fn render_preview_status(
         &self,
         tab: &MermaidTab,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        h_flex()
-            .items_center()
-            .justify_between()
-            .text_sm()
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(t(mermaid::Text::StatusLabel, cx))
-                    .when(tab.show_spinner, |this| {
-                        this.child(
-                            div()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t(mermaid::Text::Rendering, cx)),
-                        )
-                    })
-                    .when_some(tab.render_error.clone(), |this, detail| {
-                        this.child(
-                            div()
-                                .text_color(cx.theme().danger)
-                                .child(t(mermaid::Text::RenderError { detail }, cx)),
-                        )
-                    }),
-            )
-            .child(self.render_zoom_controls(cx))
+        v_flex()
+            .absolute()
+            .top_2()
+            .left_2()
+            // `v_flex()` sets no `align_items`, so it defaults to stretch and
+            // a one-word spinner chip would be dragged out to the width of a
+            // paragraph-long error beside it. Each chip sizes to its own text.
+            .items_start()
+            // A renderer message is third-party text of no known length; left
+            // to itself it would run the width of the pane and out of it.
+            .max_w(relative(0.75))
+            .gap_1()
+            .text_xs()
+            .when(tab.show_spinner, |this| {
+                this.child(
+                    overlay_ground(cx)
+                        .px_2()
+                        .py_0p5()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t(mermaid::Text::Rendering, cx)),
+                )
+            })
+            .when_some(tab.render_error.clone(), |this, detail| {
+                this.child(
+                    overlay_ground(cx)
+                        .px_2()
+                        .py_0p5()
+                        .text_color(cx.theme().danger)
+                        .child(t(mermaid::Text::RenderError { detail }, cx)),
+                )
+            })
     }
 
+    /// `-` / Fit / `+`, floating in the preview's bottom-right corner.
+    ///
+    /// In the pane they act on, and therefore drawn only when that pane is
+    /// (see this module's doc). Bottom-right rather than top-right: the status
+    /// chips have the top-left, a diagram is centred, and the corner furthest
+    /// from both is the one a control can sit in without covering anything a
+    /// person is reading.
     fn render_zoom_controls(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        h_flex()
+        overlay_ground(cx)
+            .absolute()
+            .bottom_2()
+            .right_2()
+            .flex()
+            .flex_row()
             .items_center()
             .gap_1()
+            .p_0p5()
             .child(
                 Button::new("mermaid-zoom-out")
                     .ghost()
@@ -883,6 +1008,11 @@ impl Render for MermaidView {
             .on_action(cx.listener(Self::on_zoom_reset));
 
         let Some(active) = self.tabs.get(self.active) else {
+            // Unreachable by construction — `close_tab` never leaves the
+            // workspace tabless — and deliberately still handled, because the
+            // alternative is a panic and because this early return is *why*
+            // an empty workspace was unrecoverable: no tab bar renders here,
+            // so there is nothing left to open a tab from.
             return root;
         };
 
@@ -917,16 +1047,18 @@ impl Render for MermaidView {
                 .flex_1()
                 .min_h_0()
                 .gap_2()
-                .when(
-                    matches!(self.mode, WorkspaceMode::Editor | WorkspaceMode::Split),
-                    |this| this.child(self.render_editor(active, cx)),
-                )
-                .when(
-                    matches!(self.mode, WorkspaceMode::Split | WorkspaceMode::Preview),
-                    |this| this.child(self.render_preview(cx)),
-                ),
+                // Both panes — and therefore the floating controls inside
+                // each — are gated on `WorkspaceMode`'s own predicates rather
+                // than on a `matches!` written out here, so the three
+                // mode-dependent surfaces cannot disagree about what Split
+                // means.
+                .when(self.mode.shows_editor(), |this| {
+                    this.child(self.render_editor(active, cx))
+                })
+                .when(self.mode.shows_preview(), |this| {
+                    this.child(self.render_preview(cx))
+                }),
         )
-        .child(self.render_status_bar(active, cx))
     }
 }
 
@@ -934,6 +1066,48 @@ fn hash_source(source: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
     hasher.finish()
+}
+
+/// The glyph a mode is drawn as, now that the switch carries no text.
+///
+/// Three marks that have to be told apart at 16px and mean *source only*,
+/// *both side by side* and *result only*. [`AppIcon::SquareCode`] is a pane
+/// with `< >` in it, [`AppIcon::Columns`] is a pane divided into side-by-side
+/// bands, and [`AppIcon::Eye`] is the one glyph in the set that means "look at
+/// it" rather than naming a thing. All three are already in dodo's vocabulary,
+/// so this adds no SVG — and none of them is the editor's own template button
+/// ([`AppIcon::LayoutDashboard`]), which is the collision that would actually
+/// cost a person time, since that button sits inside the pane the first of
+/// these turns on.
+fn mode_icon(mode: WorkspaceMode) -> AppIcon {
+    match mode {
+        WorkspaceMode::Editor => AppIcon::SquareCode,
+        WorkspaceMode::Split => AppIcon::Columns,
+        WorkspaceMode::Preview => AppIcon::Eye,
+    }
+}
+
+fn mode_button_id(mode: WorkspaceMode) -> &'static str {
+    match mode {
+        WorkspaceMode::Editor => "mermaid-mode-editor",
+        WorkspaceMode::Split => "mermaid-mode-split",
+        WorkspaceMode::Preview => "mermaid-mode-preview",
+    }
+}
+
+/// The ground a control or a message needs where it floats over a pane's
+/// content.
+///
+/// One helper rather than three copies: the workspace's floating clusters have
+/// to read as the same kind of object, and both panes can put anything at all
+/// behind them — a rendered diagram is arbitrary colour, and syntax-highlighted
+/// code is arbitrary text.
+fn overlay_ground(cx: &App) -> Div {
+    div()
+        .rounded(cx.theme().radius)
+        .bg(cx.theme().popover)
+        .border_1()
+        .border_color(cx.theme().border)
 }
 
 /// Paints `image` centred in `bounds` at "fit × `zoom`", offset by `pan`. Pure
@@ -975,12 +1149,30 @@ fn paint_preview_image(
         .ok();
 }
 
-/// Registers this frame's drag-to-pan listeners over the preview's hitbox.
+/// Registers this frame's pan and zoom listeners over the preview's hitbox.
+///
 /// Mirrors `dodo-flow`'s canvas input pattern (`views/flow.rs`): listeners are
 /// registered from inside the paint closure and last exactly one frame, and
-/// `capture_pointer` is what keeps the drag alive once the pointer leaves the
+/// `capture_pointer` is what keeps a drag alive once the pointer leaves the
 /// preview pane — there is nothing to release, it clears on mouse up.
-fn install_preview_drag(view: Entity<MermaidView>, hitbox: &Hitbox, window: &mut Window) {
+///
+/// **The wheel rule is `dodo-flow`'s, deliberately unchanged.** Cmd (or Ctrl)
+/// plus the wheel zooms; a bare wheel or a two-finger trackpad swipe pans.
+/// dodo has exactly two zoomable surfaces and a person who has learnt one has
+/// learnt the other, so the modifier is copied rather than chosen again —
+/// including `should_handle_scroll` over `is_hovered`, which is gpui's own
+/// advice for scroll events, and `stop_propagation`, without which every wheel
+/// notch here would also scroll the main pane this tool sits in.
+///
+/// The zoom is cursor-anchored through [`zoom::anchored_pan`], fed the factor
+/// that was *applied* rather than the one asked for — see that function's doc
+/// for why the difference is visible at the ends of the range.
+fn install_preview_input(
+    view: Entity<MermaidView>,
+    hitbox: &Hitbox,
+    bounds: Bounds<Pixels>,
+    window: &mut Window,
+) {
     {
         let (hitbox, view) = (hitbox.clone(), view.clone());
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
@@ -1016,6 +1208,7 @@ fn install_preview_drag(view: Entity<MermaidView>, hitbox: &Hitbox, window: &mut
         });
     }
     {
+        let view = view.clone();
         window.on_mouse_event(move |_: &MouseUpEvent, phase, _window, cx| {
             if phase != DispatchPhase::Bubble {
                 return;
@@ -1024,6 +1217,44 @@ fn install_preview_drag(view: Entity<MermaidView>, hitbox: &Hitbox, window: &mut
             // still stop, or the next move over it would resume panning with
             // a stale anchor.
             view.update(cx, |this, _| this.panning_from = None);
+        });
+    }
+    {
+        let (hitbox, view) = (hitbox.clone(), view.clone());
+        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble || !hitbox.should_handle_scroll(window) {
+                return;
+            }
+            let pixels = event.delta.pixel_delta(px(zoom::SCROLL_LINE_HEIGHT));
+            let zooming = event.modifiers.platform || event.modifiers.control;
+            let centre = bounds.center();
+
+            view.update(cx, |this, cx| {
+                let Some(tab) = this.active_tab_mut() else {
+                    return;
+                };
+                if zooming {
+                    let before = tab.zoom;
+                    let after = zoom::scaled(before, zoom::wheel_factor(pixels.y.as_f32()));
+                    tab.zoom = after;
+                    let applied = after / before;
+                    tab.pan.x = px(zoom::anchored_pan(
+                        tab.pan.x.as_f32(),
+                        (event.position.x - centre.x).as_f32(),
+                        applied,
+                    ));
+                    tab.pan.y = px(zoom::anchored_pan(
+                        tab.pan.y.as_f32(),
+                        (event.position.y - centre.y).as_f32(),
+                        applied,
+                    ));
+                } else {
+                    tab.pan.x += pixels.x;
+                    tab.pan.y += pixels.y;
+                }
+                cx.notify();
+            });
+            cx.stop_propagation();
         });
     }
 }

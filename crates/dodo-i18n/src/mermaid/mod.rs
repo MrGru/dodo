@@ -1,5 +1,5 @@
-//! The Mermaid workspace: the tab bar, the editor, the preview and its status
-//! bar.
+//! The Mermaid workspace: the tab bar, the editor, the preview, and the
+//! controls floating inside each pane.
 //!
 //! `en` and `vi` each render every variant below; the compiler names any
 //! string a language has not been given.
@@ -27,7 +27,10 @@ pub enum Text {
     // The editor.
     EditorPlaceholder,
 
-    // The preview and its status bar.
+    // The preview, and the two signals that float in its top-left corner.
+    // Both used to sit on a status bar across the bottom of the workspace;
+    // that bar is gone and they are not, because the preview deliberately
+    // keeps the last good render when the source stops parsing.
     /// Shown only once rendering has run long enough to be visible — see
     /// `dodo-flow`'s sibling rule for why a sub-threshold render shows nothing.
     Rendering,
@@ -38,21 +41,20 @@ pub enum Text {
         detail: String,
     },
     EmptyPreviewHint,
-    /// "Mermaid" — the format name in the preview's status bar, unrelated to
-    /// [`super::shell::Text::MermaidTitle`] which is the sidebar's row.
-    StatusLabel,
 
-    // Preview zoom controls (workspace plan phase 4). `ZoomOutLabel` and
-    // `ZoomInLabel` are the glyphs on the two step buttons; both languages
-    // draw the same symbol. `FitLabel` resets zoom and pan (also Cmd-0).
+    // The zoom cluster floating in the preview's bottom-right corner
+    // (workspace plan phase 4). `ZoomOutLabel` and `ZoomInLabel` are the
+    // glyphs on the two step buttons; both languages draw the same symbol.
+    // `FitLabel` resets zoom and pan (also Cmd-0).
     ZoomOutLabel,
     ZoomInLabel,
     FitLabel,
 
-    // The "+" tab-bar button's menu (workspace plan phase 6): a small,
-    // fixed template set, not a library. Each inserts its example source into
-    // a new tab.
-    TemplateBlank,
+    // The editor's floating template button (workspace plan phase 6): a
+    // small, fixed template set, not a library. Each *appends* its example
+    // source to the document being edited, which is why there is no `Blank`
+    // entry — a row that appends nothing would do nothing.
+    TemplatesTooltip,
     TemplateFlowchart,
     TemplateSequence,
     TemplateClass,

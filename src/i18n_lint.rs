@@ -36,7 +36,7 @@
 /// The view sources, embedded at compile time so the test needs no working
 /// directory. These are the files that build what the user sees; pure logic
 /// modules have no text sinks and are not worth scanning.
-const SOURCES: [(&str, &str); 46] = [
+const SOURCES: [(&str, &str); 47] = [
     ("src/layout.rs", include_str!("layout.rs")),
     (
         "crates/dodo-json-formatter/src/lib.rs",
@@ -211,6 +211,10 @@ const SOURCES: [(&str, &str); 46] = [
     // row: the canvas draws its first translated strings there, and a guard
     // that starts when the tool ships is a guard that misses everything
     // written while it was being built.
+    (
+        "crates/dodo-mermaid/src/view.rs",
+        include_str!("../crates/dodo-mermaid/src/view.rs"),
+    ),
     (
         "crates/dodo-flow/src/views/flow.rs",
         include_str!("../crates/dodo-flow/src/views/flow.rs"),
@@ -613,7 +617,7 @@ mod tests {
     fn the_scan_still_covers_every_source_it_did() {
         assert_eq!(
             super::SOURCES.len(),
-            46,
+            47,
             "the view scan covers fewer files than it did; add the file back, or \
              lower this count deliberately and say why"
         );
