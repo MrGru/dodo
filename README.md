@@ -42,6 +42,12 @@ An infinite canvas for diagrams and node graphs with shapes, connectors, text, i
 
 ![Diagram](docs/screenshots/diagram.png)
 
+### Mermaid
+
+Create and preview Mermaid charts and diagrams directly in Dodo, including flowcharts, sequence diagrams, state diagrams, class diagrams, and more.
+
+![Mermaid](docs/screenshots/mermaid.png)
+
 ### Cleaner
 
 Scan and safely clean system, application, and developer junk while keeping deletion behind an explicit review step.
@@ -86,8 +92,6 @@ Download the latest build from:
 
 **[GitHub Releases](https://github.com/MrGru/dodo/releases/latest)**
 
-> [!WARNING]
-> Current builds are **not code-signed or notarized**.
 
 ### macOS
 
