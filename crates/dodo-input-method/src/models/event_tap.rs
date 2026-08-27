@@ -687,13 +687,40 @@ mod tests {
     /// not merely against the engine's semantic state or its final action list.
     #[test]
     fn direct_output_keeps_the_captains_english_w_examples_literal() {
-        for word in [
-            "window", "gateway", "follow", "widow", "willow", "elbow", "arrow", "narrow", "borrow",
-            "sorrow", "tomorrow", "marrow",
-        ] {
+        for word in ["window", "gateway", "follow", "widow", "willow", "elbow"] {
             assert_eq!(type_at_end_cursor(word), word, "{word}");
         }
-        assert_visible_steps("arrow", &["a", "ả", "ar", "aro", "arrow"]);
+        // The `-rrow` words reach that final `w` through a cancelled `r`, and a
+        // cancelled Telex key is typed once — so the document is one `r` short
+        // of the English spelling, here as in the engine. Direct output is
+        // where that matters most: this replays the engine's plan as real
+        // deletes and inserts, so a key typed twice would be visible in the
+        // document rather than only in a composition.
+        for (keys, document) in [
+            ("arrow", "arow"),
+            ("narrow", "narow"),
+            ("borrow", "borow"),
+            ("sorrow", "sorow"),
+            ("tomorrow", "tomorow"),
+            ("marrow", "marow"),
+            ("arrrow", "arrow"),
+        ] {
+            assert_eq!(type_at_end_cursor(keys), document, "{keys}");
+        }
+        assert_visible_steps("arrow", &["a", "ả", "ar", "aro", "arow"]);
+        // The captain's three reported cases, through the host that types for
+        // real: `instea` may not become `insstead` on the last keystroke.
+        for (keys, document) in [
+            ("insstead", "instead"),
+            ("exxtra", "extra"),
+            ("merrmaid", "mermaid"),
+        ] {
+            assert_eq!(type_at_end_cursor(keys), document, "{keys}");
+        }
+        assert_visible_steps(
+            "insstead",
+            &["i", "in", "ín", "ins", "inst", "inste", "instea", "instead"],
+        );
     }
 
     #[test]

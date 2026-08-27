@@ -58,7 +58,9 @@
 //! off and type the key as itself. So the undo rule is stated once and both
 //! schemes get it. The undo alone is not evidence of English: if intervening
 //! letters make its literal reading impossible and a later control follows,
-//! [`VietnameseEngine`](super::VietnameseEngine) restores the raw Telex keys.
+//! [`VietnameseEngine`](super::VietnameseEngine) restores the raw Telex keys —
+//! all of them except the one the undo has already typed, which is why
+//! `insstead` is `instead`. See the parent module's *Fail safe* section.
 //!
 //! The bare `w` is the one key that reaches that layer as a whole *letter*
 //! rather than as a mark, and it undoes itself the same way — but the shared

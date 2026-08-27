@@ -31,7 +31,7 @@ render time — so `toas` + `n` becomes `toán` without anything relocating a ma
 plain enum for the same reason: Telex and VNI produce identical `Transform`s and share every rule
 about Vietnamese, so neither file contains one.
 
-Three rules are subtle enough to name before you open the files:
+Four rules are subtle enough to name before you open the files:
 
 - **A doubled letter key states the case of the letter it marks** (the captain's call, 2026-08-14).
   `dD` is `Đ` and `Dd` is `đ`; `aA`/`Aa` read the same way, because the second press *is* that
@@ -60,12 +60,31 @@ Three rules are subtle enough to name before you open the files:
   (`ưindo` + `w` → `window`, not `indow`). A directly-marked letter's cancel therefore asks the
   **last** letter, not `mark_target`: `windoư`'s nucleus is a bare `i` that can carry no horn, so
   there was no target to ask and a second `w` grew `windoưư`.
+- **A reverting key is accounted for exactly once, and `Syllable::raw` is the ledger that says
+  so.** `raw` is not a transcript of the keys: a revert types its letter immediately, so that key
+  is discharged (`Syllable::spend_reverting_key`) and the three reconstructions that rebuild the
+  letters *from* `raw` cannot type it again — `insstead` is `instead`, not `insstead`. Only the
+  *collapsing* shape discharges; `MarkOutcome::SourceRestored` puts the earlier key back **and**
+  types the current one, so both entries stand or `window` loses its `w`. The engine cannot tell a
+  deliberate escape from an English word that genuinely doubles the letter — `error` and `exxtra`
+  are the same keystroke shape — so it honours the cancellation the user already saw.
 
 **The accepted price** is stated in `vietnamese::tests`: a Latin word whose keys spell a *valid*
 Vietnamese syllable is composed and stays composed, because the word-boundary restore in `rules`
 only rescues invalid ones. So `dodo` types `đô` and `dad` types `đa`. Unikey does the same; it is
 not a bug to fix, and it is the reason the plausibility rule above is the whole guard there is —
 a word list of English exceptions is not on the table.
+
+The second price is the doubling one, and it is a **decision** rather than a defect (the captain's
+call, 2026-08-27): an English word whose repeated letter *is* a Telex control comes out one letter
+short (`arrow` types `arow`, `offer` types `ofer`), and the way to type it is to spell the doubling
+out — `arrrow`, `offfer`. The two readings cannot both be had, and the proof is in
+`the_cancellation_reading_costs_english_words_that_double_a_control` in `vietnamese::tests`:
+`effort` and `exxtra` reach the decision in step-for-step identical engine state and differ only in
+which letters they are made of. The rejected reading — hand back every keystroke — was measured,
+and it deletes the Telex escape itself (`marr` becomes `marr`, so `mar` is unreachable), which
+`a_doubled_control_still_cancels_for_vietnamese` now pins. **Do not "fix" `arrow` without reading
+both.**
 
 ## The corpus tests derive the keys, never the answer
 

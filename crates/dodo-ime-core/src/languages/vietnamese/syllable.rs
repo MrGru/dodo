@@ -32,6 +32,13 @@
 //! trustworthy impossible run can be restored immediately; otherwise raw input
 //! is only the commit fallback. It never leaves the syllable and dies at the
 //! next word boundary.
+//!
+//! It is a **ledger of what is still owed**, not a transcript, and the
+//! difference is one key: a revert types its letter at once, so the key that
+//! reverted has already been paid and is discharged from the record by
+//! [`Syllable::spend_reverting_key`]. Every reconstruction reads that one
+//! ledger, which is what makes the reverting key reach the document exactly
+//! once however the run is later re-read.
 
 use super::rules;
 use super::tone::{self, TonePlacement};
@@ -214,7 +221,14 @@ impl Syllable {
         self.tone
     }
 
-    /// The characters typed into this syllable, in order.
+    /// The keys of this syllable that still owe the document a character.
+    ///
+    /// Normally that is simply the characters typed, in order. The one
+    /// exception is the key that *reverts* a transformation: two presses of a
+    /// Telex control are one gesture producing one letter (`ss` types `s`,
+    /// `aaa` types `aa`), and the revert types that letter immediately — so
+    /// the second press has already been paid out and leaves the record. See
+    /// [`Syllable::spend_reverting_key`], which is the whole of that rule.
     pub fn raw(&self) -> &str {
         &self.raw
     }
@@ -254,6 +268,39 @@ impl Syllable {
         self.raw.push(key);
     }
 
+    /// Take the key just recorded back out of the record, because the revert
+    /// it performed has already typed it.
+    ///
+    /// # The reverting key is accounted for exactly once
+    ///
+    /// A doubled Telex control is **one gesture with one visible result**: the
+    /// first press applies a transformation and the second takes it back and
+    /// types the letter, which is why `ss` types `s` and `aaa` types `aa`. The
+    /// revert emits that letter there and then, through
+    /// `VietnameseEngine::literal_after_undo`.
+    ///
+    /// The reconstructions — [`Syllable::restore_raw_letters`] and
+    /// [`Syllable::restore_raw_letters_after_undo`] — *replace* the letters
+    /// with this record rather than adding to them, so nothing is ever emitted
+    /// twice. What went wrong was subtler and worse: a key left in the record
+    /// after its revert makes the reconstruction rebuild the syllable **as if
+    /// the cancellation had never happened**, undoing something the user had
+    /// already been shown. That is how `instea` became `insstead` on the last
+    /// keystroke.
+    ///
+    /// So the record and the letters are kept in step by discharging the key
+    /// here: two presses, one entry, one character. The press it cancelled
+    /// stays, because that is the entry the revert's own literal fills.
+    ///
+    /// **Only the collapsing shape of a revert discharges a key.** Where the
+    /// revert instead puts the earlier key back as a letter *and* types the
+    /// current one — `MarkOutcome::SourceRestored`, which is what makes
+    /// `window` out of `ưindo` plus `w` — two presses owe two characters and
+    /// both entries stand. Discharging one there would swallow the final `w`.
+    pub fn spend_reverting_key(&mut self) {
+        self.raw.pop();
+    }
+
     pub fn push_letter(&mut self, base: char, upper: bool) {
         self.letters.push(Letter::new(base, upper));
     }
@@ -286,6 +333,10 @@ impl Syllable {
 
     /// Restore an undo's raw keys after a later Telex control proves that the
     /// repeated letter belonged to a foreign run rather than a cancellation.
+    ///
+    /// The record it rebuilds from no longer holds the reverting key — see
+    /// [`Syllable::spend_reverting_key`] — so the letter that revert typed
+    /// survives this rather than being typed again.
     pub fn restore_raw_letters_after_undo(&mut self) -> bool {
         self.restore_ascii_raw_letters()
     }
@@ -799,6 +850,46 @@ mod tests {
             syllable.apply_mark_from(Mark::Horn, Some('w')),
             MarkOutcome::NoTarget
         );
+    }
+
+    /// The ledger and the screen have to agree, and the two shapes of a revert
+    /// disagree about how many letters two presses own.
+    ///
+    /// A collapsing revert leaves one letter between them, so the reverting key
+    /// is discharged and one entry remains; a restored source leaves two — the
+    /// cancelled key goes back into the word *and* the current one is typed —
+    /// so both entries stand. Discharging there would leave any later
+    /// reconstruction one `w` short of `window`.
+    #[test]
+    fn only_a_collapsing_revert_discharges_its_key_from_the_ledger() {
+        let mut collapsing = Syllable::new();
+        collapsing.record_key('w');
+        collapsing.push_marked_letter('u', Some(Mark::Horn), false, Some('w'));
+        collapsing.record_key('w');
+        assert_eq!(
+            collapsing.apply_mark_from(Mark::Horn, Some('w')),
+            MarkOutcome::SourceCancelled
+        );
+        collapsing.spend_reverting_key();
+        collapsing.push_letter('w', false);
+        assert_eq!(collapsing.render(MODERN), "w");
+        assert_eq!(collapsing.raw(), collapsing.render(MODERN));
+
+        let mut restored = Syllable::new();
+        restored.record_key('w');
+        restored.push_marked_letter('u', Some(Mark::Horn), false, Some('w'));
+        for key in "indo".chars() {
+            restored.record_key(key);
+            restored.push_letter(key, false);
+        }
+        restored.record_key('w');
+        assert_eq!(
+            restored.apply_mark_from(Mark::Horn, Some('w')),
+            MarkOutcome::SourceRestored
+        );
+        restored.push_letter('w', false);
+        assert_eq!(restored.render(MODERN), "window");
+        assert_eq!(restored.raw(), restored.render(MODERN));
     }
 
     /// The key that is put back is the one the user typed, not the one they are

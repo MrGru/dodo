@@ -1208,41 +1208,51 @@ fn a_foreign_precomposed_scalar_commits_and_passes_through() {
 
 // -------------------------------------------------- English and nonsense
 
+/// A doubled Telex control is one gesture with one visible result, and that
+/// holds whatever the engine later decides the word was.
+///
+/// The first press transforms, the second takes the transformation back and
+/// types the letter — so the letter reaches the document **once**, and neither
+/// the immediate rendering nor a later English reconstruction may change that
+/// count. `arrow` therefore types `arow`, and a typist who wants the English
+/// word spells the doubled `r` out: `arrrow`. See
+/// [`the_cancellation_reading_costs_english_words_that_double_a_control`] for the
+/// words this reading costs and why they were never really being read.
 #[test]
 fn doubled_control_letter_english_table() {
     let cases = [
-        // Tone and clear-tone keys. Without a later control, a repeat remains
-        // the supported cancellation (`marr` -> `mar`), not proof of English.
-        ("arrow", "arrow"),
-        ("arrows", "arrows"),
-        ("narrow", "narrow"),
-        ("borrow", "borrow"),
-        ("sorrow", "sorrow"),
-        ("tomorrow", "tomorrow"),
+        // Tone and clear-tone keys. A repeat is the supported cancellation
+        // (`marr` -> `mar`) and stays one letter however the run ends.
+        ("arrow", "arow"),
+        ("arrows", "arows"),
+        ("narrow", "narow"),
+        ("borrow", "borow"),
+        ("sorrow", "sorow"),
+        ("tomorrow", "tomorow"),
         ("carry", "cary"),
         ("sorry", "sory"),
         ("hurry", "hury"),
         ("worry", "ưory"),
         ("berry", "bery"),
-        ("error", "error"),
-        ("mirror", "mirror"),
-        ("horror", "horror"),
-        ("terror", "terror"),
-        ("marrow", "marrow"),
-        ("barrow", "barrow"),
-        ("harrow", "harrow"),
+        ("error", "eror"),
+        ("mirror", "miror"),
+        ("horror", "horor"),
+        ("terror", "teror"),
+        ("marrow", "marow"),
+        ("barrow", "barow"),
+        ("harrow", "harow"),
         ("class", "class"),
         ("pass", "pas"),
         ("miss", "mis"),
-        ("assess", "assess"),
+        ("assess", "asess"),
         ("across", "across"),
         ("address", "address"),
         ("off", "of"),
-        ("offer", "offer"),
-        ("coffee", "coffee"),
-        ("different", "different"),
-        ("buffer", "buffer"),
-        ("effort", "effort"),
+        ("offer", "ofer"),
+        ("coffee", "cofee"),
+        ("different", "diferent"),
+        ("buffer", "bufer"),
+        ("effort", "efort"),
         ("jazz", "jazz"),
         ("buzz", "buzz"),
         ("fizz", "fizz"),
@@ -1268,8 +1278,8 @@ fn doubled_control_letter_english_table() {
         ("agree", "agree"),
         ("aardvark", "aardvark"),
         // Case variants obey the same distinction.
-        ("Arrow", "Arrow"),
-        ("ARROW", "ARROW"),
+        ("Arrow", "Arow"),
+        ("ARROW", "AROW"),
         ("Sorry", "Sory"),
     ];
     check(&cases, telex);
@@ -1281,27 +1291,268 @@ fn doubled_control_letter_english_table() {
     }
 
     // Every Telex control family takes the deferred path: only a later control
-    // over the now-impossible cancelled reading restores the physical keys.
+    // over the now-impossible cancelled reading restores the physical keys —
+    // and the reconstruction reads a ledger the cancellation has already been
+    // discharged from, so each cancelled key still stands exactly once.
+    // `maszzw` keeps both its `z`s because `z` clears a tone rather than
+    // repeating itself: nothing there was ever cancelled.
     check(
         &[
-            ("marrnw", "marrnw"),
-            ("massnw", "massnw"),
-            ("maffnw", "maffnw"),
-            ("maxxnw", "maxxnw"),
-            ("majjnw", "majjnw"),
+            ("marrnw", "marnw"),
+            ("massnw", "masnw"),
+            ("maffnw", "mafnw"),
+            ("maxxnw", "maxnw"),
+            ("majjnw", "majnw"),
             ("maszzw", "maszzw"),
-            ("daddaw", "daddaw"),
-            ("aaand", "aaand"),
-            ("eeend", "eeend"),
-            ("ooond", "ooond"),
+            ("daddaw", "dadaw"),
+            ("aaand", "aand"),
+            ("eeend", "eend"),
+            ("ooond", "oond"),
         ],
         telex,
     );
 
+    // The cancellation is visible the moment it happens and the reconstruction
+    // leaves it alone — `ar` is never re-read as `arr`.
     let mut arrow = engine();
     assert_eq!(
         action_stream(&mut arrow, "arrow"),
-        ["a", "ả", "ar", "aro", "arrow"].map(composition)
+        ["a", "ả", "ar", "aro", "arow"].map(composition)
+    );
+}
+
+/// **A reverting Telex key reaches the document exactly once.**
+///
+/// This is the invariant the whole doubled-control family rests on. The first
+/// press applies a transformation, the second takes it back and types the
+/// letter — one gesture, one letter — and neither the immediate rendering nor
+/// the later English reconstruction may change that count. The engine keeps it
+/// true by discharging the reverting key from the syllable's ledger the moment
+/// the revert types it, so nothing downstream can type it a second time; see
+/// `Syllable::spend_reverting_key`.
+///
+/// The expected spellings below are only what the invariant looks like word by
+/// word. The property is asserted directly beside each one: the control letter
+/// is typed exactly one time fewer than it was pressed.
+#[test]
+fn a_reverting_control_key_is_typed_exactly_once() {
+    // (keys, the control key doubled in them, what lands in the document)
+    let cases = [
+        // The three reported cases, exactly.
+        ("insstead", 's', "instead"),
+        ("exxtra", 'x', "extra"),
+        ("merrmaid", 'r', "mermaid"),
+        // The five tone keys, at the front of a word, in the middle and at the
+        // end. A tone key needs a syllable to put a tone on, so the earliest a
+        // revert can happen is right after the first nucleus.
+        ("assk", 's', "ask"),
+        ("mapss", 's', "maps"),
+        ("beff", 'f', "bef"),
+        ("beffore", 'f', "before"),
+        ("offfice", 'f', "office"),
+        ("borrn", 'r', "born"),
+        ("carr", 'r', "car"),
+        ("taxxi", 'x', "taxi"),
+        ("boxx", 'x', "box"),
+        ("majjor", 'j', "major"),
+        ("banjjo", 'j', "banjo"),
+        // The horn/breve key, which is a whole letter of its own before a
+        // nucleus and a mark after one.
+        ("wwet", 'w', "wet"),
+        ("bawwl", 'w', "bawl"),
+        ("laww", 'w', "law"),
+        // The stroke, which reaches back to the syllable's initial `d`.
+        ("dddo", 'd', "ddo"),
+        ("doddge", 'd', "dodge"),
+        ("dadd", 'd', "dad"),
+        ("didd", 'd', "did"),
+        // The circumflex, where the control is the *second* press of a vowel,
+        // so escaping it takes three.
+        ("aaand", 'a', "aand"),
+        ("neeed", 'e', "need"),
+        ("cooop", 'o', "coop"),
+        // Case variants count the same key.
+        ("Insstead", 's', "Instead"),
+        ("INSSTEAD", 's', "INSTEAD"),
+        ("Merrmaid", 'r', "Mermaid"),
+        ("MERRMAID", 'r', "MERMAID"),
+        ("Exxtra", 'x', "Extra"),
+        // And the same accounting where no reconstruction happens at all,
+        // because no later control ever proves the run foreign. These are the
+        // "swallowed" face of the same rule and not a second site: the
+        // reverting key is typed once here too, and the press it cancelled is
+        // spent on the diacritic it put up and took down.
+        ("pass", 's', "pas"),
+        ("miss", 's', "mis"),
+        ("off", 'f', "of"),
+        ("carry", 'r', "cary"),
+        ("sorry", 'r', "sory"),
+        ("hurry", 'r', "hury"),
+        ("daddy", 'd', "dady"),
+    ];
+
+    let spellings: Vec<(&str, &str)> = cases.iter().map(|(keys, _, want)| (*keys, *want)).collect();
+    check(&spellings, telex);
+
+    for (keys, control, _) in cases {
+        let count = |text: &str| {
+            text.chars()
+                .filter(|key| key.eq_ignore_ascii_case(&control))
+                .count()
+        };
+        let pressed = count(keys);
+        let typed = count(&telex(keys));
+        assert_eq!(
+            typed,
+            pressed - 1,
+            "{keys}: pressed {control} {pressed} times, typed it {typed} times"
+        );
+    }
+
+    // VNI spells its controls with digits, so none of these doubled letters is
+    // a control there and every key is its own literal.
+    for (keys, _, _) in cases {
+        assert_eq!(vni(keys), keys, "{keys}");
+    }
+
+    // The revert is discharged where it happens, not where the run is later
+    // re-read: `ins` is on screen from the fourth keystroke and the last key
+    // may not widen it back to `inss`.
+    let mut instead = engine();
+    assert_eq!(
+        action_stream(&mut instead, "insstead"),
+        ["i", "in", "ín", "ins", "inst", "inste", "instea", "instead"].map(composition)
+    );
+}
+
+/// The English words the cancellation reading costs — a decision, not a bug.
+///
+/// # The choice
+///
+/// A doubled Telex control has two readings and the engine must pick one
+/// before it knows what the word is:
+///
+/// - **the cancellation** — two presses are one gesture leaving one letter, so
+///   `insstead` is `instead`. Chosen (the captain's call, 2026-08-27).
+/// - **the keystrokes** — hand back everything typed, so `arrow` is `arrow`.
+///   Rejected: it can only be had by not distrusting the raw record after a
+///   revert, which deletes the Telex escape itself — `marr` becomes `marr` and
+///   there is then no way to type `mar` at all. See
+///   [`a_doubled_control_still_cancels_for_vietnamese`], which pins that.
+///
+/// # Why no third option exists
+///
+/// The two readings want different text from the *same* engine state. `effort`
+/// and `exxtra` are step-for-step identical, six keys each:
+///
+/// | press | `effort` | `exxtra` |
+/// |---|---|---|
+/// | 1 | letter → `e` | letter → `e` |
+/// | 2 | tone applied → `è` | tone applied → `ẽ` |
+/// | 3 | same key reverts → `ef` | same key reverts → `ex` |
+/// | 4 | plain letter → `efo` | plain letter → `ext` |
+/// | 5 | tone key falls back, run impossible, reconstruction fires | *identical* |
+/// | 6 | literal | *identical* |
+///
+/// Same revert position, same trigger class, same viability, same trust state.
+/// The only difference is which letters — which is a lexicon, and a word list
+/// of English exceptions is not on the table. So the engine cannot tell a
+/// deliberate escape from a word that genuinely doubles the letter, and it
+/// honours the cancellation it already showed the user rather than guessing.
+///
+/// # The cost, and the way round it
+///
+/// These words come out one letter short. Reaching the English spelling is the
+/// same move as typing any literal Telex control — spell the doubling out,
+/// `arrrow` — which
+/// [`spelling_a_doubled_control_out_types_both_letters`] holds as a contract.
+#[test]
+fn the_cancellation_reading_costs_english_words_that_double_a_control() {
+    check(
+        &[
+            ("arrow", "arow"),
+            ("narrow", "narow"),
+            ("mirror", "miror"),
+            ("error", "eror"),
+            ("offer", "ofer"),
+            ("coffee", "cofee"),
+            ("assess", "asess"),
+            ("buffer", "bufer"),
+            ("effort", "efort"),
+            ("different", "diferent"),
+        ],
+        telex,
+    );
+    // The `effort`/`exxtra` pair from the doc comment above, side by side: two
+    // identical runs, and the reading the engine picked shows in both.
+    check(&[("effort", "efort"), ("exxtra", "extra")], telex);
+}
+
+/// **The Telex escape, which the cancellation reading exists to preserve.**
+///
+/// Doubling a control is how a Vietnamese typist takes a diacritic back and
+/// gets the letter: `marr` is the supported way to type `mar`, and there is no
+/// other way to type it. Every one of these words is what the rejected
+/// keystrokes reading would have deleted — under it `marr` is `marr`, `aww` is
+/// `aww` and `didd` is `didd`, and the letters below become unreachable.
+///
+/// So this table is the other half of the decision recorded in
+/// [`the_cancellation_reading_costs_english_words_that_double_a_control`]. A
+/// later change that makes `arrow` type `arrow` again will fail here, which is
+/// the point: that outcome cannot be bought without giving this up.
+#[test]
+fn a_doubled_control_still_cancels_for_vietnamese() {
+    check(
+        &[
+            // The five tone keys.
+            ("marr", "mar"),
+            ("mass", "mas"),
+            ("maff", "maf"),
+            ("maxx", "max"),
+            ("majj", "maj"),
+            // The horn/breve, the stroke and the circumflex.
+            ("aww", "aw"),
+            ("oww", "ow"),
+            ("uww", "uw"),
+            ("didd", "did"),
+            ("dadd", "dad"),
+            ("aaa", "aa"),
+            ("eee", "ee"),
+            ("ooo", "oo"),
+            // Cancelling one control leaves every other Telex rule intact, so
+            // the syllable is still composed around it.
+            ("toanr", "toản"),
+        ],
+        telex,
+    );
+}
+
+/// Spelling the doubling out reaches a real double letter.
+///
+/// This is the documented way round the cost recorded in
+/// [`the_cancellation_reading_costs_english_words_that_double_a_control`], so
+/// it is a contract rather than folklore: the third press has no
+/// transformation left to revert, falls back to its own literal, and the run
+/// goes literal from there.
+#[test]
+fn spelling_a_doubled_control_out_types_both_letters() {
+    check(
+        &[
+            ("arrrow", "arrow"),
+            ("narrrow", "narrow"),
+            ("errror", "error"),
+            ("offfer", "offer"),
+            ("cofffee", "coffee"),
+            ("asssess", "assess"),
+            ("bufffer", "buffer"),
+            ("efffort", "effort"),
+            ("diffferent", "different"),
+            ("passs", "pass"),
+            ("misss", "miss"),
+            ("offf", "off"),
+            ("carrry", "carry"),
+        ],
+        telex,
     );
 }
 
@@ -1319,15 +1570,25 @@ fn english_words_ending_in_w_stay_literal_without_costing_real_marks() {
         ("shadow", "shadow"),
         ("below", "below"),
         ("elbow", "elbow"),
-        ("arrow", "arrow"),
-        ("narrow", "narrow"),
-        ("borrow", "borrow"),
-        ("sorrow", "sorrow"),
-        ("tomorrow", "tomorrow"),
-        ("marrow", "marrow"),
     ];
     check(english, telex);
     check(english, vni);
+    // The `-rrow` words reach the final `w` through a cancelled `r`, so their
+    // Telex spelling is one `r` short of the English one — see
+    // `the_cancellation_reading_costs_english_words_that_double_a_control`. VNI has
+    // no alphabetic control at all and leaves them whole.
+    let rrow = &[
+        ("arrow", "arow"),
+        ("narrow", "narow"),
+        ("borrow", "borow"),
+        ("sorrow", "sorow"),
+        ("tomorrow", "tomorow"),
+        ("marrow", "marow"),
+    ];
+    check(rrow, telex);
+    for (keys, _) in rrow {
+        assert_eq!(vni(keys), *keys, "{keys}");
+    }
     check(&[("mow", "mơ"), ("tuw", "tư"), ("bawng", "băng")], telex);
     check(&[("mo7", "mơ"), ("tu7", "tư"), ("ba8ng", "băng")], vni);
 }
@@ -1362,14 +1623,15 @@ fn non_vietnamese_words_fall_through_as_typed() {
             ("View", "View"),
             ("Browser", "Browser"),
             // A cancelled doubled control makes the run literal only when a
-            // later control supplies the missing evidence.
-            ("arrow", "arrow"),
-            ("assess", "assess"),
-            ("offer", "offer"),
-            ("coffee", "coffee"),
-            ("error", "error"),
-            ("Arrow", "Arrow"),
-            ("ARROW", "ARROW"),
+            // later control supplies the missing evidence, and the cancelled
+            // key is not typed again when it does.
+            ("arrow", "arow"),
+            ("assess", "asess"),
+            ("offer", "ofer"),
+            ("coffee", "cofee"),
+            ("error", "eror"),
+            ("Arrow", "Arow"),
+            ("ARROW", "AROW"),
         ],
         telex,
     );

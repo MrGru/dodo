@@ -87,8 +87,31 @@
 //! boundary. An undo is deliberately not immediate proof — `marr` is the
 //! supported way to take hỏi back and type `mar` — but if intervening letters
 //! make that cancelled reading impossible and another control follows, the raw
-//! keys win (`arrow` stays `arrow`). The rest are why an input method has an
-//! off switch.
+//! keys win and the run goes literal (`marrnw` is `marnw`).
+//!
+//! **What that restore may never do is bring the cancelling key back.** The
+//! two presses of a doubled control are one gesture producing one letter, the
+//! revert types that letter immediately, and the reconstruction rebuilds the
+//! letters from a ledger the key has already been discharged from — see
+//! [`Syllable::spend_reverting_key`](syllable::Syllable::spend_reverting_key).
+//! Without that the reconstruction would put the cancelled key back and undo a
+//! cancellation the user had already been shown: `instea` became `insstead` on
+//! the last keystroke.
+//!
+//! **Which reading a doubled control gets is a decision** (the captain's call,
+//! 2026-08-27), because there are two and the engine cannot have both. The
+//! cancellation wins: `insstead` is `instead`. The price is that an English
+//! word whose doubled letter is genuine comes out one letter short — `arrow`
+//! is `arow` — and reaching it means spelling the doubling out, `arrrow`. The
+//! two readings are not separable here: `effort` and `exxtra` reach this
+//! decision in step-for-step identical engine state and differ only in which
+//! letters they are made of, which is a lexicon. The alternative reading was
+//! tried and costs more: it can only be had by trusting the raw record through
+//! a revert, which deletes the escape itself — `marr` becomes `marr`, and
+//! `mar` becomes unreachable. `vietnamese::tests` holds both halves, in
+//! `the_cancellation_reading_costs_english_words_that_double_a_control` and
+//! `a_doubled_control_still_cancels_for_vietnamese`. The rest are why an input
+//! method has an off switch.
 //!
 //! The one thing that restore may not undo is a letter the user *stated*:
 //! `dd` spells `đ` outright, so `ddm` is `đm` rather than the keys handed back.
@@ -423,7 +446,20 @@ impl VietnameseEngine {
         EngineResult::from_actions(self.show())
     }
 
-    fn note_undo(&mut self, literal: char) {
+    /// Record that a key has just reverted a transformation.
+    ///
+    /// `collapsed` is whether the two presses produced **one** letter between
+    /// them — the ordinary shape, `ss` typing `s` — as opposed to
+    /// [`MarkOutcome::SourceRestored`], where the cancelled key goes back into
+    /// the word where it stands and the current one is typed after it, so both
+    /// presses owe a character (`ưindo` plus `w` is `window`). Only the
+    /// collapsing shape discharges its key from the syllable's ledger; see
+    /// [`Syllable::spend_reverting_key`](syllable::Syllable::spend_reverting_key)
+    /// for why the ledger is what decides how often the key is typed.
+    fn note_undo(&mut self, literal: char, collapsed: bool) {
+        if collapsed {
+            self.syllable.spend_reverting_key();
+        }
         self.telex_undo_at = (self.config.spell_check
             && self.config.scheme == InputScheme::Telex
             && literal.is_ascii_alphabetic()
@@ -442,8 +478,10 @@ impl VietnameseEngine {
     fn apply(&mut self, transform: Transform, source: char) -> Applied {
         match transform {
             Transform::Letter { base, mark, upper } => {
+                // `cancel_self_mark` only ever takes the collapsing shape: it
+                // removes the letter its key made and the caller types that key.
                 if mark.is_some_and(|mark| self.syllable.cancel_self_mark(mark, source)) {
-                    self.note_undo(source);
+                    self.note_undo(source, true);
                     self.literal_after_undo(source)
                 } else {
                     self.syllable
@@ -454,10 +492,14 @@ impl VietnameseEngine {
             Transform::Mark { mark, literal } => {
                 match self.syllable.apply_mark_from(mark, Some(source)) {
                     MarkOutcome::Applied => Applied::Changed,
-                    MarkOutcome::SourceCancelled
-                    | MarkOutcome::SourceRestored
-                    | MarkOutcome::Reverted => {
-                        self.note_undo(literal);
+                    MarkOutcome::SourceCancelled | MarkOutcome::Reverted => {
+                        self.note_undo(literal, true);
+                        self.literal_after_undo(literal)
+                    }
+                    // Two presses, two letters: the cancelled key went back
+                    // into the word and this one is still to be typed.
+                    MarkOutcome::SourceRestored => {
+                        self.note_undo(literal, false);
                         self.literal_after_undo(literal)
                     }
                     MarkOutcome::NoTarget => self.fall_back(literal),
@@ -469,7 +511,7 @@ impl VietnameseEngine {
                 }
                 if self.syllable.tone() == tone {
                     self.syllable.clear_tone();
-                    self.note_undo(literal);
+                    self.note_undo(literal, true);
                     return self.literal_after_undo(literal);
                 }
                 self.syllable.set_tone(tone);
