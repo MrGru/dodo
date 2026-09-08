@@ -43,7 +43,6 @@ dodo-paths = { path = "../dodo-paths" }
 # `App` and no window. That boundary is what makes the engine testable, and
 # `lib.rs` records why it is very hard to recover once lost.
 gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
-gpui-component = { version = "0.6", default-features = false }
 # The versioned document format (`models::serialization`). `serde_json`'s
 # `Value` is also the migration ladder's currency: a step rewrites the parsed
 # JSON of an older version, so a migration never has to keep a copy of a

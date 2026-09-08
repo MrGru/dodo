@@ -6,7 +6,7 @@
 //! already translated; these are presentation helpers with no opinion on
 //! localization.
 
-use gpui_component::{ActiveTheme as _, Icon, IconNamed, StyledExt as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconNamed, StyledExt as _, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{App, Div, ParentElement as _, SharedString, Styled as _, div, px};
 

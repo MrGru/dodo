@@ -6,9 +6,11 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::list::{List, ListDelegate, ListItem, ListState};
-use gpui_component::{ActiveTheme as _, IndexPath, Sizable as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
+use gpui_kit::component::{
+    ActiveTheme as _, IndexPath, Sizable as _, WindowExt as _, h_flex, v_flex,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Pixels, Render,
@@ -250,7 +252,7 @@ impl ListDelegate for CatalogDelegate {
                     .w_full()
                     .min_w_0()
                     .gap_2()
-                    .child(gpui_component::Icon::new(node_icon(entry.node.kind)).xsmall())
+                    .child(gpui_kit::component::Icon::new(node_icon(entry.node.kind)).xsmall())
                     .child(
                         v_flex()
                             .flex_1()

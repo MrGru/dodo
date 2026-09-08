@@ -17,7 +17,6 @@ description = "One dialog at a time: the per-marker slot the dialogs with more t
 # question this module asks the window and the only reason the component
 # library is named here at all.
 gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
-gpui-component = { version = "0.6", default-features = false }
 
 [dev-dependencies]
 # `#[gpui::test]`, for the two tests that play the caller's half of the

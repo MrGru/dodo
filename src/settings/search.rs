@@ -1,5 +1,5 @@
-use gpui_component::list::{ListDelegate, ListItem, ListState};
-use gpui_component::{ActiveTheme as _, IndexPath, h_flex};
+use gpui_kit::component::list::{ListDelegate, ListItem, ListState};
+use gpui_kit::component::{ActiveTheme as _, IndexPath, h_flex};
 use gpui_kit::*;
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};

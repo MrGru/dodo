@@ -11,9 +11,9 @@
 //! `services::file_picker`, which does its `stat` on the background executor;
 //! the bytes are read once, at send time, in `services::http::upload`.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::Editor;
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::Editor;
+use gpui_kit::component::{
     ActiveTheme as _, Icon, Selectable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;

@@ -25,7 +25,7 @@
 //! — far more likely — silently not apply, leaving a document permanently
 //! painted in the theme it was drawn under. The resolution happens at the render
 //! boundary in `views/`, which is the only layer that may name
-//! `gpui_component::ActiveTheme`. This is also why [`Color`] is four `f32`s of
+//! `gpui_kit::component::ActiveTheme`. This is also why [`Color`] is four `f32`s of
 //! this crate's own rather than `gpui_kit::Hsla`: `models/` names no UI framework.
 
 use dodo_paths::HostOs;

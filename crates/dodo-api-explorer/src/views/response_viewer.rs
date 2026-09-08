@@ -2,11 +2,11 @@
 
 use std::time::Duration;
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::Editor;
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::tag::Tag;
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::Editor;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::{
     ActiveTheme as _, Selectable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;

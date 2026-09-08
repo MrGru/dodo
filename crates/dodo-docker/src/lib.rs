@@ -198,12 +198,12 @@ actions!(
 /// - `cmd-r` — refresh the active page (manual Refresh, from the keyboard).
 ///
 /// There is deliberately no `escape` binding here. The detail surface is now a
-/// `gpui_component` [`Dialog`](gpui_component::dialog::Dialog), which binds
+/// `gpui_kit::component` [`Dialog`](gpui_kit::component::dialog::Dialog), which binds
 /// `escape` to its own `CancelDialog` in a context of its own and holds focus
 /// while it is open — so dismissing it is the library's job, not this module's,
 /// and a second binding would only be a way for the two to disagree.
 ///
-/// Must run after `gpui_component::init`, so a binding registered here wins the
+/// Must run after `gpui_kit::component::init`, so a binding registered here wins the
 /// tie at equal context depth — the same ordering rule `api_explorer::init` and
 /// `settings::init` depend on. The arrow and space keys are only claimed by a
 /// focused text input (the search box), whose deeper context takes them first, so

@@ -6,7 +6,7 @@
 //! read without dismissing anything, which is what a banner is for and what a
 //! toast is not.
 
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 use gpui_kit::{App, Div, ParentElement as _, SharedString, Styled as _, div};
 
 use crate::app_icon::AppIcon;

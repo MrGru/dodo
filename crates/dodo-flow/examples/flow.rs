@@ -481,7 +481,7 @@ use dodo_flow::{
     },
     render::registry::GenericKind,
 };
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme, Root, Sizable,
     button::{Button, ButtonVariants},
 };
@@ -1000,9 +1000,9 @@ fn main() {
         .with_assets(Assets)
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx| {
-            gpui_component::init(cx);
+            gpui_kit::component::init(cx);
             // §26's bindings, from `commands::keys`'s table. After
-            // `gpui_component::init`, so the canvas's context wins the tie with
+            // `gpui_kit::component::init`, so the canvas's context wins the tie with
             // the component library's own.
             dodo_flow::init(cx);
             cx.activate(true);

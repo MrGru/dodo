@@ -137,7 +137,9 @@ fn start_with_os_write_transitions_keep_only_trustworthy_values() {
 /// width, [`a_side_by_side_row_would_not_fit`] fails and this whole workaround
 /// can go.
 pub(super) mod row_layout {
-    use gpui_component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
+    use gpui_kit::component::setting::{
+        SettingField, SettingGroup, SettingItem, SettingPage, Settings,
+    };
     use gpui_kit::prelude::FluentBuilder as _;
     use gpui_kit::{
         AppContext as _, Axis, Bounds, Context, InteractiveElement as _, IntoElement,
@@ -215,7 +217,7 @@ pub(super) mod row_layout {
 
     /// Right edge of the row's control, and of the box that must contain it.
     fn edges(cx: &mut TestAppContext, width: Pixels, stacked: bool) -> (Pixels, Pixels) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::component::init);
 
         let window = cx
             .update(|cx| {

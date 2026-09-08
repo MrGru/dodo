@@ -13,8 +13,8 @@
 //! Level chips are the same `Button::selected` idiom the body-view modes use,
 //! and they select a *minimum*: picking Warn shows warnings and errors.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::{ActiveTheme as _, Selectable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::{ActiveTheme as _, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,

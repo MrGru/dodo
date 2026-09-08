@@ -27,7 +27,6 @@ dodo-paths = { path = "../dodo-paths" }
 # `App` and no frame.
 # Keep the native listener and UI state in the GPUI Kit 0.6 type universe.
 gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
-gpui-component = { version = "0.6", default-features = false }
 # The `Send + Sync` sender half that carries a language switch performed inside
 # an OS callback back to the state layer, and the `Stream` adaptor `lib.rs`
 # awaits the receiver with. A callback has no `App`, which is why the seam is a

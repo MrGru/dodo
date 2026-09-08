@@ -1,12 +1,14 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use gpui_component::WindowExt as _;
-use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _};
-use gpui_component::dialog::DialogButtonProps;
-use gpui_component::spinner::Spinner;
-use gpui_component::table::{DataTable, TableState};
-use gpui_component::{
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::{
+    Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _,
+};
+use gpui_kit::component::dialog::DialogButtonProps;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::table::{DataTable, TableState};
+use gpui_kit::component::{
     ActiveTheme, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
@@ -1781,7 +1783,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
 
-    use gpui_component::table::TableDelegate as _;
+    use gpui_kit::component::table::TableDelegate as _;
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::{CleanerView, apply_latest_progress};
@@ -1877,7 +1879,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn landing_rows_does_not_change_the_static_column_layout(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::component::init);
         let window = cx.add_window(CleanerView::new);
         cx.run_until_parked();
         let (cleaner, table, before) = cx

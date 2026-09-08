@@ -5,8 +5,8 @@
 //! and the language sweep can re-push the placeholder — the same arrangement the
 //! API Explorer's collections search uses.
 
-use gpui_component::Sizable as _;
-use gpui_component::input::{Input, InputState};
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::{Entity, IntoElement, Styled as _, px};
 
 use crate::app_icon::AppIcon;

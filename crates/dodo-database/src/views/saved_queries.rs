@@ -1,9 +1,9 @@
 //! Searchable saved queries. Opening copies text into a new query tab; the
 //! saved connection scope is checked by [`DatabaseView`] before selection.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::list::{List, ListDelegate, ListItem, ListState};
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
+use gpui_kit::component::{
     ActiveTheme as _, IndexPath, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{

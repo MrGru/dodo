@@ -27,7 +27,7 @@
 //! a puzzle rather than a convenience. `state::history` keeps every statement
 //! that actually *ran* for the session, which is the part worth getting back.
 
-use gpui_component::input::EditorState;
+use gpui_kit::component::input::EditorState;
 use gpui_kit::{Entity, Task};
 
 use crate::i18n::Str;

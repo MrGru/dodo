@@ -1,8 +1,8 @@
 use std::{cell::Cell, rc::Rc};
 
-use gpui_component::list::{List, ListState};
-use gpui_component::setting::{SelectIndex, Settings};
-use gpui_component::{ActiveTheme as _, v_flex};
+use gpui_kit::component::list::{List, ListState};
+use gpui_kit::component::setting::{SelectIndex, Settings};
+use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 

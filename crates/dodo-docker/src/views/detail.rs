@@ -26,7 +26,7 @@
 //!    page's root, so it never covered the in-page tab rail or the app sidebar
 //!    whatever its hit behaviour.
 //!
-//! `gpui_component`'s [`Dialog`](gpui_component::dialog::Dialog) already solves
+//! `gpui_kit::component`'s [`Dialog`](gpui_kit::component::dialog::Dialog) already solves
 //! all of it, and `settings::open` is the in-repo precedent: a window-sized
 //! `anchored().snap_to_window()` layer that is `.occlude()`d, a
 //! `cx.stop_propagation()` on the backdrop that also closes on a left click,
@@ -70,10 +70,10 @@
 
 use std::sync::Arc;
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Editor, EditorState};
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
@@ -103,7 +103,7 @@ use crate::state::detail::{DetailStatus, DetailTab, DetailTabs};
 /// off both edges. Sizing has to happen before the dialog is built, not by
 /// clamping afterwards.
 ///
-/// [`Dialog`]: gpui_component::dialog::Dialog
+/// [`Dialog`]: gpui_kit::component::dialog::Dialog
 const PANEL_W: gpui_kit::Pixels = px(760.);
 const PANEL_H: gpui_kit::Pixels = px(520.);
 /// Margin left around the card at a window too small for the preferred size.
@@ -117,14 +117,14 @@ const PANEL_MARGIN: gpui_kit::Pixels = px(24.);
 /// section headings, the field rules and the JSON editor to the widest field value
 /// instead of the card.
 ///
-/// [`Dialog`]: gpui_component::dialog::Dialog
+/// [`Dialog`]: gpui_kit::component::dialog::Dialog
 const DIALOG_PADDING_X: gpui_kit::Pixels = px(32.);
 /// The width of the field-label column in the Details list.
 const LABEL_W: gpui_kit::Pixels = px(150.);
 /// Right padding on the title row, clearing the [`Dialog`]'s own close button —
 /// which is absolutely positioned in the card's top-right corner.
 ///
-/// [`Dialog`]: gpui_component::dialog::Dialog
+/// [`Dialog`]: gpui_kit::component::dialog::Dialog
 const TITLE_CLEARANCE: gpui_kit::Pixels = px(24.);
 
 /// Which resource a detail dialog opens on, and which tab it starts on.
@@ -666,7 +666,7 @@ mod tests {
             InspectKind::Network,
         ]
         .iter()
-        .map(|kind| gpui_component::IconNamed::path(kind_icon(*kind)).to_string())
+        .map(|kind| gpui_kit::component::IconNamed::path(kind_icon(*kind)).to_string())
         .collect();
         paths.sort_unstable();
         paths.dedup();

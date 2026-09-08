@@ -431,8 +431,8 @@ impl View {
 
 #[cfg(test)]
 mod tests {
-    use gpui_component::IconNamed as _;
     use gpui_kit::SharedString;
+    use gpui_kit::component::IconNamed as _;
 
     use super::{AVAILABLE, View};
     use crate::i18n::{Str, docker};
@@ -466,7 +466,7 @@ mod tests {
                   generated `cfg`s; nothing calls the generated pane code."
     )]
     mod platform_probe {
-        use gpui_component::IconNamed as _;
+        use gpui_kit::component::IconNamed as _;
         use gpui_kit::{App, AppContext as _, Div, Entity, ParentElement as _, Window};
 
         use crate::app_icon::AppIcon;

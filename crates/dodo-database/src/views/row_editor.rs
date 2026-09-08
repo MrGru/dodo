@@ -4,9 +4,9 @@
 //! `window.open_dialog`. Every field has an explicit NULL toggle, so an empty
 //! string is never guessed to mean NULL.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Input, InputState};
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _,
     WindowExt as _, h_flex, v_flex,
 };

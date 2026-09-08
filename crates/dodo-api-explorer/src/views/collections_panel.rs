@@ -7,10 +7,10 @@
 //! reveals matches; rename is an inline bar rather than a per-row popover so it
 //! works the same for every node.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::Input;
-use gpui_component::popover::Popover;
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::Input;
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement as _, IntoElement, ParentElement as _,

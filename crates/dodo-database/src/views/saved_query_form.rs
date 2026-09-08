@@ -1,8 +1,8 @@
 //! The one small dialog used to create and edit a saved query.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Editor, EditorState, Input, InputState};
-use gpui_component::{ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Editor, EditorState, Input, InputState};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
     Window, div, px,

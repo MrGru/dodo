@@ -10,11 +10,11 @@
 
 use std::sync::Arc;
 
-use gpui_component::button::{Button, ButtonVariant};
-use gpui_component::dialog::DialogButtonProps;
-use gpui_component::input::{InputEvent, InputState};
-use gpui_component::menu::ContextMenuExt as _;
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariant};
+use gpui_kit::component::dialog::DialogButtonProps;
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::menu::ContextMenuExt as _;
+use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;

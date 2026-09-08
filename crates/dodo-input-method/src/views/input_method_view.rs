@@ -23,10 +23,10 @@
 //! [`InputMethod`] every frame, and the recorded combination goes straight to
 //! [`InputMethod::set_language_switch`] without being kept here first.
 //!
-use gpui_component::button::Button;
-use gpui_component::radio::RadioGroup;
-use gpui_component::switch::Switch;
-use gpui_component::{
+use gpui_kit::component::button::Button;
+use gpui_kit::component::radio::RadioGroup;
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{
     ActiveTheme, Disableable as _, Selectable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;

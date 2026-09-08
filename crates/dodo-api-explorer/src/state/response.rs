@@ -1,6 +1,6 @@
 //! The response half of one open tab: what came back, and how it is shown.
 
-use gpui_component::input::EditorState;
+use gpui_kit::component::input::EditorState;
 use gpui_kit::{AppContext as _, Context, Entity, Window};
 
 use crate::i18n::{Str, api_response};

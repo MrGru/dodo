@@ -31,7 +31,6 @@ dodo-paths = { path = "../dodo-paths" }
 # scanners, the safety boundary and the state machine are all tested with no
 # `App` and no frame.
 gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
-gpui-component = { version = "0.6", default-features = false }
 # `core::ignore`'s persisted document, and the JSON `docker_cache`,
 # `services::ignore_store` and Windows' Installed Apps inventory read.
 serde = { version = "1.0", features = ["derive"] }

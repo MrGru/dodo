@@ -10,13 +10,13 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
-use gpui_component::checkbox::Checkbox;
-use gpui_component::dialog::DialogButtonProps;
-use gpui_component::input::{InputEvent, InputState};
-use gpui_component::menu::{ContextMenuExt as _, PopupMenu};
-use gpui_component::popover::Popover;
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::dialog::DialogButtonProps;
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex,
     v_flex,
 };

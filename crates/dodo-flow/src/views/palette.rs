@@ -77,7 +77,7 @@
 //! happened.
 
 use dodo_i18n::{flow, t};
-use gpui_component::{ActiveTheme, tooltip::Tooltip};
+use gpui_kit::component::{ActiveTheme, tooltip::Tooltip};
 use gpui_kit::{
     App, Bounds, Entity, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
     StatefulInteractiveElement, Styled, canvas, div, prelude::FluentBuilder, px,

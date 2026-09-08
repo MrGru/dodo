@@ -252,7 +252,7 @@ mod updater_build_info {
 mod window_icon;
 
 // GPUI Kit 0.6 is the application facade and owns the GPUI type universe.
-use gpui_component::*;
+use gpui_kit::component::*;
 use gpui_kit::*;
 
 use crate::{app::DodoApp, assets::Assets};
@@ -292,7 +292,7 @@ fn main() {
         // Registers the vendored themes; needs the registry `init` just created.
         settings::init(cx);
         // Binds the API Explorer's send shortcut. Like `settings::init`, it has
-        // to run after `gpui_component::init` to win the key-binding tie.
+        // to run after `gpui_kit::component::init` to win the key-binding tie.
         api_explorer::init(cx);
         // Binds the Docker list pages' keyboard navigation, scoped to the Docker
         // view. Same post-`init` ordering rule as the two above.
@@ -302,10 +302,10 @@ fn main() {
         // Binds undo, redo and the drawing-tool keys inside the Flow Canvas.
         flow::init(cx);
         // Binds the Mermaid preview's zoom shortcuts, scoped to the workspace.
-        // Same post-`gpui_component::init` ordering as the others.
+        // Same post-`gpui_kit::component::init` ordering as the others.
         mermaid::init(cx);
         // Binds quick navigation's paste chords and Escape, and starts the
-        // `quick-nav.json` load. Same post-`gpui_component::init` ordering as
+        // `quick-nav.json` load. Same post-`gpui_kit::component::init` ordering as
         // the four above, and it matters more here than for any of them: the
         // Escape binding is deliberately *shallower* than the library's own, so
         // every existing Escape still wins.
@@ -313,7 +313,7 @@ fn main() {
         // Loads `updater.json`, sweeps whatever a previous install renamed
         // aside, and schedules the silent background check. Everything it does
         // is asynchronous; it opens no window and blocks nothing. Same
-        // post-`gpui_component::init` ordering as the four above — it binds no
+        // post-`gpui_kit::component::init` ordering as the four above — it binds no
         // keys today, and keeping the position means adding one later is not a
         // debugging session.
         updater::init(

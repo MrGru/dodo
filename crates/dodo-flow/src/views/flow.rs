@@ -120,7 +120,7 @@
 use std::sync::{Arc, OnceLock};
 
 use dodo_i18n::{flow, t};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme, WindowExt as _,
     input::{InputState, Textarea, TextareaState},
     notification::Notification,
@@ -274,7 +274,7 @@ pub const BINDING_SCOPE: &str = "FlowCanvas && !FlowTyping";
 ///
 /// Naming both makes the two match at the same depth, and GPUI breaks that tie
 /// by **registration order, later wins**. `flow::init` runs after
-/// `gpui_component::init` for exactly this reason — `src/main.rs` says so, and
+/// `gpui_kit::component::init` for exactly this reason — `src/main.rs` says so, and
 /// `settings`, `api_explorer` and `database` all depend on the same ordering.
 /// `the_commit_keystroke_outranks_the_field_s_own_line_break` in
 /// [`views::keymap`](crate::views::keymap) is that sentence driven through
@@ -3435,7 +3435,7 @@ mod tests {
 
     /// A canvas on a test window, with no disk store behind it.
     fn mount(cx: &mut TestAppContext) -> (Entity<FlowView>, VisualTestContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::component::init);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |window, cx| {
                 cx.new(|cx| FlowView::new_unpersisted(window, cx))
@@ -3691,7 +3691,7 @@ mod tests {
     /// This one dispatches the real press.
     ///
     /// **Why the second press by hand rather than through `simulate_event`.**
-    /// A focused `gpui_component::Input` cannot be *painted* on a test window:
+    /// A focused `gpui_kit::component::Input` cannot be *painted* on a test window:
     /// its render asks the platform window for an `NSView` to hang the content
     /// type on, and GPUI's test window answers that with `unimplemented!`.
     /// `simulate_event` draws before it returns, so the assertion has to happen

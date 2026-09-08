@@ -3,13 +3,13 @@
 //!
 //! # What was evaluated first, and why it is not used
 //!
-//! `gpui_component::history::History` is a real grouped undo stack with a
+//! `gpui_kit::component::history::History` is a real grouped undo stack with a
 //! coalescing interval, it ships in a dependency dodo already builds, and the
 //! phase brief asks for it to be considered before anything is written. It was.
 //! Three things decided against it, in descending order of importance:
 //!
 //! 1. **It lives above this crate's central line.** `History` is in
-//!    `gpui_component`, and the undo stack has to sit beside the stores, inside
+//!    `gpui_kit::component`, and the undo stack has to sit beside the stores, inside
 //!    [`FlowEditor`](super::FlowEditor), or the view can reach the world
 //!    without it — which is the exact bypass this phase exists to make
 //!    unexpressible. Putting it there would put a UI-framework type in a module
@@ -120,7 +120,7 @@ impl Default for CommandHistory {
 impl CommandHistory {
     /// How many undo steps are kept before the oldest is dropped.
     ///
-    /// The same number `gpui_component::history::History` defaults to, and for
+    /// The same number `gpui_kit::component::history::History` defaults to, and for
     /// the same reason: it is far past what anyone undoes through, and an
     /// unbounded stack on a canvas is a slow memory leak — a drag that is one
     /// *entry* is still one entry per drag, and a long editing session has

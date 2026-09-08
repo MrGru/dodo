@@ -2,7 +2,7 @@
 //!
 //! # There is no sort affordance, and that is the design
 //!
-//! `gpui_component`'s table supports sorting, and this delegate deliberately
+//! `gpui_kit::component`'s table supports sorting, and this delegate deliberately
 //! does not use it. Sorting the rows that happened to arrive is not sorting the
 //! result, and a control that is present but disabled invites the question
 //! every time. Round 3 server-pages table data but did not accept sorting into
@@ -48,9 +48,9 @@
 //! horizontal scrolling, and it is why one full-width UUID cannot push the rest
 //! of the result off the right of the window.
 
-use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
-use gpui_component::table::{Column, TableDelegate, TableState};
-use gpui_component::{ActiveTheme as _, Size, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
+use gpui_kit::component::table::{Column, TableDelegate, TableState};
+use gpui_kit::component::{ActiveTheme as _, Size, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     App, ClipboardItem, Context, Div, Edges, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, SharedString, Stateful, Styled as _, Window, div, px, relative,
@@ -112,7 +112,7 @@ pub(super) fn row_height(cx: &App) -> Pixels {
     px(row_height_for(cx.theme().font_size.into()))
 }
 
-/// The size to give [`DataTable`](gpui_component::table::DataTable).
+/// The size to give [`DataTable`](gpui_kit::component::table::DataTable).
 ///
 /// `Size::Size` rather than one of the named sizes: the named ones are fixed
 /// pixel heights that ignore the font-size setting, and the arithmetic this

@@ -123,12 +123,12 @@ use std::time::Duration;
 
 use dodo_app_icon::AppIcon;
 
-use gpui_component::button::{Button, ButtonGroup, ButtonVariants};
-use gpui_component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
-use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState};
-use gpui_component::popover::Popover;
-use gpui_component::tooltip::Tooltip;
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
+use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
+use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{
     ActiveTheme, Colorize as _, Selectable, Sizable, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
@@ -196,7 +196,7 @@ actions!(dodo, [MermaidZoomIn, MermaidZoomOut, MermaidZoomReset]);
 
 /// Registers the preview's zoom shortcuts, scoped to [`KEY_CONTEXT`]:
 /// `cmd-=` / `cmd--` step the zoom, `cmd-0` resets to fit. Must run after
-/// `gpui_component::init`, the same ordering rule every other tool's `init`
+/// `gpui_kit::component::init`, the same ordering rule every other tool's `init`
 /// follows.
 pub fn init(cx: &mut App) {
     cx.bind_keys([

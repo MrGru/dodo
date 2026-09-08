@@ -52,13 +52,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui_component::button::ButtonVariant;
-use gpui_component::dialog::DialogButtonProps;
-use gpui_component::input::EditorState;
-use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
-use gpui_component::table::TableState;
-use gpui_component::tree::{TreeEvent, TreeItem, TreeState};
-use gpui_component::{ActiveTheme as _, WindowExt as _};
+use gpui_kit::component::button::ButtonVariant;
+use gpui_kit::component::dialog::DialogButtonProps;
+use gpui_kit::component::input::EditorState;
+use gpui_kit::component::resizable::{ResizableState, h_resizable, resizable_panel};
+use gpui_kit::component::table::TableState;
+use gpui_kit::component::tree::{TreeEvent, TreeItem, TreeState};
+use gpui_kit::component::{ActiveTheme as _, WindowExt as _};
 use gpui_kit::{
     App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, Hsla,
     InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, ScrollStrategy,
@@ -2313,7 +2313,7 @@ impl Render for DatabaseView {
 mod tests {
     use std::sync::Arc;
 
-    use gpui_component::tree::TreeItem;
+    use gpui_kit::component::tree::TreeItem;
     use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 
     use super::{DatabaseView, same_target};
@@ -2325,7 +2325,7 @@ mod tests {
 
     /// The page on a test window, with its constructor's disk load finished.
     fn mount(cx: &mut TestAppContext) -> (Entity<DatabaseView>, VisualTestContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::component::init);
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |window, cx| {
                 cx.new(|cx| DatabaseView::new(window, cx))
@@ -2558,7 +2558,7 @@ mod tests {
     /// `docker::views`) is opened with `open_alert_dialog`.
     ///
     /// Source-level because it cannot be reached at runtime here:
-    /// `gpui_component::Root::new` installs a macOS accessibility hook that
+    /// `gpui_kit::component::Root::new` installs a macOS accessibility hook that
     /// dereferences a real `NSView`, so a GPUI test window cannot host a
     /// `Root`, and without a `Root` there is no dialog layer to drive.
     /// Only the production half is scanned, bounded by the **first**

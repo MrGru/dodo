@@ -19,12 +19,12 @@
 //! [`Outcome::footer`](crate::state::query::Outcome::footer), which is
 //! pure and tested, so what the footer claims is checked without a database.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::Editor;
-use gpui_component::resizable::{resizable_panel, v_resizable};
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::table::DataTable;
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::Editor;
+use gpui_kit::component::resizable::{resizable_panel, v_resizable};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::table::DataTable;
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;

@@ -9,10 +9,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{InputEvent, InputState};
-use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
-use gpui_component::{ActiveTheme as _, Selectable as _, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
+use gpui_kit::component::{ActiveTheme as _, Selectable as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
     IntoElement, ParentElement as _, PathPromptOptions, Render, Styled as _, Window, div, px,

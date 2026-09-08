@@ -15,7 +15,7 @@
 //! # Rows, not a table
 //!
 //! Hand-rolled `v_flex`/`h_flex` rows, matching the Headers and Cookies panes,
-//! rather than `gpui_component::table`: a test row is a glyph, a wrapping name,
+//! rather than `gpui_kit::component::table`: a test row is a glyph, a wrapping name,
 //! a right-aligned duration and — when it failed — a message under it, which is
 //! not a grid.
 //!
@@ -23,8 +23,8 @@
 //! paints both red; the distinction is what tells the user whether their API is
 //! wrong or their script is.
 
-use gpui_component::button::Button;
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::button::Button;
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,

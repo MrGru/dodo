@@ -23,7 +23,7 @@
 //! ```
 //!
 //! `Dodo` is [`KEY_CONTEXT`], which `Layout::render` puts on the pane; `Input`
-//! is the context every `gpui_component` text field and code editor renders
+//! is the context every `gpui_kit::component` text field and code editor renders
 //! itself in. gpui's `Not` predicate is evaluated against the **whole dispatch
 //! path**, not just the node it is tested at, so `!Input` means "no input
 //! anywhere between the focused element and the root" — which is the definition,
@@ -235,7 +235,7 @@ impl QuickNav {
 
 /// Registers the two key bindings and starts the settings load.
 ///
-/// Must run after `gpui_component::init`, like `settings::init`,
+/// Must run after `gpui_kit::component::init`, like `settings::init`,
 /// `api_explorer::init`, `docker::init` and `database::init`: a binding
 /// registered later wins a tie at equal context depth, and [`LeaveInsertMode`]
 /// depends on being registered after the library's own `escape` bindings — not

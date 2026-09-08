@@ -1706,7 +1706,6 @@ dependencies = [
  "dodo-updater",
  "futures-channel",
  "futures-util",
- "gpui-component",
  "gpui-kit",
  "image",
  "nucleo-matcher",
@@ -1734,7 +1733,6 @@ dependencies = [
  "dodo-app-icon",
  "dodo-i18n",
  "dodo-paths",
- "gpui-component",
  "gpui-kit",
  "percent-encoding",
  "reqwest",
@@ -1747,7 +1745,6 @@ dependencies = [
 name = "dodo-app-icon"
 version = "0.1.0"
 dependencies = [
- "gpui-component",
  "gpui-kit",
 ]
 
@@ -1758,7 +1755,6 @@ dependencies = [
  "dodo-app-icon",
  "dodo-i18n",
  "dodo-paths",
- "gpui-component",
  "gpui-kit",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -1778,7 +1774,6 @@ dependencies = [
  "dodo-app-icon",
  "dodo-i18n",
  "dodo-paths",
- "gpui-component",
  "gpui-kit",
  "mysql",
  "percent-encoding",
@@ -1797,7 +1792,6 @@ dependencies = [
 name = "dodo-dialog-slot"
 version = "0.1.0"
 dependencies = [
- "gpui-component",
  "gpui-kit",
 ]
 
@@ -1810,7 +1804,6 @@ dependencies = [
  "dodo-i18n",
  "dodo-paths",
  "futures-util",
- "gpui-component",
  "gpui-kit",
  "serde",
  "serde_json",
@@ -1823,7 +1816,6 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "dodo-i18n",
- "gpui-component",
  "gpui-kit",
  "percent-encoding",
  "serde_json",
@@ -1835,7 +1827,6 @@ version = "0.1.0"
 dependencies = [
  "dodo-i18n",
  "dodo-paths",
- "gpui-component",
  "gpui-kit",
  "serde",
  "serde_json",
@@ -1865,7 +1856,6 @@ dependencies = [
  "dodo-paths",
  "futures-channel",
  "futures-util",
- "gpui-component",
  "gpui-kit",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -1882,7 +1872,6 @@ name = "dodo-json-formatter"
 version = "0.1.0"
 dependencies = [
  "dodo-i18n",
- "gpui-component",
  "gpui-kit",
  "serde",
  "serde_json",
@@ -1894,7 +1883,6 @@ version = "0.1.0"
 dependencies = [
  "dodo-app-icon",
  "dodo-i18n",
- "gpui-component",
  "gpui-kit",
  "mermaid-rs-renderer",
 ]
@@ -1911,7 +1899,6 @@ dependencies = [
  "dodo-dialog-slot",
  "dodo-i18n",
  "dodo-paths",
- "gpui-component",
  "gpui-kit",
  "reqwest",
  "serde",

@@ -1,6 +1,6 @@
 # GPUI Kit 0.6 migration
 
-Dodo uses the `gpui-kit` 0.6 facade (`default-features = false`, `component`) as the single GPUI family. `gpui-component` 0.6 is retained only for its styled component paths and resolves through that same family. The application bootstraps its own `Assets` with `gpui_kit::application().with_assets(Assets)` and calls `gpui_kit::init(cx)` before Dodo initialization.
+Dodo depends directly only on the `gpui-kit` 0.6 facade (`default-features = false`, `component`). Styled-component imports use `gpui_kit::component`, whose enabled `component` feature re-exports the matching `gpui-component` 0.6 crate. The application bootstraps its own `Assets` with `gpui_kit::application().with_assets(Assets)` and calls `gpui_kit::init(cx)` before Dodo initialization.
 
 ## Usage inventory and migration matrix
 
@@ -17,7 +17,7 @@ The v0.6 scroll API removes the old `ScrollbarShow` builder; Flow keeps its vert
 
 ## Assets and dependency checks
 
-`src/assets.rs` is Dodo's only application asset source. The former complete `gpui-component-assets` fallback was removed. Thirty shared SVGs used by Dodo's existing `AppIcon` variants are individually embedded under `assets/icons`; Dodo branding, tool, tray, language, Docker, database, and application-icon paths are unchanged. GPUI Component 0.6 itself has a non-optional dependency on `gpui-kit-assets`; Dodo does not select the facade `assets` feature or use `gpui_kit::assets::Assets`.
+`src/assets.rs` is Dodo's only application asset source. The former complete `gpui-component-assets` fallback was removed. Thirty shared SVGs used by Dodo's existing `AppIcon` variants are individually embedded under `assets/icons`; Dodo branding, tool, tray, language, Docker, database, and application-icon paths are unchanged. `gpui-component` remains transitively in `Cargo.lock` through `gpui-kit`'s enabled `component` feature, and it has a non-optional dependency on `gpui-kit-assets`. Dodo does not select the facade `assets` feature or use `gpui_kit::assets::Assets`.
 
 ## Upstream references
 

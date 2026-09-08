@@ -130,7 +130,7 @@ impl ScriptPolicy {
 
 /// Registers the send shortcut.
 ///
-/// Must run after `gpui_component::init`, which binds the library's own keys:
+/// Must run after `gpui_kit::component::init`, which binds the library's own keys:
 /// a binding registered later wins a tie at equal context depth, the same
 /// ordering `settings::init` depends on. Neither chord is claimed by `Input`,
 /// so both fire from inside the URL field.

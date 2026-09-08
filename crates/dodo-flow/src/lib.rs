@@ -1357,7 +1357,7 @@
 //! losing it, and the way to tell is to drive the **real event** rather than
 //! the handler.
 //! `the_press_that_opens_a_caret_does_not_hand_the_keyboard_back` does, with
-//! one wrinkle worth knowing: a *focused* `gpui_component::Input` cannot be
+//! one wrinkle worth knowing: a *focused* `gpui_kit::component::Input` cannot be
 //! painted on a GPUI test window at all — its render asks the platform window
 //! for an `NSView` and the test window answers `unimplemented!` — so the
 //! assertion happens on the dispatch and the caret is closed again before the
@@ -1575,7 +1575,7 @@
 //! than the wrapper's `FlowTyping`, so `FlowTyping` alone always loses. Naming
 //! both (`FlowTyping > Input`) ties on depth, and GPUI breaks a depth tie by
 //! registration order with the later binding winning — which is why `src/main.rs`
-//! runs `flow::init` after `gpui_component::init`, as `settings`,
+//! runs `flow::init` after `gpui_kit::component::init`, as `settings`,
 //! `api_explorer`, `docker` and `database` already do.
 //! `the_commit_keystroke_outranks_the_field_s_own_line_break` drives that
 //! through GPUI's real `Keymap`, with the library's real action type and its

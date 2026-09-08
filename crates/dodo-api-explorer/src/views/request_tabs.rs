@@ -3,9 +3,9 @@
 //! Each tab shows its method in the method's colour, the request's name, an
 //! unsaved dot, and a close button; the `+` at the end opens another.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Styled as _,

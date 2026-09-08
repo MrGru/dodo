@@ -1,7 +1,7 @@
 use std::{cell::Cell, rc::Rc};
 
-use gpui_component::setting::SettingField;
-use gpui_component::switch::Switch;
+use gpui_kit::component::setting::SettingField;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::*;
 
 use crate::api_explorer::ScriptPolicy;

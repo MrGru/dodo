@@ -23,7 +23,7 @@
 //!
 //! `None` means *the user never touched this*, and that is not the same as
 //! "the user chose the default". The clearest case is the theme:
-//! `gpui_component::init` picks light or dark from the **system appearance**,
+//! `gpui_kit::component::init` picks light or dark from the **system appearance**,
 //! so writing `"Default Light"` into a fresh file — merely because that is what
 //! the app happened to be showing — would freeze every future launch at light
 //! and quietly break system-appearance following. An absent key leaves the

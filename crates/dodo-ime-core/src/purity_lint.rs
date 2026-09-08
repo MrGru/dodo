@@ -128,7 +128,7 @@ const ALLOWED_ROOTS: [&str; 5] = ["std", "crate", "super", "self", "unicode_norm
 /// sideways case: the workspace is where a sibling crate could be reached for.
 const FORBIDDEN_NAMES: [&str; 7] = [
     "gpui_kit::",
-    "gpui_component",
+    "gpui_kit::component",
     "dodo::",
     "dodo_ime_",
     "serde::",
@@ -282,7 +282,7 @@ mod tests {
     fn the_forbidden_shapes_are_caught() {
         let cases = [
             "use gpui_kit::*;",
-            "use gpui_component::Icon;",
+            "use gpui_kit::component::Icon;",
             // Sideways: a sibling crate in the workspace, which `Cargo.toml`
             // would happily accept as one added line.
             "use dodo::i18n::Str;",

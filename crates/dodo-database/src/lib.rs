@@ -192,7 +192,7 @@ pub(crate) const KEY_CONTEXT: &str = "DatabaseResult";
 
 actions!(database, [DatabaseCopyCell, DatabaseCopyRow]);
 
-/// Registers result-grid copy shortcuts after `gpui_component::init`, so these
+/// Registers result-grid copy shortcuts after `gpui_kit::component::init`, so these
 /// bindings win the tie with the component library's own contexts.
 pub fn init(cx: &mut App) {
     cx.bind_keys([

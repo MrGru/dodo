@@ -8,8 +8,8 @@
 //! is what resolves them from the binary's own embedded `assets/icons`. This
 //! crate can therefore sit beside the artwork rather than inside it.
 
-use gpui_component::{Icon, IconNamed};
 use gpui_kit::SharedString;
+use gpui_kit::component::{Icon, IconNamed};
 
 /// The icons bundled under `assets/icons`.
 ///

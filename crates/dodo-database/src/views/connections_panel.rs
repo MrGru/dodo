@@ -5,7 +5,7 @@
 //! things about it are worth stating because none is obvious from the widget
 //! API:
 //!
-//! - **The disclosure arrow is ours.** `gpui_component`'s tree draws no
+//! - **The disclosure arrow is ours.** `gpui_kit::component`'s tree draws no
 //!   triangle at all — `render_item` returns a `ListItem` and the widget wraps
 //!   it, adding nothing — so [`disclosure`] draws the chevron from
 //!   `TreeEntry::is_folder` / `is_expanded`, and a leaf gets a spacer of the
@@ -25,12 +25,12 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::list::ListItem;
-use gpui_component::menu::{PopupMenu, PopupMenuItem};
-use gpui_component::tooltip::Tooltip;
-use gpui_component::tree::{TreeEntry, tree};
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::list::ListItem;
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::tree::{TreeEntry, tree};
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
@@ -431,7 +431,7 @@ fn connection_menu(
     menu: PopupMenu,
     look: &ConnectionLook,
     view: &gpui_kit::Entity<DatabaseView>,
-    cx: &mut gpui_kit::Context<gpui_component::tree::TreeState>,
+    cx: &mut gpui_kit::Context<gpui_kit::component::tree::TreeState>,
 ) -> PopupMenu {
     let id = look.id;
     let connect_label = if look.connected {

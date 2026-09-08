@@ -42,7 +42,7 @@
 
 use std::marker::PhantomData;
 
-use gpui_component::WindowExt as _;
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::{App, Global, Window};
 
 /// A dialog of which there is only ever one on screen.

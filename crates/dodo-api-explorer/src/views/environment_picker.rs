@@ -26,10 +26,10 @@
 //! tooltip naming the scope each value came from. It appears only when there is
 //! something to preview, so a request with no variables pays nothing.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::popover::Popover;
-use gpui_component::tooltip::Tooltip;
-use gpui_component::{ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,

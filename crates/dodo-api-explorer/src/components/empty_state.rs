@@ -5,7 +5,7 @@
 //! app's own. Kept to a glyph, a line and an optional hint so that it reads the
 //! same everywhere it appears.
 
-use gpui_component::{ActiveTheme as _, Icon, IconNamed, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconNamed, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{App, IntoElement, ParentElement as _, SharedString, Styled as _, div, px};
 

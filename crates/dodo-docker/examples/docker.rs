@@ -9,7 +9,7 @@
 use std::{borrow::Cow, path::PathBuf};
 
 use dodo_docker::DockerView;
-use gpui_component::{ActiveTheme, Root};
+use gpui_kit::component::{ActiveTheme, Root};
 use gpui_kit::{
     AppContext, AssetSource, Context, Entity, IntoElement, ParentElement, QuitMode, Render,
     SharedString, Styled, Window, WindowOptions, div, px, size,
@@ -54,7 +54,7 @@ fn main() {
         .with_assets(Assets)
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(|cx| {
-            gpui_component::init(cx);
+            gpui_kit::component::init(cx);
             dodo_docker::init(cx);
             cx.activate(true);
 

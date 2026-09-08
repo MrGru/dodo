@@ -1,5 +1,5 @@
 //! The virtualized results grid for the active category: one
-//! [`TableDelegate`] driving a [`DataTable`](gpui_component::table::DataTable),
+//! [`TableDelegate`] driving a [`DataTable`](gpui_kit::component::table::DataTable),
 //! replacing the round-1 `.children(items.iter().map(...))` list that built
 //! every row's element tree on every frame regardless of how many were
 //! actually on screen. `DataTable` only calls [`Self::render_td`] for rows
@@ -26,10 +26,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::checkbox::Checkbox;
-use gpui_component::table::{Column, TableDelegate, TableState};
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::table::{Column, TableDelegate, TableState};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 use gpui_kit::{
     AnyElement, App, ClipboardItem, Context, Div, Image, ImageFormat, ImageSource,
     InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Stateful,
@@ -304,8 +304,11 @@ impl ResultsTableDelegate {
                         .justify_center()
                         .cursor_pointer()
                         .tooltip(move |window, cx| {
-                            gpui_component::tooltip::Tooltip::new(t(cleaner::Text::SelectAll, cx))
-                                .build(window, cx)
+                            gpui_kit::component::tooltip::Tooltip::new(t(
+                                cleaner::Text::SelectAll,
+                                cx,
+                            ))
+                            .build(window, cx)
                         })
                         .child(
                             div()
@@ -361,7 +364,7 @@ impl ResultsTableDelegate {
             .size_full()
             .min_w_0()
             .tooltip(move |window, cx| {
-                gpui_component::tooltip::Tooltip::new(explanation.clone()).build(window, cx)
+                gpui_kit::component::tooltip::Tooltip::new(explanation.clone()).build(window, cx)
             })
             .child(
                 h_flex()
@@ -444,7 +447,7 @@ impl ResultsTableDelegate {
             .tooltip({
                 let path_text = path_text.clone();
                 move |window, cx| {
-                    gpui_component::tooltip::Tooltip::new(path_text.clone()).build(window, cx)
+                    gpui_kit::component::tooltip::Tooltip::new(path_text.clone()).build(window, cx)
                 }
             })
             .child(div().min_w_0().truncate().child(path_text))

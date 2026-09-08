@@ -12,7 +12,7 @@
 //! Start at [`editor`]: it states the invariant this phase exists for and how
 //! the type system holds it. [`mod@apply`] says why the inverse is a return value
 //! rather than a second enum, [`history`] records what
-//! `gpui_component::history::History` was evaluated for and what specifically
+//! `gpui_kit::component::history::History` was evaluated for and what specifically
 //! did not fit, and [`edit`] lists which of §30's commands are here and which
 //! are honestly absent because the engine cannot perform them.
 //!

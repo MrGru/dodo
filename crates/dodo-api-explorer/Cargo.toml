@@ -32,7 +32,6 @@ dodo-paths = { path = "../dodo-paths" }
 # the curl parser and the four code generators are all tested with no `App` and
 # no frame.
 gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
-gpui-component = { version = "0.6", default-features = false }
 # The HTTP client the whole tool exists to drive. `default-features = false`
 # drops `default-tls`, `charset` and `system-proxy`; `rustls` then selects
 # rustls with the platform certificate verifier, so no OpenSSL is required to
@@ -77,7 +76,7 @@ serde_json = "1.0"
 [dev-dependencies]
 # `examples/api_explorer.rs` only. The four syntax grammars match the full app;
 # the application runner and fallback icons stay out of the shipped graph.
-gpui-component = { version = "0.6", default-features = false, features = [
+gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = [
     "tree-sitter",
     "tree-sitter-html",
     "tree-sitter-yaml",

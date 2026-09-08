@@ -6,8 +6,8 @@
 //! full-strength text, the treatment the API Explorer's status tag and the
 //! app's error banner both use.
 
-use gpui_component::tag::Tag;
-use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _};
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, StyledExt as _};
 use gpui_kit::{App, Hsla, IntoElement, ParentElement as _, SharedString, div};
 
 /// A pill reading `label` in `color`.

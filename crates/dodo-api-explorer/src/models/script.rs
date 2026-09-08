@@ -102,7 +102,7 @@ pub struct ScriptResponse {
 /// A syntax error the editor can point at, before anything is sent.
 ///
 /// Line and column are **0-based**, ready for
-/// `gpui_component::input::Position`; the engine reports them 1-based and the
+/// `gpui_kit::component::input::Position`; the engine reports them 1-based and the
 /// conversion happens where the engine is named, so nothing downstream has to
 /// remember which convention it is holding.
 #[derive(Clone, Debug, PartialEq, Eq)]

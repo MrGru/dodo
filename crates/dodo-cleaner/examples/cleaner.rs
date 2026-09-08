@@ -20,14 +20,14 @@
 //! view *under* `Root` — is what actually paints it; without both, the uninstall
 //! review dialog opens in state and never appears. The asset source is the
 //! other: every category glyph is an `icons/<name>.svg` that some source has to
-//! resolve, with `gpui_component_assets` behind it for the library's own carets
+//! resolve, with `gpui_kit::component_assets` behind it for the library's own carets
 //! and check marks. It reads `assets/` off disk rather than embedding a copy, so
 //! an edited SVG needs a restart and not a rebuild.
 
 use std::{borrow::Cow, path::PathBuf};
 
 use dodo_cleaner::CleanerView;
-use gpui_component::{ActiveTheme, Root};
+use gpui_kit::component::{ActiveTheme, Root};
 use gpui_kit::{
     AppContext, AssetSource, Context, Entity, IntoElement, ParentElement, QuitMode, Render,
     SharedString, Styled, Window, WindowOptions, div, px, size,
@@ -74,7 +74,7 @@ fn main() {
         .with_assets(Assets)
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(|cx| {
-            gpui_component::init(cx);
+            gpui_kit::component::init(cx);
             cx.activate(true);
 
             let options = WindowOptions {

@@ -41,11 +41,11 @@
 //!
 //! [`services::codegen`]: crate::services::codegen
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Editor, EditorState};
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{ActiveTheme as _, Icon, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme as _, Icon, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,

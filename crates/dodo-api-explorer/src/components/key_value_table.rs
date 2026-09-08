@@ -2,7 +2,7 @@
 //!
 //! # Why this is not the library's `Table`
 //!
-//! `gpui_component::table` is a virtualized, delegate-driven table for
+//! `gpui_kit::component::table` is a virtualized, delegate-driven table for
 //! displaying rows. Every cell here is a live `InputState` that has to keep its
 //! own cursor, selection and undo history, which fights the delegate's
 //! render-on-demand model. Built from `Checkbox`, `Input` and `Button` instead,
@@ -25,11 +25,11 @@
 
 use std::path::PathBuf;
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, Textarea};
-use gpui_component::popover::Popover;
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Input, Textarea};
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;

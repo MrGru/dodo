@@ -6,7 +6,7 @@
 //! it already uses, and so the Images/Volumes/Networks pages get the identical
 //! frame for free.
 
-use gpui_component::{ActiveTheme as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::{Div, Styled as _};
 
 /// A horizontal toolbar container: full width, spaced, with a bottom rule.

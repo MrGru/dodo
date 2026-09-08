@@ -22,7 +22,7 @@
 //!
 //! # Why the model owns expansion rather than the widget
 //!
-//! `gpui_component`'s `TreeItem` keeps its expanded flag inside itself and
+//! `gpui_kit::component`'s `TreeItem` keeps its expanded flag inside itself and
 //! `TreeState::set_items` replaces the lot — so every time a node's children
 //! arrive and the items are rebuilt, the widget's own expansion state would be
 //! lost. Holding it here instead means the rebuild is a pure function of this

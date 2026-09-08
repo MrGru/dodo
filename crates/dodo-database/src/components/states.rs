@@ -5,7 +5,7 @@
 //! `database/mod.rs`), and a shared placeholder is not worth a compile-time
 //! edge between two tools.
 
-use gpui_component::{ActiveTheme as _, Icon, IconNamed, StyledExt as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconNamed, StyledExt as _, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{App, Div, ParentElement as _, SharedString, Styled as _, div, px};
 

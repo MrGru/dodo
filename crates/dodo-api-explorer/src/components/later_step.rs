@@ -5,7 +5,7 @@
 //! it arrives in — rather than rendering blank, which reads as a bug, or
 //! carrying a TODO comment, which the user never sees.
 
-use gpui_component::{ActiveTheme as _, Icon, IconNamed, StyledExt as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconNamed, StyledExt as _, v_flex};
 use gpui_kit::{App, IntoElement, ParentElement as _, SharedString, Styled as _, div, px};
 
 /// `title` names the feature; `detail` says when it arrives.

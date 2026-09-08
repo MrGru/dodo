@@ -7,8 +7,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
-use gpui_component::input::{EditorState, Position};
+use gpui_kit::component::highlighter::{Diagnostic, DiagnosticSeverity};
+use gpui_kit::component::input::{EditorState, Position};
 use gpui_kit::{Context, Entity, EventEmitter, Task, Window};
 
 use crate::i18n::{Str, api_explorer, t};

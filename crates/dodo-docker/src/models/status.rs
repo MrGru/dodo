@@ -5,7 +5,7 @@
 //! so the service layer has one tested place to translate `bollard`'s enum
 //! through (via its `Display`, which is exactly these lowercase tokens).
 
-use gpui_component::ActiveTheme as _;
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{App, Hsla};
 
 use crate::i18n::{Str, docker};

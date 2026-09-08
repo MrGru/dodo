@@ -15,10 +15,10 @@
 //! [`script_format`](crate::models::script_format) is where that
 //! choice is argued.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Editor, EditorState};
-use gpui_component::popover::Popover;
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, Entity, IntoElement, ParentElement as _, Pixels, SharedString, Styled as _, div, px,

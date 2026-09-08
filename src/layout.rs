@@ -11,12 +11,12 @@
 //! lifecycle; and [`Layout::apply_route`], which unpacks a pasted payload into
 //! the one method the receiving tool has for it.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::sidebar::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::sidebar::{
     Sidebar, SidebarCollapsible, SidebarGroup, SidebarHeader, SidebarItem, SidebarMenuItem,
 };
-use gpui_component::tooltip::Tooltip;
-use gpui_component::{ActiveTheme, Collapsible, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme, Collapsible, StyledExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -859,8 +859,8 @@ impl Render for Layout {
 #[cfg(test)]
 mod tests {
 
-    use gpui_component::Collapsible as _;
-    use gpui_component::sidebar::SidebarMenuItem;
+    use gpui_kit::component::Collapsible as _;
+    use gpui_kit::component::sidebar::SidebarMenuItem;
     use gpui_kit::{Display, FlexDirection, Length, Overflow, Styled as _, px, relative};
 
     use super::{

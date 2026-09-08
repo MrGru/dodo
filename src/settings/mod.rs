@@ -1,7 +1,7 @@
 //! The Settings dialog, plus the app-level state it edits.
 //!
 //! There is deliberately no settings struct of our own for appearance: font
-//! size, border radius and colours all live on `gpui_component::Theme`, which
+//! size, border radius and colours all live on `gpui_kit::component::Theme`, which
 //! is already a global the whole app renders from, so the dialog reads and
 //! writes that directly and every change is live. Language is the one setting
 //! with no home in `Theme`; it lives in [`crate::i18n::Language`].
@@ -29,7 +29,7 @@
 //! 2026-08-06 — is the one page whose state is not a global. It edits `Layout`,
 //! because switching a tool off has to move the main pane off it, and that is
 //! the pane's business rather than a preference's. [`features::features_page`] carries the
-//! consequences: a hand-built row instead of a [`gpui_component::setting::SettingField`], a weak handle
+//! consequences: a hand-built row instead of a [`gpui_kit::component::setting::SettingField`], a weak handle
 //! to the pane instead of a `&mut App` closure pair, and the reorder rules
 //! themselves nowhere near here — they are pure data in
 //! [`crate::session::models::features`].
@@ -45,7 +45,7 @@ mod view;
 #[cfg(test)]
 mod tests;
 
-use gpui_component::{ThemeRegistry, WindowExt as _};
+use gpui_kit::component::{ThemeRegistry, WindowExt as _};
 use gpui_kit::*;
 
 use self::view::SettingsView;
@@ -76,7 +76,7 @@ actions!(dodo, [DismissSettingsResults]);
 /// Registers the vendored themes with the library's [`ThemeRegistry`], and the
 /// one key binding the search box needs.
 ///
-/// Must run after `gpui_component::init`, which creates the registry and binds
+/// Must run after `gpui_kit::component::init`, which creates the registry and binds
 /// the library's own keys — Escape resolves by depth first and registration
 /// order second, so ours has to be registered last to win the tie.
 pub fn init(cx: &mut App) {

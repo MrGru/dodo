@@ -5,10 +5,10 @@
 //! capability. Views omit Indexes and Constraints because those objects cannot
 //! have either; unavailable backend answers remain an explicit state.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::table::DataTable;
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::table::DataTable;
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
@@ -68,7 +68,7 @@ impl DatabaseView {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
-                        gpui_component::Icon::new(match kind {
+                        gpui_kit::component::Icon::new(match kind {
                             NodeKind::View => AppIcon::Eye,
                             _ => AppIcon::Table,
                         })

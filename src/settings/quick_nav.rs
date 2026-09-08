@@ -1,4 +1,4 @@
-use gpui_component::setting::{SettingField, SettingGroup, SettingItem, SettingPage};
+use gpui_kit::component::setting::{SettingField, SettingGroup, SettingItem, SettingPage};
 use gpui_kit::*;
 
 use super::pages::highlighted;

@@ -55,7 +55,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use gpui_component::ActiveTheme;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::{
     AnyElement, App, AvailableSpace, ImageFormat as GpuiImageFormat, IntoElement, ObjectFit,
     ParentElement, RenderImage, Styled, StyledImage, Window, div, img, point, px, size,

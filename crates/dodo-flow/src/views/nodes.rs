@@ -43,7 +43,7 @@
 //! over the node. There is no path from here to "a handle element per visible
 //! node", because the snapshot never offers one.
 
-use gpui_component::ActiveTheme;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::{
     AnyElement, App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Styled, div,
     prelude::FluentBuilder, px, relative,

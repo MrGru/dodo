@@ -212,7 +212,6 @@ gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, fe
 # response body actually is. Everything else degrades to plain text. They are
 # selected through this crate's own `syntax-highlighting` feature (on by
 # default) rather than listed here, so a size-constrained build can drop them.
-gpui-component = { version = "0.6", default-features = false }
 anyhow = "1.0"
 # No `reqwest` here any more. This crate had it for `updater::services` alone
 # once `api_explorer::services::http` left, and the updater has now left too —

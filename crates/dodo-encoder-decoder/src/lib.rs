@@ -5,10 +5,10 @@
 
 use dodo_i18n as i18n;
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Editor, EditorState, Textarea, TextareaState};
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{ActiveTheme, Sizable, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Editor, EditorState, Textarea, TextareaState};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme, Sizable, StyledExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 

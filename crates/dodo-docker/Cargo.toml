@@ -31,7 +31,6 @@ dodo-paths = { path = "../dodo-paths" }
 # the row formatting, the CPU-percent maths, the inspect reduction and the
 # stores are all tested with no `App` and no frame.
 gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
-gpui-component = { version = "0.6", default-features = false }
 # The Docker Engine API client. Default features already carry `hyperlocal`
 # (the local unix-socket connector) and pointedly do NOT enable `ssl`/`rustls` —
 # the local socket needs no TLS, so this keeps dodo's rustls-only, OpenSSL-free

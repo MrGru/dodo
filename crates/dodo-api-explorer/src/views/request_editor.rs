@@ -1,10 +1,10 @@
 //! The request bar and the Params / Headers / Body / Auth / Scripts tabs.
 
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::Input;
-use gpui_component::popover::Popover;
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::Input;
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, StyledExt as _,
     h_flex, v_flex,
 };

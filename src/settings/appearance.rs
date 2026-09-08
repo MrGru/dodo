@@ -1,5 +1,5 @@
-use gpui_component::setting::SettingField;
-use gpui_component::{Theme, ThemeRegistry};
+use gpui_kit::component::setting::SettingField;
+use gpui_kit::component::{Theme, ThemeRegistry};
 use gpui_kit::*;
 
 use crate::i18n::{Language, LanguageExt, shell, t};
@@ -107,7 +107,7 @@ pub(super) fn theme_field() -> SettingField<SharedString> {
 /// own numbers win over the user's.
 ///
 /// A field the user never touched stays `None` and is not applied at all —
-/// notably the theme, because `gpui_component::init` picks light or dark from
+/// notably the theme, because `gpui_kit::component::init` picks light or dark from
 /// the *system appearance* and forcing "Default Light" over that merely because
 /// it was what the app happened to show would break appearance following for
 /// everyone who never opened this dialog. `session::models::document` argues it

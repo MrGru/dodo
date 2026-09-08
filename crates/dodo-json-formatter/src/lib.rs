@@ -5,11 +5,11 @@
 
 use dodo_i18n as i18n;
 
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
-use gpui_component::input::{Editor, EditorState, Position};
-use gpui_component::select::{Select, SelectState};
-use gpui_component::{ActiveTheme, IndexPath, Sizable, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::highlighter::{Diagnostic, DiagnosticSeverity};
+use gpui_kit::component::input::{Editor, EditorState, Position};
+use gpui_kit::component::select::{Select, SelectState};
+use gpui_kit::component::{ActiveTheme, IndexPath, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 

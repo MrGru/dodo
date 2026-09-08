@@ -14,7 +14,7 @@
 //! same lifetime rule `Layout` follows for the top-level tools. Each page is
 //! loaded lazily the first time it is shown.
 
-use gpui_component::{ActiveTheme as _, Icon, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
@@ -374,7 +374,7 @@ mod tests {
         // would make the rail unreadable or swallow a click.
         let mut icons: Vec<String> = DockerPage::ALL
             .iter()
-            .map(|page| gpui_component::IconNamed::path(page.icon()).to_string())
+            .map(|page| gpui_kit::component::IconNamed::path(page.icon()).to_string())
             .collect();
         icons.sort();
         icons.dedup();

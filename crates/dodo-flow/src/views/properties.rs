@@ -61,7 +61,7 @@
 //! invisible input shield. Only the visible card and prompt block the canvas.
 
 use dodo_i18n::{flow, t};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme,
     input::{Input, InputState},
     scroll::Scrollbar,
@@ -238,7 +238,7 @@ pub fn panel(
     view: Entity<FlowView>,
     state: &PanelState,
     prompt: Option<(PromptKind, &Entity<InputState>)>,
-    opacity: &Entity<gpui_component::slider::SliderState>,
+    opacity: &Entity<gpui_kit::component::slider::SliderState>,
     scroll: &ScrollHandle,
     cx: &App,
 ) -> impl IntoElement {
@@ -339,7 +339,7 @@ fn row(
     section: PanelSection,
     state: &PanelState,
     view: Entity<FlowView>,
-    opacity: &Entity<gpui_component::slider::SliderState>,
+    opacity: &Entity<gpui_kit::component::slider::SliderState>,
     cx: &App,
 ) -> gpui_kit::AnyElement {
     let controls = &state.controls;
@@ -854,7 +854,7 @@ fn size_label(size: FontSize) -> flow::Text {
 /// coordinate. They are formatted from the bounds, so a slider given a
 /// different range labels itself correctly rather than lying in two languages.
 fn opacity_row(
-    slider: &Entity<gpui_component::slider::SliderState>,
+    slider: &Entity<gpui_kit::component::slider::SliderState>,
     cx: &App,
 ) -> gpui_kit::AnyElement {
     let endpoint = |value: u8| {

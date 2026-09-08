@@ -13,8 +13,8 @@
 
 use std::sync::Arc;
 
-use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
-use gpui_component::{
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;

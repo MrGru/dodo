@@ -176,7 +176,7 @@ impl Updater {
 
 /// Starts the updater.
 ///
-/// Must run from `main` after `gpui_component::init`, the same ordering rule
+/// Must run from `main` after `gpui_kit::component::init`, the same ordering rule
 /// `settings::init`, `api_explorer::init` and `docker::init` depend on — this
 /// one registers no key bindings today, and keeping the ordering means adding
 /// one later is not a debugging session.

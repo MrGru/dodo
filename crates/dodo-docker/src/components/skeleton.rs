@@ -6,7 +6,7 @@
 //! page keeps the last rows visible on a refresh, so this only shows on the very
 //! first load.
 
-use gpui_component::{ActiveTheme as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{App, IntoElement, ParentElement as _, Styled as _, div, px};
 
 /// `rows` placeholder bars, each the height of a table row.

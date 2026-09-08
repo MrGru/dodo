@@ -1,4 +1,4 @@
-use gpui_component::Root;
+use gpui_kit::component::Root;
 use gpui_kit::*;
 
 use crate::layout::Layout;

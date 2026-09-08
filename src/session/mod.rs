@@ -428,7 +428,7 @@ fn displays(remembered: Option<&str>, cx: &App) -> Vec<Bounds<Pixels>> {
 ///
 /// Nothing is read here: [`load`] does that, and it has to be awaited before
 /// the window opens so the theme and the geometry are known for the first
-/// frame. Same post-`gpui_component::init` position as every other `init` in
+/// frame. Same post-`gpui_kit::component::init` position as every other `init` in
 /// `main.rs`, though this one binds no keys.
 pub fn init(cx: &mut App) {
     cx.set_global(Session::new(Arc::new(DiskSessionStore::new())));

@@ -61,7 +61,7 @@
 //!
 //! # When to call it
 //!
-//! After `gpui_component::init`, exactly once per process. The launcher and
+//! After `gpui_kit::component::init`, exactly once per process. The launcher and
 //! dodo's startup each do it. Calling it twice binds the
 //! same keystrokes twice, which GPUI resolves to the same action and which
 //! nothing depends on.
@@ -269,7 +269,7 @@ mod tests {
     /// naming `FlowTyping` alone would always lose. Naming both makes the two
     /// tie on depth, and GPUI breaks that tie by registration order with the
     /// **later** binding winning — which is why `src/main.rs` runs `flow::init`
-    /// after `gpui_component::init`.
+    /// after `gpui_kit::component::init`.
     ///
     /// Driven through GPUI's real [`Keymap`] with the library's real action
     /// type and the library's real predicate, in the real registration order,
@@ -290,7 +290,7 @@ mod tests {
             // `crates/ui/src/input/state.rs`'s `init`, verbatim for this key.
             keymap.add_bindings([KeyBinding::new(
                 "secondary-enter",
-                gpui_component::input::Enter {
+                gpui_kit::component::input::Enter {
                     secondary: true,
                     shift: false,
                 },

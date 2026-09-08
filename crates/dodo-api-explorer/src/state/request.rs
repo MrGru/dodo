@@ -5,7 +5,7 @@
 //! needs a `Window` to build. The plain-data snapshot handed to the service
 //! layer is [`RequestDraft`], taken at the moment Send is pressed.
 
-use gpui_component::input::{EditorState, InputState, TextareaState};
+use gpui_kit::component::input::{EditorState, InputState, TextareaState};
 use gpui_kit::{AppContext as _, Context, Entity, SharedString, Window};
 
 use crate::i18n::{Str, api_explorer, api_scripts, t};
