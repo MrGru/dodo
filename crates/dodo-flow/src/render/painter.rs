@@ -53,7 +53,7 @@
 
 use std::sync::Arc;
 
-use gpui::{
+use gpui_kit::{
     AnyElement, App, Background, BorderStyle, Bounds, Corners, Edges, FillOptions, Font, Hsla,
     Path, PathBuilder, PathStyle, Pixels, Point, Rgba, StrokeOptions, TextAlign, TextRun, Window,
     WrappedLine, point, px,
@@ -106,7 +106,7 @@ impl CachedGeometry for Path<Pixels> {
                 px(self.bounds.origin.x.as_f32() * scale + offset.x),
                 px(self.bounds.origin.y.as_f32() * scale + offset.y),
             ),
-            size: gpui::size(
+            size: gpui_kit::size(
                 px(self.bounds.size.width.as_f32() * scale),
                 px(self.bounds.size.height.as_f32() * scale),
             ),
@@ -141,7 +141,7 @@ fn to_bounds(rect: Rect) -> Bounds<Pixels> {
     let rect = rect.normalized();
     Bounds {
         origin: to_point(rect.origin),
-        size: gpui::size(px(rect.size.x), px(rect.size.y)),
+        size: gpui_kit::size(px(rect.size.x), px(rect.size.y)),
     }
 }
 
@@ -435,7 +435,7 @@ impl PrimitiveSink for WindowPainter<'_> {
             return;
         }
 
-        self.window.paint_quad(gpui::PaintQuad {
+        self.window.paint_quad(gpui_kit::PaintQuad {
             bounds,
             corner_radii: Corners::all(px(quad.corner_radius.max(0.0))),
             background: to_background(quad.background),

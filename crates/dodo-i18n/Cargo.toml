@@ -22,7 +22,7 @@ description = "Every string dodo shows a user, as one enum per area of the app w
 # feature crate can both name, and this crate is the only such place. Consumers
 # that hold a `Str` without rendering it must keep leaving the feature off.
 [features]
-gpui = ["dep:gpui"]
+gpui = ["dep:gpui-kit"]
 
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", optional = true }
+gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"], optional = true }

@@ -26,16 +26,16 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use gpui::{
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::checkbox::Checkbox;
+use gpui_component::table::{Column, TableDelegate, TableState};
+use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
+use gpui_kit::{
     AnyElement, App, ClipboardItem, Context, Div, Image, ImageFormat, ImageSource,
     InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, StyledImage as _, WeakEntity, Window, div, img,
     px,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::checkbox::Checkbox;
-use gpui_component::table::{Column, TableDelegate, TableState};
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 
 use super::CleanerView;
 use crate::app_icon::AppIcon;
@@ -45,12 +45,12 @@ use crate::core::item::{CleanableItem, CleanableItemId, ItemMetadata};
 use crate::core::risk::{ItemCapability, RiskLevel};
 use crate::i18n::{Str, cleaner, t};
 
-const CHECKBOX_COLUMN_WIDTH: gpui::Pixels = px(36.);
-const RISK_COLUMN_WIDTH: gpui::Pixels = px(112.);
-const SIZE_COLUMN_WIDTH: gpui::Pixels = px(90.);
+const CHECKBOX_COLUMN_WIDTH: gpui_kit::Pixels = px(36.);
+const RISK_COLUMN_WIDTH: gpui_kit::Pixels = px(112.);
+const SIZE_COLUMN_WIDTH: gpui_kit::Pixels = px(90.);
 /// Four 20 px icon buttons, three 4 px gaps and the cell's 16 px padding.
-const ACTIONS_COLUMN_WIDTH: gpui::Pixels = px(108.);
-const TRAILING_GUTTER: gpui::Pixels = px(16.);
+const ACTIONS_COLUMN_WIDTH: gpui_kit::Pixels = px(108.);
+const TRAILING_GUTTER: gpui_kit::Pixels = px(16.);
 
 /// One visible row action and the capability that earns it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -149,7 +149,7 @@ fn uninstall_label() -> Str {
 }
 
 /// The five risk levels' label and colour.
-fn risk_look(risk: RiskLevel, cx: &App) -> (Str, gpui::Hsla) {
+fn risk_look(risk: RiskLevel, cx: &App) -> (Str, gpui_kit::Hsla) {
     match risk {
         RiskLevel::SafeRecreatable => (cleaner::Text::RiskSafe.into(), cx.theme().success),
         RiskLevel::ReviewRecommended => (cleaner::Text::RiskReview.into(), cx.theme().warning),

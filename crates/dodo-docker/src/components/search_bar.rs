@@ -5,15 +5,15 @@
 //! and the language sweep can re-push the placeholder — the same arrangement the
 //! API Explorer's collections search uses.
 
-use gpui::{Entity, IntoElement, Styled as _, px};
 use gpui_component::Sizable as _;
 use gpui_component::input::{Input, InputState};
+use gpui_kit::{Entity, IntoElement, Styled as _, px};
 
 use crate::app_icon::AppIcon;
 
 /// The search field, sized to `width`, with a magnifier prefix and a clear
 /// button that appears once there is text.
-pub fn search_bar(state: &Entity<InputState>, width: gpui::Pixels) -> impl IntoElement {
+pub fn search_bar(state: &Entity<InputState>, width: gpui_kit::Pixels) -> impl IntoElement {
     Input::new(state)
         .small()
         .cleanable(true)

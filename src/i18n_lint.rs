@@ -651,7 +651,7 @@ mod tests {
                     || source.contains("impl RenderOnce for")
                     || source.contains("open_dialog")
                     || source.contains("-> impl IntoElement")
-                    || source.contains("-> gpui::AnyElement")
+                    || source.contains("-> gpui_kit::AnyElement")
                     || source.contains("-> AnyElement")
                     || source.contains("-> Div")
                     || source.contains("-> SettingField")

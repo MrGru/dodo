@@ -120,20 +120,20 @@
 use std::sync::{Arc, OnceLock};
 
 use dodo_i18n::{flow, t};
-use gpui::{
+use gpui_component::{
+    ActiveTheme, WindowExt as _,
+    input::{InputState, Textarea, TextareaState},
+    notification::Notification,
+    slider::{SliderEvent, SliderState},
+};
+use gpui_kit::{
     App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior,
     Hsla, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Path, PathPromptOptions, PinchEvent, Pixels,
     Point, Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled, Window, canvas, div,
     prelude::FluentBuilder as _, px,
 };
-use gpui::{AppContext as _, Div};
-use gpui_component::{
-    ActiveTheme, WindowExt as _,
-    input::{Input, InputState},
-    notification::Notification,
-    slider::{SliderEvent, SliderState},
-};
+use gpui_kit::{AppContext as _, Div};
 
 use crate::{
     budgets::RenderBudgets,
@@ -1377,11 +1377,11 @@ impl FlowView {
         }
 
         let base = window.text_style().font();
-        let normal = gpui::Font {
+        let normal = gpui_kit::Font {
             family: names.0.clone(),
             ..base.clone()
         };
-        let code = gpui::Font {
+        let code = gpui_kit::Font {
             family: names.1.clone(),
             ..base.clone()
         };
@@ -1391,7 +1391,7 @@ impl FlowView {
             .preferred_faces(crate::budgets::current_host())
             .iter()
             .find(|face| installed.iter().any(|name| name == *face))
-            .map(|face| gpui::Font {
+            .map(|face| gpui_kit::Font {
                 family: (*face).into(),
                 ..base.clone()
             })
@@ -1959,7 +1959,7 @@ impl FlowView {
         position: Point<Pixels>,
         bounds: Bounds<Pixels>,
         button: PointerButton,
-        modifiers: gpui::Modifiers,
+        modifiers: gpui_kit::Modifiers,
     ) -> InteractionEvent {
         let screen = self.local(position, bounds);
         let world = self.viewport.screen_to_world(screen);
@@ -2783,7 +2783,7 @@ fn trace(args: std::fmt::Arguments<'_>) {
 /// two can never be asked in the wrong order.
 struct TextEditor {
     target: TextTarget,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     /// Where the editor is drawn, in pane-relative screen pixels, as of the
     /// frame it was opened on.
     ///
@@ -2813,7 +2813,7 @@ impl FlowView {
         let seed = self.editor.text_of(target).unwrap_or_default().to_owned();
         let selection_end = seed.len();
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 // **A label is a paragraph, so the field is one** (§9). Three
                 // things follow from it and all three are the point:
                 // `Enter` inserts a line break rather than escaping to the
@@ -3149,7 +3149,7 @@ impl FlowView {
                     VerticalAlign::Bottom => it.items_end(),
                 })
                 .child(
-                    Input::new(&editing.input)
+                    Textarea::new(&editing.input)
                         // No border, no background, no shadow, no corner.
                         .appearance(false)
                         .w_full()
@@ -3431,7 +3431,7 @@ mod tests {
     use super::*;
     use crate::models::ElementKind;
     use crate::render::painter::to_hsla;
-    use gpui::{Entity, EntityInputHandler as _, TestAppContext, VisualTestContext};
+    use gpui_kit::{Entity, EntityInputHandler as _, TestAppContext, VisualTestContext};
 
     /// A canvas on a test window, with no disk store behind it.
     fn mount(cx: &mut TestAppContext) -> (Entity<FlowView>, VisualTestContext) {
@@ -3595,7 +3595,7 @@ mod tests {
     /// on the two kinds that were also losing their labels, and driven through
     /// the real machine transition and the real effect handler so it cannot
     /// pass by calling something the double-click path does not.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn a_double_click_opens_an_editor_that_already_owns_the_keyboard(cx: &mut TestAppContext) {
         let (view, mut cx) = mount(cx);
 
@@ -3703,7 +3703,7 @@ mod tests {
     /// chain: GPUI routes a keystroke to the focused handle, so a field that
     /// holds the focus when the press is over is a field the next keystroke
     /// reaches.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn the_press_that_opens_a_caret_does_not_hand_the_keyboard_back(cx: &mut TestAppContext) {
         let (view, mut cx) = mount(cx);
 
@@ -3732,31 +3732,31 @@ mod tests {
             let screen = this
                 .viewport
                 .world_to_screen(this.editor.world().nodes().bounds(node).center());
-            gpui::point(px(screen.x), px(screen.y))
+            gpui_kit::point(px(screen.x), px(screen.y))
         });
 
         // The hitbox every canvas listener gates on is answered from the hit
         // test, and the hit test is recomputed on a move.
-        cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+        cx.simulate_mouse_move(position, None, gpui_kit::Modifiers::default());
         cx.simulate_event(MouseDownEvent {
             position,
-            modifiers: gpui::Modifiers::default(),
+            modifiers: gpui_kit::Modifiers::default(),
             button: MouseButton::Left,
             click_count: 1,
             first_mouse: false,
         });
         cx.simulate_event(MouseUpEvent {
             position,
-            modifiers: gpui::Modifiers::default(),
+            modifiers: gpui_kit::Modifiers::default(),
             button: MouseButton::Left,
             click_count: 1,
         });
 
         cx.update(|window, cx| {
             window.dispatch_event(
-                gpui::PlatformInput::MouseDown(MouseDownEvent {
+                gpui_kit::PlatformInput::MouseDown(MouseDownEvent {
                     position,
-                    modifiers: gpui::Modifiers::default(),
+                    modifiers: gpui_kit::Modifiers::default(),
                     button: MouseButton::Left,
                     // The platform's count, which is the only thing that knows
                     // this machine's double-click interval.
@@ -3818,11 +3818,11 @@ mod tests {
     /// Driven through the real handler with a real event, on both keys,
     /// because either one alone is passed by a mistake: deleting the whole
     /// block satisfies the first assertion and the bug satisfied the second.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn enter_leaves_the_caret_open_and_escape_still_closes_it(cx: &mut TestAppContext) {
         fn press(key: &str) -> KeyDownEvent {
             KeyDownEvent {
-                keystroke: gpui::Keystroke::parse(key).expect("a real keystroke"),
+                keystroke: gpui_kit::Keystroke::parse(key).expect("a real keystroke"),
                 is_held: false,
                 prefer_character_input: false,
             }
@@ -3896,7 +3896,7 @@ mod tests {
     /// multi-line one — and a build where they *did* would be a build where the
     /// two are the same kind of field, which is exactly what this is guarding
     /// against.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn the_caret_types_into_a_paragraph_field(cx: &mut TestAppContext) {
         let (view, mut cx) = mount(cx);
         let node = view.update_in(&mut cx, |this, _window, _cx| {
@@ -3930,16 +3930,17 @@ mod tests {
             // than against a remembered number.
             let single = cx.new(|cx| InputState::new(window, cx));
 
-            let mut probe = |state: &Entity<InputState>, cx: &mut Context<FlowView>| {
-                state.update(cx, |state, cx| {
-                    state.set_value("one\ntwo", window, cx);
-                    state.selected_range()
-                })
-            };
+            let caret_range = caret.update(cx, |state, cx| {
+                state.set_value("one\ntwo", window, cx);
+                state.selected_range()
+            });
+            let single_range = single.update(cx, |state, cx| {
+                state.set_value("one\ntwo", window, cx);
+                state.selected_range()
+            });
 
             assert_ne!(
-                probe(&caret, cx),
-                probe(&single, cx),
+                caret_range, single_range,
                 "the caret's field behaves exactly like a single-line one, so \
                  `Enter` in it escapes to the canvas instead of breaking the line"
             );
@@ -4023,7 +4024,7 @@ mod tests {
             Some(PointerButton::Right)
         );
         assert_eq!(
-            to_pointer_button(MouseButton::Navigate(gpui::NavigationDirection::Back)),
+            to_pointer_button(MouseButton::Navigate(gpui_kit::NavigationDirection::Back)),
             None
         );
     }
@@ -4041,10 +4042,10 @@ mod tests {
 
     /// A full-height layout carrier must not turn the empty strip below a
     /// content-sized property card into an invisible input shield.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn the_pane_below_the_property_card_still_receives_canvas_presses(cx: &mut TestAppContext) {
         let (view, mut cx) = mount(cx);
-        cx.update(|window, _| window.resize(gpui::size(px(900.0), px(1200.0))));
+        cx.update(|window, _| window.resize(gpui_kit::size(px(900.0), px(1200.0))));
 
         view.update_in(&mut cx, |this, _window, cx| {
             let node = this
@@ -4067,17 +4068,17 @@ mod tests {
         let card = cx
             .debug_bounds("flow-properties-card")
             .expect("the selected node draws a property card");
-        let position = gpui::point(card.left() + px(40.0), card.bottom() + px(40.0));
+        let position = gpui_kit::point(card.left() + px(40.0), card.bottom() + px(40.0));
         let viewport = cx.update(|window, _| window.viewport_size());
         assert!(
             position.y < viewport.height,
             "the test needs canvas below the card"
         );
 
-        cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+        cx.simulate_mouse_move(position, None, gpui_kit::Modifiers::default());
         cx.simulate_event(MouseDownEvent {
             position,
-            modifiers: gpui::Modifiers::default(),
+            modifiers: gpui_kit::Modifiers::default(),
             button: MouseButton::Left,
             click_count: 1,
             first_mouse: false,
@@ -4094,7 +4095,7 @@ mod tests {
         });
         cx.simulate_event(MouseUpEvent {
             position,
-            modifiers: gpui::Modifiers::default(),
+            modifiers: gpui_kit::Modifiers::default(),
             button: MouseButton::Left,
             click_count: 1,
         });
@@ -4263,7 +4264,7 @@ mod tests {
     /// as from the document, and asserted against the same five values
     /// `views::nodes` and `render::scene`'s `plan_labels` paint a committed
     /// label with.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn the_caret_types_in_the_labels_own_ink(cx: &mut TestAppContext) {
         let (view, mut cx) = mount(cx);
 

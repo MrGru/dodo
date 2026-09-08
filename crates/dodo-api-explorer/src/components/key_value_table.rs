@@ -25,19 +25,19 @@
 
 use std::path::PathBuf;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    App, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, SharedString,
-    StatefulInteractiveElement as _, Styled as _,
-};
-use gpui::{div, px};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::Input;
+use gpui_component::input::{Input, Textarea};
 use gpui_component::popover::Popover;
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    App, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, SharedString,
+    StatefulInteractiveElement as _, Styled as _,
+};
+use gpui_kit::{div, px};
 
 use crate::app_icon::AppIcon;
 use crate::i18n::{Str, api_explorer, api_variables, t};
@@ -222,7 +222,7 @@ fn bulk_pane(table: RowTable, tab: &Entity<RequestTabState>, cx: &App) -> impl I
             .border_1()
             .border_color(cx.theme().border)
             .child(
-                Input::new(&editor)
+                Textarea::new(&editor)
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(cx.theme().mono_font_size)
                     .size_full(),
@@ -355,7 +355,7 @@ fn add_top_button(
 /// DESCRIPTION headers collapse into one-character-wide stacks. Used for the
 /// header cell and the row cell alike, so the two cannot drift out of
 /// alignment.
-fn value_column(typed: bool) -> gpui::Div {
+fn value_column(typed: bool) -> gpui_kit::Div {
     let cell = div().min_w_0();
     if typed {
         cell.flex_grow(2.).flex_shrink(1.).flex_basis(px(0.))

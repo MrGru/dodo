@@ -43,11 +43,11 @@
 //! over the node. There is no path from here to "a handle element per visible
 //! node", because the snapshot never offers one.
 
-use gpui::{
+use gpui_component::ActiveTheme;
+use gpui_kit::{
     AnyElement, App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Styled, div,
     prelude::FluentBuilder, px, relative,
 };
-use gpui_component::ActiveTheme;
 
 use crate::{
     geometry::{Rect, ResizeCorner},
@@ -148,7 +148,7 @@ fn node(rich: &RichNode, world: &GraphWorld, fonts: &FontSet, cx: &App) -> AnyEl
 /// and differ only in the two properties that a hand-drawn body owns — the
 /// border and the fill.
 fn decorated(
-    body: gpui::Stateful<Div>,
+    body: gpui_kit::Stateful<Div>,
     rich: &RichNode,
     world: &GraphWorld,
     accent: Hsla,

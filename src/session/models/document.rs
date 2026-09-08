@@ -147,7 +147,7 @@ pub struct Appearance {
 
 /// How the window was showing when it was last seen.
 ///
-/// The three modes are exactly `gpui::WindowBounds`' three, and the rectangle is
+/// The three modes are exactly `gpui_kit::WindowBounds`' three, and the rectangle is
 /// the same **restore** rectangle that type carries: for `Maximized` and
 /// `Fullscreen` it is the size the window returns to, not the size it is
 /// covering the screen with. Storing it in every mode is what lets an unzoomed
@@ -171,7 +171,7 @@ pub struct Appearance {
 /// on the monitor beside it, and no arithmetic over rectangles can tell them
 /// apart. Windows and Linux do report real global bounds.
 ///
-/// [`PlatformDisplay::uuid`](gpui::PlatformDisplay::uuid) is documented as
+/// [`PlatformDisplay::uuid`](gpui_kit::PlatformDisplay::uuid) is documented as
 /// "stable … across system restarts", which is exactly the identity needed, and
 /// it is what `WindowOptions::display_id` is resolved from at launch. A UUID
 /// that is not attached any more is the unplugged monitor: the window comes

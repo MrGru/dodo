@@ -1888,7 +1888,7 @@ mod tests {
     /// The document, geometry and budget layers name no UI framework, so they
     /// are unit tested with no `App` and no window. The crate doc explains what
     /// that is worth and why it is very hard to recover once lost; this is the
-    /// tripwire that notices the first `use gpui::…` to cross the line, while
+    /// tripwire that notices the first `use gpui_kit::…` to cross the line, while
     /// removing it is still a one-line edit.
     ///
     /// Prose may name gpui freely — several of these files explain *why* a type

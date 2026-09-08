@@ -21,16 +21,12 @@ description = "dodo's Mermaid rendering service: source in, SVG out, through an 
 mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 dodo-app-icon = { path = "../dodo-app-icon" }
 dodo-i18n = { path = "../dodo-i18n", features = ["gpui"] }
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
+gpui-component = { version = "0.6", default-features = false }
 
 [dev-dependencies]
 # The standalone launcher only, exactly as every other feature crate's.
-gpui-component = { git = "https://github.com/longbridge/gpui-component" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
-    "font-kit",
-] }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+gpui-component = { version = "0.6", default-features = false }
 
 [[example]]
 name = "mermaid"

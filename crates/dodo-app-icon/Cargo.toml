@@ -10,5 +10,6 @@ description = "The icons dodo draws: one enum naming every SVG under `assets/ico
 # path the binary's `Assets` source resolves — so it moves without the artwork
 # moving.
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+# The 0.6 facade re-exports GPUI; the component crate below resolves to its matching GPUI family.
+gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
+gpui-component = { version = "0.6", default-features = false }

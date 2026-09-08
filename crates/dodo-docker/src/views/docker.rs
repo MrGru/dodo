@@ -14,12 +14,12 @@
 //! same lifetime rule `Layout` follows for the top-level tools. Each page is
 //! loaded lazily the first time it is shown.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
+use gpui_component::{ActiveTheme as _, Icon, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
     AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
     Pixels, Render, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
-use gpui_component::{ActiveTheme as _, Icon, h_flex, v_flex};
 
 use crate::app_icon::AppIcon;
 use crate::i18n::{Str, docker, t};
@@ -221,7 +221,7 @@ impl DockerView {
     /// The vertical tab rail down the left edge. Always visible and always
     /// showing all four tabs — it is a tab strip, not the API Explorer's
     /// collapsible panel switcher, which is otherwise the same idea.
-    fn render_rail(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_rail(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         v_flex()
             .h_full()
             .flex_shrink_0()
@@ -239,7 +239,7 @@ impl DockerView {
     /// One rail tab: the accent bar, then the page's icon above its label,
     /// centred. The selected tab is marked twice over — the bar and a raised
     /// background — so it reads at a glance without relying on colour alone.
-    fn render_rail_tab(&self, page: DockerPage, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_rail_tab(&self, page: DockerPage, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let selected = self.page == page;
         let accent = if selected {
             cx.theme().primary

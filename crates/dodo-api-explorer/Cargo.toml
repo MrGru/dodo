@@ -31,8 +31,8 @@ dodo-paths = { path = "../dodo-paths" }
 # purpose: the send pipeline's ordering, the QuickJS sandbox, the consent gate,
 # the curl parser and the four code generators are all tested with no `App` and
 # no frame.
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
+gpui-component = { version = "0.6", default-features = false }
 # The HTTP client the whole tool exists to drive. `default-features = false`
 # drops `default-tls`, `charset` and `system-proxy`; `rustls` then selects
 # rustls with the platform certificate verifier, so no OpenSSL is required to
@@ -77,16 +77,12 @@ serde_json = "1.0"
 [dev-dependencies]
 # `examples/api_explorer.rs` only. The four syntax grammars match the full app;
 # the application runner and fallback icons stay out of the shipped graph.
-gpui-component = { git = "https://github.com/longbridge/gpui-component", features = [
+gpui-component = { version = "0.6", default-features = false, features = [
     "tree-sitter",
     "tree-sitter-html",
     "tree-sitter-yaml",
     "tree-sitter-javascript",
 ] }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
-    "font-kit",
-] }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 
 [[example]]
 name = "api_explorer"

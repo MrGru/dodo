@@ -4,8 +4,8 @@
 //! cannot invalidate a response, and so that the split geometry is owned in one
 //! place rather than being read off whatever view happens to render it.
 
-use gpui::{AppContext as _, Context, Entity, Pixels, px};
 use gpui_component::resizable::ResizableState;
+use gpui_kit::{AppContext as _, Context, Entity, Pixels, px};
 
 /// Default width of the Collections panel.
 ///

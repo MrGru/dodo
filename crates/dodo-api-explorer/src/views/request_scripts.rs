@@ -15,14 +15,14 @@
 //! [`script_format`](crate::models::script_format) is where that
 //! choice is argued.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    Context, Entity, IntoElement, ParentElement as _, Pixels, SharedString, Styled as _, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::{Editor, EditorState};
 use gpui_component::popover::Popover;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    Context, Entity, IntoElement, ParentElement as _, Pixels, SharedString, Styled as _, div, px,
+};
 
 /// A small floor under each script editor, so a very short pane still shows two
 /// usable editors rather than squeezing one to a line. The two editors share
@@ -42,7 +42,7 @@ impl ApiExplorer {
         &self,
         tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let pre_open = self.pre_template_menu_open;
         let post_open = self.post_template_menu_open;
 
@@ -161,7 +161,7 @@ impl ApiExplorer {
             })
             .child(
                 div().flex_1().min_h_0().min_w_0().overflow_hidden().child(
-                    Input::new(&editor)
+                    Editor::new(&editor)
                         .font_family(cx.theme().mono_font_family.clone())
                         .text_size(cx.theme().mono_font_size)
                         .size_full(),
@@ -232,7 +232,7 @@ impl ApiExplorer {
     fn templates_menu(
         &self,
         slot: ScriptSlot,
-        editor: &Entity<InputState>,
+        editor: &Entity<EditorState>,
         templates: &'static [ScriptTemplate],
         menu_open: bool,
         cx: &mut Context<Self>,

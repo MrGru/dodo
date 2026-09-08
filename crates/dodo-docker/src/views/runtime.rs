@@ -13,14 +13,14 @@
 
 use std::sync::Arc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    App, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Task, Window, div,
-};
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    App, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, div,
 };
 
 use crate::POLL_INTERVAL;
@@ -229,7 +229,7 @@ impl RuntimesView {
             .child(message)
     }
 
-    fn render_body(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_body(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         if self.state.is_loading() {
             return loading_skeleton(RuntimeKind::ALL.len(), cx).into_any_element();
         }
@@ -287,7 +287,7 @@ impl RuntimesView {
             .child(self.render_action(row, cx))
     }
 
-    fn render_action(&self, row: &RuntimeInfo, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_action(&self, row: &RuntimeInfo, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let kind = row.kind;
         let pending = self.state.is_pending(kind);
 

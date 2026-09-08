@@ -9,14 +9,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement as _, PathPromptOptions, Render, Styled as _, Window, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_component::{ActiveTheme as _, Selectable as _, h_flex, v_flex};
+use gpui_kit::{
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, ParentElement as _, PathPromptOptions, Render, Styled as _, Window, div, px,
+};
 
 use crate::app_icon::AppIcon;
 use crate::i18n::{Language, LanguageExt, Str, api_collections, api_explorer, api_variables, t};
@@ -563,7 +563,7 @@ impl ApiExplorer {
     pub(super) fn open_snapshot(
         &mut self,
         snapshot: RequestSnapshot,
-        name: Option<gpui::SharedString>,
+        name: Option<gpui_kit::SharedString>,
         node: Option<NodeId>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1114,7 +1114,7 @@ impl ApiExplorer {
     /// column shows (Collections or History) and collapses it. Clicking the
     /// panel that is already showing collapses the column; clicking the other
     /// switches to it and expands.
-    fn left_rail(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn left_rail(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let collapsed = self.ui.panel_collapsed;
         let active = self.ui.left_panel;
 
@@ -1160,7 +1160,7 @@ impl ApiExplorer {
     }
 
     /// The left column's body: the selected panel.
-    fn left_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn left_panel(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         match self.ui.left_panel {
             LeftPanel::Collections => self.render_collections_panel(cx),
             LeftPanel::History => self.render_history_panel(cx),
@@ -1173,7 +1173,7 @@ impl ApiExplorer {
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         v_flex()
             .size_full()
             .min_w_0()

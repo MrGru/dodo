@@ -23,7 +23,7 @@
 //! check or a render-generation race is a property of the *view*, and testing
 //! the rules a gesture obeys does not need a window. In this crate that is
 //! more than a preference — [`view`]'s module doc records that a
-//! `#[gpui::test]` cannot be added here at all at the pinned `gpui` revision,
+//! `#[gpui_kit::test]` cannot be added here at all at the pinned `gpui` revision,
 //! so a decision left inside [`view`] is a decision no test can reach.
 //!
 //! Nothing outside [`view`] names a GPUI type, and nothing outside [`render`]

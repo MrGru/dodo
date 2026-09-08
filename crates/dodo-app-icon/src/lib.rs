@@ -5,12 +5,11 @@
 //! Registering a variant here is what makes an SVG reachable at all.
 //!
 //! The paths are *logical*: nothing here opens a file. `dodo`'s `src/assets.rs`
-//! is what resolves them — out of the binary's own embedded `assets/icons` when
-//! it has the file, and out of `gpui-component-assets` when it does not — which
-//! is why this crate can sit beside the artwork rather than inside it.
+//! is what resolves them from the binary's own embedded `assets/icons`. This
+//! crate can therefore sit beside the artwork rather than inside it.
 
-use gpui::SharedString;
 use gpui_component::{Icon, IconNamed};
+use gpui_kit::SharedString;
 
 /// The icons bundled under `assets/icons`.
 ///
@@ -38,9 +37,8 @@ pub enum AppIcon {
     PanelLeftClose,
     PanelLeftOpen,
 
-    // API Explorer. The five below, plus `trash`, ship as our own SVGs; the
-    // rest resolve through `Assets`' fallback to `gpui_component_assets`, which
-    // already carries them — see `src/assets.rs`.
+    // API Explorer. Every icon is embedded by Dodo; shared Lucide-compatible
+    // files are deliberately copied individually rather than pulling an asset bundle.
     Clock,
     Import,
     Save,
@@ -66,14 +64,11 @@ pub enum AppIcon {
     /// draws a backspace key, not a waste bin, so a destructive row action read
     /// as "clear the field".
     Trash,
-    /// A passed and a failed row in the API Explorer's Tests tab. Both resolve
-    /// through `Assets`' fallback to `gpui_component_assets`.
+    /// A passed and a failed row in the API Explorer's Tests tab.
     CircleCheck,
     CircleX,
 
-    // Docker module. `container`, `layers`, `refresh-cw`, `filter`, `square`
-    // and `rotate-ccw` ship as our own SVGs; the rest resolve through `Assets`'
-    // fallback to `gpui_component_assets`.
+    // Docker module. Product-specific and shared SVGs are both embedded by Dodo.
     Container,
     Layers,
     Network,
@@ -84,8 +79,7 @@ pub enum AppIcon {
     Play,
     Stop,
     Restart,
-    /// The Inspect placeholder action on the round-3 pages. Resolves through
-    /// `Assets`' fallback to `gpui_component_assets`.
+    /// The Inspect placeholder action on the round-3 pages.
     Eye,
 
     /// The updater. Ships as our own `icons/download.svg`: the library carries
@@ -93,9 +87,8 @@ pub enum AppIcon {
     /// list of tools.
     Download,
 
-    // Database Explorer. `database`, `table`, `columns` and `key` ship as our
-    // own SVGs — the library's icon set has no data-shaped glyph at all — and
-    // the rest resolve through `Assets`' fallback to `gpui_component_assets`.
+    // Database Explorer. `database`, `table`, `columns` and `key` are Dodo
+    // glyphs; the remaining shared SVGs are individually embedded too.
     /// The sidebar row, and a database node in the object tree.
     Database,
     /// The engine marks on a connection's root row in the object tree. Our own
@@ -164,8 +157,7 @@ pub enum AppIcon {
     /// mark and the verb from the motif around it.
     ImageDown,
 
-    // Cleaner's section and category rows. Most resolve through `Assets`'
-    // fallback to `gpui_component_assets`.
+    // Cleaner's section and category rows.
     /// The Cleanup section. Ships as our own `icons/brush-cleaning.svg`:
     /// neither the project nor the pinned library has a cleaning brush.
     BrushCleaning,
@@ -185,9 +177,7 @@ pub enum AppIcon {
     /// The Runtimes tab's rail icon (Docker module, round 7): detecting and
     /// controlling the container runtimes/daemons on this machine reads as a
     /// system-resource concern, distinct from every other icon already on the
-    /// rail (`Container`, `Layers`, `HardDrive`, `Network`). Resolves through
-    /// `Assets`' fallback to `gpui_component_assets`, which already carries
-    /// it — no new SVG file needed.
+    /// rail (`Container`, `Layers`, `HardDrive`, `Network`).
     MemoryStick,
 }
 

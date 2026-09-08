@@ -1,14 +1,14 @@
 //! Searchable saved queries. Opening copies text into a new query tab; the
 //! saved connection scope is checked by [`DatabaseView`] before selection.
 
-use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Pixels, Render,
-    SharedString, Styled as _, Task, Window, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_component::{
     ActiveTheme as _, IndexPath, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
+};
+use gpui_kit::{
+    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Pixels, Render,
+    SharedString, Styled as _, Task, Window, div, px,
 };
 
 use crate::app_icon::AppIcon;

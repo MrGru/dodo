@@ -1,8 +1,8 @@
 use std::{cell::Cell, rc::Rc};
 
-use gpui::*;
 use gpui_component::ActiveTheme as _;
 use gpui_component::setting::{SettingField, SettingGroup, SettingItem, SettingPage};
+use gpui_kit::*;
 
 use super::appearance::{font_size_field, radius_field, theme_field};
 use super::features::features_page;

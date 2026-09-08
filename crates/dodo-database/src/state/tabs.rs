@@ -14,7 +14,7 @@
 //! would need two selections on screen and there is one, so a tab that
 //! remembered its own would disagree with the panel beside it.
 //!
-//! Each tab has its **own** [`Entity<InputState>`], the way the API Explorer's
+//! Each tab has its **own** [`Entity<EditorState>`], the way the API Explorer's
 //! request tabs do, because an editor carries a cursor, a scroll position and
 //! an undo history that a shared one would throw away on every switch. The
 //! result grid is shared — only one is ever on screen — and the view re-fills
@@ -27,8 +27,8 @@
 //! a puzzle rather than a convenience. `state::history` keeps every statement
 //! that actually *ran* for the session, which is the part worth getting back.
 
-use gpui::{Entity, Task};
-use gpui_component::input::InputState;
+use gpui_component::input::EditorState;
+use gpui_kit::{Entity, Task};
 
 use crate::i18n::Str;
 use crate::services::CancelHandle;
@@ -44,7 +44,7 @@ pub struct QueryTab {
     /// The number in the tab's default title. Counts up for the session, so
     /// closing "Query 2" does not make the next new tab claim its name.
     pub number: usize,
-    pub editor: Entity<InputState>,
+    pub editor: Entity<EditorState>,
     /// The grammar this tab's editor is pointed at. Per tab, because the guard
     /// is against re-pointing an *editor* on every frame and each tab has its
     /// own — see [`EditorLanguage`]'s module doc for what that cost round 1.
@@ -78,7 +78,7 @@ pub struct QueryTab {
 }
 
 impl QueryTab {
-    pub fn new(id: u64, number: usize, editor: Entity<InputState>) -> Self {
+    pub fn new(id: u64, number: usize, editor: Entity<EditorState>) -> Self {
         Self {
             id,
             number,

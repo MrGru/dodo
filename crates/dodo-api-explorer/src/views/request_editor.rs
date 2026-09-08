@@ -1,6 +1,5 @@
 //! The request bar and the Params / Headers / Body / Auth / Scripts tabs.
 
-use gpui::{Context, Entity, IntoElement, ParentElement as _, Styled as _, Window, div, px};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
 use gpui_component::popover::Popover;
@@ -9,6 +8,7 @@ use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, StyledExt as _,
     h_flex, v_flex,
 };
+use gpui_kit::{Context, Entity, IntoElement, ParentElement as _, Styled as _, Window, div, px};
 
 use crate::app_icon::AppIcon;
 use crate::components::key_value_table::key_value_table;
@@ -23,7 +23,7 @@ impl ApiExplorer {
         &self,
         _window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let Some(tab) = self.active_tab().cloned() else {
             return div().size_full().into_any_element();
         };
@@ -303,7 +303,7 @@ impl ApiExplorer {
         &self,
         tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         match tab.read(cx).request.active_tab {
             // Only the multipart form body has typed rows; a query parameter
             // and a header are always text.

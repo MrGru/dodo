@@ -1,8 +1,8 @@
 use std::{cell::Cell, rc::Rc};
 
-use gpui::*;
 use gpui_component::setting::SettingField;
 use gpui_component::switch::Switch;
+use gpui_kit::*;
 
 use crate::api_explorer::ScriptPolicy;
 use crate::api_explorer::models::script_consent::ConsentPolicy;

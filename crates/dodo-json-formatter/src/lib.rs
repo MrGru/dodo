@@ -5,13 +5,13 @@
 
 use dodo_i18n as i18n;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
-use gpui_component::input::{Input, InputState, Position};
+use gpui_component::input::{Editor, EditorState, Position};
 use gpui_component::select::{Select, SelectState};
 use gpui_component::{ActiveTheme, IndexPath, Sizable, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use serde::Serialize as _;
 
@@ -28,7 +28,7 @@ const INDENT_OPTIONS: [usize; 3] = [2, 3, 4];
 /// The error is kept as a [`Str`] rather than a rendered string so that it is
 /// re-translated when the language changes while it is on screen.
 pub struct JsonFormatter {
-    input: Entity<InputState>,
+    input: Entity<EditorState>,
     indent: Entity<SelectState<Vec<SharedString>>>,
     error: Option<Str>,
     /// The language the editor placeholder and dropdown labels were built for.
@@ -42,10 +42,8 @@ impl JsonFormatter {
         let language = Language::current(cx);
         let placeholder = t(json_formatter::Text::JsonPlaceholder, cx);
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
-                .multi_line(true)
-                .line_number(true)
+            EditorState::new(window, cx)
+                .language("json")
                 .placeholder(placeholder)
         });
 
@@ -223,7 +221,7 @@ impl Render for JsonFormatter {
                     .border_1()
                     .border_color(cx.theme().border)
                     .child(
-                        Input::new(&self.input)
+                        Editor::new(&self.input)
                             .font_family(cx.theme().mono_font_family.clone())
                             .text_size(cx.theme().mono_font_size)
                             .size_full(),

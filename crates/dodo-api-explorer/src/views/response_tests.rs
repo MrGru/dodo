@@ -23,13 +23,13 @@
 //! paints both red; the distinction is what tells the user whether their API is
 //! wrong or their script is.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
+use gpui_component::button::Button;
+use gpui_component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
     Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, div, px,
 };
-use gpui_component::button::Button;
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 
 use crate::app_icon::AppIcon;
 use crate::components::empty_state::empty_state;
@@ -47,7 +47,7 @@ impl ApiExplorer {
         &self,
         tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let state = tab.read(cx);
         let report = &state.response.tests;
         let has_script = is_runnable(&state.request.post_response_script.read(cx).value());
@@ -97,7 +97,7 @@ impl ApiExplorer {
         // Built eagerly rather than in a `children` closure: every row needs
         // `cx` mutably, and a closure that captured it could not hand the
         // element back out.
-        let mut rows: Vec<gpui::AnyElement> = Vec::new();
+        let mut rows: Vec<gpui_kit::AnyElement> = Vec::new();
         if grouped {
             for phase in ScriptPhase::ALL {
                 let of_phase: Vec<&TestResult> = results
@@ -159,7 +159,7 @@ impl ApiExplorer {
         &self,
         tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let tab = tab.clone();
 
         v_flex()
@@ -359,7 +359,7 @@ impl ApiExplorer {
 }
 
 /// The colour a summary reads as: its worst outcome.
-fn summary_colour(summary: &TestSummary, cx: &Context<ApiExplorer>) -> gpui::Hsla {
+fn summary_colour(summary: &TestSummary, cx: &Context<ApiExplorer>) -> gpui_kit::Hsla {
     if summary.failed > 0 {
         cx.theme().danger
     } else if summary.errored > 0 {

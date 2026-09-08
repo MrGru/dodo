@@ -101,7 +101,7 @@
 //!
 //! # Why this file is generic and names no UI framework
 //!
-//! What it caches is a `gpui::Path<Pixels>` — and if that type appeared here,
+//! What it caches is a `gpui_kit::Path<Pixels>` — and if that type appeared here,
 //! the byte accounting, the eviction order, the pan policy and the zoom band
 //! would all need a window to test. So the cache is generic over
 //! [`CachedGeometry`], a three-method trait describing what a built path can
@@ -300,7 +300,7 @@ impl ScreenAnchor {
 ///
 /// Three methods, because that is genuinely all the policy above needs — and
 /// because a wider trait would be a place for GPUI's vocabulary to leak back
-/// in. `render::painter` implements it for `gpui::Path<Pixels>`; the tests here
+/// in. `render::painter` implements it for `gpui_kit::Path<Pixels>`; the tests here
 /// implement it for a `Vec<Vec2>`.
 pub trait CachedGeometry {
     /// The vertices this holds. **Denominates the byte bound** — see
@@ -837,7 +837,7 @@ mod tests {
     use super::*;
     use crate::budgets::{RenderBackend, for_backend};
 
-    /// A stand-in for `gpui::Path<Pixels>`: a vertex buffer and nothing else,
+    /// A stand-in for `gpui_kit::Path<Pixels>`: a vertex buffer and nothing else,
     /// which is exactly what the cache's policy actually operates on.
     #[derive(Debug, Clone, PartialEq)]
     struct FakePath(Vec<Vec2>);

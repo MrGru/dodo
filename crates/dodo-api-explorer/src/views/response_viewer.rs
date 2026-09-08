@@ -2,17 +2,17 @@
 
 use std::time::Duration;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::Input;
+use gpui_component::input::Editor;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tag::Tag;
 use gpui_component::{
     ActiveTheme as _, Selectable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    StatefulInteractiveElement as _, Styled as _, div, px,
 };
 
 use crate::app_icon::AppIcon;
@@ -27,7 +27,7 @@ use crate::state::tab::RequestTabState;
 use crate::views::explorer::ApiExplorer;
 
 impl ApiExplorer {
-    pub(super) fn render_response_viewer(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(super) fn render_response_viewer(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let Some(tab) = self.active_tab().cloned() else {
             return div().size_full().into_any_element();
         };
@@ -140,7 +140,7 @@ impl ApiExplorer {
         elapsed: Duration,
         size_bytes: usize,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         h_flex()
             .items_center()
             .gap_3()
@@ -337,7 +337,7 @@ impl ApiExplorer {
                             .exchange()
                             .map(|exchange| exchange.body.clone());
                         if let Some(body) = body {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(body));
+                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(body));
                         }
                     })),
             )
@@ -480,7 +480,7 @@ impl ApiExplorer {
             })
             .child(
                 div().flex_1().min_h_0().child(
-                    Input::new(&body)
+                    Editor::new(&body)
                         .font_family(cx.theme().mono_font_family.clone())
                         .text_size(cx.theme().mono_font_size)
                         .size_full(),
@@ -562,7 +562,7 @@ impl ApiExplorer {
 
         // Built eagerly so the row elements do not keep `cx` borrowed as a lazy
         // iterator would.
-        let mut row_elements: Vec<gpui::AnyElement> = Vec::new();
+        let mut row_elements: Vec<gpui_kit::AnyElement> = Vec::new();
         for (index, row) in visible.rows.into_iter().enumerate() {
             row_elements.push(
                 self.json_tree_row(tab, &source, index, row, cx)
@@ -781,7 +781,7 @@ impl ApiExplorer {
 
 /// The theme colour a scalar is drawn in, by type, matching the code editor's
 /// own JSON highlighting closely enough to read as the same document.
-fn scalar_color(kind: ScalarKind, cx: &Context<ApiExplorer>) -> gpui::Hsla {
+fn scalar_color(kind: ScalarKind, cx: &Context<ApiExplorer>) -> gpui_kit::Hsla {
     match kind {
         ScalarKind::String => cx.theme().success,
         ScalarKind::Number => cx.theme().info,

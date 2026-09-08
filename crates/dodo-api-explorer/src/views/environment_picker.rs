@@ -26,15 +26,15 @@
 //! tooltip naming the scope each value came from. It appears only when there is
 //! something to preview, so a request with no variables pays nothing.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::popover::Popover;
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, div, px,
+};
 
 use crate::app_icon::AppIcon;
 use crate::i18n::{api_variables, t};
@@ -45,7 +45,7 @@ use crate::views::explorer::ApiExplorer;
 
 /// How wide the picker trigger may grow before its label truncates. Fixed so
 /// that a long environment name cannot push the preview off the row.
-const PICKER_MAX_W: gpui::Pixels = px(180.);
+const PICKER_MAX_W: gpui_kit::Pixels = px(180.);
 
 impl ApiExplorer {
     /// The row under the URL: the environment picker, then the preview.
@@ -94,7 +94,7 @@ impl ApiExplorer {
                 cx.notify();
             }));
 
-        let rows: Vec<gpui::AnyElement> = environments
+        let rows: Vec<gpui_kit::AnyElement> = environments
             .iter()
             .map(|environment| {
                 let id = environment.id;
@@ -209,7 +209,7 @@ impl ApiExplorer {
     /// and the editor cannot read it back during construction.
     pub(super) fn open_environments_editor(
         &mut self,
-        window: &mut gpui::Window,
+        window: &mut gpui_kit::Window,
         cx: &mut Context<Self>,
     ) {
         let scope = self.environments.active_id();
@@ -227,7 +227,7 @@ impl ApiExplorer {
         &self,
         tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
+    ) -> Option<gpui_kit::AnyElement> {
         let url = tab.read(cx).request.url.read(cx).value().to_string();
         if !has_reference(&url) {
             return None;

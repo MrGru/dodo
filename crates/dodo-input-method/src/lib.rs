@@ -40,7 +40,7 @@ use dodo_ime_core::{ActiveLanguages, LanguageId};
 use futures_channel::mpsc::{UnboundedSender, unbounded};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use futures_util::StreamExt as _;
-use gpui::{App, AsyncApp, BorrowAppContext as _, Global, Task};
+use gpui_kit::{App, AsyncApp, BorrowAppContext as _, Global, Task};
 
 use crate::i18n::Str;
 #[cfg(target_os = "macos")]

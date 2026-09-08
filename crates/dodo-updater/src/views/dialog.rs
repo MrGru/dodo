@@ -45,16 +45,16 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::Duration;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Task,
-    Window, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::progress::Progress;
 use gpui_component::{ActiveTheme as _, Icon, StyledExt as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    AnyElement, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Task,
+    Window, div, px,
+};
 
 use crate::app_icon::AppIcon;
 use crate::build_info;
@@ -70,12 +70,12 @@ use crate::{Updater, UpdaterServices};
 /// Both *preferred*: [`card_size`] shrinks them for a small window, exactly as
 /// `docker::views::detail` does — `Dialog` computes `left` from the width it is
 /// given, so an over-wide card is pushed off both edges rather than clipped.
-const PANEL_W: gpui::Pixels = px(560.);
-const PANEL_H: gpui::Pixels = px(340.);
-const PANEL_MARGIN: gpui::Pixels = px(24.);
+const PANEL_W: gpui_kit::Pixels = px(560.);
+const PANEL_H: gpui_kit::Pixels = px(340.);
+const PANEL_MARGIN: gpui_kit::Pixels = px(24.);
 /// `Dialog`'s own horizontal padding (`Edges::all(16)`), subtracted to get the
 /// body's width from the card's.
-const DIALOG_PADDING_X: gpui::Pixels = px(32.);
+const DIALOG_PADDING_X: gpui_kit::Pixels = px(32.);
 
 /// How often the UI task drains events the background job produced.
 ///
@@ -169,7 +169,7 @@ fn present(view: Entity<UpdateDialog>, window: &mut Window, cx: &mut App) {
     });
 }
 
-fn card_size(window: &Window) -> (gpui::Pixels, gpui::Pixels) {
+fn card_size(window: &Window) -> (gpui_kit::Pixels, gpui_kit::Pixels) {
     card_size_for(window.viewport_size())
 }
 
@@ -180,7 +180,9 @@ fn card_size(window: &Window) -> (gpui::Pixels, gpui::Pixels) {
 /// worth doing rather than eyeballing: `Dialog` centres the card by computing
 /// `left` from the width it was given, so a card wider than the window is not
 /// merely clipped — it is pushed off *both* edges, and the buttons go with it.
-fn card_size_for(viewport: gpui::Size<gpui::Pixels>) -> (gpui::Pixels, gpui::Pixels) {
+fn card_size_for(
+    viewport: gpui_kit::Size<gpui_kit::Pixels>,
+) -> (gpui_kit::Pixels, gpui_kit::Pixels) {
     (
         PANEL_W.min(viewport.width - PANEL_MARGIN * 2.),
         PANEL_H.min(viewport.height - PANEL_MARGIN * 4.),
@@ -381,8 +383,8 @@ impl UpdateDialog {
 /// dialog is gone is what makes closing it stop the pump.
 async fn pump(
     rx: Receiver<UpdateEvent>,
-    this: gpui::WeakEntity<UpdateDialog>,
-    cx: &mut gpui::AsyncApp,
+    this: gpui_kit::WeakEntity<UpdateDialog>,
+    cx: &mut gpui_kit::AsyncApp,
 ) {
     loop {
         match rx.try_recv() {
@@ -773,7 +775,7 @@ pub(crate) fn default_services() -> UpdaterServices {
 #[cfg(test)]
 mod tests {
     use super::{DIALOG_PADDING_X, PANEL_H, PANEL_MARGIN, PANEL_W, card_size_for, format_size};
-    use gpui::{px, size};
+    use gpui_kit::{px, size};
 
     /// The narrow end. dodo opens at 900x620 and its window can be dragged well
     /// below that; the card has to shrink rather than be pushed off-centre.

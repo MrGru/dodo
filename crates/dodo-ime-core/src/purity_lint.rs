@@ -12,7 +12,7 @@
 //! where a single `use crate::i18n::Str` would have compiled perfectly well and
 //! nothing but this file would have objected. It is its own crate now, so the
 //! compiler objects first: `crate::` reaches only into this crate, and `use
-//! gpui::…` fails to resolve because `Cargo.toml` does not name it.
+//! gpui_kit::…` fails to resolve because `Cargo.toml` does not name it.
 //!
 //! # What `Cargo.toml` cannot say, and this still can
 //!
@@ -48,7 +48,7 @@
 //! By reading the source, like dodo's own `i18n_lint` — the module this is
 //! modelled on. It looks at the root segment of every `use`, at `extern crate`,
 //! and at a short list of names that would be a violation even without a `use`
-//! (a fully-qualified `gpui::px(…)` needs no import). It is a guard, not a
+//! (a fully-qualified `gpui_kit::px(…)` needs no import). It is a guard, not a
 //! proof: a macro could still smuggle a path in. Nothing here uses one.
 
 /// Every source file of the crate, embedded so the check needs no working
@@ -120,14 +120,14 @@ const TEST_ONLY: [&str; 2] = [
 const ALLOWED_ROOTS: [&str; 5] = ["std", "crate", "super", "self", "unicode_normalization"];
 
 /// Names that are a violation wherever they appear, `use` or not — a
-/// fully-qualified `gpui::px(1.)` imports nothing.
+/// fully-qualified `gpui_kit::px(1.)` imports nothing.
 ///
 /// Not exhaustive and not trying to be: every one of these is caught by the
 /// `use` check as well. They are here to catch the fully-qualified spelling,
 /// which is the one shape that would otherwise slip past. `dodo::` is the
 /// sideways case: the workspace is where a sibling crate could be reached for.
 const FORBIDDEN_NAMES: [&str; 7] = [
-    "gpui::",
+    "gpui_kit::",
     "gpui_component",
     "dodo::",
     "dodo_ime_",
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(imported_path("let used = 1;"), None);
         // A commented-out import is not an import; `findings_in` skips the
         // line before it ever gets here.
-        assert_eq!(imported_path("// use gpui::*;"), None);
+        assert_eq!(imported_path("// use gpui_kit::*;"), None);
 
         assert_eq!(root_of("crate::core"), "crate");
         assert_eq!(root_of("::std::fmt"), "std");
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn the_forbidden_shapes_are_caught() {
         let cases = [
-            "use gpui::*;",
+            "use gpui_kit::*;",
             "use gpui_component::Icon;",
             // Sideways: a sibling crate in the workspace, which `Cargo.toml`
             // would happily accept as one added line.
@@ -290,7 +290,7 @@ mod tests {
             "use serde::Serialize;",
             "use regex::Regex;",
             "use std::collections::HashMap;\nextern crate alloc;",
-            "let size = gpui::px(4.);",
+            "let size = gpui_kit::px(4.);",
             "#[derive(serde::Serialize)]",
         ];
         for source in cases {
@@ -310,8 +310,8 @@ mod tests {
             "use crate::core::{EngineAction, KeyEvent};",
             "use unicode_normalization::UnicodeNormalization;",
             "use unicode_normalization::char::is_combining_mark;",
-            "//! mentions crate::i18n and gpui:: in prose",
-            "// use gpui::*; in a commented-out line",
+            "//! mentions crate::i18n and gpui_kit:: in prose",
+            "// use gpui_kit::*; in a commented-out line",
         ];
         for source in cases {
             assert!(

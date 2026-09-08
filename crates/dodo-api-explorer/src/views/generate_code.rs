@@ -41,16 +41,16 @@
 //!
 //! [`services::codegen`]: crate::services::codegen
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::checkbox::Checkbox;
+use gpui_component::input::{Editor, EditorState};
+use gpui_component::tab::{Tab, TabBar};
+use gpui_component::{ActiveTheme as _, Icon, WindowExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
     App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
     ParentElement as _, Pixels, Render, Styled as _, Window, div, px,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Input, InputState};
-use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{ActiveTheme as _, Icon, WindowExt as _, h_flex, v_flex};
 
 use crate::app_icon::AppIcon;
 use crate::i18n::{Str, api_explorer, api_scripts, t};
@@ -106,7 +106,7 @@ pub struct GenerateCodeDialog {
     /// The snippet, in the same code editor the Scripts tab uses — so a generated
     /// JavaScript body is highlighted and a long line soft-wraps rather than
     /// running off the card.
-    editor: Entity<InputState>,
+    editor: Entity<EditorState>,
     /// The secret variables the snippet left as placeholders, as the last
     /// generation reported them.
     withheld: Vec<String>,
@@ -128,10 +128,8 @@ impl GenerateCodeDialog {
     ) -> Self {
         let has_secrets = !variables.secret_names().is_empty();
         let editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(CodeTarget::default().editor_language())
-                .multi_line(true)
-                .line_number(true)
+            EditorState::new(window, cx)
+                .language(CodeTarget::default().editor_language())
                 .soft_wrap(true)
         });
 
@@ -242,7 +240,7 @@ impl Render for GenerateCodeDialog {
                     .border_1()
                     .border_color(cx.theme().border)
                     .child(
-                        Input::new(&self.editor)
+                        Editor::new(&self.editor)
                             .font_family(cx.theme().mono_font_family.clone())
                             .text_size(cx.theme().mono_font_size)
                             .size_full(),
@@ -332,7 +330,7 @@ impl GenerateCodeDialog {
     }
 
     /// The substitution failure, in the same wording the send path uses.
-    fn error_banner(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    fn error_banner(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
         let error = self.error.clone()?;
         Some(
             h_flex()

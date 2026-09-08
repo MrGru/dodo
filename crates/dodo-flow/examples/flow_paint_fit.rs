@@ -64,7 +64,7 @@ use dodo_flow::{
     geometry::Vec2,
     render::{painter::build_path, plan::PathPaint, shapes::Outline},
 };
-use gpui::{
+use gpui_kit::{
     AppContext, Background, Context, IntoElement, ParentElement, Path, Pixels, QuitMode, Render,
     Styled, Window, WindowOptions, canvas, div, hsla, px, size,
 };
@@ -349,13 +349,13 @@ fn report(samples: &[Sample]) {
 }
 
 fn main() {
-    gpui_platform::application()
+    gpui_kit::application()
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx| {
             cx.activate(true);
             let options = WindowOptions {
-                window_bounds: Some(gpui::WindowBounds::Windowed(gpui::Bounds {
-                    origin: gpui::point(px(80.0), px(80.0)),
+                window_bounds: Some(gpui_kit::WindowBounds::Windowed(gpui_kit::Bounds {
+                    origin: gpui_kit::point(px(80.0), px(80.0)),
                     size: size(px(1440.0), px(900.0)),
                 })),
                 ..Default::default()

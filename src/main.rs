@@ -251,8 +251,9 @@ mod updater_build_info {
 }
 mod window_icon;
 
-use gpui::*;
+// GPUI Kit 0.6 is the application facade and owns the GPUI type universe.
 use gpui_component::*;
+use gpui_kit::*;
 
 use crate::{app::DodoApp, assets::Assets};
 
@@ -281,13 +282,13 @@ fn main() {
     // failed to come up would leave a process with no window and no icon —
     // unquittable except from Activity Monitor. Deriving the mode from the icon
     // actually existing makes that state unreachable.
-    let app = gpui_platform::application()
+    let app = gpui_kit::application()
         .with_assets(Assets)
         .with_quit_mode(QuitMode::LastWindowClosed);
 
     app.run(move |cx| {
-        // This must be called before using any GPUI Component features.
-        gpui_component::init(cx);
+        // This must be called before using any GPUI Kit component features.
+        gpui_kit::init(cx);
         // Registers the vendored themes; needs the registry `init` just created.
         settings::init(cx);
         // Binds the API Explorer's send shortcut. Like `settings::init`, it has

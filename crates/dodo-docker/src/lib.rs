@@ -145,7 +145,7 @@ pub(crate) mod views;
 
 use std::time::Duration;
 
-use gpui::{App, KeyBinding, actions};
+use gpui_kit::{App, KeyBinding, actions};
 
 pub use views::{DockerPage, DockerView};
 

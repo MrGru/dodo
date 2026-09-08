@@ -1,4 +1,4 @@
-// Deliberately not `use super::*`: that pulls in `use gpui::*`, whose `test`
+// Deliberately not `use super::*`: that pulls in `use gpui_kit::*`, whose `test`
 // re-export shadows the standard attribute. See the dodo-build-validate skill.
 use std::cell::Cell;
 
@@ -137,14 +137,14 @@ fn start_with_os_write_transitions_keep_only_trustworthy_values() {
 /// width, [`a_side_by_side_row_would_not_fit`] fails and this whole workaround
 /// can go.
 pub(super) mod row_layout {
-    use gpui::prelude::FluentBuilder as _;
-    use gpui::{
+    use gpui_component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
+    use gpui_kit::prelude::FluentBuilder as _;
+    use gpui_kit::{
         AppContext as _, Axis, Bounds, Context, InteractiveElement as _, IntoElement,
         ParentElement as _, Pixels, Render, SharedString, StyleRefinement, Styled as _,
         TestAppContext, VisualTestContext, Window, WindowBounds, WindowOptions, div, point, px,
         size,
     };
-    use gpui_component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
 
     use super::super::{DIALOG_WIDTH, SIDEBAR_WIDTH};
 
@@ -167,7 +167,7 @@ pub(super) mod row_layout {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             let title = SharedString::from("Database URI pattern");
             let field = SettingField::render(|options, _, _| {
-                let horizontal = matches!(options.layout, Axis::Horizontal);
+                let horizontal = matches!(options.layout(), Axis::Horizontal);
                 div()
                     .debug_selector(|| "field".into())
                     .h(px(32.))
@@ -251,7 +251,7 @@ pub(super) mod row_layout {
         ]
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn a_pattern_row_stays_inside_the_card(cx: &mut TestAppContext) {
         for width in widths() {
             let (field, panel) = edges(cx, width, true);
@@ -265,7 +265,7 @@ pub(super) mod row_layout {
     /// Why [`super::super::quick_nav::input_item`] exists. Not a wish — if this ever stops
     /// overflowing, the stacked layout is no longer load-bearing and the row can
     /// go back to sitting beside its label.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn a_side_by_side_row_would_not_fit(cx: &mut TestAppContext) {
         let width = DIALOG_WIDTH - CARD_CHROME;
         let (field, panel) = edges(cx, width, false);

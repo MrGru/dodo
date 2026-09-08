@@ -42,8 +42,8 @@
 
 use std::marker::PhantomData;
 
-use gpui::{App, Global, Window};
 use gpui_component::WindowExt as _;
+use gpui_kit::{App, Global, Window};
 
 /// A dialog of which there is only ever one on screen.
 ///
@@ -116,7 +116,7 @@ fn set_on_screen<K: SingleDialog>(on_screen: bool, cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{App, TestAppContext};
+    use gpui_kit::{App, TestAppContext};
 
     use super::{OpenDecision, SingleDialog, claim_with, decide_open, release};
 
@@ -175,7 +175,7 @@ mod tests {
     }
 
     /// The defect end to end: two open requests, one dialog.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn two_open_requests_leave_exactly_one_dialog(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let mut stack = Stack::default();
@@ -187,7 +187,7 @@ mod tests {
 
     /// The other half of the acceptance: the reused dialog closes cleanly on one
     /// dismiss, and the stack is balanced — and empty — afterwards.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn one_dismissal_empties_the_stack_and_frees_the_slot(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let mut stack = Stack::default();

@@ -1,8 +1,6 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
 use gpui_component::WindowExt as _;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _};
 use gpui_component::dialog::DialogButtonProps;
@@ -11,6 +9,8 @@ use gpui_component::table::{DataTable, TableState};
 use gpui_component::{
     ActiveTheme, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::app_icon::AppIcon;
 use crate::core::cancellation::CancellationToken;
@@ -1781,8 +1781,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
 
-    use gpui::{AppContext as _, TestAppContext};
     use gpui_component::table::TableDelegate as _;
+    use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::{CleanerView, apply_latest_progress};
     use crate::core::category::CleanerCategory;
@@ -1875,7 +1875,7 @@ mod tests {
         );
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn landing_rows_does_not_change_the_static_column_layout(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
         let window = cx.add_window(CleanerView::new);

@@ -48,14 +48,14 @@
 //! horizontal scrolling, and it is why one full-width UUID cannot push the rest
 //! of the result off the right of the window.
 
-use gpui::{
+use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
+use gpui_component::table::{Column, TableDelegate, TableState};
+use gpui_component::{ActiveTheme as _, Size, StyledExt as _, h_flex, v_flex};
+use gpui_kit::{
     App, ClipboardItem, Context, Div, Edges, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, SharedString, Stateful, Styled as _, Window, div, px, relative,
     rems,
 };
-use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
-use gpui_component::table::{Column, TableDelegate, TableState};
-use gpui_component::{ActiveTheme as _, Size, StyledExt as _, h_flex, v_flex};
 
 use crate::app_icon::AppIcon;
 use crate::i18n::{db_query, t};

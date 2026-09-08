@@ -20,15 +20,15 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Window, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::{
     ActiveTheme as _, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 
 use crate::core::item::{CleanableItem, CleanableItemId};
@@ -41,8 +41,8 @@ use crate::macos::applications::review::{self, UninstallReview, UninstallReviewE
 
 use super::CleanerView;
 
-const WIDTH: gpui::Pixels = px(640.);
-const PADDING: gpui::Pixels = px(32.);
+const WIDTH: gpui_kit::Pixels = px(640.);
+const PADDING: gpui_kit::Pixels = px(32.);
 
 enum ReviewState {
     Loading,
@@ -85,7 +85,7 @@ struct UninstallReviewDialog {
     page: Entity<CleanerView>,
     state: ReviewState,
     selected: HashSet<CleanableItemId>,
-    task: Option<gpui::Task<()>>,
+    task: Option<gpui_kit::Task<()>>,
 }
 
 impl UninstallReviewDialog {
@@ -164,7 +164,7 @@ fn default_selection(review: &UninstallReview) -> HashSet<CleanableItemId> {
         .collect()
 }
 
-fn confidence_label(confidence: MatchConfidence, cx: &App) -> gpui::SharedString {
+fn confidence_label(confidence: MatchConfidence, cx: &App) -> gpui_kit::SharedString {
     let str = match confidence {
         MatchConfidence::Confirmed => cleaner::Text::ConfidenceConfirmed,
         MatchConfidence::High => cleaner::Text::ConfidenceHigh,

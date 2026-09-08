@@ -102,7 +102,7 @@ impl RuntimeStatus {
     /// uses: green for Running, gray for a plain Stopped/NotInstalled/
     /// Unsupported, and the muted/warning split reserved for Unknown so a
     /// genuinely unreadable result still stands out from an ordinary "off".
-    pub fn color(&self, cx: &gpui::App) -> gpui::Hsla {
+    pub fn color(&self, cx: &gpui_kit::App) -> gpui_kit::Hsla {
         use gpui_component::ActiveTheme as _;
         match self {
             RuntimeStatus::Running => cx.theme().success,

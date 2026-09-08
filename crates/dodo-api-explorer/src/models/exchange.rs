@@ -3,8 +3,8 @@
 
 use std::time::Duration;
 
-use gpui::{App, Hsla};
 use gpui_component::ActiveTheme as _;
+use gpui_kit::{App, Hsla};
 
 use crate::i18n::{Str, api_response};
 

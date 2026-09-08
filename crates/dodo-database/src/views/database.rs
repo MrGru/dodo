@@ -52,18 +52,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::{
-    App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, Hsla,
-    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, ScrollStrategy,
-    SharedString, Styled as _, Subscription, Task, Window, div, px,
-};
 use gpui_component::button::ButtonVariant;
 use gpui_component::dialog::DialogButtonProps;
-use gpui_component::input::InputState;
+use gpui_component::input::EditorState;
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::table::TableState;
 use gpui_component::tree::{TreeEvent, TreeItem, TreeState};
 use gpui_component::{ActiveTheme as _, WindowExt as _};
+use gpui_kit::{
+    App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, Hsla,
+    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, ScrollStrategy,
+    SharedString, Styled as _, Subscription, Task, Window, div, px,
+};
 
 use crate::app_icon::AppIcon;
 use crate::i18n::{Language, LanguageExt, Str, database, db_catalog, db_connection, db_query, t};
@@ -238,15 +238,13 @@ impl DatabaseView {
 
     /// Builds one editor. Every tab gets its own, so a switch keeps each tab's
     /// cursor, scroll position and undo history.
-    fn new_editor(&self, window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
+    fn new_editor(&self, window: &mut Window, cx: &mut Context<Self>) -> Entity<EditorState> {
         let placeholder = t(database::Text::QueryPlaceholder, cx);
         cx.new(|cx| {
-            InputState::new(window, cx)
+            EditorState::new(window, cx)
                 // `code_editor` first: it *replaces* the mode, so anything set
                 // before it is discarded.
-                .code_editor(Engine::PostgreSql.editor_language())
-                .multi_line(true)
-                .line_number(true)
+                .language(Engine::PostgreSql.editor_language())
                 .soft_wrap(false)
                 .placeholder(placeholder)
         })
@@ -2030,7 +2028,7 @@ impl DatabaseView {
 
         // Every tab, not just the active one: a background tab whose editor was
         // never re-pointed would draw black text the moment it is switched to.
-        let editors: Vec<(usize, Entity<InputState>)> = self
+        let editors: Vec<(usize, Entity<EditorState>)> = self
             .tabs
             .tabs()
             .iter()
@@ -2315,8 +2313,8 @@ impl Render for DatabaseView {
 mod tests {
     use std::sync::Arc;
 
-    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
     use gpui_component::tree::TreeItem;
+    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 
     use super::{DatabaseView, same_target};
     use crate::models::connection::{ConnectionDocument, ConnectionProfile, SslMode};
@@ -2490,7 +2488,7 @@ mod tests {
         assert!(!same_target(&file, &saved(99, "other")));
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn load_saved_populates_tree_and_new_connections_remain_visible(cx: &mut TestAppContext) {
         let (database, mut cx) = mount(cx);
         adopt(&database, vec![saved(7, "Saved SQLite")], Some(7), &mut cx);
@@ -2515,7 +2513,7 @@ mod tests {
     /// covers is the composition — the real page, the real store, the profile
     /// list adopted through the real asynchronous load, and the widget items
     /// the panel actually draws from.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn confirming_delete_removes_the_row_the_profile_and_the_saved_document(
         cx: &mut TestAppContext,
     ) {

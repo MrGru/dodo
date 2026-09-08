@@ -29,14 +29,14 @@
 //! consequences those record: the body is an **entity**, and its width is
 //! **stated** rather than `w_full`.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::input::{Editor, EditorState};
+use gpui_component::{ActiveTheme as _, StyledExt as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement as _,
     Pixels, Render, Styled as _, Window, div, px,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme as _, StyledExt as _, WindowExt as _, h_flex, v_flex};
 
 use crate::i18n::{Str, api_scripts, t};
 use crate::models::script::is_runnable;
@@ -110,7 +110,7 @@ struct ScriptConsentDialog {
     /// is shown under: the same widget the Scripts tab edits them in, so the
     /// text the user approves looks exactly like the text they would have read
     /// there — highlighted the same way, too.
-    scripts: Vec<(Str, Entity<InputState>)>,
+    scripts: Vec<(Str, Entity<EditorState>)>,
     /// Whether an earlier version of these scripts was approved and has since
     /// been edited.
     re_armed: bool,
@@ -140,10 +140,8 @@ impl ScriptConsentDialog {
             editors.push((
                 label.into(),
                 cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .code_editor("javascript")
-                        .multi_line(true)
-                        .line_number(true)
+                    EditorState::new(window, cx)
+                        .language("javascript")
                         .soft_wrap(true)
                         .default_value(source)
                 }),
@@ -230,7 +228,7 @@ impl Render for ScriptConsentDialog {
                             .border_1()
                             .border_color(cx.theme().border)
                             .child(
-                                Input::new(editor)
+                                Editor::new(editor)
                                     .font_family(cx.theme().mono_font_family.clone())
                                     .text_size(cx.theme().mono_font_size)
                                     .size_full(),

@@ -66,7 +66,7 @@
 //! same keystrokes twice, which GPUI resolves to the same action and which
 //! nothing depends on.
 
-use gpui::{Action, App, KeyBinding, actions};
+use gpui_kit::{Action, App, KeyBinding, actions};
 
 use crate::{
     commands::keys,
@@ -168,7 +168,7 @@ mod tests {
         views::flow::{KEY_CONTEXT, TYPING_CONTEXT},
     };
     use dodo_paths::HostOs;
-    use gpui::{KeyBinding, KeyContext};
+    use gpui_kit::{KeyBinding, KeyContext};
 
     /// **Every host's bindings, actually built.**
     ///
@@ -278,7 +278,7 @@ mod tests {
     /// types a line break instead of finishing the label.
     #[test]
     fn the_commit_keystroke_outranks_the_field_s_own_line_break() {
-        use gpui::{Keymap, Keystroke};
+        use gpui_kit::{Keymap, Keystroke};
 
         for host in [HostOs::MacOs, HostOs::Windows, HostOs::Unix] {
             let row = keys::for_host(host)

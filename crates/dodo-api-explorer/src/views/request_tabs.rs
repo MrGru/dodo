@@ -3,21 +3,21 @@
 //! Each tab shows its method in the method's colour, the request's name, an
 //! unsaved dot, and a close button; the `+` at the end opens another.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Styled as _,
-    div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Styled as _,
+    div, px,
+};
 
 use crate::app_icon::AppIcon;
 use crate::i18n::{api_explorer, t};
 use crate::views::explorer::ApiExplorer;
 
 impl ApiExplorer {
-    pub(super) fn render_tab_strip(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(super) fn render_tab_strip(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let active = self.ui.active_tab;
 
         let tabs: Vec<Tab> = self

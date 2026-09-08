@@ -46,15 +46,15 @@
 //! nothing at all, so the user is never left guessing which fields came from
 //! their paste.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, IntoElement,
-    ParentElement as _, Pixels, Render, SharedString, Styled as _, Task, Window, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, IntoElement,
+    ParentElement as _, Pixels, Render, SharedString, Styled as _, Task, Window, div, px,
 };
 
 use crate::app_icon::AppIcon;

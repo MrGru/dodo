@@ -1,21 +1,21 @@
 //! The one small dialog used to create and edit a saved query.
 
-use gpui::{
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::input::{Editor, EditorState, Input, InputState};
+use gpui_component::{ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, v_flex};
+use gpui_kit::{
     App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
     Window, div, px,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, v_flex};
 
 use crate::components::notice::{Tone, notice};
 use crate::i18n::{Str, db_connection, db_query, t};
 use crate::models::library::SavedQuery;
 use crate::views::database::DatabaseView;
 
-const WIDTH: gpui::Pixels = px(680.);
-const HEIGHT: gpui::Pixels = px(440.);
-const PADDING: gpui::Pixels = px(32.);
+const WIDTH: gpui_kit::Pixels = px(680.);
+const HEIGHT: gpui_kit::Pixels = px(440.);
+const PADDING: gpui_kit::Pixels = px(32.);
 
 pub fn open(
     page: Entity<DatabaseView>,
@@ -45,7 +45,7 @@ struct SavedQueryForm {
     page: Entity<DatabaseView>,
     draft: SavedQuery,
     name: Entity<InputState>,
-    statement: Entity<InputState>,
+    statement: Entity<EditorState>,
     error: Option<Str>,
 }
 
@@ -62,10 +62,8 @@ impl SavedQueryForm {
                 .default_value(draft.name.clone())
         });
         let statement = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(draft.scope.engine.editor_language())
-                .multi_line(true)
-                .line_number(true)
+            EditorState::new(window, cx)
+                .language(draft.scope.engine.editor_language())
                 .soft_wrap(false)
                 .default_value(draft.statement.clone())
         });
@@ -149,7 +147,7 @@ impl Render for SavedQueryForm {
                             .border_1()
                             .border_color(cx.theme().border)
                             .child(
-                                Input::new(&self.statement)
+                                Editor::new(&self.statement)
                                     .font_family(cx.theme().mono_font_family.clone())
                                     .text_size(cx.theme().mono_font_size)
                                     .size_full(),

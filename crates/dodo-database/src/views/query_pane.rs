@@ -19,17 +19,17 @@
 //! [`Outcome::footer`](crate::state::query::Outcome::footer), which is
 //! pure and tested, so what the footer claims is checked without a database.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    AnyElement, Context, IntoElement, ParentElement as _, SharedString, Styled as _, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::Input;
+use gpui_component::input::Editor;
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::table::DataTable;
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    AnyElement, Context, IntoElement, ParentElement as _, SharedString, Styled as _, div, px,
 };
 
 use crate::app_icon::AppIcon;
@@ -323,7 +323,7 @@ impl DatabaseView {
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .child(
-                        Input::new(&editor)
+                        Editor::new(&editor)
                             .font_family(cx.theme().mono_font_family.clone())
                             .text_size(cx.theme().mono_font_size)
                             .size_full(),

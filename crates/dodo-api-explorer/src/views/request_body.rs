@@ -11,12 +11,14 @@
 //! `services::file_picker`, which does its `stat` on the background executor;
 //! the bytes are read once, at send time, in `services::http::upload`.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{Context, Entity, IntoElement, ParentElement as _, SharedString, Styled as _, div, px};
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::Input;
+use gpui_component::input::Editor;
 use gpui_component::{
     ActiveTheme as _, Icon, Selectable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    Context, Entity, IntoElement, ParentElement as _, SharedString, Styled as _, div, px,
 };
 
 use crate::app_icon::AppIcon;
@@ -35,7 +37,7 @@ impl ApiExplorer {
         &self,
         tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let state = tab.read(cx);
         let body_type = state.request.body_type;
         let method = state.request.method;
@@ -134,7 +136,7 @@ impl ApiExplorer {
                                         .value()
                                         .to_string();
                                     if !text.is_empty() {
-                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
                                             text,
                                         ));
                                     }
@@ -197,7 +199,7 @@ impl ApiExplorer {
             return div()
                 .size_full()
                 .child(
-                    Input::new(&editor)
+                    Editor::new(&editor)
                         .font_family(cx.theme().mono_font_family.clone())
                         .text_size(cx.theme().mono_font_size)
                         .size_full(),
@@ -228,7 +230,7 @@ impl ApiExplorer {
         &self,
         tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let state = tab.read(cx);
         let path = state.request.binary_path.clone();
         let size = state.request.binary_size.map(file_picker::format_size);

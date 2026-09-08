@@ -33,18 +33,18 @@
 //! table rather than tucked into a tooltip. Masking is display only — the value
 //! goes to disk in plain text like every other one.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{
     ActiveTheme as _, Icon, Selectable as _, Sizable as _, StyledExt as _, WindowExt as _, h_flex,
     v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Window, div, px,
 };
 
 use crate::app_icon::AppIcon;
@@ -512,7 +512,7 @@ impl EnvironmentsEditor {
         let active = self.page.read(cx).environments.active_id();
         let selected = self.scope;
 
-        let rows: Vec<gpui::AnyElement> = environments
+        let rows: Vec<gpui_kit::AnyElement> = environments
             .iter()
             .map(|environment| {
                 let id = environment.id;
@@ -555,7 +555,7 @@ impl EnvironmentsEditor {
             // `flex_shrink` alone does nothing here: the pane beside this one is
             // `flex_1` with `min_w_0`, so it absorbs every pixel of shrinking
             // and this would never give any back.
-            .w(gpui::relative(0.32))
+            .w(gpui_kit::relative(0.32))
             .min_w(SCOPE_LIST_MIN_W)
             .max_w(SCOPE_LIST_W)
             .flex_shrink_0()
@@ -695,7 +695,7 @@ impl EnvironmentsEditor {
 
     /// The last store or import failure, shown where the action that caused it
     /// happened. Held as a [`Str`] on the page, so it re-translates live.
-    fn store_error(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    fn store_error(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
         let error = self.page.read(cx).environments.error().cloned()?;
         Some(
             h_flex()

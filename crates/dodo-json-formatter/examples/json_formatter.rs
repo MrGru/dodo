@@ -5,28 +5,28 @@
 use std::{borrow::Cow, path::PathBuf};
 
 use dodo_json_formatter::JsonFormatter;
-use gpui::{
+use gpui_component::{ActiveTheme, Root};
+use gpui_kit::{
     AppContext, AssetSource, Context, Entity, IntoElement, ParentElement, QuitMode, Render,
     SharedString, Styled, Window, WindowOptions, div, px, size,
 };
-use gpui_component::{ActiveTheme, Root};
 
 struct Assets;
 
 impl AssetSource for Assets {
-    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+    fn load(&self, path: &str) -> gpui_kit::Result<Option<Cow<'static, [u8]>>> {
         let file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets")
             .join(path);
 
         match std::fs::read(file) {
             Ok(bytes) => Ok(Some(Cow::Owned(bytes))),
-            Err(_) => gpui_component_assets::Assets.load(path),
+            Err(_) => Ok(None),
         }
     }
 
-    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
-        gpui_component_assets::Assets.list(path)
+    fn list(&self, _path: &str) -> gpui_kit::Result<Vec<SharedString>> {
+        Ok(Vec::new())
     }
 }
 
@@ -45,7 +45,7 @@ impl Render for JsonFormatterWindow {
 }
 
 fn main() {
-    gpui_platform::application()
+    gpui_kit::application()
         .with_assets(Assets)
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(|cx| {

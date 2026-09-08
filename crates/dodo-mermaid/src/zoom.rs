@@ -6,7 +6,7 @@
 //! every number below is an `f32` over screen pixels gpui already computed
 //! this frame, so the arithmetic deciding what a gesture *means* is a plain
 //! `#[test]` away — which matters more in this crate than most, because
-//! [`crate::view`]'s module doc records that a `#[gpui::test]` cannot be added
+//! [`crate::view`]'s module doc records that a `#[gpui_kit::test]` cannot be added
 //! here at all at the pinned revision.
 //!
 //! Zoom is a multiplier over "fit the preview pane", never over the image's

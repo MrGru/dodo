@@ -93,7 +93,7 @@ pub mod services;
 pub(crate) mod state;
 pub(crate) mod views;
 
-use gpui::{App, Global, KeyBinding, actions};
+use gpui_kit::{App, Global, KeyBinding, actions};
 
 pub use views::ApiExplorer;
 

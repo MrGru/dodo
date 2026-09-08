@@ -4,7 +4,7 @@
 //! **No GPUI here**, the same rule as [`crate::render`] and for a reason this
 //! module feels harder than most: a `MermaidTab` owns an `Entity<InputState>`,
 //! so a test that closed a *real* tab would need a window — and
-//! [`crate::view`]'s module doc records that a `#[gpui::test]` cannot be added
+//! [`crate::view`]'s module doc records that a `#[gpui_kit::test]` cannot be added
 //! to this crate at all at the pinned `gpui` revision. Keeping the *decision*
 //! here and leaving [`crate::view`] only the moving is therefore the sole
 //! shape in which "closing the last tab leaves a blank one" can be asserted by

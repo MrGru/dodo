@@ -55,11 +55,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use gpui::{
+use gpui_component::ActiveTheme;
+use gpui_kit::{
     AnyElement, App, AvailableSpace, ImageFormat as GpuiImageFormat, IntoElement, ObjectFit,
     ParentElement, RenderImage, Styled, StyledImage, Window, div, img, point, px, size,
 };
-use gpui_component::ActiveTheme;
 
 use crate::{
     geometry::Vec2,
@@ -226,7 +226,7 @@ fn decoded_bytes(image: &RenderImage) -> usize {
 
 /// One resource, through GPUI's own decoder.
 ///
-/// **No new package.** `gpui::Image::to_image_data` is the same path
+/// **No new package.** `gpui_kit::Image::to_image_data` is the same path
 /// `img("file.png")` takes, `gpui` already depends on `image` 0.25 with every
 /// format below among its features, and dodo is deliberate about its graph —
 /// see `deny.toml`. What this crate adds is the mapping from a document's
@@ -254,7 +254,7 @@ pub fn decode_bytes(format: ImageFormat, bytes: &[u8], cx: &App) -> Option<Arc<R
         ImageFormat::Tiff => GpuiImageFormat::Tiff,
     };
 
-    gpui::Image::from_bytes(format, bytes.to_vec())
+    gpui_kit::Image::from_bytes(format, bytes.to_vec())
         .to_image_data(cx.svg_renderer())
         .ok()
 }

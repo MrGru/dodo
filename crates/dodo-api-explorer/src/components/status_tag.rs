@@ -1,8 +1,8 @@
 //! The response status badge and the small metrics beside it.
 
-use gpui::{App, IntoElement, ParentElement as _, SharedString, Styled as _, div, px};
 use gpui_component::tag::Tag;
 use gpui_component::{ActiveTheme as _, Icon, IconNamed, Sizable as _, StyledExt as _, h_flex};
+use gpui_kit::{App, IntoElement, ParentElement as _, SharedString, Styled as _, div, px};
 
 use crate::models::exchange::StatusClass;
 

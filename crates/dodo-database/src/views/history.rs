@@ -6,14 +6,14 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Pixels, Render,
-    SharedString, Styled as _, Task, Window, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IndexPath, Sizable as _, WindowExt as _, h_flex, v_flex,
+};
+use gpui_kit::{
+    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Pixels, Render,
+    SharedString, Styled as _, Task, Window, div, px,
 };
 
 use crate::app_icon::AppIcon;

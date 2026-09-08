@@ -4,16 +4,16 @@
 //! `window.open_dialog`. Every field has an explicit NULL toggle, so an empty
 //! string is never guessed to mean NULL.
 
-use gpui::{
-    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _,
     WindowExt as _, h_flex, v_flex,
+};
+use gpui_kit::{
+    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    div, px,
 };
 
 use crate::components::notice::{Tone, notice};
@@ -21,8 +21,8 @@ use crate::i18n::{Str, db_connection, db_query, t};
 use crate::models::value::{ColumnMeta, Row, Value};
 use crate::views::database::DatabaseView;
 
-const WIDTH: gpui::Pixels = px(640.);
-const PADDING: gpui::Pixels = px(32.);
+const WIDTH: gpui_kit::Pixels = px(640.);
+const PADDING: gpui_kit::Pixels = px(32.);
 
 #[derive(Clone, Copy)]
 pub enum Action {

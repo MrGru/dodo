@@ -45,8 +45,8 @@ mod view;
 #[cfg(test)]
 mod tests;
 
-use gpui::*;
 use gpui_component::{ThemeRegistry, WindowExt as _};
+use gpui_kit::*;
 
 use self::view::SettingsView;
 use crate::assets::Assets;

@@ -1,6 +1,6 @@
-use gpui::*;
 use gpui_component::setting::SettingField;
 use gpui_component::{Theme, ThemeRegistry};
+use gpui_kit::*;
 
 use crate::i18n::{Language, LanguageExt, shell, t};
 use crate::session::Session;

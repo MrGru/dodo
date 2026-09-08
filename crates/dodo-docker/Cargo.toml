@@ -30,8 +30,8 @@ dodo-paths = { path = "../dodo-paths" }
 # The other 27 — `models`, `services` and `state` — are gpui-free on purpose:
 # the row formatting, the CPU-percent maths, the inspect reduction and the
 # stores are all tested with no `App` and no frame.
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
+gpui-component = { version = "0.6", default-features = false }
 # The Docker Engine API client. Default features already carry `hyperlocal`
 # (the local unix-socket connector) and pointedly do NOT enable `ssl`/`rustls` —
 # the local socket needs no TLS, so this keeps dodo's rustls-only, OpenSSL-free
@@ -60,10 +60,6 @@ serde_json = "1.0"
 [dev-dependencies]
 # `examples/docker.rs` only: the application runner and the component library's
 # fallback icons. Keeping both here leaves the shipped app's graph unchanged.
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
-    "font-kit",
-] }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 
 [[example]]
 name = "docker"

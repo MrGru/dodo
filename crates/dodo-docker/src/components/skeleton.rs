@@ -6,8 +6,8 @@
 //! page keeps the last rows visible on a refresh, so this only shows on the very
 //! first load.
 
-use gpui::{App, IntoElement, ParentElement as _, Styled as _, div, px};
 use gpui_component::{ActiveTheme as _, v_flex};
+use gpui_kit::{App, IntoElement, ParentElement as _, Styled as _, div, px};
 
 /// `rows` placeholder bars, each the height of a table row.
 pub fn loading_skeleton(rows: usize, cx: &App) -> impl IntoElement {

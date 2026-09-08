@@ -13,13 +13,13 @@
 //! Level chips are the same `Button::selected` idiom the body-view modes use,
 //! and they select a *minimum*: picking Warn shows warnings and errors.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::{ActiveTheme as _, Selectable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
     ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, div, px,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::{ActiveTheme as _, Selectable as _, Sizable as _, h_flex, v_flex};
 
 use crate::app_icon::AppIcon;
 use crate::components::empty_state::empty_state;
@@ -33,7 +33,7 @@ impl ApiExplorer {
         &self,
         tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         let state = tab.read(cx);
         let level = state.response.console_level;
         let dropped = state.response.console.dropped();
@@ -168,7 +168,7 @@ impl ApiExplorer {
     }
 
     /// One line: a run rule, or a level-coloured message.
-    fn console_line(&self, entry: &ConsoleEntry, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn console_line(&self, entry: &ConsoleEntry, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let text = line_text(entry, cx);
 
         if entry.separator {
@@ -216,7 +216,7 @@ impl ApiExplorer {
 /// dodo's own lines are held as a [`Str`] and rendered here, so a console
 /// already on screen re-translates when the language changes; a script's own
 /// output is verbatim and has no translation.
-fn line_text(entry: &ConsoleEntry, cx: &gpui::App) -> String {
+fn line_text(entry: &ConsoleEntry, cx: &gpui_kit::App) -> String {
     match &entry.localized {
         Some(str) => t(str.clone(), cx).to_string(),
         None => entry.message.clone(),

@@ -12,7 +12,7 @@
 
 use std::path::PathBuf;
 
-use gpui::{App, Context, Entity, PathPromptOptions};
+use gpui_kit::{App, Context, Entity, PathPromptOptions};
 
 /// A file the user picked, with whatever the filesystem could say about it.
 ///

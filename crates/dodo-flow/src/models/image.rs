@@ -76,7 +76,7 @@ use crate::geometry::Vec2;
 /// The encodings dodo will hand to a decoder.
 ///
 /// One variant per format GPUI's own image path decodes — see
-/// `gpui::ImageFormat`, which this deliberately mirrors rather than wraps: this
+/// `gpui_kit::ImageFormat`, which this deliberately mirrors rather than wraps: this
 /// module sits below the UI-framework line, and a `gpui` type in a serialized
 /// field would put the document format on the far side of it.
 ///

@@ -1,14 +1,14 @@
 //! The empty and error placeholders a page shows in place of its table.
 //!
-//! Both return a centred [`gpui::Div`] the caller finishes with an action — the
+//! Both return a centred [`gpui_kit::Div`] the caller finishes with an action — the
 //! Create button under an empty state, the Retry button under an error — so the
 //! action keeps its own listener while the frame stays reusable. Strings arrive
 //! already translated; these are presentation helpers with no opinion on
 //! localization.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{App, Div, ParentElement as _, SharedString, Styled as _, div, px};
 use gpui_component::{ActiveTheme as _, Icon, IconNamed, StyledExt as _, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{App, Div, ParentElement as _, SharedString, Styled as _, div, px};
 
 /// A centred "nothing here" panel: a glyph, a title and an optional hint. The
 /// caller appends any action button as a further child.

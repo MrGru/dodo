@@ -71,7 +71,7 @@ pub mod services;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{App, BorrowAppContext as _, Global, KeyBinding, Task, actions};
+use gpui_kit::{App, BorrowAppContext as _, Global, KeyBinding, Task, actions};
 
 use crate::i18n::Str;
 use crate::quick_nav::models::config::QuickNavDocument;
@@ -278,7 +278,7 @@ pub fn init(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{KeyBindingContextPredicate, KeyContext};
+    use gpui_kit::{KeyBindingContextPredicate, KeyContext};
 
     use super::{KEY_CONTEXT, NORMAL_MODE};
 

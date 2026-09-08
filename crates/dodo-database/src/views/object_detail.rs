@@ -5,15 +5,15 @@
 //! capability. Views omit Indexes and Constraints because those objects cannot
 //! have either; unavailable backend answers remain an explicit state.
 
-use gpui::{
-    AnyElement, ClipboardItem, Context, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, StatefulInteractiveElement as _, Styled as _, div,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::table::DataTable;
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
+use gpui_kit::{
+    AnyElement, ClipboardItem, Context, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, StatefulInteractiveElement as _, Styled as _, div,
 };
 
 use crate::app_icon::AppIcon;

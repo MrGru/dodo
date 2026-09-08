@@ -10,7 +10,7 @@
 //! discards the result if a later edit has already moved the tab's
 //! [`MermaidTab::render_generation`] on — the same "stamp a revision, compare
 //! before redoing the work" shape root `AGENTS.md` asks for, applied to a
-//! background task rather than a `render` body. A [`gpui::Task`] stored on the
+//! background task rather than a `render` body. A [`gpui_kit::Task`] stored on the
 //! tab is dropped — and therefore cancelled — the moment a newer edit replaces
 //! it, so the common case (typing) never even reaches the renderer for
 //! anything but the keystroke that pauses.
@@ -96,17 +96,17 @@
 //! the wheel, whose modifier rule is `dodo-flow`'s canvas rule character for
 //! character (see [`install_preview_input`]).
 //!
-//! # No `#[gpui::test]` here, on purpose
+//! # No `#[gpui_kit::test]` here, on purpose
 //!
 //! `dodo-flow`'s `views/flow.rs` — the other view in dodo built on a
 //! `canvas()` plus raw `window.on_mouse_event` listeners — has none either,
 //! and this file does not add the first: at this pinned `gpui` revision,
-//! adding *any* `#[cfg(test)] mod tests { #[gpui::test] fn … }` to this file,
+//! adding *any* `#[cfg(test)] mod tests { #[gpui_kit::test] fn … }` to this file,
 //! however trivial the test body, makes `cargo test -p dodo-mermaid` either
 //! crash (`SIGBUS`, a `syn` parser stack overflow inside `gpui_macros`) or
 //! demand an ever-larger `#![recursion_limit]` that never converges. Isolated
-//! by bisection: a single three-line `#[gpui::test]` fn already triggers it,
-//! and `dodo-json-formatter` and `dodo-flow` — which have no `#[gpui::test]`
+//! by bisection: a single three-line `#[gpui_kit::test]` fn already triggers it,
+//! and `dodo-json-formatter` and `dodo-flow` — which have no `#[gpui_kit::test]`
 //! either — are the closest working comparisons. [`crate::render`]'s,
 //! [`crate::workspace`]'s, [`crate::templates`]'s and [`crate::zoom`]'s plain
 //! `#[test]`s and the standalone `examples/mermaid.rs` launcher are this
@@ -123,16 +123,16 @@ use std::time::Duration;
 
 use dodo_app_icon::AppIcon;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
 use gpui_component::button::{Button, ButtonGroup, ButtonVariants};
 use gpui_component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
     ActiveTheme, Colorize as _, Selectable, Sizable, StyledExt as _, h_flex, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::i18n::{Language, LanguageExt, Str, mermaid, t};
 use crate::render::{DefaultMermaidRenderer, MermaidRenderer, preset_defaults};
@@ -157,7 +157,7 @@ const SPINNER_THRESHOLD: Duration = Duration::from_millis(150);
 
 /// The multiplier over the diagram's own declared size the preview is
 /// rasterised at. `render_single_frame` already doubles this
-/// (`gpui::SMOOTH_SVG_SCALE_FACTOR`) for antialiasing, so the effective
+/// (`gpui_kit::SMOOTH_SVG_SCALE_FACTOR`) for antialiasing, so the effective
 /// density is 4x — enough headroom that a moderate zoom stays crisp without a
 /// re-rasterise.
 const PREVIEW_SCALE: f32 = 2.0;
@@ -216,7 +216,7 @@ pub fn init(cx: &mut App) {
 struct MermaidTab {
     id: u64,
     title: Str,
-    editor: Entity<InputState>,
+    editor: Entity<EditorState>,
     render_task: Option<Task<()>>,
     render_generation: u64,
     /// The [`render_key`] — source *and* theme — of the last render that was
@@ -398,10 +398,8 @@ impl MermaidView {
 
         let placeholder = t(mermaid::Text::EditorPlaceholder, cx);
         let editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("mermaid")
-                .multi_line(true)
-                .line_number(true)
+            EditorState::new(window, cx)
+                .language("mermaid")
                 .soft_wrap(true)
                 .placeholder(placeholder)
         });
@@ -1469,7 +1467,7 @@ impl MermaidView {
             .border_1()
             .border_color(cx.theme().border)
             .child(
-                Input::new(&tab.editor)
+                Editor::new(&tab.editor)
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(cx.theme().mono_font_size)
                     .size_full(),
@@ -1916,6 +1914,7 @@ fn paint_preview_image(
 
     window
         .paint_image(
+            Bounds::new(origin, size(width, height)),
             Bounds::new(origin, size(width, height)),
             Corners::default(),
             image.clone(),

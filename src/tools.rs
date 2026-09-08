@@ -72,7 +72,7 @@
 //!
 //! [`Features::resolve`]: crate::session::models::features::Features::resolve
 
-use gpui::{App, AppContext as _, Div, Entity, ParentElement as _, Window};
+use gpui_kit::{App, AppContext as _, Div, Entity, ParentElement as _, Window};
 
 use crate::app_icon::AppIcon;
 use crate::i18n::{Str, docker, shell};
@@ -431,8 +431,8 @@ impl View {
 
 #[cfg(test)]
 mod tests {
-    use gpui::SharedString;
     use gpui_component::IconNamed as _;
+    use gpui_kit::SharedString;
 
     use super::{AVAILABLE, View};
     use crate::i18n::{Str, docker};
@@ -466,8 +466,8 @@ mod tests {
                   generated `cfg`s; nothing calls the generated pane code."
     )]
     mod platform_probe {
-        use gpui::{App, AppContext as _, Div, Entity, ParentElement as _, Window};
         use gpui_component::IconNamed as _;
+        use gpui_kit::{App, AppContext as _, Div, Entity, ParentElement as _, Window};
 
         use crate::app_icon::AppIcon;
         use crate::i18n::{Str, shell};

@@ -6,9 +6,9 @@
 //! full-strength text, the treatment the API Explorer's status tag and the
 //! app's error banner both use.
 
-use gpui::{App, Hsla, IntoElement, ParentElement as _, SharedString, div};
 use gpui_component::tag::Tag;
 use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _};
+use gpui_kit::{App, Hsla, IntoElement, ParentElement as _, SharedString, div};
 
 /// A pill reading `label` in `color`.
 pub fn status_badge(label: SharedString, color: Hsla, cx: &App) -> impl IntoElement {

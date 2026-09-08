@@ -16,11 +16,11 @@ description = "One dialog at a time: the per-marker slot the dialogs with more t
 # `App`, `Global` and `Window`, plus `WindowExt::has_active_dialog` — the one
 # question this module asks the window and the only reason the component
 # library is named here at all.
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
+gpui-component = { version = "0.6", default-features = false }
 
 [dev-dependencies]
 # `#[gpui::test]`, for the two tests that play the caller's half of the
 # protocol against an `App`. A real dialog stack stays out of reach — see the
 # module doc — so this is the whole of what the tests need.
-gpui = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
+gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component", "test-support"] }

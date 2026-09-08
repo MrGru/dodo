@@ -25,11 +25,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    AnyElement, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
@@ -37,6 +32,11 @@ use gpui_component::tooltip::Tooltip;
 use gpui_component::tree::{TreeEntry, tree};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    AnyElement, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, div, px,
 };
 
 use crate::app_icon::AppIcon;
@@ -51,12 +51,12 @@ use crate::views::database::{
 
 /// The width of the disclosure column. Wide enough for the chevron, and every
 /// row reserves it so a leaf's label lines up with a folder's.
-const ARROW_WIDTH: gpui::Pixels = px(14.);
+const ARROW_WIDTH: gpui_kit::Pixels = px(14.);
 
 impl DatabaseView {
     /// The whole left panel: a header with the two actions that are not
     /// per-connection, and the tree.
-    pub(super) fn render_panel(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+    pub(super) fn render_panel(&mut self, cx: &mut gpui_kit::Context<Self>) -> AnyElement {
         let store_error = self.store_error.clone();
         let query_store_error = self.query_store_error.clone();
 
@@ -95,7 +95,7 @@ impl DatabaseView {
             .into_any_element()
     }
 
-    fn render_header(&self, cx: &mut gpui::Context<Self>) -> AnyElement {
+    fn render_header(&self, cx: &mut gpui_kit::Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
             .px_2()
@@ -151,7 +151,7 @@ impl DatabaseView {
             .into_any_element()
     }
 
-    fn render_no_connections(&self, cx: &mut gpui::Context<Self>) -> AnyElement {
+    fn render_no_connections(&self, cx: &mut gpui_kit::Context<Self>) -> AnyElement {
         // Nothing at all until the file has been read: a "no connections yet"
         // panel that flashes on every launch reads as data loss.
         if !self.connections.loaded() {
@@ -177,7 +177,7 @@ impl DatabaseView {
         .into_any_element()
     }
 
-    fn render_tree(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+    fn render_tree(&mut self, cx: &mut gpui_kit::Context<Self>) -> AnyElement {
         // `TreeItem` has room for one string, so everything else about a row is
         // looked up by element id as it is drawn. The map is rebuilt per frame
         // from the same outline the items came from, so the two cannot disagree.
@@ -281,7 +281,7 @@ fn connection_row(
     entry: &TreeEntry,
     look: &ConnectionLook,
     label: SharedString,
-    selected: Option<(gpui::Hsla, gpui::Pixels)>,
+    selected: Option<(gpui_kit::Hsla, gpui_kit::Pixels)>,
 ) -> AnyElement {
     let details = look.details.clone();
     let is_selected = selected.is_some();
@@ -330,7 +330,7 @@ fn connection_row(
 
 /// The hover card: a plain label/value list, values in the monospace face
 /// because most of them are addresses. **No password row exists.**
-fn detail_card(details: &[(SharedString, SharedString)], cx: &gpui::App) -> AnyElement {
+fn detail_card(details: &[(SharedString, SharedString)], cx: &gpui_kit::App) -> AnyElement {
     v_flex()
         .gap_0p5()
         .children(details.iter().map(|(label, value)| {
@@ -365,7 +365,7 @@ fn object_row(
     label: SharedString,
     detail: Option<SharedString>,
     is_muted: bool,
-    muted: gpui::Hsla,
+    muted: gpui_kit::Hsla,
 ) -> AnyElement {
     h_flex()
         .w_full()
@@ -430,8 +430,8 @@ fn disclosure(entry: &TreeEntry) -> AnyElement {
 fn connection_menu(
     menu: PopupMenu,
     look: &ConnectionLook,
-    view: &gpui::Entity<DatabaseView>,
-    cx: &mut gpui::Context<gpui_component::tree::TreeState>,
+    view: &gpui_kit::Entity<DatabaseView>,
+    cx: &mut gpui_kit::Context<gpui_component::tree::TreeState>,
 ) -> PopupMenu {
     let id = look.id;
     let connect_label = if look.connected {

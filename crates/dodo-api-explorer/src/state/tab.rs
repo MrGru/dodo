@@ -7,9 +7,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{Context, Entity, EventEmitter, Task, Window};
 use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
-use gpui_component::input::{InputState, Position};
+use gpui_component::input::{EditorState, Position};
+use gpui_kit::{Context, Entity, EventEmitter, Task, Window};
 
 use crate::i18n::{Str, api_explorer, t};
 use crate::models::exchange::{BodyKind, Exchange};
@@ -263,7 +263,7 @@ impl RequestTabState {
     /// [`script_format`](crate::models::script_format).
     pub fn format_script(
         &mut self,
-        editor: Entity<InputState>,
+        editor: Entity<EditorState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

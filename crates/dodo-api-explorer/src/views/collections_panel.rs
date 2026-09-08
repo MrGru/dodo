@@ -7,15 +7,15 @@
 //! reveals matches; rename is an inline bar rather than a per-row popover so it
 //! works the same for every node.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
 use gpui_component::popover::Popover;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    Context, InteractiveElement as _, IntoElement, ParentElement as _,
+    StatefulInteractiveElement as _, Styled as _, div, px,
+};
 
 use crate::app_icon::AppIcon;
 use crate::components::empty_state::empty_state;
@@ -24,7 +24,7 @@ use crate::models::collection::{Node, NodeId, NodeKind};
 use crate::views::explorer::ApiExplorer;
 
 impl ApiExplorer {
-    pub(super) fn render_collections_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(super) fn render_collections_panel(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let query = self.search_input.read(cx).value().trim().to_lowercase();
         let error = self.collections.error();
 
@@ -160,10 +160,10 @@ impl ApiExplorer {
     }
 
     /// The whole tree, filtered by `query`.
-    fn collections_tree(&self, query: &str, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn collections_tree(&self, query: &str, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         // Collected eagerly: each row is built with `&mut cx`, so the rows
         // cannot be a lazy iterator that keeps `cx` borrowed.
-        let mut rows: Vec<gpui::AnyElement> = Vec::new();
+        let mut rows: Vec<gpui_kit::AnyElement> = Vec::new();
         for node in self.collections.tree().roots() {
             if let Some(element) = self.render_node(node, 0, query, cx) {
                 rows.push(element);
@@ -181,7 +181,7 @@ impl ApiExplorer {
         depth: usize,
         query: &str,
         cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
+    ) -> Option<gpui_kit::AnyElement> {
         let filtering = !query.is_empty();
         if filtering && !node_matches(node, query) {
             return None;
@@ -196,7 +196,7 @@ impl ApiExplorer {
         column = column.child(self.node_row(node, depth, expanded, cx));
 
         if is_container && expanded {
-            let mut children: Vec<gpui::AnyElement> = Vec::new();
+            let mut children: Vec<gpui_kit::AnyElement> = Vec::new();
             for child in &node.children {
                 if let Some(element) = self.render_node(child, depth + 1, query, cx) {
                     children.push(element);
@@ -308,7 +308,7 @@ impl ApiExplorer {
                       handler: fn(
             &mut ApiExplorer,
             NodeId,
-            &mut gpui::Window,
+            &mut gpui_kit::Window,
             &mut Context<ApiExplorer>,
         )| {
             Button::new((key, id as usize))

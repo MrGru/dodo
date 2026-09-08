@@ -32,7 +32,7 @@
 
 use std::borrow::Cow;
 
-use gpui::{App, Global, SharedString};
+use gpui_kit::{App, Global, SharedString};
 
 use crate::{Language, Str};
 

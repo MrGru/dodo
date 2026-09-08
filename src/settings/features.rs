@@ -1,10 +1,10 @@
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::setting::{SettingGroup, SettingItem, SettingPage};
 use gpui_component::switch::Switch;
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::app_icon::AppIcon;
 use crate::i18n::{Str, shell, t};

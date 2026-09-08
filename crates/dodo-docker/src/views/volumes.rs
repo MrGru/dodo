@@ -11,18 +11,18 @@
 
 use std::sync::Arc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Pixels, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
-};
 use gpui_component::button::{Button, ButtonVariant};
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::menu::ContextMenuExt as _;
 use gpui_component::{
     ActiveTheme as _, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, MouseButton, ParentElement as _, Pixels, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
 };
 
 use crate::app_icon::AppIcon;
@@ -367,7 +367,7 @@ impl VolumesView {
             .child(message)
     }
 
-    fn render_body(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_body(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         if let LoadStatus::Failed(message) = self.state.status() {
             return self.render_error(t(message.clone(), cx), cx);
         }
@@ -386,7 +386,7 @@ impl VolumesView {
         self.render_table(cx)
     }
 
-    fn render_error(&self, message: SharedString, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_error(&self, message: SharedString, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         error_state(t(docker::Text::UnreachableTitle, cx), message, cx)
             .child(
                 Button::new("docker-volumes-retry")
@@ -398,14 +398,14 @@ impl VolumesView {
             .into_any_element()
     }
 
-    fn render_table(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_table(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let rows = self.state.visible();
         if rows.is_empty() {
             return empty_state(AppIcon::HardDrive, t(docker::Text::NoVolumes, cx), None, cx)
                 .into_any_element();
         }
 
-        let mut blocks: Vec<gpui::AnyElement> = Vec::new();
+        let mut blocks: Vec<gpui_kit::AnyElement> = Vec::new();
         for row in rows {
             blocks.push(self.render_row(row.clone(), cx).into_any_element());
         }

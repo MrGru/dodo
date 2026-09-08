@@ -9,7 +9,7 @@
 //! this one a [`ThemeDefaults`] — the ten values the *chosen preset*
 //! happens to carry — so every rule below can be asserted with a synthetic
 //! table and no renderer at all. That matters more in this crate than most:
-//! [`crate::view`]'s module doc records that a `#[gpui::test]` cannot be added
+//! [`crate::view`]'s module doc records that a `#[gpui_kit::test]` cannot be added
 //! here, so a rule left in the view is a rule nothing can assert.
 //!
 //! [`view`]: crate::view

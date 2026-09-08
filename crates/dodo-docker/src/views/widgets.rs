@@ -11,14 +11,14 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gpui::{
-    App, ClickEvent, Context, Div, FocusHandle, InteractiveElement as _, ParentElement as _,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Window, div,
-};
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::menu::PopupMenu;
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _};
+use gpui_kit::{
+    App, ClickEvent, Context, Div, FocusHandle, InteractiveElement as _, ParentElement as _,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Window, div,
+};
 
 use crate::app_icon::AppIcon;
 use crate::i18n::{docker, shared, t};

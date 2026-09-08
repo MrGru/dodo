@@ -95,14 +95,14 @@ default = ["syntax-highlighting", "sql-highlighting"]
 # is the one lever in this crate that trades a visible feature for real binary
 # size; `docs/build-optimization.md` records what it is worth.
 syntax-highlighting = [
-    "gpui-component/tree-sitter",
-    "gpui-component/tree-sitter-html",
-    "gpui-component/tree-sitter-yaml",
+    "gpui-kit/tree-sitter",
+    "gpui-kit/tree-sitter-html",
+    "gpui-kit/tree-sitter-yaml",
     # JavaScript, for the Scripts tab's two editors and the consent dialog's
     # read-only view of an imported script. Measured on its own in
     # `docs/build-optimization.md`; it is the only grammar here that colours
     # something the user *writes* rather than something a server sent.
-    "gpui-component/tree-sitter-javascript",
+    "gpui-kit/tree-sitter-javascript",
 ]
 # SQL, for the Database Explorer's query editor. **Its own feature, deliberately
 # not folded into `syntax-highlighting` above**, because it is by far the most
@@ -115,7 +115,7 @@ syntax-highlighting = [
 # the cost knowing the number; `--no-default-features` (or dropping just this
 # one) leaves the query editor a plain code editor — gutter, selection,
 # multi-cursor, search, soft wrap, no colour.
-sql-highlighting = ["gpui-component/tree-sitter", "gpui-component/tree-sitter-sql"]
+sql-highlighting = ["gpui-kit/tree-sitter", "gpui-kit/tree-sitter-sql"]
 
 [dependencies]
 # Every icon dodo draws, as one enum over `assets/icons`. Extracted with the
@@ -201,8 +201,10 @@ dodo-ime-core = { path = "crates/dodo-ime-core" }
 # keeps its own copies of the ones `src/window_icon.rs`, `src/tray` and the
 # Cleaner still name. See that crate's `lib.rs` for the seam.
 dodo-input-method = { path = "crates/dodo-input-method" }
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
+# The 0.6 facade owns the compatible GPUI, platform and component versions.
+# `default-features = false` deliberately keeps the upstream asset bundle out:
+# `src/assets.rs` is Dodo's sole asset source.
+gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component"] }
 # `tree-sitter` (JSON), `tree-sitter-html` and `tree-sitter-yaml` are what make
 # the code editor actually colour text: without any of them the library's
 # highlighter compiles to a stub that returns no highlights. Three grammars
@@ -210,8 +212,7 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["fo
 # response body actually is. Everything else degrades to plain text. They are
 # selected through this crate's own `syntax-highlighting` feature (on by
 # default) rather than listed here, so a size-constrained build can drop them.
-gpui-component = { git = "https://github.com/longbridge/gpui-component" }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+gpui-component = { version = "0.6", default-features = false }
 anyhow = "1.0"
 # No `reqwest` here any more. This crate had it for `updater::services` alone
 # once `api_explorer::services::http` left, and the updater has now left too —
@@ -375,7 +376,7 @@ windows-sys = { version = "0.61", features = [
 winresource = { version = "0.1.31", default-features = false }
 
 [dev-dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }
+gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = ["component", "test-support"] }
 
 # ---------------------------------------------------------------------------
 # Build profiles

@@ -23,14 +23,14 @@
 //! [`InputMethod`] every frame, and the recorded combination goes straight to
 //! [`InputMethod::set_language_switch`] without being kept here first.
 //!
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
 use gpui_component::button::Button;
 use gpui_component::radio::RadioGroup;
 use gpui_component::switch::Switch;
 use gpui_component::{
     ActiveTheme, Disableable as _, Selectable as _, StyledExt as _, h_flex, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use dodo_ime_core::LanguageId;
 
@@ -756,7 +756,9 @@ mod tests {
         RECORDER_CONTEXT, page_root, recordable_key, recorded_modifiers, shortcut_key_label,
     };
     use crate::models::settings::{Shortcut, ShortcutKey, ShortcutModifiers};
-    use gpui::{KeyBindingContextPredicate, KeyContext, Length, Modifiers, Styled as _, relative};
+    use gpui_kit::{
+        KeyBindingContextPredicate, KeyContext, Length, Modifiers, Styled as _, relative,
+    };
 
     /// The captain's report: at a small window the last settings on this page
     /// could not be reached. The cause was not a missing scroll container —

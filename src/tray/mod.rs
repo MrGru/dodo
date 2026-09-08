@@ -33,7 +33,7 @@
 //!
 //! `tray-icon` and `muda` each keep a global handler slot. dodo installs one in
 //! each, and those handlers do exactly one thing: `unbounded_send` on a
-//! `futures_channel` mpsc. A single long-lived foreground [`gpui::Task`] awaits
+//! `futures_channel` mpsc. A single long-lived foreground [`gpui_kit::Task`] awaits
 //! the receiver. That is the whole mechanism — **no polling, no timer, no
 //! background thread, no per-frame tick, and emphatically no second event
 //! loop.** When the queue is empty the task is parked; waking it goes through
@@ -74,7 +74,7 @@ pub mod startup;
 use dodo_ime_core::{ActiveLanguages, LanguageId};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt as _;
-use gpui::{App, BorrowAppContext as _, Global, QuitMode, Subscription, Task, WeakEntity};
+use gpui_kit::{App, BorrowAppContext as _, Global, QuitMode, Subscription, Task, WeakEntity};
 use tray_icon::menu::MenuEvent;
 use tray_icon::{TrayIcon, TrayIconBuilder, TrayIconEvent};
 
@@ -112,7 +112,7 @@ pub(crate) fn problem(message: &str) {
 /// A `Global` for the same reason [`Session`](crate::session::Session) and
 /// [`Updater`](crate::updater::Updater) are: read from anywhere, written from
 /// one place. `TrayIcon` is `!Send` — it is `Rc<RefCell<..>>` around an
-/// `NSStatusItem` — and that is fine, because `gpui::Global` requires only
+/// `NSStatusItem` — and that is fine, because `gpui_kit::Global` requires only
 /// `'static` and `App` is main-thread-bound anyway.
 pub struct Tray {
     /// Held for two reasons: its `Drop` removes the status item, and
@@ -374,7 +374,7 @@ fn install_event_handlers() -> UnboundedReceiver<Signal> {
 
 /// The one long-lived listener. Parks when the channel is empty; ends when the
 /// sender is dropped or the task is.
-async fn drain(mut receiver: UnboundedReceiver<Signal>, cx: &mut gpui::AsyncApp) {
+async fn drain(mut receiver: UnboundedReceiver<Signal>, cx: &mut gpui_kit::AsyncApp) {
     while let Some(signal) = receiver.next().await {
         match signal {
             Signal::Menu(event) => {

@@ -59,7 +59,7 @@ impl TrayMenu {
     /// Must run on the main thread: `muda::Menu::new` *panics* off it rather
     /// than returning an error. Every caller is inside `App::run`'s callback or
     /// a foreground task, so that is structural — see [`crate::tray::init`].
-    pub fn new(selected: LanguageId, active: ActiveLanguages, cx: &gpui::App) -> TrayMenu {
+    pub fn new(selected: LanguageId, active: ActiveLanguages, cx: &gpui_kit::App) -> TrayMenu {
         let languages = LanguageId::ALL
             .into_iter()
             .map(|language| {
@@ -172,7 +172,7 @@ impl TrayMenu {
     ///
     /// Called when the interface language changes. It leaves the
     /// [`LanguageId`] rows alone because their labels are endonyms.
-    pub fn relabel(&self, cx: &gpui::App) {
+    pub fn relabel(&self, cx: &gpui_kit::App) {
         self.open.set_text(t(tray::Text::OpenDodo, cx));
         self.keyboard_input
             .set_text(t(tray::Text::KeyboardInput, cx));

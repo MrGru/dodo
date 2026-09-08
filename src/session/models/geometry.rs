@@ -7,7 +7,7 @@
 //!
 //! # gpui does none of this for us
 //!
-//! Worth stating, because it is easy to assume otherwise. `gpui::Window::new`
+//! Worth stating, because it is easy to assume otherwise. `gpui_kit::Window::new`
 //! only sanity-checks placement in `default_bounds`, the branch it takes when
 //! `WindowOptions::window_bounds` is `None` — cascade offset, display clamp and
 //! all. Hand it `Some(bounds)` and it passes the rectangle straight to
@@ -48,7 +48,7 @@
 //! Windows taskbar, so a clamped window is under neither. It is what gpui's own
 //! `default_bounds` uses.
 
-use gpui::{Bounds, Pixels, Point, Size, point, px, size};
+use gpui_kit::{Bounds, Pixels, Point, Size, point, px, size};
 
 use super::document::WindowRecord;
 
@@ -199,7 +199,7 @@ fn centered_in(display: Bounds<Pixels>, size: Size<Pixels>) -> Bounds<Pixels> {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{Bounds, Pixels, Size, point, px, size};
+    use gpui_kit::{Bounds, Pixels, Size, point, px, size};
 
     use super::{place, place_record};
     use crate::session::models::document::{WindowMode, WindowRecord};

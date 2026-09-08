@@ -10,12 +10,6 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    Anchor, App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Pixels, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
-};
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::DialogButtonProps;
@@ -25,6 +19,12 @@ use gpui_component::popover::Popover;
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex,
     v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    Anchor, App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, MouseButton, ParentElement as _, Pixels, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
 };
 
 use crate::app_icon::AppIcon;
@@ -845,7 +845,7 @@ impl ContainersView {
             )
     }
 
-    fn render_body(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_body(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         // Error wins over everything: the list could not be loaded.
         if let LoadStatus::Failed(message) = self.state.status() {
             return self.render_error(t(message.clone(), cx), cx);
@@ -861,7 +861,7 @@ impl ContainersView {
         self.render_table(cx)
     }
 
-    fn render_error(&self, message: SharedString, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_error(&self, message: SharedString, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         error_state(t(docker::Text::UnreachableTitle, cx), message, cx)
             .child(
                 Button::new("docker-retry")
@@ -873,7 +873,7 @@ impl ContainersView {
             .into_any_element()
     }
 
-    fn render_empty(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_empty(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         empty_state(
             AppIcon::Inbox,
             t(docker::Text::NoContainers, cx),
@@ -892,7 +892,7 @@ impl ContainersView {
         .into_any_element()
     }
 
-    fn render_table(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_table(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let groups = self.state.visible_groups();
 
         // Rows exist but the search/filters hide them all: a centred empty note.
@@ -910,7 +910,7 @@ impl ContainersView {
         // Materialise each group as its header row plus, when expanded, its
         // container rows. `render_*`'s return borrows `cx`, so this cannot be a
         // `map` closure.
-        let mut blocks: Vec<gpui::AnyElement> = Vec::new();
+        let mut blocks: Vec<gpui_kit::AnyElement> = Vec::new();
         for group in groups {
             let collapsed = self.state.is_collapsed(&group.key);
             blocks.push(
@@ -1307,7 +1307,7 @@ impl Render for ContainersView {
 }
 
 /// A header cell: a `div` carrying the caption, ready for width refinements.
-fn header_cell(label: SharedString) -> gpui::Div {
+fn header_cell(label: SharedString) -> gpui_kit::Div {
     div().truncate().child(label)
 }
 
@@ -1323,7 +1323,7 @@ fn filter_section_title(label: SharedString, cx: &App) -> impl IntoElement {
 /// The colour of a group's running summary: success when all up, muted when all
 /// stopped, warning for a partial mix — the same semantic tones the per-row
 /// status badge uses.
-fn group_status_color(status: GroupStatus, cx: &App) -> gpui::Hsla {
+fn group_status_color(status: GroupStatus, cx: &App) -> gpui_kit::Hsla {
     match status {
         GroupStatus::AllRunning => cx.theme().success,
         GroupStatus::PartiallyRunning => cx.theme().warning,
@@ -1338,7 +1338,7 @@ fn action_button(
     tooltip: SharedString,
     enabled: bool,
     variant: ButtonVariant,
-    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+    on_click: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     Button::new(id)
         .xsmall()

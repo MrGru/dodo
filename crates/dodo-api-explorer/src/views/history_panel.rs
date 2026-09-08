@@ -6,14 +6,14 @@
 
 use std::time::SystemTime;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::tag::Tag;
 use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, div, px,
+};
 
 use crate::app_icon::AppIcon;
 use crate::components::empty_state::empty_state;
@@ -24,7 +24,7 @@ use crate::state::history::HistoryEntry;
 use crate::views::explorer::ApiExplorer;
 
 impl ApiExplorer {
-    pub(super) fn render_history_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(super) fn render_history_panel(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         v_flex()
             .size_full()
             .child(self.history_header(cx))
@@ -43,7 +43,7 @@ impl ApiExplorer {
                         )
                         .into_any_element()
                     } else {
-                        let mut rows: Vec<gpui::AnyElement> = Vec::new();
+                        let mut rows: Vec<gpui_kit::AnyElement> = Vec::new();
                         for entry in self.history.entries() {
                             rows.push(self.history_row(entry, cx).into_any_element());
                         }

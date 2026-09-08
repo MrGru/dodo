@@ -184,7 +184,7 @@ pub(crate) mod services;
 pub(crate) mod state;
 pub(crate) mod views;
 
-use gpui::{App, KeyBinding, actions};
+use gpui_kit::{App, KeyBinding, actions};
 
 pub use views::DatabaseView;
 

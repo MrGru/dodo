@@ -5,12 +5,12 @@
 
 use dodo_i18n as i18n;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::{Editor, EditorState, Textarea, TextareaState};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme, Sizable, StyledExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use base64::alphabet;
 use base64::engine::{DecodePaddingMode, Engine as _, GeneralPurpose, GeneralPurposeConfig};
@@ -105,10 +105,10 @@ fn format_index(format: Format) -> usize {
 /// re-translated when the language changes while it is on screen.
 pub struct EncoderDecoder {
     format: Format,
-    input: Entity<InputState>,
-    output: Entity<InputState>,
-    jwt_header: Entity<InputState>,
-    jwt_payload: Entity<InputState>,
+    input: Entity<TextareaState>,
+    output: Entity<TextareaState>,
+    jwt_header: Entity<EditorState>,
+    jwt_payload: Entity<EditorState>,
     jwt_signature: SharedString,
     error: Option<Str>,
     /// The language the placeholders were built for. Those live inside library
@@ -122,28 +122,24 @@ impl EncoderDecoder {
         let language = Language::current(cx);
         let input_placeholder = t(encoder_decoder::Text::EncoderInputPlaceholder, cx);
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .soft_wrap(true)
                 .placeholder(input_placeholder)
         });
         let output_placeholder = t(encoder_decoder::Text::EncoderOutputPlaceholder, cx);
         let output = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .soft_wrap(true)
                 .placeholder(output_placeholder)
         });
         let jwt_header = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
-                .multi_line(true)
+            EditorState::new(window, cx)
+                .language("json")
                 .soft_wrap(true)
         });
         let jwt_payload = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
-                .multi_line(true)
+            EditorState::new(window, cx)
+                .language("json")
                 .soft_wrap(true)
         });
 
@@ -295,7 +291,7 @@ impl EncoderDecoder {
         })
     }
 
-    fn editor(state: &Entity<InputState>, cx: &App) -> impl IntoElement {
+    fn textarea(state: &Entity<TextareaState>, cx: &App) -> impl IntoElement {
         div()
             .flex_1()
             .min_h_0()
@@ -303,7 +299,7 @@ impl EncoderDecoder {
             .border_1()
             .border_color(cx.theme().border)
             .child(
-                Input::new(state)
+                Textarea::new(state)
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(cx.theme().mono_font_size)
                     .size_full(),
@@ -314,25 +310,49 @@ impl EncoderDecoder {
         div().text_sm().font_bold().child(t(text, cx))
     }
 
-    fn pane(label: Str, state: Entity<InputState>, cx: &App) -> AnyElement {
+    fn textarea_pane(label: Str, state: Entity<TextareaState>, cx: &App) -> AnyElement {
         v_flex()
             .flex_1()
             .min_w_0()
             .min_h_0()
             .gap_1()
             .child(Self::label(label, cx))
-            .child(Self::editor(&state, cx))
+            .child(Self::textarea(&state, cx))
+            .into_any_element()
+    }
+
+    fn editor_pane(label: Str, state: Entity<EditorState>, cx: &App) -> AnyElement {
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .gap_1()
+            .child(Self::label(label, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Editor::new(&state)
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_size(cx.theme().mono_font_size)
+                            .size_full(),
+                    ),
+            )
             .into_any_element()
     }
 
     fn output_pane(
         is_jwt: bool,
-        output: Entity<InputState>,
-        jwt: (Entity<InputState>, Entity<InputState>, SharedString),
+        output: Entity<TextareaState>,
+        jwt: (Entity<EditorState>, Entity<EditorState>, SharedString),
         cx: &App,
     ) -> AnyElement {
         if !is_jwt {
-            return Self::pane(encoder_decoder::Text::OutputLabel.into(), output, cx);
+            return Self::textarea_pane(encoder_decoder::Text::OutputLabel.into(), output, cx);
         }
         let (jwt_header, jwt_payload, jwt_signature) = jwt;
 
@@ -341,12 +361,12 @@ impl EncoderDecoder {
             .min_w_0()
             .min_h_0()
             .gap_2()
-            .child(Self::pane(
+            .child(Self::editor_pane(
                 encoder_decoder::Text::JwtHeaderLabel.into(),
                 jwt_header,
                 cx,
             ))
-            .child(Self::pane(
+            .child(Self::editor_pane(
                 encoder_decoder::Text::JwtPayloadLabel.into(),
                 jwt_payload,
                 cx,
@@ -374,12 +394,12 @@ impl EncoderDecoder {
     fn panes(
         layout: PaneLayout,
         is_jwt: bool,
-        input: Entity<InputState>,
-        output: Entity<InputState>,
-        jwt: (Entity<InputState>, Entity<InputState>, SharedString),
+        input: Entity<TextareaState>,
+        output: Entity<TextareaState>,
+        jwt: (Entity<EditorState>, Entity<EditorState>, SharedString),
         cx: &App,
     ) -> AnyElement {
-        let input = Self::pane(encoder_decoder::Text::InputLabel.into(), input, cx);
+        let input = Self::textarea_pane(encoder_decoder::Text::InputLabel.into(), input, cx);
         let output = Self::output_pane(is_jwt, output, jwt, cx);
 
         match layout {
@@ -606,7 +626,7 @@ mod tests {
         B64_STANDARD, FORMATS, PaneLayout, decode_base64, decode_hex, decode_url, encode_hex,
         format_at, format_index, pane_layout, split_jwt,
     };
-    use gpui::px;
+    use gpui_kit::px;
 
     #[test]
     fn tabs_select_each_format_in_order() {

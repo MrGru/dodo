@@ -1,7 +1,7 @@
 //! The HTTP methods the request bar offers, and how each one is coloured.
 
-use gpui::{App, Hsla};
 use gpui_component::ActiveTheme as _;
+use gpui_kit::{App, Hsla};
 
 /// The nine methods in the method dropdown, in the order they are listed.
 ///

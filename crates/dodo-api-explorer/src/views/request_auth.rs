@@ -6,16 +6,16 @@
 //! query string. That is why adding a scheme with different mechanics later
 //! touches one service module rather than this view.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
-    SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::popover::Popover;
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
+    SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
 };
 
 use crate::app_icon::AppIcon;
@@ -34,7 +34,7 @@ impl ApiExplorer {
         &self,
         tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         v_flex()
             .size_full()
             .child(
@@ -117,7 +117,7 @@ impl ApiExplorer {
         &self,
         tab: &Entity<RequestTabState>,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui_kit::AnyElement {
         // Everything the fields need is copied out before anything borrows
         // `cx` mutably: `tab.read` holds an immutable borrow of it, and the
         // builders below all want the mutable one.
@@ -233,7 +233,7 @@ impl ApiExplorer {
 
 /// The column the field rows sit in. Bounded so the inputs do not stretch the
 /// width of a wide window, which reads as a form nobody laid out.
-fn field_column() -> gpui::Div {
+fn field_column() -> gpui_kit::Div {
     v_flex().w_full().max_w(px(560.)).gap_2().p_3()
 }
 

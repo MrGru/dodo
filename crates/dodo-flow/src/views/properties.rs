@@ -61,17 +61,17 @@
 //! invisible input shield. Only the visible card and prompt block the canvas.
 
 use dodo_i18n::{flow, t};
-use gpui::{
-    App, Bounds, Entity, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, canvas, div,
-    prelude::FluentBuilder, px,
-};
 use gpui_component::{
     ActiveTheme,
     input::{Input, InputState},
-    scroll::{Scrollbar, ScrollbarShow},
+    scroll::Scrollbar,
     slider::Slider,
     tooltip::Tooltip,
+};
+use gpui_kit::{
+    App, Bounds, Entity, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, canvas, div,
+    prelude::FluentBuilder, px,
 };
 
 use crate::{
@@ -223,7 +223,7 @@ impl PromptKind {
 /// Takes the view entity rather than a `Context<FlowView>` for the same reason
 /// the palette does: a click handler is handed an `&mut App`.
 ///
-/// **[`occlude`](gpui::InteractiveElement::occlude) on the visible card and
+/// **[`occlude`](gpui_kit::InteractiveElement::occlude) on the visible card and
 /// prompt is what keeps the panel open when it is used.** Without it every
 /// press on a control was delivered twice — once here, applying the edit, and
 /// once to the canvas underneath, where it landed on empty canvas, started a
@@ -242,7 +242,7 @@ pub fn panel(
     scroll: &ScrollHandle,
     cx: &App,
 ) -> impl IntoElement {
-    let rows: Vec<gpui::AnyElement> = state
+    let rows: Vec<gpui_kit::AnyElement> = state
         .sections
         .iter()
         .map(|section| row(*section, state, view.clone(), opacity, cx))
@@ -297,7 +297,7 @@ pub fn panel(
                         .right_0()
                         .bottom_0()
                         .w(px(SCROLLBAR_GUTTER_PIXELS))
-                        .child(Scrollbar::vertical(scroll).scrollbar_show(ScrollbarShow::Always)),
+                        .child(Scrollbar::vertical(scroll)),
                 ),
         )
         .children(prompt.map(|(kind, input)| prompt_row(kind, input, cx)))
@@ -341,9 +341,9 @@ fn row(
     view: Entity<FlowView>,
     opacity: &Entity<gpui_component::slider::SliderState>,
     cx: &App,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let controls = &state.controls;
-    let body: gpui::AnyElement = match section {
+    let body: gpui_kit::AnyElement = match section {
         PanelSection::Stroke => color_row(
             &STROKE_SWATCHES,
             controls.stroke,
@@ -738,7 +738,7 @@ fn choices<T>(
     availability: Availability,
     view: Entity<FlowView>,
     cx: &App,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     div()
         .flex()
         .items_center()
@@ -757,7 +757,7 @@ fn choices<T>(
         .into_any_element()
 }
 
-fn align_row(count: usize, view: Entity<FlowView>, cx: &App) -> gpui::AnyElement {
+fn align_row(count: usize, view: Entity<FlowView>, cx: &App) -> gpui_kit::AnyElement {
     let label = |alignment| match alignment {
         Alignment::Left => flow::Text::ElementsAlignLeft,
         Alignment::HorizontalCenter => flow::Text::ElementsAlignHorizontalCenter,
@@ -799,7 +799,7 @@ fn align_row(count: usize, view: Entity<FlowView>, cx: &App) -> gpui::AnyElement
 /// than as an outline: a letterform built from cubics would be a worse `S` than
 /// the theme's own font already is. The letters come from the catalogue for the
 /// reason its doc gives.
-fn font_size_row(current: FontSize, view: Entity<FlowView>, cx: &App) -> gpui::AnyElement {
+fn font_size_row(current: FontSize, view: Entity<FlowView>, cx: &App) -> gpui_kit::AnyElement {
     div()
         .flex()
         .items_center()
@@ -853,7 +853,10 @@ fn size_label(size: FontSize) -> flow::Text {
 /// own bounds rendered as numbers, in the same class as a row count or a
 /// coordinate. They are formatted from the bounds, so a slider given a
 /// different range labels itself correctly rather than lying in two languages.
-fn opacity_row(slider: &Entity<gpui_component::slider::SliderState>, cx: &App) -> gpui::AnyElement {
+fn opacity_row(
+    slider: &Entity<gpui_component::slider::SliderState>,
+    cx: &App,
+) -> gpui_kit::AnyElement {
     let endpoint = |value: u8| {
         div()
             .text_size(px(10.0))
@@ -883,7 +886,7 @@ fn color_row(
     prompt: PromptKind,
     view: Entity<FlowView>,
     cx: &App,
-) -> gpui::AnyElement {
+) -> gpui_kit::AnyElement {
     let stroke = prompt == PromptKind::StrokeColor;
     let change = |color: Color| {
         if stroke {
@@ -968,7 +971,7 @@ fn swatch(
         .border_color(if selected {
             cx.theme().primary
         } else {
-            gpui::transparent_black()
+            gpui_kit::transparent_black()
         })
         .child(
             div()

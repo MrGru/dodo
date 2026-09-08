@@ -173,7 +173,7 @@ Other platforms are built and package-verified by CI but may still have platform
 
 ## Build from Source
 
-Dodo requires Rust **1.85+** with Edition 2024 support.
+Dodo requires Rust **1.90+** with Edition 2024 support (GPUI Kit 0.6).
 
 ```sh
 git clone https://github.com/MrGru/dodo.git

@@ -11,14 +11,14 @@
 //! lifecycle; and [`Layout::apply_route`], which unpacks a pasted payload into
 //! the one method the receiving tool has for it.
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::sidebar::{
     Sidebar, SidebarCollapsible, SidebarGroup, SidebarHeader, SidebarItem, SidebarMenuItem,
 };
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme, Collapsible, StyledExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use crate::app_icon::AppIcon;
 use crate::docker::DockerPage;
@@ -859,9 +859,9 @@ impl Render for Layout {
 #[cfg(test)]
 mod tests {
 
-    use gpui::{Display, FlexDirection, Length, Overflow, Styled as _, px, relative};
     use gpui_component::Collapsible as _;
     use gpui_component::sidebar::SidebarMenuItem;
+    use gpui_kit::{Display, FlexDirection, Length, Overflow, Styled as _, px, relative};
 
     use super::{
         AUTO_COLLAPSE_WIDTH, Layout, MAIN_MIN_HEIGHT, MAIN_MIN_WIDTH, PANE_CHROME_HEIGHT,
@@ -1039,7 +1039,7 @@ mod tests {
             px(SIDEBAR_RAIL_WIDTH + PANE_CHROME_WIDTH + MAIN_MIN_WIDTH)
         );
         assert_eq!(min.height, px(PANE_CHROME_HEIGHT + MAIN_MIN_HEIGHT));
-        assert_eq!(min, gpui::size(px(600.), px(440.)));
+        assert_eq!(min, gpui_kit::size(px(600.), px(440.)));
 
         // …and a window at that floor is narrow enough that the rail, not the
         // labelled sidebar, is what the width leaves room for. If these two

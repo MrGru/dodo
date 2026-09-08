@@ -5,8 +5,8 @@
 //! needs a `Window` to build. The plain-data snapshot handed to the service
 //! layer is [`RequestDraft`], taken at the moment Send is pressed.
 
-use gpui::{AppContext as _, Context, Entity, SharedString, Window};
-use gpui_component::input::InputState;
+use gpui_component::input::{EditorState, InputState, TextareaState};
+use gpui_kit::{AppContext as _, Context, Entity, SharedString, Window};
 
 use crate::i18n::{Str, api_explorer, api_scripts, t};
 use crate::models::auth::{ApiKeyLocation, AuthDraft, AuthType};
@@ -174,7 +174,7 @@ impl KeyValueRow {
     /// inside `InputState`, which is not rebuilt each frame, so they are also
     /// what [`RequestState::sync_placeholders`] has to refresh when the
     /// language changes.
-    fn new(id: usize, table: RowTable, window: &mut Window, cx: &mut gpui::App) -> Self {
+    fn new(id: usize, table: RowTable, window: &mut Window, cx: &mut gpui_kit::App) -> Self {
         let (key, value, description) = table.placeholders();
         Self {
             id,
@@ -189,7 +189,7 @@ impl KeyValueRow {
     }
 
     /// The row as plain data.
-    pub fn snapshot(&self, cx: &gpui::App) -> KeyValue {
+    pub fn snapshot(&self, cx: &gpui_kit::App) -> KeyValue {
         KeyValue {
             enabled: self.enabled,
             key: self.key.read(cx).value().to_string(),
@@ -204,7 +204,7 @@ impl KeyValueRow {
     ///
     /// Delegates to the model so the table and the encoder cannot drift apart
     /// about what "incomplete" means.
-    pub fn is_incomplete_file(&self, cx: &gpui::App) -> bool {
+    pub fn is_incomplete_file(&self, cx: &gpui_kit::App) -> bool {
         self.snapshot(cx).is_incomplete_file()
     }
 }
@@ -213,7 +213,7 @@ impl KeyValueRow {
 fn single_line(
     placeholder: SharedString,
     window: &mut Window,
-    cx: &mut gpui::App,
+    cx: &mut gpui_kit::App,
 ) -> Entity<InputState> {
     cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
 }
@@ -223,11 +223,10 @@ fn single_line(
 fn multi_line(
     placeholder: SharedString,
     window: &mut Window,
-    cx: &mut gpui::App,
-) -> Entity<InputState> {
+    cx: &mut gpui_kit::App,
+) -> Entity<TextareaState> {
     cx.new(|cx| {
-        InputState::new(window, cx)
-            .multi_line(true)
+        TextareaState::new(window, cx)
             .soft_wrap(true)
             .placeholder(placeholder)
     })
@@ -270,13 +269,11 @@ fn code_editor(
     language: &'static str,
     placeholder: SharedString,
     window: &mut Window,
-    cx: &mut gpui::App,
-) -> Entity<InputState> {
+    cx: &mut gpui_kit::App,
+) -> Entity<EditorState> {
     cx.new(|cx| {
-        InputState::new(window, cx)
-            .code_editor(language)
-            .multi_line(true)
-            .line_number(true)
+        EditorState::new(window, cx)
+            .language(language)
             .soft_wrap(true)
             .placeholder(placeholder)
     })
@@ -298,7 +295,7 @@ pub struct RequestState {
     /// (see [`RequestState::set_edit_mode`]).
     bulk_edit: [bool; 3],
     /// The multiline editor behind each table's Bulk Edit view.
-    bulk_editors: [Entity<InputState>; 3],
+    bulk_editors: [Entity<TextareaState>; 3],
 
     // Body tab.
     pub body_type: BodyType,
@@ -308,7 +305,7 @@ pub struct RequestState {
     /// and back has to keep what was typed, and re-pointing the highlighter
     /// (see [`RequestState::apply_body_language`]) is cheaper than rebuilding
     /// the widget and its rope.
-    pub body_editor: Entity<InputState>,
+    pub body_editor: Entity<EditorState>,
     /// The rows behind the two form body types, shared for the same reason.
     pub body_fields: Vec<KeyValueRow>,
     /// The file [`BodyType::Binary`] sends. Empty means none chosen.
@@ -326,8 +323,8 @@ pub struct RequestState {
     pub auth_key_location: ApiKeyLocation,
 
     // Scripts tab.
-    pub pre_request_script: Entity<InputState>,
-    pub post_response_script: Entity<InputState>,
+    pub pre_request_script: Entity<EditorState>,
+    pub post_response_script: Entity<EditorState>,
     /// The last parse failure in each editor, or `None` when it parses.
     ///
     /// Kept beside the editor as well as inside it: the wavy underline says
@@ -482,7 +479,7 @@ impl RequestState {
     }
 
     /// Appends an empty row.
-    pub fn add_row(&mut self, table: RowTable, window: &mut Window, cx: &mut gpui::App) {
+    pub fn add_row(&mut self, table: RowTable, window: &mut Window, cx: &mut gpui_kit::App) {
         let row = KeyValueRow::new(self.next_row_id, table, window, cx);
         self.next_row_id += 1;
         self.rows_mut(table).push(row);
@@ -504,7 +501,7 @@ impl RequestState {
         table: RowTable,
         id: usize,
         window: &mut Window,
-        cx: &mut gpui::App,
+        cx: &mut gpui_kit::App,
     ) {
         let Some(index) = self.index_of(table, id) else {
             return;
@@ -603,7 +600,7 @@ impl RequestState {
     }
 
     /// The multiline editor behind a table's Bulk Edit view.
-    pub fn bulk_editor(&self, table: RowTable) -> &Entity<InputState> {
+    pub fn bulk_editor(&self, table: RowTable) -> &Entity<TextareaState> {
         &self.bulk_editors[table.index()]
     }
 
@@ -616,7 +613,7 @@ impl RequestState {
         table: RowTable,
         bulk: bool,
         window: &mut Window,
-        cx: &mut gpui::App,
+        cx: &mut gpui_kit::App,
     ) {
         if self.bulk_edit[table.index()] == bulk {
             return;
@@ -638,7 +635,7 @@ impl RequestState {
     /// Serializes a table's rows into Bulk Edit text: one `Key: Value` per row,
     /// disabled rows prefixed with `# `. Fully empty rows (the trailing "type
     /// here" row) contribute nothing.
-    fn rows_to_bulk(&self, table: RowTable, cx: &gpui::App) -> String {
+    fn rows_to_bulk(&self, table: RowTable, cx: &gpui_kit::App) -> String {
         let mut lines = Vec::new();
         for row in self.rows(table) {
             let key = row.key.read(cx).value();
@@ -662,7 +659,7 @@ impl RequestState {
         table: RowTable,
         text: &str,
         window: &mut Window,
-        cx: &mut gpui::App,
+        cx: &mut gpui_kit::App,
     ) {
         let parsed = parse_bulk_lines(text);
         let mut existing = std::mem::take(self.rows_mut(table)).into_iter();
@@ -691,7 +688,7 @@ impl RequestState {
     /// authoritative: the Bulk Edit editor when that view is open, the rows
     /// otherwise. This is how [`RequestState::draft`] stays correct even when a
     /// table is left in Bulk Edit at Send time.
-    fn table_key_values(&self, table: RowTable, cx: &gpui::App) -> Vec<KeyValue> {
+    fn table_key_values(&self, table: RowTable, cx: &gpui_kit::App) -> Vec<KeyValue> {
         if self.is_bulk_edit(table) {
             let text = self.bulk_editors[table.index()].read(cx).value();
             parse_bulk_lines(&text)
@@ -727,7 +724,7 @@ impl RequestState {
     /// the module doc of `database::state::editor` for the full diagnosis, and
     /// `state::tab::refresh_body`, which gets the same effect from the
     /// `set_value` it happens to make straight afterwards.
-    pub fn apply_body_language(&self, cx: &mut gpui::App) {
+    pub fn apply_body_language(&self, cx: &mut gpui_kit::App) {
         let Some(language) = self.body_type.editor_language() else {
             return;
         };
@@ -738,7 +735,7 @@ impl RequestState {
     }
 
     /// The editor behind one script slot.
-    pub fn script_editor(&self, slot: ScriptSlot) -> &Entity<InputState> {
+    pub fn script_editor(&self, slot: ScriptSlot) -> &Entity<EditorState> {
         match slot {
             ScriptSlot::Pre => &self.pre_request_script,
             ScriptSlot::Post => &self.post_response_script,
@@ -765,10 +762,9 @@ impl RequestState {
     ///
     /// `InputState` takes its placeholder once and caches it, so none of them
     /// re-translate on their own; this is the sweep that makes them.
-    pub fn sync_placeholders(&self, window: &mut Window, cx: &mut gpui::App) {
+    pub fn sync_placeholders(&self, window: &mut Window, cx: &mut gpui_kit::App) {
         for (field, str) in [
             (&self.url, api_explorer::Text::UrlPlaceholder),
-            (&self.body_editor, api_explorer::Text::BodyPlaceholder),
             (&self.auth_token, api_explorer::Text::AuthTokenPlaceholder),
             (
                 &self.auth_username,
@@ -786,6 +782,15 @@ impl RequestState {
                 &self.auth_key_value,
                 api_explorer::Text::ApiKeyValuePlaceholder,
             ),
+        ] {
+            let text = t(str, cx);
+            field.update(cx, |state, cx| {
+                state.set_placeholder(text, window, cx);
+            });
+        }
+
+        for (editor, str) in [
+            (&self.body_editor, api_explorer::Text::BodyPlaceholder),
             (
                 &self.pre_request_script,
                 api_explorer::Text::PreRequestScriptPlaceholder,
@@ -796,9 +801,7 @@ impl RequestState {
             ),
         ] {
             let text = t(str, cx);
-            field.update(cx, |state, cx| {
-                state.set_placeholder(text, window, cx);
-            });
+            editor.update(cx, |state, cx| state.set_placeholder(text, window, cx));
         }
 
         let bulk_placeholder = t(api_explorer::Text::BulkEditPlaceholder, cx);
@@ -830,7 +833,7 @@ impl RequestState {
     /// This is the only place the body document is read out in full, which is
     /// what keeps a large body off the render path: nothing calls
     /// `InputState::value` on it per frame.
-    pub fn draft(&self, cx: &gpui::App) -> RequestDraft {
+    pub fn draft(&self, cx: &gpui_kit::App) -> RequestDraft {
         RequestDraft {
             method: self.method,
             url: self.url.read(cx).value().to_string(),
@@ -857,7 +860,7 @@ impl RequestState {
     /// A full plain-data capture of this request, including the scripts the
     /// wire-facing [`RequestDraft`] drops. This is what a saved collection entry
     /// and a history entry store.
-    pub fn snapshot(&self, cx: &gpui::App) -> RequestSnapshot {
+    pub fn snapshot(&self, cx: &gpui_kit::App) -> RequestSnapshot {
         let draft = self.draft(cx);
         RequestSnapshot {
             method: draft.method,
@@ -881,7 +884,7 @@ impl RequestState {
         snapshot: &RequestSnapshot,
         name: Option<SharedString>,
         window: &mut Window,
-        cx: &mut gpui::App,
+        cx: &mut gpui_kit::App,
     ) {
         self.method = snapshot.method;
         let url = snapshot.url.clone();
@@ -940,7 +943,7 @@ impl RequestState {
         table: RowTable,
         values: &[KeyValue],
         window: &mut Window,
-        cx: &mut gpui::App,
+        cx: &mut gpui_kit::App,
     ) {
         let mut rows = Vec::with_capacity(values.len().max(1));
         for value in values {
@@ -973,7 +976,7 @@ impl RequestState {
     /// [`tab_title::derive`]'s job, including what to do with a URL that does
     /// not parse yet; a request with nothing typed at all falls back to the one
     /// piece of wording, which is why this needs `cx`.
-    pub fn display_name(&self, cx: &gpui::App) -> SharedString {
+    pub fn display_name(&self, cx: &gpui_kit::App) -> SharedString {
         if let Some(name) = &self.name {
             return name.clone();
         }

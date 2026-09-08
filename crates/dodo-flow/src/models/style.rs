@@ -26,14 +26,14 @@
 //! painted in the theme it was drawn under. The resolution happens at the render
 //! boundary in `views/`, which is the only layer that may name
 //! `gpui_component::ActiveTheme`. This is also why [`Color`] is four `f32`s of
-//! this crate's own rather than `gpui::Hsla`: `models/` names no UI framework.
+//! this crate's own rather than `gpui_kit::Hsla`: `models/` names no UI framework.
 
 use dodo_paths::HostOs;
 use serde::{Deserialize, Serialize};
 
 /// A straight RGBA colour, components in `0.0..=1.0`, **not** premultiplied.
 ///
-/// Its own type rather than `gpui::Hsla` because `models/` names no UI
+/// Its own type rather than `gpui_kit::Hsla` because `models/` names no UI
 /// framework — see this module's doc. `views/` converts.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Color {

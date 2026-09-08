@@ -77,11 +77,11 @@
 //! happened.
 
 use dodo_i18n::{flow, t};
-use gpui::{
+use gpui_component::{ActiveTheme, tooltip::Tooltip};
+use gpui_kit::{
     App, Bounds, Entity, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
     StatefulInteractiveElement, Styled, canvas, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, tooltip::Tooltip};
 
 use crate::{
     geometry::{Rect, Vec2},
@@ -189,7 +189,7 @@ pub struct PaletteState {
 /// constraint for `Button::on_click`, and the launcher's style toggle already
 /// captures its entity for it.
 ///
-/// **[`occlude`](gpui::InteractiveElement::occlude) is the load-bearing line
+/// **[`occlude`](gpui_kit::InteractiveElement::occlude) is the load-bearing line
 /// here**, and its absence was the whole of "picking a tool draws a shape
 /// immediately". See [`views::flow`](crate::views::flow)'s module doc for the
 /// mechanism; the short version is that the canvas registers its listeners on
@@ -339,7 +339,12 @@ fn delete_button(enabled: bool, view: Entity<FlowView>, cx: &App) -> impl IntoEl
 /// The id is the glyph's stable *name* rather than its label — an id must not
 /// change when the language does, which is exactly why `dodo-i18n-text`'s rule
 /// exempts it.
-fn shell(glyph: Glyph, selected: bool, enabled: bool, cx: &App) -> gpui::Stateful<gpui::Div> {
+fn shell(
+    glyph: Glyph,
+    selected: bool,
+    enabled: bool,
+    cx: &App,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
     let ink = match (selected, enabled) {
         (true, _) => cx.theme().primary_foreground,
         (false, true) => cx.theme().foreground,

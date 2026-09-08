@@ -75,7 +75,7 @@ use dodo_i18n as i18n;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{App, Global, Task};
+use gpui_kit::{App, Global, Task};
 
 pub use crate::build_info::BuildInfo;
 use crate::models::config::UpdaterConfig;
@@ -239,7 +239,7 @@ pub fn init(build: BuildInfo, cx: &mut App) {
 
 /// Opens the update dialog and starts a check — the sidebar's **Check for
 /// updates**.
-pub fn open(window: &mut gpui::Window, cx: &mut App) {
+pub fn open(window: &mut gpui_kit::Window, cx: &mut App) {
     views::dialog::open(window, cx);
 }
 
@@ -253,7 +253,7 @@ pub fn open(window: &mut gpui::Window, cx: &mut App) {
 /// the user is in another tool, because an update is not a property of the
 /// visible page. The cadence is hours rather than seconds, so there is no
 /// equivalent of Docker's "only the visible page polls" rule to make.
-async fn check_loop(first: Duration, interval: Duration, cx: &mut gpui::AsyncApp) {
+async fn check_loop(first: Duration, interval: Duration, cx: &mut gpui_kit::AsyncApp) {
     let mut delay = first;
     loop {
         cx.background_executor().timer(delay).await;

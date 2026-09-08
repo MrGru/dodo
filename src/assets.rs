@@ -1,15 +1,12 @@
-use anyhow::anyhow;
-use gpui::*;
+use gpui_kit::*;
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
 
-/// An asset source that loads assets from the `./assets` folder.
+/// Dodo's asset source, embedded from `./assets`.
 ///
-/// Anything not found here falls back to [`gpui_component_assets::Assets`], the
-/// icon set `gpui_component::IconName` is generated from — library widgets
-/// (dropdown carets, menu check marks, the dialog close button) request those
-/// paths without us naming them, so the fallback keeps them from silently
-/// rendering blank. Icons we ship ourselves shadow the library's by path.
+/// The GPUI Kit asset bundle is intentionally not linked. The small set of
+/// upstream-compatible SVGs Dodo needs lives beside Dodo's own icons, so every
+/// path this application resolves remains explicit and owned here.
 #[derive(RustEmbed)]
 #[folder = "./assets"]
 #[include = "icons/**/*.svg"]
@@ -26,9 +23,7 @@ impl AssetSource for Assets {
             return Ok(Some(file.data));
         }
 
-        gpui_component_assets::Assets
-            .load(path)
-            .map_err(|_| anyhow!("could not find asset at path \"{path}\""))
+        Ok(None)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {

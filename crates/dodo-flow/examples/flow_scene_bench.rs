@@ -1257,7 +1257,7 @@ fn measure_geometry_cache_styled(spec: SceneSpec, budgets: &RenderBudgets, style
     let mut snapshot = RenderSnapshot::new();
     let mut plan = PaintPlan::new();
     let options = scene_options(budgets);
-    let mut cache: GeometryCache<gpui::Path<gpui::Pixels>> = GeometryCache::new(budgets);
+    let mut cache: GeometryCache<gpui_kit::Path<gpui_kit::Pixels>> = GeometryCache::new(budgets);
 
     let frames = 60;
     let mut cold = CacheStats::default();
@@ -1333,7 +1333,7 @@ fn measure_geometry_cache_styled(spec: SceneSpec, budgets: &RenderBudgets, style
 /// A sink that goes through §23's cache, exactly as `WindowPainter` does, but
 /// throws the path away instead of painting it.
 struct CachingSink<'a> {
-    cache: &'a mut GeometryCache<gpui::Path<gpui::Pixels>>,
+    cache: &'a mut GeometryCache<gpui_kit::Path<gpui_kit::Pixels>>,
     tessellations: u32,
 }
 

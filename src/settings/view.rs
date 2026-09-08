@@ -1,10 +1,10 @@
 use std::{cell::Cell, rc::Rc};
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
 use gpui_component::list::{List, ListState};
 use gpui_component::setting::{SelectIndex, Settings};
 use gpui_component::{ActiveTheme as _, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
 use super::general::StartupStatus;
 use super::pages::pages;

@@ -46,7 +46,7 @@
 
 use anyhow::{Context as _, anyhow};
 use dodo_ime_core::LanguageId;
-use gpui::App;
+use gpui_kit::App;
 use tray_icon::Icon;
 
 use crate::assets::Assets;
@@ -182,7 +182,7 @@ pub fn render(language: LanguageId, cx: &App) -> anyhow::Result<Icon> {
     // `render_single_frame` multiplies the scale by `SMOOTH_SVG_SCALE_FACTOR`
     // (2) and by the SVG's own intrinsic size, so this is the scale that lands
     // on `ICON_HEIGHT_PX` rather than a magic number.
-    let scale = ICON_HEIGHT_PX / SVG_HEIGHT_UNITS / gpui::SMOOTH_SVG_SCALE_FACTOR;
+    let scale = ICON_HEIGHT_PX / SVG_HEIGHT_UNITS / gpui_kit::SMOOTH_SVG_SCALE_FACTOR;
     let image = cx
         .svg_renderer()
         .render_single_frame(&file.data, scale)

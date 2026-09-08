@@ -84,7 +84,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{
+use gpui_kit::{
     App, AsyncApp, BorrowAppContext as _, Bounds, DisplayId, Global, Pixels, PlatformDisplay, Task,
     WindowBounds, px, size,
 };
@@ -488,7 +488,7 @@ pub fn default_window_bounds(cx: &App) -> WindowBounds {
 mod tests {
     use std::sync::Arc;
 
-    use gpui::{Bounds, Pixels, TestAppContext, WindowBounds, point, px, size};
+    use gpui_kit::{Bounds, Pixels, TestAppContext, WindowBounds, point, px, size};
 
     use super::{SAVE_DELAY, Session, flush_on_quit};
     use crate::session::models::document::{SessionDocument, ToolRecord, WindowMode, WindowRecord};
@@ -518,7 +518,7 @@ mod tests {
         cx.run_until_parked();
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn a_change_reaches_the_store_once_the_delay_has_passed(cx: &mut TestAppContext) {
         let store = install(cx, Ok(SessionDocument::new()));
 
@@ -534,7 +534,7 @@ mod tests {
 
     /// The coalescing claim, as the disk sees it: a burst of changes is **one**
     /// write, holding the last of them.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn a_burst_of_changes_is_written_once(cx: &mut TestAppContext) {
         let store = install(cx, Ok(SessionDocument::new()));
 
@@ -551,7 +551,7 @@ mod tests {
 
     /// The rule that makes refusing a newer file mean anything: a session dodo
     /// could not read is a session dodo does not write over.
-    #[gpui::test]
+    #[gpui_kit::test]
     async fn an_unreadable_file_is_never_written_back(cx: &mut TestAppContext) {
         let store = install(
             cx,
@@ -578,7 +578,7 @@ mod tests {
 
     /// Closing the window within the coalescing delay is the ordinary way to
     /// quit, so it must not be the way to lose the last change.
-    #[gpui::test]
+    #[gpui_kit::test]
     async fn quitting_inside_the_delay_still_writes(cx: &mut TestAppContext) {
         let store = install(cx, Ok(SessionDocument::new()));
 
@@ -596,7 +596,7 @@ mod tests {
 
     /// …and a session with nothing pending writes nothing, so quitting does not
     /// touch the disk for its own sake.
-    #[gpui::test]
+    #[gpui_kit::test]
     async fn quitting_with_nothing_pending_writes_nothing(cx: &mut TestAppContext) {
         let store = install(cx, Ok(SessionDocument::new()));
 
@@ -619,7 +619,7 @@ mod tests {
 
     /// A burst of *geometry* changes is the case the delay really exists for:
     /// a resize drag emits one every frame, and it must still be one write.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn a_resize_drag_is_written_once(cx: &mut TestAppContext) {
         let store = install(cx, Ok(SessionDocument::new()));
 
@@ -645,7 +645,7 @@ mod tests {
 
     /// A maximized or fullscreen window keeps its **restore** rectangle, so
     /// unzooming after a restart lands where it did before.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn the_window_mode_survives_with_its_restore_rectangle(cx: &mut TestAppContext) {
         let store = install(cx, Ok(SessionDocument::new()));
         let restore = Bounds {
@@ -662,7 +662,7 @@ mod tests {
         assert_eq!((window.width, window.height), (900., 620.));
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn with_no_saved_window_there_is_nothing_to_restore(cx: &mut TestAppContext) {
         install(cx, Ok(SessionDocument::new()));
         assert!(cx.update(|cx| Session::window_bounds(cx)).is_none());
@@ -679,7 +679,7 @@ mod tests {
     /// origin): the rectangle comes back untouched and in the mode it was saved
     /// in. `models::geometry` argues each placement rule on its own; this is the
     /// wiring above it.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn a_saved_window_is_restored_in_the_mode_it_was_saved_in(cx: &mut TestAppContext) {
         for (mode, expected) in [
             (
@@ -715,7 +715,7 @@ mod tests {
 
     /// The awkward case the captain will want to try: quit on a second display,
     /// unplug it, reopen. The window must not come back where the monitor was.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn a_window_saved_on_a_display_that_is_gone_comes_back_on_screen(cx: &mut TestAppContext) {
         install(
             cx,
@@ -744,7 +744,7 @@ mod tests {
 
     /// A hand-edited or corrupt rectangle is "no saved geometry", so `main`
     /// opens its own default window rather than a zero-sized one.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn an_impossible_saved_rectangle_leaves_the_default_window(cx: &mut TestAppContext) {
         install(
             cx,
@@ -760,7 +760,7 @@ mod tests {
         assert!(cx.update(|cx| Session::window_bounds(cx)).is_none());
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn the_open_tool_reaches_the_store(cx: &mut TestAppContext) {
         let store = install(cx, Ok(SessionDocument::new()));
 
@@ -778,7 +778,7 @@ mod tests {
     /// The Features page's two changes reach the file, in order and with each
     /// tool's own flag. `models::features` argues the rules; this is the wiring
     /// above them.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn the_tool_list_reaches_the_store(cx: &mut TestAppContext) {
         let store = install(cx, Ok(SessionDocument::new()));
 
@@ -812,7 +812,7 @@ mod tests {
 
     /// Before the Features page has ever been opened there is nothing stored,
     /// and that is what `Features::resolve` reads as "every tool, in order".
-    #[gpui::test]
+    #[gpui_kit::test]
     fn an_untouched_session_has_no_tool_list(cx: &mut TestAppContext) {
         install(cx, Ok(SessionDocument::new()));
         assert_eq!(cx.update(|cx| Session::tools(cx)), None);
@@ -821,7 +821,7 @@ mod tests {
     /// Clicking the tool already open is the common case, and it must not cost
     /// a write. `tools::View::shown` is where an unknown or switched-off code
     /// is turned back into a tool; that fallback is tested there.
-    #[gpui::test]
+    #[gpui_kit::test]
     fn re_selecting_the_open_tool_writes_nothing(cx: &mut TestAppContext) {
         let store = install(cx, Ok(SessionDocument::new()));
 

@@ -1,7 +1,7 @@
 //! The response half of one open tab: what came back, and how it is shown.
 
-use gpui::{AppContext as _, Context, Entity, Window};
-use gpui_component::input::InputState;
+use gpui_component::input::EditorState;
+use gpui_kit::{AppContext as _, Context, Entity, Window};
 
 use crate::i18n::{Str, api_response};
 use crate::models::console::{ConsoleLevel, ConsoleLog};
@@ -98,7 +98,7 @@ pub struct ResponseState {
     /// The editor the body is rendered in. Reused across responses so the
     /// widget, its scroll position and its highlighter are not rebuilt each
     /// time.
-    pub body: Entity<InputState>,
+    pub body: Entity<EditorState>,
     pub collapsed: bool,
     /// This tab's script output. Survives across sends, with a separator
     /// between runs — see [`ConsoleLog`].
@@ -132,12 +132,7 @@ impl ResponseState {
             body_view: BodyView::default(),
             visible_lines: LINE_WINDOW,
             total_lines: 0,
-            body: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .code_editor("text")
-                    .multi_line(true)
-                    .line_number(true)
-            }),
+            body: cx.new(|cx| EditorState::new(window, cx).language("text")),
             collapsed: false,
             console: ConsoleLog::default(),
             console_level: ConsoleLevel::Debug,

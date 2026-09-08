@@ -70,17 +70,17 @@
 
 use std::sync::Arc;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Task, Window, div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::{Editor, EditorState};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{
     ActiveTheme as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Task, Window, div, px,
 };
 
 use crate::app_icon::AppIcon;
@@ -104,10 +104,10 @@ use crate::state::detail::{DetailStatus, DetailTab, DetailTabs};
 /// clamping afterwards.
 ///
 /// [`Dialog`]: gpui_component::dialog::Dialog
-const PANEL_W: gpui::Pixels = px(760.);
-const PANEL_H: gpui::Pixels = px(520.);
+const PANEL_W: gpui_kit::Pixels = px(760.);
+const PANEL_H: gpui_kit::Pixels = px(520.);
 /// Margin left around the card at a window too small for the preferred size.
-const PANEL_MARGIN: gpui::Pixels = px(24.);
+const PANEL_MARGIN: gpui_kit::Pixels = px(24.);
 /// [`Dialog`]'s own left and right padding (`Edges::all(16)`, which this dialog
 /// does not override), subtracted to get the body's width from the card's.
 ///
@@ -118,14 +118,14 @@ const PANEL_MARGIN: gpui::Pixels = px(24.);
 /// instead of the card.
 ///
 /// [`Dialog`]: gpui_component::dialog::Dialog
-const DIALOG_PADDING_X: gpui::Pixels = px(32.);
+const DIALOG_PADDING_X: gpui_kit::Pixels = px(32.);
 /// The width of the field-label column in the Details list.
-const LABEL_W: gpui::Pixels = px(150.);
+const LABEL_W: gpui_kit::Pixels = px(150.);
 /// Right padding on the title row, clearing the [`Dialog`]'s own close button —
 /// which is absolutely positioned in the card's top-right corner.
 ///
 /// [`Dialog`]: gpui_component::dialog::Dialog
-const TITLE_CLEARANCE: gpui::Pixels = px(24.);
+const TITLE_CLEARANCE: gpui_kit::Pixels = px(24.);
 
 /// Which resource a detail dialog opens on, and which tab it starts on.
 ///
@@ -213,7 +213,7 @@ pub fn open(
 /// The height allowance is generous because `Dialog` places the card a tenth of
 /// the viewport down and adds its own vertical padding and title row around the
 /// body; `PANEL_MARGIN * 4` keeps the bottom edge inside a short window.
-fn card_size(window: &Window) -> (gpui::Pixels, gpui::Pixels) {
+fn card_size(window: &Window) -> (gpui_kit::Pixels, gpui_kit::Pixels) {
     let viewport = window.viewport_size();
     let width = PANEL_W.min(viewport.width - PANEL_MARGIN * 2.);
     let height = PANEL_H.min(viewport.height - PANEL_MARGIN * 4.);
@@ -286,7 +286,7 @@ pub struct DetailView {
     tabs: DetailTabs<Box<InspectDetail>, Vec<LogLine>>,
     /// The raw-JSON pane, a JSON code editor so the response is highlighted the
     /// same way the API Explorer highlights a JSON body.
-    json: Entity<InputState>,
+    json: Entity<EditorState>,
     /// One in-flight fetch per tab, so switching away from a loading tab does not
     /// cancel it — a single slot would drop the Inspect task on the way to Logs
     /// and leave Inspect stuck on its skeleton, since its slot is already filled
@@ -303,8 +303,8 @@ impl DetailView {
         cx: &mut Context<Self>,
     ) -> Self {
         let json = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .soft_wrap(false)
         });
         let mut this = Self {
@@ -511,7 +511,7 @@ impl DetailView {
             .child(section_title(t(docker::Text::RawJson, cx), cx))
             .child(
                 div().w_full().flex_1().min_h_0().child(
-                    Input::new(&self.json)
+                    Editor::new(&self.json)
                         .font_family(cx.theme().mono_font_family.clone())
                         .text_size(cx.theme().mono_font_size)
                         .size_full(),
@@ -629,7 +629,7 @@ fn section_title(label: SharedString, cx: &App) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    // Deliberately not `use super::*`: that pulls in `use gpui::…`, whose `test`
+    // Deliberately not `use super::*`: that pulls in `use gpui_kit::…`, whose `test`
     // re-export shadows the standard attribute. See the dodo-build-validate skill.
     use super::{DetailRequest, kind_icon};
     use crate::models::inspect::InspectKind;

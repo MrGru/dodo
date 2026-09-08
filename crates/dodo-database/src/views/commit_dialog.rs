@@ -6,14 +6,14 @@
 
 use std::sync::Arc;
 
-use gpui::{
-    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    div, px,
-};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::{
     ActiveTheme as _, Sizable as _, StyledExt as _, WindowExt as _, h_flex, v_flex,
+};
+use gpui_kit::{
+    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    div, px,
 };
 
 use crate::components::notice::{Tone, notice};
@@ -22,8 +22,8 @@ use crate::models::statement::{GeneratedBatch, display_parameter, placeholder};
 use crate::services::Driver;
 use crate::views::database::{DatabaseView, MutationTarget};
 
-const WIDTH: gpui::Pixels = px(760.);
-const PADDING: gpui::Pixels = px(32.);
+const WIDTH: gpui_kit::Pixels = px(760.);
+const PADDING: gpui_kit::Pixels = px(32.);
 
 pub(super) fn open(
     page: Entity<DatabaseView>,
