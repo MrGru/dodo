@@ -42,6 +42,14 @@ These hold everywhere in dodo, whatever you are touching.
   depends on itself through unpinned default-branch refs, and the three resulting cargo errors are
   recorded in `docs/build-optimization.md`. Hence `--locked` on every cargo invocation.
 
+- **`gpui-pre-macos` is a vendored patch, not an upstream release.** dodo overrides that one GPUI
+  package via `[patch.crates-io]` with `patches/gpui-pre-macos/`; the only functional change vs
+  upstream is a `NSView::removeFromSuperview` call in `MacWindow::drop` that fixes the macOS
+  tray-reopen IOSurface memory leak (full rationale: commit `66e90e5`). A GPUI version bump can
+  silently drop or invalidate it, so on **any** bump: re-verify the leak stays fixed (three-cycle
+  same-PID `footprint` retest with a real window), re-apply the `removeFromSuperview` hunk onto the
+  new source if the bump drops it, and prefer upstreaming the fix so this local patch can be removed.
+
 - **Every string a user reads goes through `dodo-i18n`**, never a bare literal in view code. Load
   `dodo-i18n-text` before writing or changing one; two `cargo test` guards enforce it, and a
   failing guard means the code is wrong rather than the test.
