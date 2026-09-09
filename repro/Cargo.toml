@@ -1,0 +1,37 @@
+# Standalone macOS reproduction for the dodo tray-reopen IOSurface leak.
+#
+# It is deliberately OUTSIDE the dodo workspace (own `[workspace]` table below,
+# and listed in the root `[workspace].exclude`) so it carries its own lockfile
+# and does not enter dodo's default build. It depends on the exact same GPUI
+# backend dodo ships — `gpui-pre` / `gpui-pre-platform` `=0.3.4`, upstream Zed
+# rev 69164008341295ad481bb11c0334a712ca8c23e3 — and the `[patch.crates-io]`
+# below swaps `gpui-pre-macos` for the counter-instrumented vendored copy so the
+# native deallocators print per-cycle. Build/run from this directory:
+#     cargo run --release          # captain: watch [REPRO-COUNTER]/[REPRO-SAMPLE]
+[package]
+name = "dodo-window-lifecycle-repro"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "repro"
+path = "src/main.rs"
+
+[dependencies]
+# The core GPUI crate (lib name `gpui`) and the platform-wiring crate (lib name
+# `gpui_platform`, which provides `application()` -> `MacPlatform`). Together
+# these are exactly what dodo reaches through `gpui-kit`; the window backend
+# they pull in transitively is `gpui-pre-macos`, patched below.
+gpui = { package = "gpui-pre", version = "=0.3.4" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.4" }
+
+# Swap only the one package that owns `MacWindow` / `MacWindowState` /
+# `MetalRenderer` for the vendored, counter-instrumented copy. Every other GPUI
+# package still resolves from crates.io at the same `=0.3.4` identity.
+[patch.crates-io]
+gpui-pre-macos = { path = "../patches/gpui-pre-macos" }
+
+# Own workspace root: keeps this crate self-contained and immune to the parent
+# dodo `[workspace]` above it in the tree.
+[workspace]

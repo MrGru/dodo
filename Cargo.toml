@@ -60,7 +60,12 @@ default-members = [
     "crates/dodo-paths",
     "crates/dodo-updater",
 ]
-exclude = ["tools/update-manifest"]
+# `patches/gpui-pre-macos` is a vendored copy of that one GPUI package (see the
+# directory and `repro/`); `repro` is a standalone GPUI window-lifecycle
+# reproduction. Both are excluded for the same reason `tools/update-manifest`
+# is — a `[workspace]` table here otherwise claims every package below the root,
+# and `workspace.exclude` matches paths, not patterns.
+exclude = ["tools/update-manifest", "patches/gpui-pre-macos", "repro"]
 
 [package]
 name = "dodo"
@@ -437,3 +442,27 @@ inherits = "release"
 debug = "full"
 split-debuginfo = "packed"
 strip = "none"
+
+# ---------------------------------------------------------------------------
+# GPUI macOS window-lifecycle fix (local patch)
+#
+# Overrides ONLY `gpui-pre-macos` with a vendored copy that is byte-identical to
+# published 0.3.4 except one additive hunk in `MacWindow::drop`: it removes the
+# GPUIView from its superview at window close. Without it, AppKit keeps the
+# content subview (and its first-responder / tracking-area / layer-backing /
+# input-context associations) retained past the window's own close, so the
+# view's ivar `Arc<MacWindowState>` is never released and the renderer's
+# CAMetalLayer plus ~65 MB of IOSurface leak on every true close-to-tray/reopen
+# cycle, never reclaiming. `patches/gpui-pre-macos/src/window.rs` carries the
+# hunk; `repro/` reproduces and verifies it.
+#
+# `gpui-pre`, `gpui-pre-apple`, `gpui-pre-platform`, `gpui-component` and
+# `gpui-kit` all stay on their registry identities — this is the one edge that
+# reaches `gpui-pre-macos` (macOS only). `patches/gpui-pre-macos` is in
+# `[workspace].exclude` above for the same reason `tools/update-manifest` is.
+#
+# Remove this section, that workspace exclusion and `patches/gpui-pre-macos/`
+# once an upstream release carries the same fix, then refresh the GPUI lockfile
+# in its own reviewed change.
+[patch.crates-io]
+gpui-pre-macos = { path = "patches/gpui-pre-macos" }
