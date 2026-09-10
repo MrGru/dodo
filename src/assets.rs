@@ -46,3 +46,32 @@ impl Assets {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    // Import by name, not `use super::*`: this module's `gpui_kit::*` glob
+    // re-exports gpui's `test` proc macro, which would shadow std's `#[test]`
+    // and blow the recursion limit. See the `dodo-build-validate` skill.
+    use super::Assets;
+
+    /// gpui-component widgets resolve their own glyphs through *our* asset
+    /// source: a checked `Checkbox` draws `IconName::Check`, whose `.path()` is
+    /// `icons/check.svg`. Because dodo embeds only the SVGs it needs (see the
+    /// `#[include]` above), a widget icon we don't ship comes back `None` and
+    /// the glyph silently vanishes — the checked box with no tick. Each path
+    /// here is a kit `IconName` a component dodo actually renders resolves at
+    /// runtime: `check` (Checkbox / clipboard), `loader` (Spinner, and the
+    /// loading `Button` that draws one), `undo-2` (the settings page reset
+    /// button). Adding one to this list without adding the file must fail here,
+    /// not on screen.
+    #[test]
+    fn kit_widget_icons_are_embedded() {
+        for path in ["icons/check.svg", "icons/loader.svg", "icons/undo-2.svg"] {
+            assert!(
+                Assets::get(path).is_some(),
+                "{path} is a gpui-component widget icon dodo renders but does \
+                 not embed — copy it from gpui-kit-assets into assets/icons/"
+            );
+        }
+    }
+}
