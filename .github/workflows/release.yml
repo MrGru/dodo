@@ -67,14 +67,6 @@ jobs:
       prerelease: ${{ steps.resolve.outputs.prerelease }}
       source_date_epoch: ${{ steps.resolve.outputs.source_date_epoch }}
       publish: ${{ steps.resolve.outputs.publish }}
-      macos_signed: ${{ steps.resolve.outputs.macos_signed }}
-    env:
-      # Read here, at job level, because the `secrets` context is not available
-      # in any `if:` — see the signing steps in the build job below. The publish
-      # job needs the answer for the release notes, and a matrix job's outputs
-      # cannot give it one (four rows, one output slot), so it is resolved once
-      # in this job and passed down.
-      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
     steps:
       # Full history: `git log` on the tagged commit needs the commit object,
       # and a default shallow checkout of a tag does not always carry it.
@@ -122,18 +114,6 @@ jobs:
           # embed the same build_time (build.rs honours SOURCE_DATE_EPOCH).
           epoch="$(git log -1 --pretty=%ct)"
           echo "source_date_epoch=$epoch" >> "$GITHUB_OUTPUT"
-
-          # Whether the macOS archives in this run will be Developer ID signed,
-          # notarised and stapled. Only the presence of the certificate secret
-          # is knowable here; the build job fails hard if the rest of the set is
-          # incomplete, so "the secret exists" and "the artifacts are signed"
-          # cannot diverge in a run that reaches publish. A fork has no secret
-          # and gets `false`, which is what keeps its release notes truthful.
-          if [ -n "${MACOS_CERTIFICATE:-}" ]; then
-            echo "macos_signed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "macos_signed=false" >> "$GITHUB_OUTPUT"
-          fi
 
           echo "releasing $tag (version $version, epoch $epoch)"
 
@@ -517,12 +497,6 @@ jobs:
         id: notes
         env:
           TAG: ${{ needs.meta.outputs.tag }}
-          # Resolved once in the `meta` job. The macOS paragraph is the one
-          # piece of the notes that depends on how the run was configured, and
-          # getting it wrong is worse than saying nothing: telling a user to
-          # clear quarantine on a notarised app is noise, and NOT telling them
-          # on an unsigned one is a download that will not open.
-          MACOS_SIGNED: ${{ needs.meta.outputs.macos_signed }}
         shell: bash
         run: |
           set -euo pipefail
@@ -592,52 +566,14 @@ jobs:
             }
           ')"
 
+          # Only the changelog: what changed. The download-verification,
+          # macOS/code-signing and build-provenance sections were removed
+          # deliberately — the notes feed both the GitHub Release body and the
+          # update manifest's `notes` field, and both should show only what's new.
           {
             echo "## dodo ${TAG}"
             echo
             echo "$changelog"
-            echo
-            echo "### Verifying a download"
-            echo
-            echo '```sh'
-            echo "sha256sum -c SHA256SUMS   # or: shasum -a 256 -c SHA256SUMS"
-            echo '```'
-            echo
-            echo "Every archive also ships its own \`.sha256\` sidecar."
-            echo
-            echo "### macOS"
-            echo
-            if [ "${MACOS_SIGNED:-false}" = "true" ]; then
-              echo "\`dodo.app\` is **code-signed with a Developer ID certificate, notarised by"
-              echo "Apple and stapled**, so it opens straight from Finder — no Gatekeeper"
-              echo "prompt and no \`xattr\` incantation."
-              echo
-              echo "The plain \`-macos-\` archive (the bare binary, for terminal users) is signed"
-              echo "and notarised too, but a bare executable is not a format a notarisation"
-              echo "ticket can be stapled to, so Gatekeeper checks it against Apple online the"
-              echo "first time it runs."
-              echo
-              echo "Check what you downloaded:"
-              echo
-              echo '```sh'
-              echo "codesign -dvvv dodo.app        # identity, team, hardened runtime"
-              echo "spctl --assess --type execute -v dodo.app"
-              echo "xcrun stapler validate dodo.app"
-              echo '```'
-              echo
-            else
-              echo "The binaries in this build are **not code-signed or notarised**, so"
-              echo "Gatekeeper will quarantine them. Clear it with:"
-              echo
-              echo '```sh'
-              echo "xattr -dr com.apple.quarantine dodo.app   # or the extracted binary"
-              echo '```'
-              echo
-            fi
-            echo "### Build provenance"
-            echo
-            echo "Run \`dodo --build-info\` — every binary records the commit, tag,"
-            echo "build time, target and rustc version it was produced from."
           } > "$notes_file"
 
           echo "path=$notes_file" >> "$GITHUB_OUTPUT"
