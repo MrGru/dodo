@@ -225,13 +225,26 @@ impl CommandHistory {
         // gesture replaces the forward command and leaves the inverse alone,
         // because the inverse already holds the earliest before-state. That is
         // what keeps a slider drag at one entry as well as at one step.
-        if let Some(gesture) = self.gesture
-            && let Some(top) = self.undos.back_mut()
-            && top.gesture == Some(gesture)
-            && top.redo.supersedes(&redo)
-        {
-            top.redo = redo;
-            return;
+        //
+        // The scan walks the gesture's own entries — which are contiguous at
+        // the top — newest-first, rather than only the very last one, because a
+        // single frame of a gesture can record two different absolute writes
+        // (a group rotation moves its shapes with `SetNodeTransforms` and turns
+        // its connectors with `SetNodeConnectors`). Those interleave on the
+        // stack, so a match for one stream may sit one entry below the other's;
+        // matching only `back()` would let the second stream grow one entry per
+        // frame. For a single-stream gesture `back()` is the first candidate, so
+        // this is identical to matching it directly.
+        if let Some(gesture) = self.gesture {
+            for entry in self.undos.iter_mut().rev() {
+                if entry.gesture != Some(gesture) {
+                    break;
+                }
+                if entry.redo.supersedes(&redo) {
+                    entry.redo = redo;
+                    return;
+                }
+            }
         }
 
         if self.undos.len() >= self.limit {

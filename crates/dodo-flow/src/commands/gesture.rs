@@ -361,7 +361,9 @@ mod tests {
         interaction::{
             CanvasTool, InputModifiers, InteractionEvent, InteractionMachine, PointerButton,
         },
-        models::{Connector, ElementId, ElementKind, GraphNodeKind, LinearKind, NodeIndex},
+        models::{
+            Connector, ElementId, ElementKind, GraphNodeKind, LinearKind, NodeIndex, ShapeKind,
+        },
         runtime::{ConnectionRules, NodeSpec, PointerTarget},
     };
 
@@ -770,6 +772,166 @@ mod tests {
             let expected = before[index].rotated_about(centre, std::f32::consts::FRAC_PI_2);
             assert!((editor.world().nodes().bounds(node).center() - expected).length() < 1e-3);
         }
+    }
+
+    /// A group of {shape, arrow, shape} laid out horizontally, matching the
+    /// repro: a rectangle on the left, an ellipse on the right, and an arrow
+    /// between them. `bound` decides whether the arrow's ends attach to the two
+    /// shapes (Excalidraw's default) or float free. The group centre is the
+    /// origin, so the rotated coordinates below stay easy to read.
+    fn arrow_group(bound: bool) -> (FlowEditor, NodeIndex, NodeIndex, Vec2) {
+        let mut editor = FlowEditor::new();
+        editor.set_rules(ConnectionRules::PERMISSIVE);
+        let shape = |kind, x: f32| {
+            NodeDraft::new(NodeSpec::new(
+                ElementId::NONE,
+                ElementKind::Shape(kind),
+                Vec2::new(x - 50.0, -50.0),
+                Vec2::new(100.0, 100.0),
+            ))
+        };
+        let added = editor
+            .apply(EditCommand::AddNodes(vec![
+                shape(ShapeKind::Rectangle, -300.0),
+                shape(ShapeKind::Ellipse, 300.0),
+            ]))
+            .unwrap()
+            .added_nodes;
+        let (rect, ell) = (added[0], added[1]);
+
+        let (start, end) = (Vec2::new(-250.0, 0.0), Vec2::new(250.0, 0.0));
+        let connector = if bound {
+            editor.connector_between(start, end, Some(rect), Some(ell))
+        } else {
+            Connector::new(start, end)
+        };
+        let mut spec = NodeSpec::new(
+            ElementId::NONE,
+            ElementKind::Linear(LinearKind::Arrow),
+            start,
+            end - start,
+        );
+        spec.connector = Some(connector);
+        let arrow = editor
+            .apply(EditCommand::AddNodes(vec![NodeDraft::new(spec)]))
+            .unwrap()
+            .added_nodes[0];
+
+        for node in [rect, ell, arrow] {
+            editor.set_node_selected(node, true);
+        }
+        assert!(editor.group_selection());
+        let group = editor.world().selection().single_node().unwrap();
+        let centre = editor.world().nodes().bounds(group).center();
+        (editor, group, arrow, centre)
+    }
+
+    /// **What the user sees**: a connector's endpoints as drawn, with the node
+    /// angle the renderer would apply folded in (see `render::scene`).
+    fn drawn_arrow(editor: &FlowEditor, arrow: NodeIndex) -> [Vec2; 2] {
+        let c = editor.world().nodes().connector(arrow).unwrap();
+        let angle = editor.world().nodes().angle(arrow);
+        let mid = c.bounds().center();
+        [
+            c.start.point.rotated_about(mid, angle),
+            c.end.point.rotated_about(mid, angle),
+        ]
+    }
+
+    /// **The reported bug, as a property.** Rotating a group carries its arrow
+    /// with it exactly as it carries the shapes: the drawn endpoints end up
+    /// rotated about the group centre, still spanning the two shapes — not left
+    /// horizontal in the middle.
+    ///
+    /// Before the fix, the connector's node angle was stacked with the group
+    /// rotation while the renderer also turned its endpoints, so a 90° turn
+    /// double-rotated the arrow back to horizontal: the concrete `after`
+    /// endpoints came out `(250, 0)`/`(-250, 0)` instead of the `(0, -250)` /
+    /// `(0, 250)` this asserts. Both a bound and a free-standing arrow are
+    /// checked, and an arbitrary angle alongside the right angle.
+    #[test]
+    fn a_rotated_group_carries_its_arrow_like_its_shapes() {
+        for bound in [true, false] {
+            for &angle in &[std::f32::consts::FRAC_PI_2, 0.7] {
+                let (mut editor, group, arrow, centre) = arrow_group(bound);
+
+                let before = drawn_arrow(&editor, arrow);
+                assert_eq!(before, [Vec2::new(-250.0, 0.0), Vec2::new(250.0, 0.0)]);
+
+                rotate_in_steps(&mut editor, group, centre, &[angle]);
+
+                let after = drawn_arrow(&editor, arrow);
+                let expect = before.map(|p| p.rotated_about(centre, angle));
+                for (got, want) in after.into_iter().zip(expect) {
+                    assert!(
+                        (got - want).length() < 1e-2,
+                        "bound={bound} angle={angle}: arrow endpoint {got:?} did not rotate with the group (want {want:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A concrete 90° case, spelled out, and the guarantee that dragging it in
+    /// many frames costs no more history than doing it in one. The gesture
+    /// records two absolute streams — the shapes' transforms and the arrow's
+    /// connector — and each coalesces to a single entry, so a whole turn is one
+    /// undo step whatever the frame count.
+    #[test]
+    fn a_group_arrow_rotation_is_one_bounded_undo_step() {
+        let quarter = std::f32::consts::FRAC_PI_2;
+
+        let (mut single, group, arrow, centre) = arrow_group(true);
+        let depth = single.history().undo_depth();
+        rotate_in_steps(&mut single, group, centre, &[quarter]);
+
+        // The horizontal arrow now spans the vertically stacked shapes.
+        let [start, end] = drawn_arrow(&single, arrow);
+        assert!(
+            (start - Vec2::new(0.0, -250.0)).length() < 1e-2,
+            "{start:?}"
+        );
+        assert!((end - Vec2::new(0.0, 250.0)).length() < 1e-2, "{end:?}");
+
+        let one_step = single.history().undo_depth();
+        assert!(single.undo());
+        assert_eq!(
+            single.history().undo_depth(),
+            depth,
+            "one undo did not cover the whole group-arrow rotation"
+        );
+        assert_eq!(
+            drawn_arrow(&single, arrow),
+            [Vec2::new(-250.0, 0.0), Vec2::new(250.0, 0.0)]
+        );
+
+        // Sixty frames must leave the same, bounded number of entries.
+        let (mut stepped, group, _, centre) = arrow_group(true);
+        let angles: Vec<f32> = (1..=60).map(|s| quarter * s as f32 / 60.0).collect();
+        rotate_in_steps(&mut stepped, group, centre, &angles);
+        assert_eq!(
+            stepped.history().undo_depth(),
+            one_step,
+            "per-frame rotation grew the undo stack"
+        );
+    }
+
+    /// A bound arrow stays attached through the turn: after a 90° group
+    /// rotation its ends still sit on the rectangle and the ellipse, which is
+    /// the whole point of the connection surviving.
+    #[test]
+    fn a_bound_arrow_stays_attached_after_a_group_rotation() {
+        let (mut editor, group, arrow, centre) = arrow_group(true);
+        let connector = editor.world().nodes().connector(arrow).unwrap();
+        assert!(connector.start.attachment.is_some() && connector.end.attachment.is_some());
+
+        rotate_in_steps(&mut editor, group, centre, &[std::f32::consts::FRAC_PI_2]);
+
+        let connector = editor.world().nodes().connector(arrow).unwrap();
+        assert!(
+            connector.start.attachment.is_some() && connector.end.attachment.is_some(),
+            "the rotation severed the arrow's bindings"
+        );
     }
 
     #[test]

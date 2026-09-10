@@ -110,6 +110,11 @@ struct TransformNodeStart {
     node: NodeIndex,
     bounds: Rect,
     angle: f32,
+    /// The member's connector at the grip press, when it is one. A connector
+    /// carries its orientation in its ordered endpoints, not in a node angle,
+    /// so rotation transforms these points rather than stacking an angle the
+    /// renderer would apply a second time — see [`FlowEditor::rotate_node_or_group`].
+    connector: Option<Connector>,
 }
 
 #[derive(Debug, Clone)]
@@ -971,6 +976,7 @@ impl FlowEditor {
                 node,
                 bounds: self.world.nodes().bounds(node).normalized(),
                 angle: self.world.nodes().angle(node),
+                connector: self.world.nodes().connector(node),
             })
             .collect()
     }
@@ -1049,19 +1055,45 @@ impl FlowEditor {
         if *subject != node || *captured_centre != centre {
             return false;
         }
-        let transforms = nodes
-            .iter()
-            .map(|member| {
+
+        // A connector's orientation lives in its ordered endpoints, so rotation
+        // transforms the points about the group centre and leaves the node
+        // angle at rest. Stacking an angle instead would double-rotate: the
+        // renderer already turns a connector's endpoints by that angle, and a
+        // bound end is refreshed onto its (also-rotated) target — so the two
+        // would compound and the arrow would end up back where it started.
+        // Rotating the endpoints is right for a free end, and harmless for a
+        // bound one that the refresh overwrites anyway.
+        let mut transforms = Vec::new();
+        let mut connectors = Vec::new();
+        for member in nodes {
+            if let Some(start) = member.connector {
+                let mut rotated = start;
+                rotated.start.point = start.start.point.rotated_about(centre, total);
+                rotated.end.point = start.end.point.rotated_about(centre, total);
+                connectors.push((member.node, rotated));
+            } else {
                 let moved = member.bounds.center().rotated_about(centre, total);
-                (
+                transforms.push((
                     member.node,
                     Rect::new(moved - member.bounds.size * 0.5, member.bounds.size),
                     member.angle + total,
-                )
-            })
-            .collect();
-        self.apply(EditCommand::SetNodeTransforms(transforms))
-            .is_ok_and(|summary| summary.changed)
+                ));
+            }
+        }
+
+        let mut changed = false;
+        if !connectors.is_empty() {
+            changed |= self
+                .apply(EditCommand::SetNodeConnectors(connectors))
+                .is_ok_and(|summary| summary.changed);
+        }
+        if !transforms.is_empty() {
+            changed |= self
+                .apply(EditCommand::SetNodeTransforms(transforms))
+                .is_ok_and(|summary| summary.changed);
+        }
+        changed
     }
 
     pub fn finish_transform_gesture(&mut self) {
