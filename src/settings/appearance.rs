@@ -163,10 +163,32 @@ fn set_theme(name: &str, cx: &mut App) {
     Theme::global_mut(cx).apply_config(&config);
     set_font_size(font_size, cx);
     set_radius(radius, cx);
+    // Resize handles live in gpui-base's theme projection, not this global.
+    Theme::sync_base(cx);
 }
 
 /// Dropdown values are stable identifiers, never localized labels, so the
 /// stored choice does not change meaning when the language does.
 fn size_value(size: f32) -> SharedString {
     format!("{size}").into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::set_theme;
+    use gpui_kit::{TestAppContext, base, component};
+
+    #[gpui_kit::test]
+    fn selecting_a_theme_updates_the_resize_handle_color(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            component::init(cx);
+            let light_handle = base::Theme::global(cx).resizable.handle;
+
+            set_theme("Default Dark", cx);
+
+            let dark_handle = base::Theme::global(cx).resizable.handle;
+            assert_eq!(dark_handle, Some(component::Theme::global(cx).border));
+            assert_ne!(dark_handle, light_handle);
+        });
+    }
 }
