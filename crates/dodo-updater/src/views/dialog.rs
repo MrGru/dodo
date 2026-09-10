@@ -48,12 +48,13 @@ use std::time::Duration;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::text::TextView;
 use gpui_kit::component::{ActiveTheme as _, Icon, StyledExt as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Task,
-    Window, div, px,
+    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Task, Window, div,
+    px,
 };
 
 use crate::app_icon::AppIcon;
@@ -545,11 +546,18 @@ impl UpdateDialog {
                     .border_color(cx.theme().border)
                     .p_2()
                     .text_sm()
-                    .font_family(cx.theme().mono_font_family.clone())
                     // The release notes are the *release's* text, not dodo's:
-                    // they arrive in the manifest and are shown verbatim, which
-                    // is why they do not go through `Str`.
-                    .child(SharedString::from(info.notes.clone())),
+                    // they arrive in the manifest and are shown verbatim (never
+                    // through `Str`). They are markdown, so they render through
+                    // gpui-component's `TextView::markdown` rather than as a raw
+                    // string — headings and lists come out formatted instead of
+                    // as literal `##`/`-`. The theme's text-view defaults are
+                    // installed by `gpui_component::init` at startup; no setup
+                    // is needed here.
+                    .child(TextView::markdown(
+                        "update-release-notes-md",
+                        info.notes.clone(),
+                    )),
             )
             .into_any_element()
     }
