@@ -99,6 +99,9 @@ pub enum AppIcon {
     /// not survive the trip anyway, and a monochrome trace of one would be a
     /// trademark dodo has no licence to use.
     PostgreSql,
+    Redis,
+    MySql,
+    MariaDb,
     Sqlite,
     /// A table node. Also the result grid's own empty state.
     Table,
@@ -230,6 +233,9 @@ impl IconNamed for AppIcon {
             Self::Download => "icons/download.svg",
             Self::Database => "icons/database.svg",
             Self::PostgreSql => "icons/postgresql.svg",
+            Self::Redis => "icons/redis.svg",
+            Self::MySql => "icons/mysql.svg",
+            Self::MariaDb => "icons/mariadb.svg",
             Self::Sqlite => "icons/sqlite.svg",
             Self::Table => "icons/table.svg",
             Self::Columns => "icons/columns.svg",

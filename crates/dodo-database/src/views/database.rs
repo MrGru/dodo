@@ -2171,8 +2171,8 @@ pub(super) fn engine_icon(engine: Engine) -> AppIcon {
     match engine {
         Engine::PostgreSql => AppIcon::PostgreSql,
         Engine::Sqlite => AppIcon::Sqlite,
-        Engine::MySql => AppIcon::Database,
-        Engine::Redis => AppIcon::Key,
+        Engine::MySql => AppIcon::MySql,
+        Engine::Redis => AppIcon::Redis,
     }
 }
 
