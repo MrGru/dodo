@@ -79,6 +79,7 @@ use gpui_kit::{App, Global, Task};
 
 pub use crate::build_info::BuildInfo;
 use crate::models::config::UpdaterConfig;
+use crate::models::state::UpdateInfo;
 use crate::services::config_store::UpdaterConfigStore;
 use crate::services::{Downloader, ManifestSource, PlatformInstaller, Verifier, log, pipeline};
 
@@ -237,10 +238,99 @@ pub fn init(build: BuildInfo, cx: &mut App) {
     .detach();
 }
 
+/// The newest version a check has found that this build does not yet run, or
+/// `None` when the last check found nothing newer.
+///
+/// **Its own `Global`, not a field on [`Updater`]**, for two reasons: the title
+/// bar can [`observe_global`](gpui_kit::App::observe_global) exactly this and
+/// repaint only when availability changes, and setting it does not have to
+/// thread a field through `Updater`'s four constructors. It is written from one
+/// place — [`record_check`] — and read from the title bar's render.
+#[derive(Clone, Default)]
+pub struct AvailableUpdate(pub Option<UpdateInfo>);
+
+impl Global for AvailableUpdate {}
+
+impl AvailableUpdate {
+    /// The update the last check found, if any. What the title bar's Update
+    /// button is shown from, and where it reads the version text.
+    pub fn get(cx: &App) -> Option<UpdateInfo> {
+        cx.try_global::<AvailableUpdate>()
+            .and_then(|available| available.0.clone())
+    }
+
+    fn set(info: Option<UpdateInfo>, cx: &mut App) {
+        cx.set_global(AvailableUpdate(info));
+    }
+}
+
 /// Opens the update dialog and starts a check — the sidebar's **Check for
-/// updates**.
+/// updates**, and the title bar's Update button.
 pub fn open(window: &mut gpui_kit::Window, cx: &mut App) {
     views::dialog::open(window, cx);
+}
+
+/// Runs one update check now, off the UI thread, and records the result in
+/// [`AvailableUpdate`] so the title bar reflects it. Opens no window.
+///
+/// The tray's "Open Dodo" calls this on every reopen, so a release published
+/// while dodo sat in the tray shows up on the title bar without a restart. It
+/// reuses [`record_check`] — the very check the startup schedule runs — rather
+/// than being a second update mechanism, and it respects the same
+/// "check automatically" preference the periodic loop does: a user who turned
+/// checking off is not checked on behind their back.
+pub fn check_now(cx: &mut App) {
+    if !Updater::config(cx).checks_automatically() {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        record_check(cx).await;
+    })
+    .detach();
+}
+
+/// Runs one check on the background executor and records the result in
+/// [`AvailableUpdate`]. Returns the found update, if any, so a caller can also
+/// open the dialog.
+///
+/// **The single place a check's result becomes process state.** Both the
+/// periodic [`check_loop`] and the tray-reopen [`check_now`] route through it,
+/// so the title bar's Update button and the auto-opening dialog can never
+/// disagree about what a check found.
+async fn record_check(cx: &mut gpui_kit::AsyncApp) -> Option<UpdateInfo> {
+    let config = cx.update(|cx| Updater::config(cx));
+    let services = cx.update(Updater::services);
+    let Ok(current) = pipeline::current_version() else {
+        return None;
+    };
+
+    let outcome = cx
+        .background_executor()
+        .spawn({
+            let source = services.source.clone();
+            async move { pipeline::check(source.as_ref(), &config, &current, &|_| {}) }
+        })
+        .await;
+
+    match outcome {
+        Ok(pipeline::CheckOutcome::Found(info)) => {
+            let info = *info;
+            cx.update(|cx| AvailableUpdate::set(Some(info.clone()), cx));
+            Some(info)
+        }
+        // Up to date clears any stale offer — a version the user updated past,
+        // or one a re-check on a different channel no longer offers.
+        Ok(pipeline::CheckOutcome::UpToDate) => {
+            cx.update(|cx| AvailableUpdate::set(None, cx));
+            None
+        }
+        // A failure leaves the last known state alone: a flaky network is no
+        // reason to hide a button the user could still act on.
+        Err(error) => {
+            log::problem(&format!("update check failed: {error:?}"));
+            None
+        }
+    }
 }
 
 /// The silent background check, forever.
@@ -267,38 +357,21 @@ async fn check_loop(first: Duration, interval: Duration, cx: &mut gpui_kit::Asyn
             continue;
         }
 
-        let services = cx.update(Updater::services);
-        let Ok(current) = pipeline::current_version() else {
-            return;
-        };
-
-        let outcome = cx
-            .background_executor()
-            .spawn({
-                let source = services.source.clone();
-                async move { pipeline::check(source.as_ref(), &config, &current, &|_| {}) }
-            })
-            .await;
-
-        match outcome {
-            Ok(pipeline::CheckOutcome::Found(info)) => {
-                let info = *info;
-                // The one moment the check stops being silent. `windows()` is
-                // one window in dodo; a launch that has not opened it yet gets
-                // nothing, and the next tick tries again.
-                cx.update(|cx| {
-                    if let Some(window) = cx.windows().first().cloned() {
-                        let _ = window.update(cx, |_, window, cx| {
-                            views::dialog::open_with(info.clone(), window, cx);
-                        });
-                    }
-                });
-            }
-            // Silent by design: neither "you are up to date" nor "the network is
-            // down" is news the user asked for. A failure is one stderr line and
-            // the next tick tries again.
-            Ok(pipeline::CheckOutcome::UpToDate) => {}
-            Err(error) => log::problem(&format!("background check failed: {error:?}")),
+        // One check, recorded once, for the title bar and this loop both — see
+        // `record_check`. A failure or "up to date" returns `None` and is
+        // silent by design: neither is news the user asked for, and the next
+        // tick tries again.
+        if let Some(info) = record_check(cx).await {
+            // The one moment the check stops being silent. `windows()` is
+            // one window in dodo; a launch that has not opened it yet gets
+            // nothing, and the next tick tries again.
+            cx.update(|cx| {
+                if let Some(window) = cx.windows().first().cloned() {
+                    let _ = window.update(cx, |_, window, cx| {
+                        views::dialog::open_with(info.clone(), window, cx);
+                    });
+                }
+            });
         }
     }
 }

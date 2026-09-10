@@ -44,6 +44,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
                     .into()
             }
         Text::CheckForUpdates => "Check for updates".into(),
+        Text::NewVersion(version) => format!("New version: v{version}").into(),
         Text::DatabaseTitle => "Database".into(),
         Text::QuickNavigation => "Quick navigation".into(),
         Text::QuickNavEnabled => "Paste to navigate".into(),

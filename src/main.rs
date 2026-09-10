@@ -326,6 +326,10 @@ fn main() {
             },
             cx,
         );
+        // Binds Cmd/Ctrl+1..9 to the sidebar section switch. Same
+        // post-`gpui_kit::component::init` ordering as the others so it wins the
+        // key-binding tie.
+        layout::init(cx);
         // Installs the session global and the quit-time flush of
         // `session.json`. It reads nothing here — the read is awaited below,
         // because the window cannot be opened until its geometry is known.
@@ -443,6 +447,15 @@ fn window_options(cx: &mut App) -> WindowOptions {
         // floor by `geometry::place`, which this option cannot do for it — the
         // platform only polices dragging.
         window_min_size: Some(layout::window_min_size()),
+        // The window wears dodo's own title bar (`layout::Layout::title_bar`, a
+        // gpui-component `TitleBar`), so the OS controls sit inside it: an
+        // appears-transparent titlebar with the macOS traffic lights positioned
+        // for it, and `app_owns_titlebar_drag` so the bar moves the window
+        // itself. Merged into these options rather than replacing them with
+        // `TitleBar::window_options()`, which would drop the saved geometry, the
+        // display, the minimum size and the Linux icon below.
+        titlebar: Some(TitleBar::title_bar_options()),
+        app_owns_titlebar_drag: true,
         // What a Linux desktop matches `assets/linux/dodo.desktop` against to
         // find the icon; inert on macOS and Windows. See `window_icon::APP_ID`
         // for why the value is not arbitrary.

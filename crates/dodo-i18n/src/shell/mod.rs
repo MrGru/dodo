@@ -46,6 +46,10 @@ pub enum Text {
 
     // The in-app updater: the sidebar affordance and the dialog.
     CheckForUpdates,
+    /// The title bar's Update button, shown only when a check found a newer
+    /// version. Carries that version so the whole sentence is one translated
+    /// string rather than a prefix glued to a number.
+    NewVersion(String),
 
     // Database Explorer. Product names — PostgreSQL, SQLite — are proper nouns
     // and live in `database::models::engine`, untranslated, the same treatment

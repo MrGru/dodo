@@ -1,29 +1,42 @@
-//! The shell: the sidebar, the main pane, the width rule between them, and the
-//! quick-navigation bindings that live on the pane.
+//! The shell: the custom title bar, the icon-only sidebar rail, the main pane,
+//! and the quick-navigation and section-switch bindings that live on the pane.
 //!
 //! **Which tools exist is not decided here.** [`crate::tools`] is the table —
 //! one row per tool carrying its code, title, icon, platforms, view type and
 //! accepted pastes — and [`View`] and [`Panes`] are generated from it. This file
 //! draws whatever that table declares, in whatever order
 //! [`Layout::features`](Layout::features) says the user wants, and knows about a
-//! particular tool in exactly two places: [`pane_title`] and
-//! [`Layout::activate`], which are Docker's rail heading and Docker's polling
-//! lifecycle; and [`Layout::apply_route`], which unpacks a pasted payload into
-//! the one method the receiving tool has for it.
+//! particular tool in exactly one place: [`Layout::activate`], which is Docker's
+//! polling lifecycle; and [`Layout::apply_route`], which unpacks a pasted
+//! payload into the one method the receiving tool has for it.
+//!
+//! # The chrome
+//!
+//! There is one bar across the top — a [`TitleBar`], so the window controls
+//! (macOS traffic lights, or the Windows min/max/close buttons) are the
+//! platform's own and this file only reserves room for them. The bar carries
+//! the sidebar toggle by the sidebar it hides, the Settings and Update buttons,
+//! and the Dodo mark pinned to the edge **opposite** the OS controls. Below it
+//! sit the icon-only sidebar rail and the main pane.
+//!
+//! **The sidebar is icon-only always, and the toggle hides it entirely.** The
+//! width-driven "labels when wide, icons when narrow" rule this shell used to
+//! carry is gone: the rail is a fixed strip of large icons in the style of a
+//! chat app's left rail, each naming itself — and its `Cmd`/`Ctrl` shortcut — on
+//! hover. Item _N_ in the visible list is reached by `Cmd`/`Ctrl`+_N_, and the
+//! hover label and the binding are the one function [`section_shortcut`] apart,
+//! so they cannot drift.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::sidebar::{
-    Sidebar, SidebarCollapsible, SidebarGroup, SidebarHeader, SidebarItem, SidebarMenuItem,
+use gpui_kit::component::{
+    ActiveTheme, Selectable as _, Sizable as _, TITLE_BAR_HEIGHT, TitleBar, h_flex, v_flex,
 };
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme, Collapsible, StyledExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::app_icon::AppIcon;
-use crate::docker::DockerPage;
 use crate::encoder_decoder::Format;
-use crate::i18n::{Str, shell, t};
+use crate::i18n::{shell, t};
 #[cfg(target_os = "macos")]
 use crate::input_method::InputMethod;
 use crate::quick_nav::models::detect::Detector;
@@ -35,15 +48,66 @@ use crate::settings;
 use crate::tools::{Panes, View};
 use crate::updater;
 
-/// The heading above the main pane. Docker names the page its rail has selected
-/// — the sidebar row says "Docker", the heading says "Containers" — so the
-/// header keeps telling the user which of the four they are looking at, exactly
-/// as it did when the four were sidebar children.
-fn pane_title(view: View, docker_page: DockerPage) -> Str {
-    match view {
-        View::Docker => docker_page.title(),
-        other => other.title(),
+/// How many sidebar sections a keyboard shortcut can reach: `Cmd`/`Ctrl`+1
+/// through +9. There is no digit key past the ninth, so a tenth tool has a
+/// hover label with no shortcut on it — [`section_shortcut`] returns `None` and
+/// [`init`] binds nothing for it.
+const SECTION_SHORTCUTS: usize = 9;
+
+/// The keyboard shortcut that switches to the tool at `index` (0-based) in the
+/// visible list, as it is shown on the row's hover label. `None` past the ninth
+/// tool, which has no digit key.
+///
+/// **The one place the shown modifier is chosen**, and [`init`] binds the same
+/// digits: the label a user reads and the key they press are this function and
+/// the loop in `init`, and nothing else. Both platforms' chords are bound (see
+/// `init`); the label shows the one that platform's users expect.
+fn section_shortcut(index: usize) -> Option<String> {
+    (index < SECTION_SHORTCUTS).then(|| {
+        let modifier = if cfg!(target_os = "macos") {
+            "Cmd"
+        } else {
+            "Ctrl"
+        };
+        format!("{modifier}+{}", index + 1)
+    })
+}
+
+/// Switch the main pane to the tool at this 0-based position in the visible
+/// list. Bound to `Cmd`/`Ctrl`+1..9 by [`init`]; the value is the digit minus
+/// one, so the action carries the same index [`section_shortcut`] labels.
+#[derive(Clone, PartialEq, Default, Debug, gpui_kit::Action)]
+#[action(namespace = dodo, no_json)]
+struct ActivateSection(usize);
+
+/// Registers the section-switch key bindings.
+///
+/// Must run after `gpui_kit::component::init`, the same ordering rule
+/// `quick_nav::init` and the feature crates' `init`s depend on: a binding
+/// registered later wins a tie at equal context depth.
+///
+/// Both `Cmd`+_N_ and `Ctrl`+_N_ are bound on every platform, exactly as
+/// `quick_nav` binds both clipboard chords — a Linux user on a Mac keyboard is
+/// not an interesting mistake to punish — and both are scoped to
+/// [`quick_nav::KEY_CONTEXT`], the pane's own context, so they fire whenever the
+/// window is up (the pane wraps everything, focused input included, which is
+/// why `Cmd`+2 switches sections mid-type as a browser's tab shortcut does).
+pub fn init(cx: &mut App) {
+    let mut bindings = Vec::with_capacity(SECTION_SHORTCUTS * 2);
+    for index in 0..SECTION_SHORTCUTS {
+        let digit = index + 1;
+        bindings.push(KeyBinding::new(
+            &format!("cmd-{digit}"),
+            ActivateSection(index),
+            Some(quick_nav::KEY_CONTEXT),
+        ));
+        bindings.push(KeyBinding::new(
+            &format!("ctrl-{digit}"),
+            ActivateSection(index),
+            Some(quick_nav::KEY_CONTEXT),
+        ));
     }
+    cx.bind_keys(bindings);
 }
 
 /// The widths and heights the layout is built from, in logical pixels. They are
@@ -56,254 +120,28 @@ fn pane_title(view: View, docker_page: DockerPage) -> Str {
 /// which that crowding was first recorded.
 const MAIN_MIN_WIDTH: f32 = 520.;
 const MAIN_MIN_HEIGHT: f32 = 360.;
-/// The sidebar's two widths. The collapsed one is `COLLAPSED_WIDTH` in the
-/// pinned checkout's `sidebar/mod.rs`, which the library does not export.
-const SIDEBAR_WIDTH: f32 = 240.;
-const SIDEBAR_RAIL_WIDTH: f32 = 48.;
-/// The pane's own chrome around the tool: `p_4` left and right; and `p_4` top
-/// and bottom plus the header row (`h_8`) and the `gap_4` under it.
+/// The icon rail's width, and the size of the tool glyphs on it. Wider than a
+/// plain menu's collapsed rail (which the library draws at 48px around a 16px
+/// icon): the rail is the primary navigation now, so its icons are large enough
+/// to read at a glance in the style of a chat app's left rail.
+const SIDEBAR_RAIL_WIDTH: f32 = 56.;
+const SIDEBAR_ICON_SIZE: f32 = 22.;
+/// The pane's own chrome around the tool: `p_4` left and right, and `p_4` top
+/// and bottom. The title bar's height is added on top of the vertical figure by
+/// [`window_min_size`].
 const PANE_CHROME_WIDTH: f32 = 32.;
-const PANE_CHROME_HEIGHT: f32 = 80.;
+const PANE_CHROME_HEIGHT: f32 = 32.;
 
-/// The window width at which the sidebar gives up its labels.
-///
-/// **Derived, not chosen**: it is exactly the width at which an expanded
-/// sidebar would push the main pane below [`MAIN_MIN_WIDTH`]. Narrower than
-/// this and the labels are costing the content more than they are worth.
-const AUTO_COLLAPSE_WIDTH: f32 = SIDEBAR_WIDTH + PANE_CHROME_WIDTH + MAIN_MIN_WIDTH;
-
-/// The smallest window dodo asks the platform to allow: the icon rail, plus the
-/// main pane at its minimum. Handed to `WindowOptions::window_min_size` in
-/// `main.rs`, which is what stops a drag before the layout has to cope at all —
-/// the scroll container in [`Layout::render`] is the fallback for when it does.
+/// The smallest window dodo asks the platform to allow: the title bar, the icon
+/// rail, and the main pane at its minimum. Handed to
+/// `WindowOptions::window_min_size` in `main.rs`, which is what stops a drag
+/// before the layout has to cope at all — the scroll container in
+/// [`Layout::render`] is the fallback for when it does.
 pub fn window_min_size() -> Size<Pixels> {
     size(
         px(SIDEBAR_RAIL_WIDTH + PANE_CHROME_WIDTH + MAIN_MIN_WIDTH),
-        px(PANE_CHROME_HEIGHT + MAIN_MIN_HEIGHT),
+        TITLE_BAR_HEIGHT + px(PANE_CHROME_HEIGHT + MAIN_MIN_HEIGHT),
     )
-}
-
-/// Whether the sidebar is showing icons only, and how it came to be that way.
-///
-/// **The width rule is edge-triggered, and that is the whole reason this is a
-/// struct rather than a `width < AUTO_COLLAPSE_WIDTH` test inside `render`.** A
-/// level-triggered rule re-collapses the sidebar on the very next frame after
-/// the user expands it, so at a narrow width the toggle would appear broken —
-/// a control that undoes itself is worse than no control at all. Only the
-/// window *crossing* the breakpoint moves the sidebar:
-///
-/// * Crossing downward collapses it, and records that the width did it.
-/// * Crossing upward expands it again — but only if the collapse was the
-///   width's own. A sidebar the user collapsed by hand stays collapsed.
-/// * The toggle always wins and hands ownership back to the user: after a
-///   manual press the sidebar stays exactly as left until the next crossing.
-///
-/// The `collapsed` flag **is** persisted, in `session.json`; the other two are
-/// not, and must not be — see [`SidebarState::restored`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct SidebarState {
-    collapsed: bool,
-    /// Set only when [`SidebarState::resize`] was the one that collapsed it,
-    /// which is what [`SidebarState::resize`] later needs in order to know
-    /// whether re-expanding would be restoring the user's state or overriding
-    /// it.
-    collapsed_by_width: bool,
-    /// Which side of the breakpoint the last width was on, or `None` before the
-    /// first frame — so the first width ever seen is recorded rather than
-    /// treated as a crossing, and the opening state is whatever [`Layout::new`]
-    /// asked for.
-    narrow: Option<bool>,
-}
-
-impl SidebarState {
-    /// How dodo opens with nothing saved: on the icon rail, by choice rather
-    /// than by width.
-    const fn new() -> Self {
-        Self {
-            collapsed: true,
-            collapsed_by_width: false,
-            narrow: None,
-        }
-    }
-
-    /// How dodo opens with a saved sidebar.
-    ///
-    /// **Only `collapsed` is restored, and the other two fields are reset**,
-    /// which is the whole subtlety here. `collapsed_by_width` says "the width
-    /// rule did this, so the width rule may undo it", and that is a claim about
-    /// a window size from the *last* run — restoring it would let the first
-    /// widening past the breakpoint expand a sidebar the user had collapsed by
-    /// hand. `narrow` stays `None` so the first width this run sees is recorded
-    /// rather than treated as a crossing, exactly as on a fresh start; the
-    /// restored state is then whatever the user left, at any window size.
-    const fn restored(collapsed: bool) -> Self {
-        Self {
-            collapsed,
-            collapsed_by_width: false,
-            narrow: None,
-        }
-    }
-
-    /// Apply the width rule to a new window width.
-    ///
-    /// Pure, and idempotent for any width on the same side of the breakpoint —
-    /// which is what makes it safe to call once per frame from `render`.
-    fn resize(mut self, width: Pixels) -> Self {
-        let narrow = width < px(AUTO_COLLAPSE_WIDTH);
-        let crossed = self.narrow.is_some_and(|was| was != narrow);
-        self.narrow = Some(narrow);
-
-        if !crossed {
-            return self;
-        }
-
-        if narrow {
-            if !self.collapsed {
-                self.collapsed = true;
-                self.collapsed_by_width = true;
-            }
-        } else if self.collapsed_by_width {
-            self.collapsed = false;
-            self.collapsed_by_width = false;
-        }
-
-        self
-    }
-
-    /// The user pressed the toggle. Their choice, and theirs to keep.
-    fn toggle(self) -> Self {
-        Self {
-            collapsed: !self.collapsed,
-            collapsed_by_width: false,
-            ..self
-        }
-    }
-}
-
-/// A tool row that names itself while the sidebar is collapsed to icons.
-///
-/// **Wrapping is the only way to get that tooltip, and there is no risk of a
-/// second one.** `SidebarMenuItem` at the pinned revision has no tooltip of its
-/// own — `sidebar/menu.rs` has neither the field nor the builder — and
-/// `SidebarMenu::children` accepts nothing but a `SidebarMenuItem`, so it
-/// cannot be added from inside the menu either. `SidebarItem` is public though,
-/// and `SidebarGroup` takes any implementation of it, so the rows go into the
-/// group directly, each inside a `div` carrying the tooltip. `SidebarGroup`
-/// already stacks its children with the same `gap_2` `SidebarMenu` used, so
-/// dropping `SidebarMenu` changes nothing that is drawn.
-///
-/// This is still one flat row per tool — [`SidebarMenuItem::children`] stays
-/// unused, for the reason [`View`] gives.
-#[derive(Clone)]
-struct ToolItem {
-    item: SidebarMenuItem,
-    /// The row's own translated title, the very string its label shows. A
-    /// tooltip that read differently from the label would be a second string
-    /// to translate and a second thing to keep in step.
-    title: SharedString,
-    collapsed: bool,
-}
-
-impl Collapsible for ToolItem {
-    fn is_collapsed(&self) -> bool {
-        self.collapsed
-    }
-
-    fn collapsed(mut self, collapsed: bool) -> Self {
-        self.collapsed = collapsed;
-        self
-    }
-}
-
-impl SidebarItem for ToolItem {
-    fn render(
-        self,
-        id: impl Into<ElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> impl IntoElement {
-        let id = id.into();
-        let collapsed = self.collapsed;
-        let title = self.title;
-
-        div()
-            // Its own id, not the row's: `tooltip` comes from
-            // `StatefulInteractiveElement`, so the wrapper has to be stateful,
-            // and reusing the row's id for the element above it reads like a
-            // mistake even though the two paths differ.
-            .id(SharedString::from(format!("tool-tip-{id}")))
-            .w_full()
-            .when(collapsed, |this| {
-                this.tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
-            })
-            .child(self.item.collapsed(collapsed).render(id, window, cx))
-    }
-}
-
-/// One sidebar-footer row: the icon, and the label beside it when the sidebar
-/// is wide enough to have one.
-///
-/// **Lining the collapsed icon up with the tool icons above is arithmetic, not
-/// taste**, and it is worth writing down because two of the three numbers come
-/// from inside the widget library (`sidebar/mod.rs`, `sidebar/menu.rs` and
-/// `button/button.rs` in the pinned checkout):
-///
-/// * Collapsed the rail is 48px and `Sidebar` insets the menu (`#inner`'s
-///   `p_2`) and the footer (`px_2`) by the same 8px, so each gets the same
-///   31px-wide box. A menu row fills that box and centres its icon in it, so
-///   the footer button has to fill it too — hence `w_full` and **`px_0`**,
-///   because `Button`'s own `px_4` is wider than the whole box and pushes its
-///   contents out past the right-hand edge.
-/// * Expanded both are inset 12px (`px_3`) and a menu row puts its icon 8px
-///   further in (`p_2`), so `px_2` on the button lands the footer icon in the
-///   same column, and the label in the same column as the row labels.
-///
-/// Two things this deliberately does *not* use, having read what they do:
-///
-/// * **`SidebarFooter`** — it adds a second `p_2` the menu rows do not have,
-///   which halves the collapsed box to 15px and leaves no way to reach the
-///   rail's centre, plus a hover highlight spanning the whole footer that a
-///   menu row has no counterpart for. `Sidebar::footer` takes any element, so
-///   the `v_flex` goes in directly. It is still a stack rather than two loose
-///   buttons: the sidebar's own footer wrapper is an `h_flex`, so siblings
-///   would sit side by side.
-/// * **`.justify_start()`** — which these buttons used to carry, and which
-///   cannot align anything here: `Button` wraps its children in an
-///   `h_flex().size_full().justify_center()`, so the outer justification never
-///   reaches the icon. The child's own `w_full` is what left-aligns the
-///   expanded row.
-fn footer_button(
-    id: &'static str,
-    icon: AppIcon,
-    label: Str,
-    icon_collapsed: bool,
-    cx: &App,
-) -> Button {
-    // Translated once: collapsed it is the tooltip, expanded it is the label.
-    // The tooltip is never a second string written for the purpose.
-    let label = t(label, cx);
-
-    Button::new(id)
-        .ghost()
-        .w_full()
-        .map(|this| {
-            if icon_collapsed {
-                this.px_0().tooltip(label.clone())
-            } else {
-                this.px_2()
-            }
-        })
-        .child(
-            h_flex()
-                .gap_2()
-                .when(!icon_collapsed, |this| this.w_full())
-                .child(icon.view())
-                .when(!icon_collapsed, |this| {
-                    // Fixed-length label in a 240px-wide sidebar: without these
-                    // it wraps to two lines and pushes the footer taller.
-                    this.child(div().flex_shrink_0().whitespace_nowrap().child(label))
-                }),
-        )
 }
 
 /// The box the active tool is rendered into, and the scroll container around
@@ -343,9 +181,7 @@ fn tool_box() -> Div {
 }
 
 /// The scroll container [`tool_box`] is the sole child of. A column flex, so
-/// that box can grow past the pane instead of being stretched to it; the pane
-/// header stays outside, so the pane title and the sidebar toggle never scroll
-/// away.
+/// that box can grow past the pane instead of being stretched to it.
 fn main_pane() -> Stateful<Div> {
     div()
         .id("main-pane")
@@ -358,8 +194,10 @@ fn main_pane() -> Stateful<Div> {
 }
 
 pub struct Layout {
-    collapsible: SidebarCollapsible,
-    sidebar: SidebarState,
+    /// Whether the whole sidebar is hidden. It is icon-only when shown; the
+    /// title bar's toggle is the only thing that flips this, and the value is
+    /// persisted in `session.json` (via [`Session::sidebar_collapsed`]).
+    sidebar_hidden: bool,
     active: View,
     /// Which tools the sidebar lists, and in what order — the Features settings
     /// page, resolved against this build's [`View::ALL`].
@@ -385,6 +223,12 @@ pub struct Layout {
     /// Keeps the window-bounds observer alive: a `Subscription` unsubscribes
     /// when it drops, so this field is the subscription, not bookkeeping.
     _bounds: Subscription,
+    /// Repaints the title bar when the updater's [`AvailableUpdate`] global
+    /// changes, so the Update button appears (or vanishes) the moment a check
+    /// finds (or clears) an offer — including the check the tray runs on reopen.
+    ///
+    /// [`AvailableUpdate`]: crate::updater::AvailableUpdate
+    _update: Subscription,
     /// Re-checks macOS Accessibility after Dodo returns from System Settings.
     #[cfg(target_os = "macos")]
     _activation: Subscription,
@@ -396,18 +240,10 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// With nothing saved, dodo opens on the **icon rail**, not the labelled
-    /// sidebar: the tools are a handful of entries a user learns once, and the
-    /// pane they are choosing between is the whole point of the window, so
-    /// 240px of permanent chrome is a poor default. The toggle in the pane
-    /// header is unchanged, and every collapsed icon carries its title as a
-    /// tooltip, which is what keeps the rail readable to someone who has not
-    /// learned it yet.
-    ///
-    /// **That, the open tool and the tool list itself are restored from
-    /// `session.json`** when there is one — the captain asked for session
-    /// restoration on 2026-08-06, which is also what settles the sidebar
-    /// question the sidebar round left open as being above that worker. See
+    /// With nothing saved, dodo opens with the icon rail **shown** — the tools
+    /// are the whole point of the window and the rail is a thin strip — and on
+    /// the first tool. The open tool, the tool list and whether the sidebar was
+    /// hidden are all restored from `session.json` when there is one; see
     /// [`crate::session`].
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // The menu bar item's Settings row opens this pane's dialog, and
@@ -431,10 +267,10 @@ impl Layout {
         let features = Features::resolve(Session::tools(cx).as_deref(), &View::codes());
         let active = View::shown(&features, Session::active_tool(cx).as_deref());
 
-        let sidebar = match Session::sidebar_collapsed(cx) {
-            Some(collapsed) => SidebarState::restored(collapsed),
-            None => SidebarState::new(),
-        };
+        // Restored when saved, shown by default. The persisted flag now means
+        // "hidden entirely" rather than the old "collapsed to icons", because
+        // the rail no longer has an expanded form to collapse from.
+        let sidebar_hidden = Session::sidebar_collapsed(cx).unwrap_or(false);
 
         // Every tool's view at once, in the table's order. The `Panes` struct
         // is generated from the same rows the sidebar is, so there is no list
@@ -449,8 +285,7 @@ impl Layout {
         }
 
         Self {
-            collapsible: SidebarCollapsible::Icon,
-            sidebar,
+            sidebar_hidden,
             active,
             features,
             focus,
@@ -468,6 +303,9 @@ impl Layout {
                     .map(|uuid| uuid.to_string());
                 Session::set_window(window.window_bounds(), display, cx);
             }),
+            // Only a repaint: the button reads the global directly in `render`,
+            // so nothing here has to carry the version — it just has to notice.
+            _update: cx.observe_global::<updater::AvailableUpdate>(|_, cx| cx.notify()),
             #[cfg(target_os = "macos")]
             _activation: cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
@@ -493,6 +331,34 @@ impl Layout {
         // drops a change that leaves the document as it was.
         Session::set_active_tool(view.code(), cx);
         cx.notify();
+    }
+
+    /// `Cmd`/`Ctrl`+_N_: switch to the tool at position _N_ in the visible list.
+    ///
+    /// A digit past the last visible tool does nothing — the list is the user's
+    /// own, so the ninth shortcut on a six-tool sidebar is simply inert rather
+    /// than an error.
+    fn activate_section(
+        &mut self,
+        action: &ActivateSection,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ActivateSection(index) = *action;
+        // Bind the tool before touching `self` mutably: `visible_tools`
+        // borrows `self` immutably, and its iterator must be dropped before
+        // `activate` can take the mutable borrow.
+        let target = self.visible_tools().nth(index);
+        if let Some(view) = target {
+            self.activate(view, cx);
+        }
+    }
+
+    /// The tools the sidebar draws, in the user's own order — the one list both
+    /// the rail and the section shortcuts index into, so a shortcut can never
+    /// point at a different tool than the icon it labels.
+    fn visible_tools(&self) -> impl Iterator<Item = View> + '_ {
+        self.features.visible().filter_map(View::lookup)
     }
 
     /// The sidebar's tools, shown or not, in the user's order. What the
@@ -684,173 +550,181 @@ impl Layout {
         cx.notify();
     }
 
-    /// The sidebar menu: one flat row per **visible** tool, in the user's own
-    /// order, no nesting. Nesting is what the icon-collapsed sidebar cannot
-    /// render, so there is none.
+    /// The custom title bar: the window controls (the platform's own), the
+    /// sidebar toggle by the sidebar it hides, the Settings and Update buttons,
+    /// and the Dodo mark on the edge opposite the OS controls.
     ///
-    /// A `Vec` rather than the fixed-size array this used to return, because
-    /// the number of rows is now the user's choice. It is never empty:
-    /// `Features` will not let the last tool be switched off.
-    fn menu(&self, cx: &mut Context<Self>) -> Vec<ToolItem> {
-        self.features
-            .visible()
-            .filter_map(View::lookup)
-            .map(|view| self.tool_item(view, cx))
-            .collect()
-    }
+    /// The [`TitleBar`] lays its two children out with `justify_between`, so the
+    /// left cluster sits by the controls' side and the right cluster reaches the
+    /// far edge. On macOS the controls are top-left, so the Dodo mark goes on
+    /// the right; on Windows and Linux they are top-right, so it goes on the
+    /// left — the Settings and Update buttons stay together beside the controls
+    /// in both.
+    fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // macOS is the one platform whose window controls are on the left.
+        let controls_on_left = cfg!(target_os = "macos");
 
-    /// A flat, top-level tool row. Docker is one of these like any other: the
-    /// click enters the section on whichever page its rail last had selected,
-    /// which resumes that page's polling; every other tool pauses it.
-    fn tool_item(&self, view: View, cx: &mut Context<Self>) -> ToolItem {
-        let layout = cx.entity();
-        let title = t(view.title(), cx);
-        let item = SidebarMenuItem::new(title.clone())
-            .icon(view.icon().view())
-            .active(self.active == view)
-            .on_click(move |_, _, cx| {
-                layout.update(cx, |this, cx| this.activate(view, cx));
+        let toggle = Button::new("toggle-sidebar")
+            .ghost()
+            .child(
+                (if self.sidebar_hidden {
+                    AppIcon::PanelLeftOpen
+                } else {
+                    AppIcon::PanelLeftClose
+                })
+                .view(),
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.sidebar_hidden = !this.sidebar_hidden;
+                Session::set_sidebar_collapsed(this.sidebar_hidden, cx);
+                cx.notify();
+            }));
+
+        let settings = Button::new("open-settings")
+            .ghost()
+            .child(AppIcon::Settings.view())
+            .on_click({
+                // The dialog's Features page edits this pane's tool list, so it
+                // is handed a handle to it. Weak, and taken here rather than
+                // inside the closure: `Button::on_click` is given an `&mut App`,
+                // not a `Context<Self>`.
+                let layout = cx.entity().downgrade();
+                move |_, window, cx| settings::open(layout.clone(), window, cx)
             });
 
-        ToolItem {
-            item,
-            title,
-            // `SidebarGroup` hands every child its own collapsed state on the
-            // way to rendering it, so this is only a starting value.
-            collapsed: false,
+        // Shown only when a check has found a newer version — the button is
+        // absent otherwise. Opens the very dialog the sidebar's old "Check for
+        // updates" opened; the visibility and the version text both come from
+        // the updater's `AvailableUpdate` global, not a second mechanism.
+        let update = updater::AvailableUpdate::get(cx).map(|info| {
+            Button::new("update-available")
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .items_center()
+                        .child(AppIcon::Download.view())
+                        .child(t(shell::Text::NewVersion(info.version.clone()), cx)),
+                )
+                .on_click(|_, window, cx| updater::open(window, cx))
+        });
+
+        let mark = div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size_6()
+            .child(AppIcon::Dodo.view().with_size(px(20.)));
+
+        let divider = || div().w(px(1.)).h_5().bg(cx.theme().title_bar_border);
+
+        let mut left = h_flex().items_center().gap_1();
+        let mut right = h_flex().items_center().gap_1();
+
+        // The Dodo mark rides on the edge opposite the OS controls.
+        if controls_on_left {
+            left = left.child(toggle);
+            right = right
+                .children(update)
+                .child(settings)
+                .child(divider())
+                .child(mark);
+        } else {
+            left = left.child(mark).child(divider()).child(toggle);
+            right = right.children(update).child(settings);
         }
+
+        TitleBar::new().child(left).child(right)
+    }
+
+    /// The icon-only sidebar rail: one large glyph per **visible** tool, in the
+    /// user's own order, each naming itself and its shortcut on hover.
+    fn rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .id("sidebar-rail")
+            .h_full()
+            .flex_shrink_0()
+            .w(px(SIDEBAR_RAIL_WIDTH))
+            .py_2()
+            .gap_1()
+            .items_center()
+            .bg(cx.theme().sidebar)
+            .border_r_1()
+            .border_color(cx.theme().sidebar_border)
+            .children(
+                self.visible_tools()
+                    .enumerate()
+                    .map(|(index, view)| self.rail_item(index, view, cx))
+                    .collect::<Vec<_>>(),
+            )
+    }
+
+    /// One rail row: the tool's glyph, its active highlight, and its hover label
+    /// — the tool's own translated name, followed by the `Cmd`/`Ctrl` shortcut
+    /// that reaches it. The label and the binding are one [`section_shortcut`]
+    /// apart, so they read the same key.
+    fn rail_item(&self, index: usize, view: View, cx: &mut Context<Self>) -> Button {
+        let layout = cx.entity();
+        let name = t(view.title(), cx);
+        let tooltip: SharedString = match section_shortcut(index) {
+            Some(shortcut) => format!("{name}  {shortcut}").into(),
+            None => name,
+        };
+
+        Button::new(("rail-item", index))
+            .ghost()
+            .selected(self.active == view)
+            .w(px(SIDEBAR_RAIL_WIDTH - 12.))
+            .tooltip(tooltip)
+            .child(view.icon().view().with_size(px(SIDEBAR_ICON_SIZE)))
+            .on_click(move |_, _, cx| {
+                layout.update(cx, |this, cx| this.activate(view, cx));
+            })
     }
 }
 
 impl Render for Layout {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The width rule is applied here rather than from a resize observer,
-        // and deliberately without a `cx.notify()`: GPUI re-renders on resize
-        // anyway, this frame is built from the value below, and `resize` is
-        // idempotent within one side of the breakpoint — so a frame at an
-        // unchanged width changes nothing and no render can schedule another.
-        self.sidebar = self.sidebar.resize(window.viewport_size().width);
-
-        let icon_collapsed = self.sidebar.collapsed && self.collapsible == SidebarCollapsible::Icon;
-        let title = pane_title(self.active, self.panes.docker.read(cx).page());
-
-        h_flex()
-            // The pane is where quick navigation's key bindings live, and
-            // `track_focus` is what puts this node in a keystroke's dispatch
-            // path. Both halves are load-bearing: without the context the
-            // bindings never match, and without the focus handle they stop
-            // matching the moment nothing else is focused. See
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            // The pane is where quick navigation's and the section shortcuts'
+            // key bindings live, and `track_focus` is what puts this node in a
+            // keystroke's dispatch path. Both halves are load-bearing: without
+            // the context the bindings never match, and without the focus handle
+            // they stop matching the moment nothing else is focused. See
             // [`Layout::focus`].
             .key_context(quick_nav::KEY_CONTEXT)
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::quick_navigate))
             .on_action(cx.listener(Self::leave_insert_mode))
+            .on_action(cx.listener(Self::activate_section))
             .size_full()
             .bg(cx.theme().background)
+            .child(self.title_bar(cx))
             .child(
-                Sidebar::new("side-bar")
-                    .collapsible(self.collapsible)
-                    .collapsed(self.sidebar.collapsed)
-                    .w(px(SIDEBAR_WIDTH))
-                    .header(
-                        SidebarHeader::new().child(
-                            h_flex()
-                                .gap_2()
-                                .child(AppIcon::Dodo.view())
-                                // Collapsed to icons the header keeps the mark
-                                // and drops the word, the same treatment the
-                                // Settings button below uses. "Dodo" is the
-                                // product name and stays untranslated.
-                                .when(!icon_collapsed, |this| this.child("Dodo")),
-                        ),
-                    )
-                    .child(SidebarGroup::new(t(shell::Text::Tools, cx)).children(self.menu(cx)))
-                    .footer(
-                        // A plain stack, not a `SidebarFooter` — see
-                        // [`footer_button`] for why, and for where its two
-                        // paddings come from. `gap_2` is the menu's own row
-                        // gap, so collapsed the icons keep the same rhythm all
-                        // the way down the rail.
-                        v_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(
-                                // Beside Settings rather than inside it: this is
-                                // an action, not a preference, and the one
-                                // preference it carries ("check automatically")
-                                // lives in the dialog it opens.
-                                footer_button(
-                                    "check-for-updates",
-                                    AppIcon::Download,
-                                    shell::Text::CheckForUpdates.into(),
-                                    icon_collapsed,
-                                    cx,
-                                )
-                                .on_click(|_, window, cx| updater::open(window, cx)),
-                            )
-                            .child(
-                                footer_button(
-                                    "open-settings",
-                                    AppIcon::Settings,
-                                    shell::Text::Settings.into(),
-                                    icon_collapsed,
-                                    cx,
-                                )
-                                // The dialog's Features page edits this pane's
-                                // tool list, so it is handed a handle to it.
-                                // Weak, and taken here rather than inside the
-                                // closure: `Button::on_click` is given an
-                                // `&mut App`, not a `Context<Self>`.
-                                .on_click({
-                                    let layout = cx.entity().downgrade();
-                                    move |_, window, cx| settings::open(layout.clone(), window, cx)
-                                }),
-                            ),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .h_full()
+                h_flex()
+                    .w_full()
                     .flex_1()
-                    .min_w_0()
-                    .gap_4()
-                    .p_4()
+                    .min_h_0()
+                    // The toggle hides the whole rail; shown, it is the icon
+                    // sidebar.
+                    .when(!self.sidebar_hidden, |this| this.child(self.rail(cx)))
                     .child(
-                        h_flex()
-                            .items_center()
-                            .gap_3()
+                        v_flex()
+                            .h_full()
+                            .flex_1()
+                            .min_w_0()
+                            .p_4()
+                            // The tool scrolls rather than being squeezed, and
+                            // how that is arranged is [`main_pane`] and
+                            // [`tool_box`]. …and which tool goes in the box is
+                            // the table's answer, not a `match` here:
+                            // `Panes::place` is generated from the same rows the
+                            // rail walks, so a tool cannot be listed in one and
+                            // missing from the other.
                             .child(
-                                Button::new("toggle-sidebar")
-                                    .child(
-                                        (if icon_collapsed {
-                                            AppIcon::PanelLeftOpen
-                                        } else {
-                                            AppIcon::PanelLeftClose
-                                        })
-                                        .view(),
-                                    )
-                                    .ghost()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.sidebar = this.sidebar.toggle();
-                                        // The user's own choice, and the only
-                                        // one worth remembering: a collapse the
-                                        // *width* caused is this window's
-                                        // business, not the next launch's.
-                                        Session::set_sidebar_collapsed(this.sidebar.collapsed, cx);
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(div().font_bold().child(t(title, cx))),
-                    )
-                    // The tool scrolls rather than being squeezed, and how
-                    // that is arranged is [`main_pane`] and [`tool_box`].
-                    // …and which tool goes in the box is the table's answer,
-                    // not a `match` here: `Panes::place` is generated from the
-                    // same rows the sidebar walks, so a tool cannot be listed
-                    // in one and missing from the other.
-                    .child(
-                        main_pane()
-                            .child(tool_box().map(|this| self.panes.place(self.active, this))),
+                                main_pane().child(
+                                    tool_box().map(|this| self.panes.place(self.active, this)),
+                                ),
+                            ),
                     ),
             )
     }
@@ -859,34 +733,21 @@ impl Render for Layout {
 #[cfg(test)]
 mod tests {
 
-    use gpui_kit::component::Collapsible as _;
-    use gpui_kit::component::sidebar::SidebarMenuItem;
     use gpui_kit::{Display, FlexDirection, Length, Overflow, Styled as _, px, relative};
 
     use super::{
-        AUTO_COLLAPSE_WIDTH, Layout, MAIN_MIN_HEIGHT, MAIN_MIN_WIDTH, PANE_CHROME_HEIGHT,
-        PANE_CHROME_WIDTH, SIDEBAR_RAIL_WIDTH, SIDEBAR_WIDTH, SidebarState, ToolItem, main_pane,
-        pane_title, tool_box, window_min_size,
+        Layout, MAIN_MIN_HEIGHT, MAIN_MIN_WIDTH, PANE_CHROME_HEIGHT, PANE_CHROME_WIDTH,
+        SECTION_SHORTCUTS, SIDEBAR_RAIL_WIDTH, main_pane, section_shortcut, tool_box,
+        window_min_size,
     };
-    use crate::docker::DockerPage;
-    use crate::i18n::{Str, docker};
     use crate::quick_nav::models::detect::{Detector, Patterns, detect_among};
     use crate::session::models::features::Features;
     use crate::tools::View;
-
-    /// A width comfortably on each side of the breakpoint. 1280 and 520 are the
-    /// two the layout is reviewed at.
-    const WIDE: f32 = 1280.;
-    const NARROW: f32 = 520.;
 
     /// The tool list of someone who has never opened the Features page: every
     /// tool, in `View::ALL` order, all of them visible.
     fn everything() -> Features {
         Features::resolve(None, &View::codes())
-    }
-
-    fn title_of(view: View, page: DockerPage) -> Str {
-        pane_title(view, page)
     }
 
     /// The source of one item, from its signature down to the next line that
@@ -901,6 +762,134 @@ mod tests {
             Some(end) => &body[..end],
             None => body,
         }
+    }
+
+    // ---- the section shortcuts --------------------------------------------
+
+    /// **The shortcut label and the key binding are one function apart.** The
+    /// hover label the user reads is [`section_shortcut`], and `init` binds the
+    /// same digits — so the two cannot say different things. This pins the
+    /// label side: item _N_ reads `Cmd`/`Ctrl`+_N_, 1-based.
+    #[test]
+    fn the_first_nine_sections_carry_a_one_based_shortcut() {
+        let modifier = if cfg!(target_os = "macos") {
+            "Cmd"
+        } else {
+            "Ctrl"
+        };
+
+        for index in 0..SECTION_SHORTCUTS {
+            assert_eq!(
+                section_shortcut(index).as_deref(),
+                Some(format!("{modifier}+{}", index + 1)).as_deref(),
+            );
+        }
+        // The tenth tool and beyond has no digit key, so no shortcut label.
+        assert_eq!(section_shortcut(SECTION_SHORTCUTS), None);
+        assert_eq!(section_shortcut(SECTION_SHORTCUTS + 3), None);
+    }
+
+    /// The digits reach exactly the sidebar's own list, in the user's own
+    /// order: `Cmd`/`Ctrl`+1 is the first *visible* tool, whatever the user
+    /// dragged there, and a hidden tool is skipped rather than counted.
+    ///
+    /// `activate_section` cannot run without a window (it calls `activate`,
+    /// which touches an entity), so the mapping it depends on is asserted on the
+    /// same iterator `activate_section` indexes — `visible()`+`lookup`, the
+    /// definition `Layout::visible_tools` wraps.
+    #[test]
+    fn a_section_digit_indexes_the_visible_list_in_the_users_order() {
+        let mut features = everything();
+        features.move_to(View::Database.code(), 0);
+        features
+            .set_enabled(View::JsonFormatter.code(), false)
+            .expect("the others remain");
+
+        let visible: Vec<View> = features.visible().filter_map(View::lookup).collect();
+
+        // Digit 1 is the tool the user dragged to the top…
+        assert_eq!(visible.first().copied(), Some(View::Database));
+        // …and the hidden tool is nowhere in the indexable list.
+        assert!(!visible.contains(&View::JsonFormatter));
+
+        // Every in-range digit lands on a real, still-visible tool.
+        for index in 0..visible.len().min(SECTION_SHORTCUTS) {
+            assert_eq!(
+                visible.get(index).copied(),
+                visible.iter().copied().nth(index)
+            );
+            assert!(section_shortcut(index).is_some());
+        }
+        // A digit past the end is inert — `nth` returns `None`, and
+        // `activate_section` does nothing with it.
+        assert_eq!(visible.iter().copied().nth(visible.len()), None);
+    }
+
+    /// `init` binds both the `Cmd` and the `Ctrl` chord for every section, so a
+    /// source scan is the only window-free way to hold the count: the key
+    /// binding really is `cmd-N`/`ctrl-N` for 1..=9, matching the labels.
+    #[test]
+    fn init_binds_both_chords_for_every_shortcut_section() {
+        let source = include_str!("layout.rs");
+        let init = item_source(source, "pub fn init(cx: &mut App)");
+        assert!(init.contains("\"cmd-{digit}\""));
+        assert!(init.contains("\"ctrl-{digit}\""));
+        // Bound at the pane's own context, so they fire whenever the window is
+        // up — including with an input focused, like a browser's tab shortcut.
+        assert!(init.contains("quick_nav::KEY_CONTEXT"));
+    }
+
+    // ---- the title bar's Update button ------------------------------------
+
+    /// **The button is drawn iff a check found an update**, and the check drives
+    /// it through one global. This pins the visibility rule at its source: the
+    /// title bar reads `AvailableUpdate::get`, whose `Some`/`None` is the whole
+    /// of "an update is available". `record_check` in the updater is the only
+    /// writer, and its own crate tests that a found check sets it and an
+    /// up-to-date one clears it.
+    #[test]
+    fn the_update_button_is_gated_on_the_updater_global() {
+        let source = include_str!("layout.rs");
+        let title_bar = item_source(source, "fn title_bar(&self");
+
+        assert!(
+            title_bar.contains("updater::AvailableUpdate::get(cx).map("),
+            "the Update button must be built from the updater's availability \
+             global, so it is present exactly when a check found a newer version",
+        );
+        assert!(
+            title_bar.contains("updater::open"),
+            "clicking it must open the existing update dialog, not a new flow",
+        );
+        // The version text is the translated `NewVersion` string carrying the
+        // detected version — never a bare literal.
+        assert!(title_bar.contains("shell::Text::NewVersion(info.version"));
+    }
+
+    /// Trap 7's second half. `crate::tools` proves neither Settings nor the
+    /// updater is a row in the table; this proves the Settings button is still
+    /// reachable — it moved to the title bar, and the Features page it opens is
+    /// the only way back from a sidebar the user has cut down to one tool.
+    #[test]
+    fn settings_stays_reachable_from_the_title_bar() {
+        let source = include_str!("layout.rs");
+        let title_bar = item_source(source, "fn title_bar(&self");
+        assert!(
+            title_bar.contains("\"open-settings\""),
+            "the Settings button has left the title bar; the Features page \
+             assumes it is always reachable",
+        );
+    }
+
+    /// Every rail icon still names itself on hover — the icon rail is the only
+    /// thing a row is now, so an anonymous glyph is a dead end. The label also
+    /// carries the shortcut, which is what `section_shortcut` is for.
+    #[test]
+    fn every_rail_icon_names_itself_and_its_shortcut_on_hover() {
+        let source = include_str!("layout.rs");
+        let rail_item = item_source(source, "fn rail_item(&self");
+        assert!(rail_item.contains(".tooltip("));
+        assert!(rail_item.contains("section_shortcut(index)"));
     }
 
     // ---- quick navigation meets the tool list ------------------------------
@@ -989,222 +978,22 @@ mod tests {
         }
     }
 
-    /// The sidebar's restored flag is the user's own choice and nothing else.
-    /// Restoring `collapsed_by_width` would let the first widening past the
-    /// breakpoint expand a sidebar the user had collapsed by hand — using a
-    /// window size from the *previous* run to justify it.
-    #[test]
-    fn a_restored_sidebar_carries_only_the_users_own_choice() {
-        for collapsed in [true, false] {
-            let restored = SidebarState::restored(collapsed);
-            assert_eq!(restored.collapsed, collapsed);
-            assert!(!restored.collapsed_by_width);
-            assert!(restored.narrow.is_none());
-
-            // …so the first width this run sees is recorded, not acted on.
-            assert_eq!(restored.resize(px(WIDE)).collapsed, collapsed);
-            assert_eq!(restored.resize(px(NARROW)).collapsed, collapsed);
-        }
-    }
-
-    /// A sidebar restored expanded still collapses when the window is dragged
-    /// narrow, and comes back when it is widened — the width rule is unchanged
-    /// by restoration.
-    #[test]
-    fn the_width_rule_still_applies_to_a_restored_sidebar() {
-        let restored = SidebarState::restored(false).resize(px(WIDE));
-        let collapsed = restored.resize(px(NARROW));
-        assert!(collapsed.collapsed && collapsed.collapsed_by_width);
-        assert!(!collapsed.resize(px(WIDE)).collapsed);
-    }
+    // ---- the window floor --------------------------------------------------
 
     #[test]
-    fn the_breakpoint_is_where_labels_would_start_costing_the_pane_its_minimum() {
-        // The rule the constant exists to express: at exactly the breakpoint an
-        // expanded sidebar still leaves the main pane its minimum, and one pixel
-        // narrower it does not.
-        assert_eq!(
-            AUTO_COLLAPSE_WIDTH - SIDEBAR_WIDTH - PANE_CHROME_WIDTH,
-            MAIN_MIN_WIDTH
-        );
-        assert_eq!(AUTO_COLLAPSE_WIDTH, 792.);
-    }
+    fn the_smallest_allowed_window_holds_the_title_bar_rail_and_pane_minimum() {
+        use gpui_kit::component::TITLE_BAR_HEIGHT;
 
-    #[test]
-    fn the_smallest_allowed_window_still_holds_the_pane_minimum() {
         let min = window_min_size();
 
         assert_eq!(
             min.width,
             px(SIDEBAR_RAIL_WIDTH + PANE_CHROME_WIDTH + MAIN_MIN_WIDTH)
         );
-        assert_eq!(min.height, px(PANE_CHROME_HEIGHT + MAIN_MIN_HEIGHT));
-        assert_eq!(min, gpui_kit::size(px(600.), px(440.)));
-
-        // …and a window at that floor is narrow enough that the rail, not the
-        // labelled sidebar, is what the width leaves room for. If these two
-        // ever disagree the smallest window would open with a sidebar it cannot
-        // afford.
-        assert!(min.width < px(AUTO_COLLAPSE_WIDTH));
-    }
-
-    #[test]
-    fn dodo_opens_collapsed_and_the_first_width_seen_is_not_a_crossing() {
-        let start = SidebarState::new();
-        assert!(start.collapsed);
-        assert!(!start.collapsed_by_width);
-
-        // Opening wide must not expand a sidebar the app deliberately opened
-        // collapsed…
-        assert!(start.resize(px(WIDE)).collapsed);
-        // …and opening narrow must not mark it as the width's doing, or the
-        // first widening would expand it.
-        let narrow_first = start.resize(px(NARROW));
-        assert!(narrow_first.collapsed);
-        assert!(!narrow_first.collapsed_by_width);
-        assert!(narrow_first.resize(px(WIDE)).collapsed);
-    }
-
-    #[test]
-    fn narrowing_past_the_breakpoint_collapses_the_sidebar_and_widening_restores_it() {
-        let expanded = SidebarState::new().resize(px(WIDE)).toggle();
-        assert!(!expanded.collapsed);
-
-        let collapsed = expanded.resize(px(NARROW));
-        assert!(collapsed.collapsed);
-        assert!(collapsed.collapsed_by_width);
-
-        let restored = collapsed.resize(px(WIDE));
-        assert!(!restored.collapsed);
-        assert!(!restored.collapsed_by_width);
-    }
-
-    #[test]
-    fn the_breakpoint_itself_counts_as_wide() {
-        let expanded = SidebarState::new().resize(px(WIDE)).toggle();
-
-        assert!(!expanded.resize(px(AUTO_COLLAPSE_WIDTH)).collapsed);
-        assert!(expanded.resize(px(AUTO_COLLAPSE_WIDTH - 1.)).collapsed);
-    }
-
-    #[test]
-    fn expanding_the_sidebar_at_a_narrow_width_is_not_undone_by_the_next_frame() {
-        // The defect this whole struct exists to prevent: `render` applies the
-        // width rule every frame, so a level-triggered rule would collapse the
-        // sidebar again before the user let go of the mouse.
-        let mut state = SidebarState::new().resize(px(WIDE)).resize(px(NARROW));
-        state = state.toggle();
-        assert!(!state.collapsed);
-
-        for _ in 0..10 {
-            state = state.resize(px(NARROW));
-            assert!(!state.collapsed, "the width rule must not fight the user");
-        }
-        // Even a different narrow width is not a crossing.
-        assert!(!state.resize(px(NARROW - 100.)).collapsed);
-    }
-
-    #[test]
-    fn a_sidebar_the_user_collapsed_stays_collapsed_when_the_window_grows() {
-        let by_hand = SidebarState::new().resize(px(WIDE));
-        assert!(by_hand.collapsed && !by_hand.collapsed_by_width);
-
-        // Narrow and wide again: nothing here was the width's to restore.
-        let round_trip = by_hand.resize(px(NARROW)).resize(px(WIDE));
-        assert!(round_trip.collapsed);
-
-        // Same once the user has expanded and re-collapsed it by hand.
-        let re_collapsed = by_hand.toggle().toggle();
-        assert!(re_collapsed.collapsed);
-        assert!(re_collapsed.resize(px(NARROW)).resize(px(WIDE)).collapsed);
-    }
-
-    #[test]
-    fn a_tool_row_takes_the_collapsed_state_the_group_hands_it() {
-        // `SidebarGroup` calls `collapsed(..)` on each child on its way to
-        // rendering it, and `ToolItem` decides whether to show a tooltip from
-        // that same flag. Dropping it on the floor would leave every collapsed
-        // icon anonymous, and nothing else would fail.
-        let item = ToolItem {
-            item: SidebarMenuItem::new("JSON Formatter"),
-            title: "JSON Formatter".into(),
-            collapsed: false,
-        };
-
-        assert!(!item.is_collapsed());
-        assert!(item.clone().collapsed(true).is_collapsed());
-        assert!(!item.collapsed(true).collapsed(false).is_collapsed());
-    }
-
-    /// Trap 7's second half. `crate::tools` proves neither footer button is a
-    /// row in the table; this proves the Settings button is still *in* the
-    /// footer, because the Features page it opens is the only way back from a
-    /// sidebar the user has cut down to one tool.
-    #[test]
-    fn settings_stays_in_the_sidebar_footer() {
-        let source = include_str!("layout.rs");
-        let footer = item_source(source, "fn render(&mut self, window: &mut Window");
-        assert!(
-            footer.contains("\"open-settings\""),
-            "the Settings button has left the sidebar footer; the Features page \
-             assumes it is always reachable",
+        assert_eq!(
+            min.height,
+            TITLE_BAR_HEIGHT + px(PANE_CHROME_HEIGHT + MAIN_MIN_HEIGHT)
         );
-    }
-
-    #[test]
-    fn every_icon_on_the_collapsed_rail_can_still_name_itself() {
-        // A source scan, because a tooltip cannot be driven from a test on
-        // macOS: `Root::new` dereferences a real `NSView`, so there is no
-        // window to hover. Both call sites are checked because they reach the
-        // tooltip by different routes — the tool rows through `ToolItem`,
-        // which exists only for this, and the footer through `Button::tooltip`.
-        let source = include_str!("layout.rs");
-
-        assert!(
-            item_source(source, "fn footer_button(").contains(".tooltip("),
-            "the collapsed footer buttons show no label, so they must show a tooltip",
-        );
-        assert!(
-            item_source(source, "impl SidebarItem for ToolItem").contains(".tooltip("),
-            "the collapsed tool rows show no label, so they must show a tooltip",
-        );
-        // …and the extraction really is bounded, or the two above would pass
-        // on any file that mentions a tooltip anywhere.
-        assert!(!item_source(source, "fn pane_title(").contains(".tooltip("));
-    }
-
-    #[test]
-    fn the_docker_row_reads_docker_while_the_pane_reads_the_page() {
-        assert_eq!(View::Docker.title(), Str::from(docker::Text::Docker));
-
-        for (page, expected) in [
-            (DockerPage::Containers, Str::from(docker::Text::Containers)),
-            (DockerPage::Images, Str::from(docker::Text::Images)),
-            (DockerPage::Volumes, Str::from(docker::Text::Volumes)),
-            (DockerPage::Networks, Str::from(docker::Text::Networks)),
-        ] {
-            assert_eq!(
-                title_of(View::Docker, page),
-                expected,
-                "the pane heading must follow the rail's selected page",
-            );
-        }
-    }
-
-    #[test]
-    fn the_other_tools_ignore_the_docker_page() {
-        for view in [
-            View::JsonFormatter,
-            View::EncoderDecoder,
-            View::ApiExplorer,
-            View::Cleaner,
-            View::Database,
-            View::Diagram,
-        ] {
-            for page in DockerPage::ALL {
-                assert_eq!(title_of(view, page), view.title());
-            }
-        }
     }
 
     /// The defect this pair exists to prevent: a tool page taller than the pane

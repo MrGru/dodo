@@ -411,6 +411,13 @@ async fn drain(mut receiver: UnboundedReceiver<Signal>, cx: &mut gpui_kit::Async
 /// active window is the *key* window and is `None` whenever dodo is not
 /// frontmost — which, clicking a menu bar item, it usually is not.
 fn open_dodo(cx: &mut App) {
+    // A reopen is a fresh chance to notice a release published while dodo sat
+    // in the tray: re-run the launch check so the title bar's Update button
+    // appears without a restart. It reuses the updater's own check — no second
+    // mechanism — opens nothing, and runs whether the window is merely raised
+    // or rebuilt below, so both reopen paths are covered.
+    crate::updater::check_now(cx);
+
     cx.activate(true);
     if let Some(window) = cx.windows().first().cloned() {
         let _ = window.update(cx, |_, window, _| window.activate_window());
