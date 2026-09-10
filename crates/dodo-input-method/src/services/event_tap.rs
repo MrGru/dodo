@@ -1239,6 +1239,61 @@ mod tests {
         assert_eq!(plan.insert.as_deref(), Some("Đ"));
     }
 
+    /// The captain's reproduction, driven through the real callback: in English
+    /// mode every key of `workflow` is returned to the application unchanged, so
+    /// the app receives the literal keys — never the Telex reading `wơrkflo`. The
+    /// only macOS path that could transform a key is this tap, and the language
+    /// gate is what makes it pass through; a Vietnamese document on the same keys
+    /// would compose instead (asserted here so a removed gate cannot pass).
+    #[test]
+    fn english_mode_passes_workflow_through_the_callback_untransformed() {
+        let english = |language| {
+            State::new(
+                SettingsDocument {
+                    language,
+                    active_languages: ActiveLanguages::from_languages([
+                        LanguageId::English,
+                        LanguageId::Vietnamese,
+                    ])
+                    .unwrap(),
+                    ..SettingsDocument::default()
+                },
+                futures_channel::mpsc::unbounded().0,
+            )
+        };
+
+        // macOS ANSI virtual key codes for w, o, r, k, f, l, o, w.
+        let workflow = [13_u16, 31, 15, 40, 3, 37, 31, 13];
+
+        let state = english(LanguageId::English);
+        assert!(!state.transforms(), "English mode must not transform");
+        for key_code in workflow {
+            // Created only to call the callback directly; it is never posted.
+            let event = CGEvent::new_keyboard_event(None, key_code, true).unwrap();
+            let event_ptr = std::ptr::NonNull::from(&*event);
+            let returned = unsafe {
+                callback(
+                    std::ptr::null_mut(),
+                    CGEventType::KeyDown,
+                    event_ptr,
+                    (&state as *const State).cast_mut().cast(),
+                )
+            };
+            assert_eq!(
+                returned,
+                event_ptr.as_ptr(),
+                "English mode must return key {key_code} to the app verbatim"
+            );
+        }
+
+        // The gate, not the keys, is the deciding factor: the same document in
+        // Vietnamese would hand these keys to the engine.
+        assert!(
+            english(LanguageId::Vietnamese).transforms(),
+            "Vietnamese mode is where the engine runs"
+        );
+    }
+
     /// A key press with no modifiers, as every descriptor but `Shift`+`Left`
     /// spells it.
     fn plain(key_code: u16, down: bool, tag: i64) -> SyntheticEventDescriptor {
