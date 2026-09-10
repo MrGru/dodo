@@ -737,6 +737,21 @@ impl Syllable {
         }
     }
 
+    /// Whether a letter Vietnamese does not have (`f`, `j`, `w`, `z`) sits in
+    /// the syllable as itself.
+    ///
+    /// Those four are the only ASCII letters the Vietnamese alphabet omits, and
+    /// none is ever a *base* here except when it was typed literally — the horn
+    /// key `w` becomes an `ư`/`ơ` whose base is `u`/`o`, not a `w`. So one in the
+    /// letters is the current word stating it is English: `ww` collapses to a
+    /// literal `w`, and `uww` to `uw`. The caller stops interpreting Telex
+    /// controls for the rest of the word on the strength of it.
+    pub fn contains_foreign_letter(&self) -> bool {
+        self.letters
+            .iter()
+            .any(|letter| matches!(letter.base, 'f' | 'j' | 'w' | 'z'))
+    }
+
     pub fn clear(&mut self) {
         self.letters.clear();
         self.tone = Tone::Level;

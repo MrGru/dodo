@@ -486,15 +486,22 @@ fn a_repeated_modifier_undoes_itself_and_types_its_key() {
 ///
 /// Both readings come from provenance alone — which key made this letter, and
 /// how many letters have arrived since. No word list, no rendered text.
+///
+/// Once that cancellation has left a literal `w` — a letter Vietnamese does not
+/// have — the current word has declared itself English (the captain's call,
+/// 2026-09-10): later keys in it stay literal rather than re-opening the horn,
+/// so `www` is `ww` and not `wư`. See [`VietnameseEngine::normalize`].
 #[test]
 fn a_repeated_standalone_w_takes_back_the_letter_it_made_wherever_it_is() {
     check(
         &[
-            // Alone, and as one gesture: two presses, one letter.
+            // Alone, and as one gesture: two presses, one letter. A third press
+            // does not re-open the horn — the literal `w` already made this word
+            // English — so the counts run `ư`, `w`, `ww`, `www`.
             ("w", "ư"),
             ("ww", "w"),
-            ("www", "wư"),
-            ("wwww", "ww"),
+            ("www", "ww"),
+            ("wwww", "www"),
             // At the start, with the rest of the word in between: two presses,
             // two letters, because the second `w` is the next letter of a word
             // rather than a correction of the first.
@@ -512,6 +519,47 @@ fn a_repeated_standalone_w_takes_back_the_letter_it_made_wherever_it_is() {
             // After text that has already proved not to be Vietnamese.
             ("sww", "sw"),
             ("twnw", "twnw"),
+        ],
+        telex,
+    );
+}
+
+/// The captain's per-word English intent (2026-09-10): once a run holds a
+/// literal letter Vietnamese does not have (`f`, `j`, `w`, `z`) — reached by
+/// cancelling a control (`ww` → `w`) or by a modifier with nowhere to land —
+/// the current word has declared itself English, and every later key in it
+/// stays literal. The reach-back horn `w` is the control this closes: an invalid
+/// syllable already refused the tone keys, but the horn could still reach a
+/// vowel and mark it, so `wwarow` used to become `wăro`.
+#[test]
+fn a_word_that_has_shown_a_foreign_letter_stops_interpreting_telex() {
+    check(
+        &[
+            // The double-w cancellation is strong English evidence; the later
+            // keys, horn `w` included, are literal.
+            ("wwarow", "warow"),
+            ("wwas", "was"),
+            ("wwaf", "waf"),
+            ("wwix", "wix"),
+            ("wwao", "wao"),
+            ("uww", "uw"),
+            // A targetless modifier reaches the same literal letter and latches
+            // exactly as the cancellation does.
+            ("sww", "sw"),
+            ("twnw", "twnw"),
+        ],
+        telex,
+    );
+
+    // Guardrail — composition is untouched for a word that never showed a
+    // foreign letter, and the horn that *makes* `ư`/`ơ` is Vietnamese, not
+    // foreign: it is a `u`/`o` with a mark, so it never trips this rule.
+    check(
+        &[
+            ("tieengs", "tiếng"),
+            ("tuwr", "tử"),
+            ("dduonwg", "đương"),
+            ("muwax", "mữa"),
         ],
         telex,
     );

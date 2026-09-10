@@ -84,10 +84,13 @@
 //! *not* a Vietnamese syllable (`where` stays `where`, `sport` stays `sport`),
 //! which is most of them. Once a trustworthy run becomes impossible it is
 //! restored immediately and later Telex controls stay literal until the
-//! boundary. An undo is deliberately not immediate proof — `marr` is the
-//! supported way to take hỏi back and type `mar` — but if intervening letters
-//! make that cancelled reading impossible and another control follows, the raw
-//! keys win and the run goes literal (`marrnw` is `marnw`).
+//! boundary — as does a run that has shown a letter Vietnamese does not have at
+//! all (`f`, `j`, `w`, `z`), which is the current word declaring itself English:
+//! `wwarow` is `warow`, its reach-back horn included, not `wăro`. An undo is
+//! deliberately not immediate proof — `marr` is the supported way to take hỏi
+//! back and type `mar` — but if intervening letters make that cancelled reading
+//! impossible and another control follows, the raw keys win and the run goes
+//! literal (`marrnw` is `marnw`).
 //!
 //! **What that restore may never do is bring the cancelling key back.** The
 //! two presses of a doubled control are one gesture producing one letter, the
@@ -566,12 +569,19 @@ impl VietnameseEngine {
     /// the trustworthy physical run cannot become Vietnamese.
     fn normalize(&mut self) {
         self.syllable.normalize();
-        if self.config.spell_check
-            && self.config.scheme == InputScheme::Telex
-            && self.syllable.viability() == rules::Viability::Impossible
-            && self.syllable.restore_raw_letters()
-        {
-            self.literal_mode = true;
+        if self.config.spell_check && self.config.scheme == InputScheme::Telex {
+            if self.syllable.viability() == rules::Viability::Impossible
+                && self.syllable.restore_raw_letters()
+            {
+                self.literal_mode = true;
+            } else if self.syllable.contains_foreign_letter() {
+                // A letter Vietnamese does not have — reached by a cancelled
+                // control (`ww` is `w`) or a mark with nowhere to land — is the
+                // current word declaring itself English. Stop interpreting Telex
+                // controls, including the reach-back horn, for the rest of it:
+                // `wwarow` stays `warow`, not `wăro`.
+                self.literal_mode = true;
+            }
         }
     }
 

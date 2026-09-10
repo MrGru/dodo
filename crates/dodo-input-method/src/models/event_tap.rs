@@ -555,6 +555,29 @@ mod tests {
         harness.document
     }
 
+    /// Behaviour 4 of the captain's per-word intent: a word committed by a space
+    /// is reopened when the space is backspaced away, so a Vietnamese modifier
+    /// still lands on it. The reopen replays the raw keys through the engine, so
+    /// whatever intent that word had — Vietnamese here — is restored with it.
+    #[test]
+    fn a_word_reopened_after_space_then_backspace_still_takes_a_mark() {
+        let mut harness = EndCursorHarness::new();
+        harness.type_keys("tieeng");
+        assert_eq!(harness.document, "tiêng");
+        harness.press(KeyEvent::character(' '));
+        assert_eq!(harness.document, "tiêng ");
+        harness.press(KeyEvent::special(Key::Backspace));
+        assert_eq!(
+            harness.document, "tiêng",
+            "the space is gone and the word is back"
+        );
+        harness.press(KeyEvent::character('s'));
+        assert_eq!(
+            harness.document, "tiếng",
+            "the sắc mark lands on the reopened word"
+        );
+    }
+
     fn assert_visible_steps(keys: &str, expected: &[&str]) {
         assert_eq!(keys.chars().count(), expected.len(), "{keys:?}");
         let mut harness = EndCursorHarness::new();
@@ -687,7 +710,16 @@ mod tests {
     /// not merely against the engine's semantic state or its final action list.
     #[test]
     fn direct_output_keeps_the_captains_english_w_examples_literal() {
-        for word in ["window", "gateway", "follow", "widow", "willow", "elbow"] {
+        for word in [
+            "window",
+            "gateway",
+            "follow",
+            "widow",
+            "willow",
+            "elbow",
+            "workflow",
+            "playwright",
+        ] {
             assert_eq!(type_at_end_cursor(word), word, "{word}");
         }
         // The `-rrow` words reach that final `w` through a cancelled `r`, and a
@@ -731,7 +763,10 @@ mod tests {
         assert_visible_steps("}}}", &["Ư", "}", "}Ư"]);
         assert_visible_steps("o[[", &["o", "oơ", "o["]);
 
-        assert_visible_steps("www", &["ư", "w", "wư"]);
+        // The third `w` does not re-open the horn: the cancelled `w` at step two
+        // is a letter Vietnamese does not have, so the word is now English and
+        // its later keys are literal (`ww`, not `wư`).
+        assert_visible_steps("www", &["ư", "w", "ww"]);
         assert_visible_steps("aaa", &["a", "â", "aa"]);
         assert_visible_steps("eee", &["e", "ê", "ee"]);
         assert_visible_steps("ooo", &["o", "ô", "oo"]);
