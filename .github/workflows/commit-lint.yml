@@ -1,0 +1,71 @@
+# Conventional Commits gate: every commit subject must be machine-parseable,
+# so `release.yml` can build the "What's New" changelog from `feat`/`fix`/`perf`
+# subjects. A non-conforming subject fails here rather than producing a garbled
+# release note later. Dependency-free on purpose (grep + git), matching the rest
+# of this repo's workflows.
+name: Commit Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  commit-lint:
+    name: conventional commits
+    runs-on: ubuntu-latest
+    steps:
+      # Full history so a range like `<base>..<head>` resolves.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check commit subjects
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # On a PR, check every commit the PR adds; on a push, the newly pushed
+          # commits. A brand-new branch reports an all-zeros "before", so there
+          # is no predecessor to diff against — check just the tip commit.
+          if [ "$EVENT" = "pull_request" ]; then
+            range="${PR_BASE}..${PR_HEAD}"
+          elif [ "${PUSH_BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+            range="${PUSH_AFTER}"
+            git rev-parse "${PUSH_AFTER}~1" >/dev/null 2>&1 && range="${PUSH_AFTER}~1..${PUSH_AFTER}"
+          else
+            range="${PUSH_BEFORE}..${PUSH_AFTER}"
+          fi
+
+          # Full Conventional Commits type set: only feat/fix/perf show in the
+          # release notes, but the format is enforced for every commit so the
+          # log stays parseable. Merge commits are excluded (--no-merges).
+          pattern='^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(\([a-z0-9._-]+\))?!?: .+'
+
+          fail=0
+          while IFS=$'\t' read -r sha subject; do
+            [ -n "$sha" ] || continue
+            if ! printf '%s' "$subject" | grep -Eq "$pattern"; then
+              echo "::error::Non-conventional commit ${sha}: ${subject}"
+              fail=1
+            fi
+          done < <(git log --no-merges --pretty=format:'%H%x09%s' "$range")
+
+          if [ "$fail" -ne 0 ]; then
+            echo "Commit subjects must follow Conventional Commits:"
+            echo "  type(optional-scope)!?: description"
+            echo "Allowed types: feat fix perf refactor docs test build ci chore style revert"
+            echo "See https://www.conventionalcommits.org/"
+            exit 1
+          fi
+          echo "All commit subjects follow Conventional Commits."

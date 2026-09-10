@@ -470,7 +470,12 @@ jobs:
       # The only place in either workflow that needs write access.
       contents: write
     steps:
+      # Full history: the release-notes step below derives the previous tag with
+      # `git describe` and lists commits in `<prev>..<tag>`, both of which need
+      # more than a shallow tip. Same reason the `meta` job checks out depth 0.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       # `digest-mismatch` defaults to `error` from v8 on — a downloaded archive
       # whose hash does not match what the server recorded now fails the release
@@ -522,8 +527,75 @@ jobs:
         run: |
           set -euo pipefail
           notes_file="$RUNNER_TEMP/release-notes.md"
+
+          # What's New, straight from the Conventional Commits since the last
+          # release. Previous tag is empty on the first release (→ all commits).
+          # Pure git + awk on purpose: no npm/node changelog dependency.
+          prev_tag="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          if [ -n "$prev_tag" ]; then
+            range="${prev_tag}..${TAG}"
+          else
+            range="${TAG}"
+          fi
+
+          # Full message per commit, records separated by an ASCII Record
+          # Separator (0x1e) so the awk can see the body (for a BREAKING CHANGE
+          # footer) as well as the subject. NUL as RS is unreliable across awks.
+          changelog="$(git log --no-merges --pretty=format:'%B%x1e' "$range" | awk '
+            BEGIN { RS = "\036"; nbc = 0; nfe = 0; nfi = 0; npe = 0 }
+            {
+              sub(/^[\r\n]+/, "")
+              if ($0 == "") next
+              nl = index($0, "\n")
+              subj = (nl > 0) ? substr($0, 1, nl - 1) : $0
+              sub(/\r$/, "", subj)
+
+              ci = index(subj, ": ")
+              if (ci == 0) next
+              head = substr(subj, 1, ci - 1)
+              desc = substr(subj, ci + 2)
+
+              bang = 0
+              if (head ~ /!$/) { bang = 1; sub(/!$/, "", head) }
+
+              scope = ""
+              op = index(head, "(")
+              if (op > 0) {
+                type = substr(head, 1, op - 1)
+                cp = index(head, ")")
+                if (cp > op) scope = substr(head, op + 1, cp - op - 1)
+              } else {
+                type = head
+              }
+
+              # Only feat/fix/perf reach users; the rest are hidden noise.
+              if (type != "feat" && type != "fix" && type != "perf") next
+
+              breaking = bang
+              if ($0 ~ /BREAKING[ -]CHANGE/) breaking = 1
+
+              if (length(desc) > 0) desc = toupper(substr(desc, 1, 1)) substr(desc, 2)
+              bullet = (scope != "") ? "- **" scope ":** " desc : "- " desc
+
+              if (breaking) bc[++nbc] = bullet
+              if (type == "feat") fe[++nfe] = bullet
+              else if (type == "fix") fi[++nfi] = bullet
+              else if (type == "perf") pe[++npe] = bullet
+            }
+            END {
+              any = 0
+              if (nbc > 0) { print "### Breaking Changes"; print ""; for (i = 1; i <= nbc; i++) print bc[i]; print ""; any = 1 }
+              if (nfe > 0) { print "### Features";         print ""; for (i = 1; i <= nfe; i++) print fe[i]; print ""; any = 1 }
+              if (nfi > 0) { print "### Bug Fixes";        print ""; for (i = 1; i <= nfi; i++) print fi[i]; print ""; any = 1 }
+              if (npe > 0) { print "### Performance";      print ""; for (i = 1; i <= npe; i++) print pe[i]; print ""; any = 1 }
+              if (!any)   { print "### Changes";           print ""; print "- Maintenance and internal improvements."; print "" }
+            }
+          ')"
+
           {
             echo "## dodo ${TAG}"
+            echo
+            echo "$changelog"
             echo
             echo "### Verifying a download"
             echo

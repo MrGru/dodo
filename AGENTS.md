@@ -77,6 +77,12 @@ These hold everywhere in dodo, whatever you are touching.
   Run both before committing. `cargo build` alone does not prove the tree is green, and there is no
   crate-level `allow` in dodo; `dodo-build-release-internals` owns the suppression rules.
 
+- **Every commit subject must follow [Conventional Commits](https://www.conventionalcommits.org/):**
+  `type(optional-scope)!?: description` (`feat fix perf refactor docs test build ci chore style
+  revert`). It is a blocking CI job (`.github/workflows/commit-lint.yml`), and `feat`/`fix`/`perf`
+  subjects are what `release.yml` turns into the release notes' "What's New" section — a
+  non-conforming subject fails CI and would otherwise be dropped from the changelog.
+
 - **The pinned `gpui-component` source is the reference for every widget question**, at
   `~/.cargo/git/checkouts/gpui-component-*/<rev>/crates/ui/src` (rev from `Cargo.lock`). Its
   `<checkout>/skills/` directory holds the upstream authors' own guidance, which is excellent on
