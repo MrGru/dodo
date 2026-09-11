@@ -25,6 +25,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use gpui_kit::component::IconNamed as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
@@ -36,7 +37,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, div, px,
+    StatefulInteractiveElement as _, Styled as _, div, img, px,
 };
 
 use crate::app_icon::AppIcon;
@@ -295,7 +296,7 @@ fn connection_row(
             this.px_1().bg(accent).rounded(radius)
         })
         .child(disclosure(entry))
-        .child(Icon::new(look.icon).xsmall().flex_shrink_0())
+        .child(engine_glyph(look.icon))
         // The dot and the word both: a colour alone is not a label, and two of
         // the four states differ only by hue.
         .child(
@@ -326,6 +327,18 @@ fn connection_row(
             Tooltip::element(move |_, cx| detail_card(&details, cx)).build(window, cx)
         })
         .into_any_element()
+}
+
+/// The glyph beside a connection's name. A brand engine logo carries its own
+/// colours in its SVG fills, so it is drawn through `img()` — a full-colour
+/// raster — at the same 12px box the `xsmall` [`Icon`] alpha mask would use.
+/// Every other icon stays a tinted glyph. See [`AppIcon::is_brand`].
+fn engine_glyph(icon: AppIcon) -> AnyElement {
+    if icon.is_brand() {
+        img(icon.path()).size_3().flex_shrink_0().into_any_element()
+    } else {
+        Icon::new(icon).xsmall().flex_shrink_0().into_any_element()
+    }
 }
 
 /// The hover card: a plain label/value list, values in the monospace face

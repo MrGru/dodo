@@ -91,13 +91,15 @@ pub enum AppIcon {
     // glyphs; the remaining shared SVGs are individually embedded too.
     /// The sidebar row, and a database node in the object tree.
     Database,
-    /// The engine marks on a connection's root row in the object tree. Our own
-    /// SVGs — the library has nothing product-shaped — and deliberately drawn
-    /// as ordinary outline glyphs in the set's Lucide-ish style rather than as
-    /// either vendor's registered logo: gpui paints an SVG as an alpha mask
-    /// tinted with the element's text colour, so a two-colour brand mark could
-    /// not survive the trip anyway, and a monochrome trace of one would be a
-    /// trademark dodo has no licence to use.
+    /// The engine marks on a connection's root row in the object tree. Each is
+    /// the vendor's own logo carrying its brand colours in the SVG's fills, so
+    /// these five are the only icons dodo draws through `img()` (a full-colour
+    /// raster) rather than the `svg()` alpha mask every other variant uses:
+    /// gpui paints an SVG element as an alpha mask tinted with the current text
+    /// colour, which keeps coverage and discards colour, so a brand mark drawn
+    /// that way would be a flat monochrome silhouette. [`AppIcon::is_brand`]
+    /// names this set, and `dodo-database`'s connection row is where the
+    /// `img()` path is chosen.
     PostgreSql,
     Redis,
     MySql,
@@ -139,9 +141,9 @@ pub enum AppIcon {
 
     /// The Mermaid workspace's sidebar row. Ships as our own
     /// `icons/mermaid.svg`: three connected boxes rather than the project's
-    /// actual logo — an alpha-masked trace of it would not survive being
-    /// tinted to the element's text colour anyway, the same reason
-    /// `PostgreSql`/`Sqlite` above draw plain outline glyphs instead.
+    /// actual logo — this one is drawn through the `svg()` alpha mask like
+    /// every non-engine icon, so an alpha-masked trace of the real logo would
+    /// not survive being tinted to the element's text colour anyway.
     Mermaid,
 
     /// The Mermaid toolbar's Copy SVG action. Ships as our own
@@ -264,5 +266,46 @@ impl IconNamed for AppIcon {
 impl AppIcon {
     pub fn view(self) -> Icon {
         Icon::new(self)
+    }
+
+    /// Whether this icon is a database engine's own brand logo, whose SVG
+    /// carries vendor colours in its fills. The caller draws these through
+    /// `img()` so those fills survive; every other icon goes through the
+    /// `svg()` alpha mask, which keeps only coverage. See the doc on
+    /// [`AppIcon::PostgreSql`].
+    pub fn is_brand(self) -> bool {
+        matches!(
+            self,
+            Self::PostgreSql | Self::MySql | Self::MariaDb | Self::Redis | Self::Sqlite
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppIcon, IconNamed};
+
+    /// The brand set is exactly the five engine logos, and every one of them
+    /// resolves to a `.svg` under `icons/`. If a new engine logo is added it
+    /// must join this set, or it will render as a flat alpha-mask silhouette.
+    #[test]
+    fn only_the_engine_logos_are_brand_coloured() {
+        for icon in [
+            AppIcon::PostgreSql,
+            AppIcon::MySql,
+            AppIcon::MariaDb,
+            AppIcon::Redis,
+            AppIcon::Sqlite,
+        ] {
+            assert!(icon.is_brand(), "{:?} must be brand", icon.path());
+        }
+        for icon in [
+            AppIcon::Database,
+            AppIcon::Table,
+            AppIcon::Mermaid,
+            AppIcon::Dodo,
+        ] {
+            assert!(!icon.is_brand(), "{:?} must not be brand", icon.path());
+        }
     }
 }
