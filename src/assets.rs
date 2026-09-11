@@ -62,11 +62,20 @@ mod tests {
     /// here is a kit `IconName` a component dodo actually renders resolves at
     /// runtime: `check` (Checkbox / clipboard), `loader` (Spinner, and the
     /// loading `Button` that draws one), `undo-2` (the settings page reset
-    /// button). Adding one to this list without adding the file must fail here,
-    /// not on screen.
+    /// button), and the four `window-*` glyphs (Windows title-bar controls).
+    /// Adding one to this list without adding the file must fail here, not on
+    /// screen.
     #[test]
     fn kit_widget_icons_are_embedded() {
-        for path in ["icons/check.svg", "icons/loader.svg", "icons/undo-2.svg"] {
+        for path in [
+            "icons/check.svg",
+            "icons/loader.svg",
+            "icons/undo-2.svg",
+            "icons/window-minimize.svg",
+            "icons/window-maximize.svg",
+            "icons/window-restore.svg",
+            "icons/window-close.svg",
+        ] {
             assert!(
                 Assets::get(path).is_some(),
                 "{path} is a gpui-component widget icon dodo renders but does \

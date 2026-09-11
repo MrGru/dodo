@@ -563,6 +563,7 @@ impl Layout {
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // macOS is the one platform whose window controls are on the left.
         let controls_on_left = cfg!(target_os = "macos");
+        let is_windows = cfg!(target_os = "windows");
 
         let toggle = Button::new("toggle-sidebar")
             .ghost()
@@ -578,7 +579,10 @@ impl Layout {
                 this.sidebar_hidden = !this.sidebar_hidden;
                 Session::set_sidebar_collapsed(this.sidebar_hidden, cx);
                 cx.notify();
-            }));
+            }))
+            // Exclude the button's hitbox from the surrounding Windows caption
+            // region so WM_NCHITTEST leaves its click with the application.
+            .when(is_windows, |this| this.occlude());
 
         let settings = Button::new("open-settings")
             .ghost()
@@ -590,7 +594,8 @@ impl Layout {
                 // not a `Context<Self>`.
                 let layout = cx.entity().downgrade();
                 move |_, window, cx| settings::open(layout.clone(), window, cx)
-            });
+            })
+            .when(is_windows, |this| this.occlude());
 
         // Shown only when a check has found a newer version — the button is
         // absent otherwise. Opens the very dialog the sidebar's old "Check for
@@ -606,6 +611,7 @@ impl Layout {
                         .child(t(shell::Text::NewVersion(info.version.clone()), cx)),
                 )
                 .on_click(|_, window, cx| updater::open(window, cx))
+                .when(is_windows, |this| this.occlude())
         });
 
         let mark = div()
