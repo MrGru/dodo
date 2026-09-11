@@ -29,6 +29,12 @@ pub enum Engine {
     Sqlite,
     #[serde(rename = "mysql")]
     MySql,
+    /// MariaDB speaks MySQL's wire protocol, so it shares the `mysql` driver
+    /// and dialect — it is a separate variant only so it carries its own name
+    /// and brand icon. Saved as `"mariadb"`; an existing MySQL connection stays
+    /// `"mysql"` and is untouched, so nothing needs migrating.
+    #[serde(rename = "mariadb")]
+    MariaDb,
     #[serde(rename = "redis")]
     Redis,
 }
@@ -47,10 +53,11 @@ pub enum Address {
 impl Engine {
     /// Every engine this build can connect to, in the order the picker lists
     /// them.
-    pub const ALL: [Engine; 4] = [
+    pub const ALL: [Engine; 5] = [
         Engine::PostgreSql,
         Engine::Sqlite,
         Engine::MySql,
+        Engine::MariaDb,
         Engine::Redis,
     ];
 
@@ -61,7 +68,8 @@ impl Engine {
         match self {
             Engine::PostgreSql => "PostgreSQL",
             Engine::Sqlite => "SQLite",
-            Engine::MySql => "MySQL / MariaDB",
+            Engine::MySql => "MySQL",
+            Engine::MariaDb => "MariaDB",
             Engine::Redis => "Redis",
         }
     }
@@ -69,7 +77,9 @@ impl Engine {
     /// Whether this engine is dialled or opened.
     pub fn address(self) -> Address {
         match self {
-            Engine::PostgreSql | Engine::MySql | Engine::Redis => Address::Network,
+            Engine::PostgreSql | Engine::MySql | Engine::MariaDb | Engine::Redis => {
+                Address::Network
+            }
             Engine::Sqlite => Address::File,
         }
     }
@@ -79,7 +89,7 @@ impl Engine {
     pub fn default_port(self) -> Option<u16> {
         match self {
             Engine::PostgreSql => Some(5432),
-            Engine::MySql => Some(3306),
+            Engine::MySql | Engine::MariaDb => Some(3306),
             Engine::Redis => Some(6379),
             Engine::Sqlite => None,
         }
@@ -90,7 +100,7 @@ impl Engine {
     pub fn default_user(self) -> &'static str {
         match self {
             Engine::PostgreSql => "postgres",
-            Engine::MySql => "root",
+            Engine::MySql | Engine::MariaDb => "root",
             Engine::Sqlite | Engine::Redis => "",
         }
     }
@@ -105,7 +115,7 @@ impl Engine {
     /// text, which is the library's own graceful default.
     pub fn editor_language(self) -> &'static str {
         match self {
-            Engine::PostgreSql | Engine::Sqlite | Engine::MySql => "sql",
+            Engine::PostgreSql | Engine::Sqlite | Engine::MySql | Engine::MariaDb => "sql",
             Engine::Redis => "text",
         }
     }
@@ -118,13 +128,14 @@ impl Engine {
             Engine::PostgreSql => "postgresql",
             Engine::Sqlite => "sqlite",
             Engine::MySql => "mysql",
+            Engine::MariaDb => "mariadb",
             Engine::Redis => "redis",
         }
     }
 
     /// Whether the network form's TLS control maps to this client.
     pub fn supports_tls(self) -> bool {
-        matches!(self, Engine::PostgreSql | Engine::MySql)
+        matches!(self, Engine::PostgreSql | Engine::MySql | Engine::MariaDb)
     }
 
     /// The database field's initial value. Redis addresses logical database 0;
@@ -157,6 +168,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Engine::MySql).expect("serializes"),
             "\"mysql\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Engine::MariaDb).expect("serializes"),
+            "\"mariadb\""
         );
         assert_eq!(
             serde_json::to_string(&Engine::Redis).expect("serializes"),
@@ -196,5 +211,28 @@ mod tests {
             assert!(!engine.editor_language().is_empty());
             assert!(!engine.display_name().is_empty());
         }
+    }
+
+    /// MariaDB shares MySQL's wire protocol, so its network defaults match, but
+    /// it is a distinct product: its own name and URL scheme, and — because the
+    /// serialized forms differ — an old `"mysql"` connection still loads as
+    /// `MySql`, never silently re-tagged. That back-compat is the whole reason
+    /// this can be a new variant rather than a rewrite of saved files.
+    #[test]
+    fn mariadb_shares_mysqls_protocol_defaults_but_keeps_its_own_identity() {
+        assert_eq!(Engine::MariaDb.address(), Address::Network);
+        assert_eq!(Engine::MariaDb.default_port(), Some(3306));
+        assert_eq!(Engine::MariaDb.default_user(), "root");
+        assert_eq!(Engine::MariaDb.editor_language(), "sql");
+        assert!(Engine::MariaDb.supports_tls());
+
+        assert_eq!(Engine::MariaDb.display_name(), "MariaDB");
+        assert_eq!(Engine::MySql.display_name(), "MySQL");
+        assert_eq!(Engine::MariaDb.url_scheme(), "mariadb");
+
+        // Back-compat: a file written before this variant existed round-trips
+        // to MySql, not MariaDb.
+        let old: Engine = serde_json::from_str("\"mysql\"").expect("deserializes");
+        assert_eq!(old, Engine::MySql);
     }
 }

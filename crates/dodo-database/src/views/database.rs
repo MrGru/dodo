@@ -2172,6 +2172,7 @@ pub(super) fn engine_icon(engine: Engine) -> AppIcon {
         Engine::PostgreSql => AppIcon::PostgreSql,
         Engine::Sqlite => AppIcon::Sqlite,
         Engine::MySql => AppIcon::MySql,
+        Engine::MariaDb => AppIcon::MariaDb,
         Engine::Redis => AppIcon::Redis,
     }
 }
@@ -2407,6 +2408,28 @@ mod tests {
             database: database.into(),
             ..ConnectionProfile::new(id, Engine::PostgreSql)
         }
+    }
+
+    #[test]
+    fn every_engine_maps_to_its_own_brand_icon() {
+        use gpui_kit::component::IconNamed as _;
+
+        use super::engine_icon;
+        use crate::app_icon::AppIcon;
+
+        // Every engine's root-row glyph is one of the brand logos, so all of
+        // them take the colour-preserving `img()` path.
+        for engine in Engine::ALL {
+            assert!(
+                engine_icon(engine).is_brand(),
+                "{engine:?} must map to a brand logo"
+            );
+        }
+        // MariaDB shows its own mark, not MySQL's — the whole point of the
+        // separate variant. `AppIcon` has no `PartialEq`, so compare paths.
+        assert_eq!(engine_icon(Engine::MariaDb).path(), AppIcon::MariaDb.path());
+        assert_eq!(engine_icon(Engine::MySql).path(), AppIcon::MySql.path());
+        assert_ne!(engine_icon(Engine::MariaDb).path(), AppIcon::MySql.path());
     }
 
     #[test]

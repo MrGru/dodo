@@ -16,7 +16,7 @@
 //!
 //! # Why there is no dropdown here
 //!
-//! The engine picker has two options and the TLS picker has three. A segmented
+//! The engine picker has one button per engine and the TLS picker has three. A segmented
 //! row of buttons shows every option at once, needs no popup, and cannot be
 //! half-open when the dialog closes. `Select` is for lists too long to show.
 //!

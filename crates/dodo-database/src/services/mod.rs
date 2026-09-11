@@ -300,7 +300,11 @@ pub fn connect(profile: &ConnectionProfile) -> Result<Arc<dyn Driver>, DbError> 
     match profile.engine {
         Engine::PostgreSql => postgres::connect(profile).map(|driver| driver as Arc<dyn Driver>),
         Engine::Sqlite => sqlite::connect(profile).map(|driver| driver as Arc<dyn Driver>),
-        Engine::MySql => mysql::connect(profile).map(|driver| driver as Arc<dyn Driver>),
+        // MariaDB speaks MySQL's wire protocol, so it shares the driver — the
+        // whole point of it being a variant rather than a new backend.
+        Engine::MySql | Engine::MariaDb => {
+            mysql::connect(profile).map(|driver| driver as Arc<dyn Driver>)
+        }
         Engine::Redis => redis::connect(profile).map(|driver| driver as Arc<dyn Driver>),
     }
 }

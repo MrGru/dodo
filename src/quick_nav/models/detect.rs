@@ -62,7 +62,7 @@
 //! JSON, dodo already owns a **tested parser** for exactly that format, and
 //! every one of them is strictly more accurate than any pattern could be:
 //! `services::curl::parse` understands shell quoting, `models::uri::parse`
-//! understands four engines' URI dialects across 36 tests, and `serde_json` is
+//! understands five engines' URI dialects across 36 tests, and `serde_json` is
 //! the definition of the format. Replacing one of those with a regex would be a
 //! regression wearing configurability as a disguise. Mermaid joined this group
 //! rather than the pattern-shaped one below for the same reason: `dodo-mermaid`

@@ -231,7 +231,8 @@ fn split_scheme(input: &str) -> Result<(String, &str), UriError> {
 fn engine_for_scheme(scheme: &str) -> Option<(Engine, bool)> {
     match scheme {
         "postgres" | "postgresql" => Some((Engine::PostgreSql, false)),
-        "mysql" | "mariadb" => Some((Engine::MySql, false)),
+        "mysql" => Some((Engine::MySql, false)),
+        "mariadb" => Some((Engine::MariaDb, false)),
         "redis" | "valkey" => Some((Engine::Redis, false)),
         "rediss" | "valkeys" => Some((Engine::Redis, true)),
         // `file:` is SQLite's own URI-filename scheme, and dodo's only
@@ -364,7 +365,9 @@ fn read_query(query: &str, parsed: &mut ParsedUri) -> Result<(), UriError> {
         let key = key.to_ascii_lowercase();
 
         let applied = match parsed.profile.engine {
-            Engine::PostgreSql | Engine::MySql => apply_sql_parameter(&key, &value, parsed)?,
+            Engine::PostgreSql | Engine::MySql | Engine::MariaDb => {
+                apply_sql_parameter(&key, &value, parsed)?
+            }
             Engine::Redis => apply_redis_parameter(&key, &value, parsed),
             // SQLite's URI parameters (`mode`, `cache`, `immutable`) address
             // how the file is opened, which dodo's SQLite driver decides for
@@ -473,7 +476,7 @@ mod tests {
         parse(input, 7).unwrap_or_else(|error| panic!("{input} did not parse: {error:?}"))
     }
 
-    // ---- the four engines and their scheme aliases -----------------------
+    // ---- the engines and their scheme aliases ----------------------------
 
     #[test]
     fn a_postgresql_uri_fills_every_field_it_carries() {
@@ -499,16 +502,28 @@ mod tests {
     }
 
     #[test]
-    fn a_mysql_uri_parses_and_mariadb_is_the_same_engine() {
+    fn mysql_and_mariadb_uris_parse_to_their_own_engines() {
         let parsed = ok("mysql://root:pw@127.0.0.1:3307/app");
         assert_eq!(parsed.profile.engine, Engine::MySql);
         assert_eq!(parsed.profile.port, 3307);
         assert_eq!(parsed.profile.database, "app");
         assert_eq!(parsed.profile.user, "root");
 
+        // `mariadb://` is now its own engine, not an alias for MySQL — the rest
+        // of the connection is identical because they share the wire protocol.
+        let maria = ok("mariadb://root:pw@127.0.0.1:3307/app");
+        assert_eq!(maria.profile.engine, Engine::MariaDb);
         assert_eq!(
-            ok("mariadb://root:pw@127.0.0.1:3307/app").profile,
-            parsed.profile
+            (
+                maria.profile.port,
+                &maria.profile.database,
+                &maria.profile.user
+            ),
+            (
+                parsed.profile.port,
+                &parsed.profile.database,
+                &parsed.profile.user
+            )
         );
     }
 
