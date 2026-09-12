@@ -786,7 +786,15 @@ impl FlowView {
         self.editor.rebuild_all_geometry();
         self.rebuild_spatial_index();
         self.viewport = viewport;
-        self.active_viewport = viewport;
+        // The viewport *size* tracks the pane, never the board: a stored board
+        // carries its camera (pan + zoom) but a freshly created board's default
+        // viewport has zero size, and `sync_pane` only re-applies the pane when
+        // it *changes* — which it has not, since only the viewport was replaced.
+        // Leaving a zero size makes the visibility query return nothing, so no
+        // node body is extracted while the selection box still draws from the
+        // selection: the "drawn shape shows handles but no body" regression.
+        self.viewport.set_size(self.pane);
+        self.active_viewport = self.viewport;
         self.interaction = InteractionMachine::new();
         self.hovered = None;
         self.editing = None;
@@ -4331,6 +4339,50 @@ mod tests {
             modifiers: gpui_kit::Modifiers::default(),
             button: MouseButton::Left,
             click_count: 1,
+        });
+    }
+
+    /// **A shape drawn on a freshly created board paints a body**, not just a
+    /// selection box.
+    ///
+    /// The regression: `load_board_document` replaced the whole viewport with
+    /// the board's — zero-sized for a new board — while `self.pane` kept its
+    /// measured value, so `sync_pane` (which only re-applies on a *change*)
+    /// never restored the size. The visibility query then saw an empty viewport
+    /// and extracted no node body, while the selection box still drew from the
+    /// selection: handles with nothing under them.
+    #[gpui_kit::test]
+    fn a_shape_drawn_on_a_new_board_is_extracted_as_a_painted_body(cx: &mut TestAppContext) {
+        let (view, mut cx) = mount(cx);
+        cx.update(|window, _| window.resize(gpui_kit::size(px(900.0), px(1200.0))));
+        cx.run_until_parked();
+
+        view.update(&mut cx, |this, _cx| {
+            this.create_board();
+            let node = this
+                .editor
+                .apply(crate::commands::EditCommand::AddNodes(vec![
+                    crate::commands::NodeDraft::new(crate::runtime::NodeSpec::new(
+                        crate::models::ElementId::NONE,
+                        ElementKind::Shape(crate::models::ShapeKind::Rectangle),
+                        Vec2::new(200.0, 200.0),
+                        Vec2::new(160.0, 80.0),
+                    )),
+                ]))
+                .expect("adding a node cannot fail")
+                .added_nodes[0];
+            this.refresh_snapshot();
+
+            let painted = this.snapshot.rich().iter().any(|rich| rich.node == node)
+                || this
+                    .snapshot
+                    .canvas()
+                    .iter()
+                    .any(|canvas| canvas.node == node);
+            assert!(
+                painted,
+                "a node drawn on a new board must reach the paint plan, not just its handles",
+            );
         });
     }
 
