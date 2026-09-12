@@ -39,6 +39,7 @@ pub mod image;
 pub mod kind;
 pub mod serialization;
 pub mod style;
+pub mod workbook;
 
 pub use document::{
     Connector, ConnectorAttachment, ConnectorEnd, ConnectorEndpoint, DocumentSettings, Endpoint,
@@ -56,3 +57,4 @@ pub use style::{
     FontStyle, GRAPH_NODE_RADIUS, RenderQuality, RenderStyle, SketchStyle, Sloppiness, StrokeStyle,
     TextAlign, VerticalAlign,
 };
+pub use workbook::{BoardId, FlowBoard, FlowWorkbook};

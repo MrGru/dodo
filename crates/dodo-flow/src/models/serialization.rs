@@ -46,7 +46,7 @@ use serde_json::Value;
 
 use crate::{
     geometry::{PerimeterShape, Rect, Vec2, nearest_perimeter_point},
-    models::{Connector, ElementKind, FlowDocument, LinearKind},
+    models::{Connector, ElementKind, FlowBoard, FlowDocument, FlowWorkbook, LinearKind},
 };
 
 /// The format version this build writes.
@@ -110,7 +110,7 @@ use crate::{
 /// is present with the wrong shape — and it is the same kind of change as the
 /// font rung at the bottom of the ladder. See
 /// `connector_bindings_became_perimeter_parameters`.
-pub const CURRENT_VERSION: u32 = 8;
+pub const CURRENT_VERSION: u32 = 9;
 
 /// One rung of the ladder: rewrites a document body written by version `from`
 /// into the shape version `from + 1` expects.
@@ -135,6 +135,7 @@ pub const MIGRATIONS: &[(u32, MigrationStep)] = &[
     (5, elements_gained_rotation),
     (6, groups_became_structural),
     (7, connector_bindings_became_perimeter_parameters),
+    (8, single_board_became_a_workbook),
 ];
 
 /// **Version 1 ▸ 2**: a font's continuous `size` became one of four steps, and
@@ -483,6 +484,35 @@ fn connector_bindings_became_perimeter_parameters(value: &mut Value) -> Result<(
     Ok(())
 }
 
+/// **Version 8 ▸ 9**: the single board becomes the first board in a workbook.
+///
+/// The old body is moved wholesale into the board's `document` field. This is
+/// intentionally structural rather than typed: every v8 key, including image
+/// bytes and unknown metadata, survives unchanged.
+fn single_board_became_a_workbook(value: &mut Value) -> Result<(), LoadError> {
+    let Some(object) = value.as_object_mut() else {
+        return Ok(());
+    };
+    let mut document = serde_json::Map::new();
+    for key in ["nodes", "edges", "images", "settings", "metadata", "ids"] {
+        if let Some(value) = object.remove(key) {
+            document.insert(key.into(), value);
+        }
+    }
+    object.insert(
+        "boards".into(),
+        serde_json::to_value(vec![FlowBoard {
+            id: crate::models::BoardId::new(1),
+            name: "Board 1".into(),
+            document: serde_json::from_value(Value::Object(document))?,
+            viewport: crate::geometry::Viewport::default(),
+        }])?,
+    );
+    object.insert("active_board".into(), Value::from(1));
+    object.insert("next_board_id".into(), Value::from(2));
+    Ok(())
+}
+
 /// Why a document could not be loaded.
 #[derive(Debug)]
 pub enum LoadError {
@@ -568,51 +598,49 @@ impl From<serde_json::Error> for SaveError {
     }
 }
 
-/// The on-disk envelope: a version beside the document's own fields.
-///
-/// `#[serde(flatten)]` keeps the file one level deep — `{"version": 1,
-/// "nodes": […], "edges": […]}` — which is the shape §31 shows, and which makes
-/// a hand edit or a `jq` query straightforward.
+/// The on-disk envelope: a version beside the flattened workbook fields.
 #[derive(Debug, Serialize, Deserialize)]
 struct Envelope {
     version: u32,
     #[serde(flatten)]
-    document: FlowDocument,
+    workbook: FlowWorkbook,
 }
 
-impl FlowDocument {
-    /// Writes the document with a `version` field, indented.
-    ///
-    /// Pretty rather than compact because these files are diffed, reviewed and
-    /// occasionally hand-edited; a canvas document is small next to the
-    /// geometry it describes, and the geometry is never in it.
+impl FlowWorkbook {
+    /// Writes the workbook with a version field, indented.
     pub fn to_json(&self) -> Result<String, SaveError> {
-        let envelope = Envelope {
+        Ok(serde_json::to_string_pretty(&Envelope {
             version: CURRENT_VERSION,
-            // The clone is one `Vec` walk per *save*, not per frame. Taking a
-            // reference instead would need a second borrowing envelope type,
-            // for no measurable gain at this frequency.
-            document: self.clone(),
-        };
-        Ok(serde_json::to_string_pretty(&envelope)?)
+            workbook: self.clone(),
+        })?)
     }
 
-    /// Reads a document, migrating it up from whatever version wrote it.
-    ///
-    /// The loaded document's id watermark is reseeded
-    /// ([`FlowDocument::reseed_ids`]) before it is returned, so a file whose
-    /// stored watermark is stale — a merge, a hand edit, another build — cannot
-    /// make this session issue a duplicate id.
-    pub fn from_json(json: &str) -> Result<FlowDocument, LoadError> {
+    /// Reads every board, migrating older single-board documents as needed.
+    pub fn from_json(json: &str) -> Result<FlowWorkbook, LoadError> {
         let mut value: Value = serde_json::from_str(json)?;
         let version = read_version(&value)?;
-
         migrate(&mut value, version, MIGRATIONS)?;
 
-        let envelope: Envelope = serde_json::from_value(value)?;
-        let mut document = envelope.document;
-        document.reseed_ids();
-        Ok(document)
+        let mut workbook = serde_json::from_value::<Envelope>(value)?.workbook;
+        workbook.normalize();
+        for board in &mut workbook.boards {
+            board.document.reseed_ids();
+        }
+        Ok(workbook)
+    }
+}
+
+/// Compatibility helpers for callers that still exchange one board.
+impl FlowDocument {
+    pub fn to_json(&self) -> Result<String, SaveError> {
+        FlowWorkbook::with_document(self.clone()).to_json()
+    }
+
+    pub fn from_json(json: &str) -> Result<FlowDocument, LoadError> {
+        Ok(FlowWorkbook::from_json(json)?
+            .active_board()
+            .document
+            .clone())
     }
 }
 
@@ -671,8 +699,8 @@ mod tests {
     use crate::{
         geometry::Vec2,
         models::{
-            ElementKind, Endpoint, FlowDocument, FontFamily, FontSize, LinearKind, RenderQuality,
-            RenderStyle, ShapeKind, VerticalAlign, ids::ElementId,
+            ElementKind, Endpoint, FlowDocument, FlowWorkbook, FontFamily, FontSize, LinearKind,
+            RenderQuality, RenderStyle, ShapeKind, VerticalAlign, ids::ElementId,
         },
     };
 
@@ -759,7 +787,7 @@ mod tests {
             Vec2::new(70.0, 90.0),
             Vec2::new(160.0, 40.0),
         );
-        let mut value: Value = serde_json::from_str(&old.to_json().unwrap()).unwrap();
+        let mut value = serde_json::to_value(&old).unwrap();
         value["version"] = json!(3);
         value["nodes"]
             .as_array_mut()
@@ -900,12 +928,51 @@ mod tests {
     }
 
     #[test]
+    fn a_workbook_round_trips_with_each_board_and_viewport() {
+        let mut workbook = FlowWorkbook::new();
+        workbook.active_board_mut().document = document();
+        workbook.active_board_mut().viewport =
+            crate::geometry::Viewport::new(Vec2::new(10.0, -20.0), 1.5, Vec2::new(800.0, 600.0));
+        let second = workbook.create_board();
+        workbook.active_board_mut().document.add_node(
+            ElementKind::default(),
+            Vec2::new(99.0, 88.0),
+            Vec2::ONE,
+        );
+
+        let loaded = FlowWorkbook::from_json(&workbook.to_json().unwrap()).unwrap();
+        assert_eq!(loaded, workbook);
+        assert_eq!(loaded.active_board, second);
+    }
+
+    #[test]
+    fn a_version_eight_single_board_becomes_the_first_workbook_board_without_loss() {
+        let original = document();
+        let mut value: Value = serde_json::from_str(&original.to_json().unwrap()).unwrap();
+        value["version"] = json!(8);
+        let board = value["boards"][0]["document"].take();
+        let object = value.as_object_mut().unwrap();
+        object.remove("boards");
+        object.remove("active_board");
+        object.remove("next_board_id");
+        for (key, value) in board.as_object().unwrap().clone() {
+            object.insert(key, value);
+        }
+
+        let loaded = FlowWorkbook::from_json(&value.to_string()).unwrap();
+        assert_eq!(loaded.boards.len(), 1);
+        assert_eq!(loaded.active_board().name, "Board 1");
+        assert_eq!(loaded.active_board().document, original);
+    }
+
+    #[test]
     fn the_written_file_carries_the_version_at_the_top_level() {
         let value: Value = serde_json::from_str(&document().to_json().unwrap()).unwrap();
 
         assert_eq!(value["version"], json!(CURRENT_VERSION));
-        assert!(value["nodes"].is_array(), "the envelope is flattened");
-        assert!(value["edges"].is_array());
+        assert!(value["boards"].is_array(), "the workbook is flattened");
+        assert!(value["boards"][0]["document"]["nodes"].is_array());
+        assert!(value["boards"][0]["document"]["edges"].is_array());
     }
 
     #[test]
@@ -1031,16 +1098,22 @@ mod tests {
         // change to the world sizes.
         let value: Value = serde_json::from_str(&original.to_json().unwrap()).unwrap();
         assert_eq!(
-            value["nodes"][0]["style"]["font"]["size"],
+            value["boards"][0]["document"]["nodes"][0]["style"]["font"]["size"],
             json!("ExtraLarge")
         );
-        assert_eq!(value["nodes"][1]["style"]["font"]["family"], json!("Code"));
         assert_eq!(
-            value["nodes"][0]["style"]["font"]["vertical_align"],
+            value["boards"][0]["document"]["nodes"][1]["style"]["font"]["family"],
+            json!("Code")
+        );
+        assert_eq!(
+            value["boards"][0]["document"]["nodes"][0]["style"]["font"]["vertical_align"],
             json!("Bottom"),
             "the fourth text row is in the file like the other three"
         );
-        assert_eq!(value["edges"][0]["label"], json!("carries"));
+        assert_eq!(
+            value["boards"][0]["document"]["edges"][0]["label"],
+            json!("carries")
+        );
     }
 
     /// **A label with line breaks in it survives a save and a reload, on every
@@ -1108,7 +1181,10 @@ mod tests {
         // On disk as escapes in one string, not as anything the format had to
         // learn — and still at the version this build already wrote.
         let value: Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(value["nodes"][0]["label"], json!(paragraph));
+        assert_eq!(
+            value["boards"][0]["document"]["nodes"][0]["label"],
+            json!(paragraph)
+        );
         assert_eq!(value["version"], json!(CURRENT_VERSION));
         assert!(
             json.contains("first line\\nsecond line"),
@@ -1282,13 +1358,17 @@ mod tests {
         let value: Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value["version"], json!(CURRENT_VERSION));
         assert_eq!(
-            value["images"].as_object().map(|it| it.len()),
+            value["boards"][0]["document"]["images"]
+                .as_object()
+                .map(|it| it.len()),
             Some(1),
             "one entry per distinct picture"
         );
-        assert!(value["nodes"][0]["image"]["handle"].is_string());
+        assert!(value["boards"][0]["document"]["nodes"][0]["image"]["handle"].is_string());
         assert!(
-            value["nodes"][0]["image"].get("bytes").is_none(),
+            value["boards"][0]["document"]["nodes"][0]["image"]
+                .get("bytes")
+                .is_none(),
             "an element must never carry the bytes"
         );
     }
@@ -1460,6 +1540,6 @@ mod tests {
             serde_json::from_str(&document().to_json().unwrap()).expect("parses as the envelope");
 
         assert_eq!(envelope.version, CURRENT_VERSION);
-        assert_eq!(envelope.document.nodes.len(), 2);
+        assert_eq!(envelope.workbook.active_board().document.nodes.len(), 2);
     }
 }

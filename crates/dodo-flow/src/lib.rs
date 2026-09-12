@@ -1790,7 +1790,7 @@ pub use instrument::{Instruments, Probe};
 pub use interaction::{InteractionEffect, InteractionEvent, InteractionMachine, InteractionState};
 pub use models::{
     Connector, ConnectorAttachment, ConnectorEnd, ConnectorEndpoint, ElementId, ElementKind,
-    FlowDocument,
+    FlowDocument, FlowWorkbook,
 };
 pub use properties::{PanelSection, SelectionKind};
 pub use render::{GridSettings, GridStyle, PaintPlan, PaintStats, SceneInk, SceneOptions};
