@@ -410,11 +410,14 @@ fn target_identity(foreground: usize, thread: u32) -> Option<TargetIdentity> {
     if unsafe { GetGUIThreadInfo(thread, &mut gui) } == 0 || gui.hwndFocus.is_null() {
         return None;
     }
+    // The caret owner (`gui.hwndCaret`) is deliberately not part of the identity:
+    // a lazily created caret flips it on the first typed character and would
+    // reset composition mid-word, stranding an English restore. See
+    // `models::keyboard_hook::TargetIdentity`.
     Some(TargetIdentity::new(
         foreground,
         thread,
         gui.hwndFocus as usize,
-        gui.hwndCaret as usize,
     ))
 }
 

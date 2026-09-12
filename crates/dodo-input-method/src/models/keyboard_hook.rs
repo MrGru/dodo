@@ -61,23 +61,46 @@ pub(crate) enum WindowsInput {
 
 /// The Windows signals that prove composition is still aimed at one control.
 ///
-/// A null caret owner is allowed because custom controls often draw their own;
-/// physical mouse-down is observed separately and invalidates even that case.
+/// It is the foreground window, its GUI thread, and the focused control — the
+/// three things that are stable for as long as the caret stays in one field.
+///
+/// # Why the caret owner is deliberately *not* one of them
+///
+/// `GetGUIThreadInfo`'s `hwndCaret` was once part of this identity, and it was
+/// the source of a Windows-only bug the macOS Event Tap never had: it corrupted
+/// English words such as `workflow`, `follow` and `window`, and nothing else.
+///
+/// A caret is a system resource, and a control that has keyboard focus does not
+/// necessarily own one *yet* — several UI toolkits call `CreateCaret` lazily, on
+/// the first character typed. So `hwndCaret` reads `0` on the first keystroke
+/// and the control's own handle on the second, with focus unchanged throughout.
+/// That is a spurious target change, and it fires on exactly the keystroke where
+/// dodo has just replaced a literal `w` with a provisional `ư`: the reset throws
+/// away the shared engine's per-word English-restore state (`literal_mode`, the
+/// undo watermark and the `raw` ledger it rebuilds `work` from), stranding the
+/// `ư` mid-word. Vietnamese is untouched, because each syllable composes from a
+/// clean state and needs no such restore — which is why only English words broke.
+///
+/// The macOS host tracks only the target *process* and never the caret, and it
+/// is correct, so the caret buys nothing here that the other signals and the
+/// callback do not already provide: a real caret move is a mouse-down (the mouse
+/// hook resets), an arrow/Home/End (a boundary key that commits the syllable), or
+/// a focus change to another control (`focus`, above). The remaining case — a
+/// program moving the caret inside one control with no observable event — is the
+/// same residual risk macOS already accepts, not a regression this reopens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TargetIdentity {
     foreground: usize,
     thread: u32,
     focus: usize,
-    caret: usize,
 }
 
 impl TargetIdentity {
-    pub(crate) fn new(foreground: usize, thread: u32, focus: usize, caret: usize) -> Self {
+    pub(crate) fn new(foreground: usize, thread: u32, focus: usize) -> Self {
         Self {
             foreground,
             thread,
             focus,
-            caret,
         }
     }
 }
@@ -1133,15 +1156,14 @@ mod tests {
 
     #[test]
     fn target_changes_and_uncertainty_reset_retained_text() {
-        let target = TargetIdentity::new(1, 2, 3, 4);
+        let target = TargetIdentity::new(1, 2, 3);
         let mut observed = None;
         assert!(!target_changed(&mut observed, Some(target)));
         assert!(!target_changed(&mut observed, Some(target)));
         for changed in [
-            TargetIdentity::new(9, 2, 3, 4),
-            TargetIdentity::new(1, 9, 3, 4),
-            TargetIdentity::new(1, 2, 9, 4),
-            TargetIdentity::new(1, 2, 3, 9),
+            TargetIdentity::new(9, 2, 3),
+            TargetIdentity::new(1, 9, 3),
+            TargetIdentity::new(1, 2, 9),
         ] {
             let mut observed = Some(target);
             assert!(target_changed(&mut observed, Some(changed)));
@@ -1151,7 +1173,7 @@ mod tests {
         assert!(composer.process(KeyEvent::character('d')).pass_through);
         assert!(target_changed(
             &mut observed,
-            Some(TargetIdentity::new(1, 2, 5, 4))
+            Some(TargetIdentity::new(1, 2, 5))
         ));
         composer.reset();
         let after_focus_change = composer.process(KeyEvent::character('d'));
@@ -1160,6 +1182,141 @@ mod tests {
 
         assert!(target_changed(&mut observed, None));
         assert_eq!(observed, None);
+    }
+
+    /// The Windows-only regression this fix is for: the caret owner is not part
+    /// of the composition target, so a control that creates its caret lazily on
+    /// the first character does not read as a target change on the keystroke that
+    /// begins an English rewrite. Two identities that would once have differed
+    /// only in their caret owner are equal, so composition — and with it the
+    /// shared engine's English-restore state — survives.
+    #[test]
+    fn a_lazy_caret_does_not_read_as_a_target_change() {
+        // Same window, thread and focused control; the caret owner used to be a
+        // fourth field and went 0 -> control-handle on the first typed character.
+        let before_first_key = TargetIdentity::new(0x100, 7, 0x200);
+        let after_caret_created = TargetIdentity::new(0x100, 7, 0x200);
+        let mut observed = Some(before_first_key);
+        assert!(
+            !target_changed(&mut observed, Some(after_caret_created)),
+            "a caret appearing must not reset an in-flight English word"
+        );
+
+        // A real move — the focused control itself changing — still resets.
+        assert!(target_changed(
+            &mut observed,
+            Some(TargetIdentity::new(0x100, 7, 0x999))
+        ));
+    }
+
+    /// Apply one verbatim Windows `SendInput` batch to a plain end-cursor
+    /// document (no browser autocomplete selection): Backspace deletes one
+    /// grapheme, a Unicode unit inserts itself.
+    fn plain_document_after(mut document: String, inputs: &[WindowsInput]) -> String {
+        for input in inputs {
+            match *input {
+                WindowsInput::Key {
+                    virtual_key,
+                    key_up: false,
+                } if virtual_key == vk::BACK as u16 => {
+                    document = dodo_ime_core::core::truncate_graphemes(&document, 1);
+                }
+                WindowsInput::Unicode {
+                    unit,
+                    key_up: false,
+                } => document.push(char::from_u32(u32::from(unit)).expect("BMP test text")),
+                WindowsInput::Key { .. } | WindowsInput::Unicode { .. } => {}
+            }
+        }
+        document
+    }
+
+    /// Type `keys` the way the Windows hook does, into a plain (non-browser)
+    /// end-cursor document: every transforming plan is staged through the real
+    /// `output_inputs` batch and applied, and a passed-through key types itself
+    /// after it. This is the whole Windows model path bar the OS callback, which
+    /// is `#[cfg(windows)]` and can only run in CI.
+    fn windows_document(keys: &str) -> String {
+        let mut composer = DirectComposer::new(VietnameseConfig::default());
+        let mut document = String::new();
+        for key in keys.chars() {
+            let event = KeyEvent::character(key);
+            let plan = composer.process(event);
+            if plan.transforms() {
+                let rewrite = BrowserRewrite::plan(true, Some("notepad.exe"), &plan);
+                document = plain_document_after(document, &output_inputs(&plan, &rewrite));
+            }
+            if plan.pass_through
+                && let Some(typed) = event.typed()
+            {
+                document.push(typed);
+            }
+        }
+        document
+    }
+
+    /// The captain's report, staged end to end through the Windows path: the
+    /// English words that a Telex engine transforms mid-word must land literal.
+    /// `wwindoww` collapses its leading doubled `w` to one (the Telex escape),
+    /// exactly as the shared engine specifies.
+    #[test]
+    fn the_windows_path_keeps_the_captains_english_words_literal() {
+        for (keys, document) in [
+            ("workflow", "workflow"),
+            ("follow", "follow"),
+            ("playwright", "playwright"),
+            ("window", "window"),
+            ("gateway", "gateway"),
+            ("widow", "widow"),
+            ("wwindoww", "windoww"),
+        ] {
+            assert_eq!(windows_document(keys), document, "{keys}");
+        }
+    }
+
+    /// Why the target reset must not fire mid-word, stated as the corruption it
+    /// would cause. `workflow` reaches its literal spelling only because the
+    /// engine keeps one word's worth of state and restores `work` from it once
+    /// `k` proves the run is not Vietnamese. Resetting the composer after the
+    /// opening `w` has become a provisional `ư` — which is what a spurious
+    /// `TargetIdentity` change once did — strands that `ư` and the word comes out
+    /// mangled, while Vietnamese, needing no restore, would be unharmed.
+    #[test]
+    fn a_reset_mid_english_word_strands_the_restore() {
+        // Uninterrupted, the Windows path restores the literal spelling.
+        assert_eq!(windows_document("workflow"), "workflow");
+
+        // Interrupted right after the first key's `w` -> `ư` rewrite, the engine
+        // loses the raw `w` it would have rebuilt `work` from.
+        let mut composer = DirectComposer::new(VietnameseConfig::default());
+        let mut document = String::new();
+        for (index, key) in "workflow".chars().enumerate() {
+            let event = KeyEvent::character(key);
+            let plan = composer.process(event);
+            if plan.transforms() {
+                let rewrite = BrowserRewrite::plan(true, Some("notepad.exe"), &plan);
+                document = plain_document_after(document, &output_inputs(&plan, &rewrite));
+            }
+            if plan.pass_through
+                && let Some(typed) = event.typed()
+            {
+                document.push(typed);
+            }
+            if index == 0 {
+                // The spurious reset: the document already shows the provisional
+                // `ư`, and the engine's per-word state is thrown away.
+                assert_eq!(document, "ư");
+                composer.reset();
+            }
+        }
+        assert_ne!(
+            document, "workflow",
+            "a mid-word reset must corrupt the word"
+        );
+        assert!(
+            document.starts_with('ư'),
+            "the stranded provisional letter stays in the document: {document:?}"
+        );
     }
 
     #[test]
