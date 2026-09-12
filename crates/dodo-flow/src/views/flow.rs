@@ -1459,6 +1459,10 @@ impl FlowView {
                     .as_ref()
                     .filter(|rename| rename.id == id)
                     .map(|rename| rename.input.clone());
+                // The last board can never be closed (see `delete_board`), so
+                // the control that closes it only exists when there is more than
+                // one — mirroring `dodo-database`'s tab `close()`.
+                let closable = self.workbook.boards.len() > 1;
                 div()
                     .id(format!("flow-board-{}", id.get()))
                     .h(px(28.0))
@@ -1488,24 +1492,26 @@ impl FlowView {
                             .is_none_or(|rename| rename.id != id),
                         |this| this.child(name),
                     )
-                    .child(
-                        div()
-                            .id(format!("close-flow-board-{}", id.get()))
-                            .px(px(4.0))
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t(flow::Text::BoardClose, cx))
-                            .on_mouse_down(MouseButton::Left, {
-                                let view = view.clone();
-                                move |_, window, cx| {
-                                    view.update(cx, |this, cx| {
-                                        this.delete_board(id);
-                                        cx.notify();
-                                        this.focus_handle.clone().focus(window, cx);
-                                    });
-                                }
-                            }),
-                    )
+                    .when(closable, |this| {
+                        this.child(
+                            div()
+                                .id(format!("close-flow-board-{}", id.get()))
+                                .px(px(4.0))
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t(flow::Text::BoardClose, cx))
+                                .on_mouse_down(MouseButton::Left, {
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.delete_board(id);
+                                            cx.notify();
+                                            this.focus_handle.clone().focus(window, cx);
+                                        });
+                                    }
+                                }),
+                        )
+                    })
                     .on_mouse_down(MouseButton::Left, {
                         let view = view.clone();
                         move |event, window, cx| {

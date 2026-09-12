@@ -92,7 +92,7 @@ samples! {
     plain ColorPlaceholder;
     plain ColorFromTheme;
     term BoardAdd;
-    plain BoardClose;
+    term BoardClose;
     with StorageProblem(DETAIL.into()) [DETAIL];
     plain StorageLoadConflict;
 
