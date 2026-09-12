@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use crate::{models::FlowDocument, paths::data_dir};
+use crate::{models::FlowWorkbook, paths::data_dir};
 
 pub(crate) const DOCUMENT_FILE: &str = "flow.json";
 
@@ -26,8 +26,8 @@ impl std::fmt::Display for StoreError {
 }
 
 pub(crate) trait DocumentStore: Send + Sync + 'static {
-    fn load(&self) -> Result<FlowDocument, StoreError>;
-    fn persist(&self, document: &FlowDocument) -> Result<(), StoreError>;
+    fn load(&self) -> Result<FlowWorkbook, StoreError>;
+    fn persist(&self, workbook: &FlowWorkbook) -> Result<(), StoreError>;
 }
 
 pub(crate) struct DiskDocumentStore {
@@ -54,23 +54,23 @@ impl DiskDocumentStore {
 }
 
 impl DocumentStore for DiskDocumentStore {
-    fn load(&self) -> Result<FlowDocument, StoreError> {
+    fn load(&self) -> Result<FlowWorkbook, StoreError> {
         match std::fs::read_to_string(&self.path) {
             Ok(json) => {
-                FlowDocument::from_json(&json).map_err(|error| StoreError::at(&self.path, error))
+                FlowWorkbook::from_json(&json).map_err(|error| StoreError::at(&self.path, error))
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(FlowDocument::new()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(FlowWorkbook::new()),
             Err(error) => Err(StoreError::at(&self.path, error)),
         }
     }
 
-    fn persist(&self, document: &FlowDocument) -> Result<(), StoreError> {
+    fn persist(&self, workbook: &FlowWorkbook) -> Result<(), StoreError> {
         let directory = self
             .path
             .parent()
             .expect("a file beneath data_dir has a parent");
         std::fs::create_dir_all(directory).map_err(|error| StoreError::at(directory, error))?;
-        let json = document
+        let json = workbook
             .to_json()
             .map_err(|error| StoreError::at(&self.path, error))?;
         let temporary = self.path.with_extension("json.tmp");
@@ -86,7 +86,7 @@ mod tests {
     use super::{DOCUMENT_FILE, DiskDocumentStore, DocumentStore};
     use crate::{
         geometry::Vec2,
-        models::{ElementKind, FlowDocument},
+        models::{ElementKind, FlowWorkbook},
     };
 
     fn path() -> PathBuf {
@@ -103,21 +103,21 @@ mod tests {
     #[test]
     fn a_missing_file_is_an_empty_diagram() {
         let store = DiskDocumentStore::at(path());
-        assert_eq!(store.load().expect("first run"), FlowDocument::new());
+        assert_eq!(store.load().expect("first run"), FlowWorkbook::new());
     }
 
     #[test]
     fn a_diagram_survives_a_restart_at_the_contract_file_name() {
         let path = path();
-        let mut document = FlowDocument::new();
-        document.add_node(
+        let mut workbook = FlowWorkbook::new();
+        workbook.active_board_mut().document.add_node(
             ElementKind::default(),
             Vec2::new(10.0, 20.0),
             Vec2::new(120.0, 60.0),
         );
 
         DiskDocumentStore::at(path.clone())
-            .persist(&document)
+            .persist(&workbook)
             .expect("persists");
 
         assert_eq!(
@@ -126,7 +126,7 @@ mod tests {
         );
         assert_eq!(
             DiskDocumentStore::at(path.clone()).load().unwrap(),
-            document
+            workbook
         );
         assert!(!path.with_extension("json.tmp").exists());
 
@@ -148,11 +148,11 @@ mod tests {
         assert!(editor.set_render_style(RenderStyle::Sketch));
 
         DiskDocumentStore::at(path.clone())
-            .persist(&editor.to_document())
+            .persist(&FlowWorkbook::with_document(editor.to_document()))
             .expect("persists");
 
         let reopened = DiskDocumentStore::at(path.clone()).load().expect("loads");
-        let (editor, _) = FlowEditor::from_document(&reopened);
+        let (editor, _) = FlowEditor::from_document(&reopened.active_board().document);
         assert_eq!(editor.settings().render_style, RenderStyle::Sketch);
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());

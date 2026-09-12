@@ -121,8 +121,8 @@ use std::sync::{Arc, OnceLock};
 
 use dodo_i18n::{flow, t};
 use gpui_kit::component::{
-    ActiveTheme, WindowExt as _,
-    input::{InputState, Textarea, TextareaState},
+    ActiveTheme, Sizable as _, WindowExt as _,
+    input::{Input, InputState, Textarea, TextareaState},
     notification::Notification,
     slider::{SliderEvent, SliderState},
 };
@@ -145,9 +145,9 @@ use crate::{
         InteractionMachine, PointerButton, TextTarget, resize_keeps_aspect,
     },
     models::{
-        Color, EdgeIndex, EdgeRouting, ElementKind, FlowDocument, FontFamily, ImageFormat,
-        ImageResource, NodeIndex, RenderQuality, RenderStyle, SketchStyle, TextAlign,
-        VerticalAlign,
+        BoardId, Color, EdgeIndex, EdgeRouting, ElementKind, FlowDocument, FlowWorkbook,
+        FontFamily, ImageFormat, ImageResource, NodeIndex, RenderQuality, RenderStyle, SketchStyle,
+        TextAlign, VerticalAlign,
     },
     properties::{ArrowKind, Availability, ControlState, SelectionKind},
     render::{
@@ -369,6 +369,9 @@ pub struct FlowView {
     /// undo history would be written, and an editor lends no `&mut` to the
     /// world it owns. `commands::editor`'s module doc has the whole argument.
     editor: FlowEditor,
+    /// Serialized boards; only `editor` is a live runtime, for the active board.
+    workbook: FlowWorkbook,
+    active_editor_revision: u64,
     viewport: Viewport,
     budgets: RenderBudgets,
     focus_handle: FocusHandle,
@@ -493,10 +496,12 @@ pub struct FlowView {
     /// the current-colour swatch, or the Link action's. One `Option` for both,
     /// because they can never be open at once.
     prompt: Option<PanelPrompt>,
+    renaming_board: Option<BoardRename>,
 
     // ---- Phase 8's app persistence ------------------------------------
     document_store: Option<Arc<dyn DocumentStore>>,
     storage_ready: bool,
+    workbook_revision: u64,
     saved_revision: u64,
     saving_revision: Option<u64>,
 }
@@ -504,6 +509,11 @@ pub struct FlowView {
 /// The panel's open text field.
 struct PanelPrompt {
     kind: properties::PromptKind,
+    input: Entity<InputState>,
+}
+
+struct BoardRename {
+    id: BoardId,
     input: Entity<InputState>,
 }
 
@@ -539,6 +549,8 @@ impl FlowView {
 
         let mut view = FlowView {
             editor: FlowEditor::new(),
+            workbook: FlowWorkbook::new(),
+            active_editor_revision: 0,
             viewport: Viewport::default(),
             grid: GridSettings::default(),
             grid_limits: GridLimits::from_budgets(&budgets),
@@ -583,8 +595,10 @@ impl FlowView {
             opacity_shown: None,
             opacity_dragging: false,
             prompt: None,
+            renaming_board: None,
             storage_ready: document_store.is_none(),
             document_store,
+            workbook_revision: 0,
             saved_revision: 0,
             saving_revision: None,
         };
@@ -633,9 +647,9 @@ impl FlowView {
                 .await;
 
             let _ = view.update_in(cx, |this, window, cx| match loaded {
-                Ok(document) if this.editor.revision() == 0 => {
-                    this.set_document(document);
-                    this.saved_revision = this.editor.revision();
+                Ok(workbook) if this.editor.revision() == 0 => {
+                    this.set_workbook(workbook);
+                    this.saved_revision = this.workbook_revision;
                     this.storage_ready = true;
                     cx.notify();
                 }
@@ -664,11 +678,11 @@ impl FlowView {
         .detach();
     }
 
-    /// Starts at most one write, and copies the document only when its revision
-    /// changed. `render` can run for an unrelated ancestor repaint, so an
-    /// unguarded `to_document` here would copy the whole canvas per frame.
+    /// Starts at most one workbook write. The active document is copied only
+    /// after its editor changed; inactive boards are already serializable data.
     fn persist_if_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let revision = self.editor.revision();
+        self.save_active_board_if_changed();
+        let revision = self.workbook_revision;
         if !self.storage_ready || revision == self.saved_revision || self.saving_revision.is_some()
         {
             return;
@@ -677,12 +691,12 @@ impl FlowView {
             return;
         };
 
-        let document = self.editor.to_document();
+        let workbook = self.workbook.clone();
         self.saving_revision = Some(revision);
         cx.spawn_in(window, async move |view, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { store.persist(&document) })
+                .spawn(async move { store.persist(&workbook) })
                 .await;
 
             let _ = view.update_in(cx, |this, window, cx| {
@@ -692,8 +706,6 @@ impl FlowView {
                 match result {
                     Ok(()) => {
                         this.saved_revision = revision;
-                        // If edits landed during the write, one more render
-                        // starts the next (and only the next) snapshot.
                         cx.notify();
                     }
                     Err(error) => {
@@ -733,10 +745,112 @@ impl FlowView {
         &mut self.editor
     }
 
-    /// The world written back out as a document. Allocates; for a save or a
-    /// test, never for a frame.
+    /// The active world written back out as a document. Allocates; for a save
+    /// or a test, never for a frame.
     pub fn to_document(&self) -> FlowDocument {
         self.editor.world().to_document()
+    }
+
+    pub fn workbook(&self) -> &FlowWorkbook {
+        &self.workbook
+    }
+
+    fn save_active_board_if_changed(&mut self) {
+        if self.editor.revision() == self.active_editor_revision {
+            return;
+        }
+        self.workbook
+            .save_active_board(self.editor.to_document(), self.viewport);
+        self.active_editor_revision = self.editor.revision();
+        self.workbook_revision += 1;
+    }
+
+    fn set_workbook(&mut self, workbook: FlowWorkbook) {
+        self.workbook = workbook;
+        let board = self.workbook.active_board().clone();
+        self.load_board_document(board.document, board.viewport);
+        self.workbook_revision = 0;
+    }
+
+    fn load_board_document(&mut self, document: FlowDocument, viewport: Viewport) {
+        self.editor.load_document(document);
+        self.editor.rebuild_all_geometry();
+        self.rebuild_spatial_index();
+        self.viewport = viewport;
+        self.interaction = InteractionMachine::new();
+        self.hovered = None;
+        self.editing = None;
+        self.prompt = None;
+        self.active_editor_revision = self.editor.revision();
+    }
+
+    pub fn create_board(&mut self) {
+        self.save_active_board_if_changed();
+        self.workbook.create_board();
+        let board = self.workbook.active_board().clone();
+        self.load_board_document(board.document, board.viewport);
+        self.workbook_revision += 1;
+    }
+
+    pub fn switch_board(&mut self, id: BoardId) -> bool {
+        self.save_active_board_if_changed();
+        if !self.workbook.select_board(id) {
+            return false;
+        }
+        let board = self.workbook.active_board().clone();
+        self.load_board_document(board.document, board.viewport);
+        self.workbook_revision += 1;
+        true
+    }
+
+    pub fn rename_board(&mut self, id: BoardId, name: String) -> bool {
+        if self.workbook.rename_board(id, name) {
+            self.workbook_revision += 1;
+            return true;
+        }
+        false
+    }
+
+    pub fn delete_board(&mut self, id: BoardId) -> bool {
+        self.save_active_board_if_changed();
+        let was_active = self.workbook.active_board == id;
+        if !self.workbook.delete_board(id) {
+            return false;
+        }
+        if was_active {
+            let board = self.workbook.active_board().clone();
+            self.load_board_document(board.document, board.viewport);
+        }
+        self.workbook_revision += 1;
+        true
+    }
+
+    fn begin_board_rename(&mut self, id: BoardId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(board) = self.workbook.board(id) else {
+            return;
+        };
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(board.name.clone()));
+        window.focus(&input.focus_handle(cx), cx);
+        self.renaming_board = Some(BoardRename { id, input });
+        cx.notify();
+    }
+
+    fn commit_board_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(rename) = self.renaming_board.take() else {
+            return;
+        };
+        let name = rename.input.read(cx).value().trim().to_owned();
+        if !name.is_empty() {
+            self.rename_board(rename.id, name);
+        }
+        self.focus_handle.clone().focus(window, cx);
+        cx.notify();
+    }
+
+    fn cancel_board_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.renaming_board = None;
+        self.focus_handle.clone().focus(window, cx);
+        cx.notify();
     }
 
     /// Replaces the document, **rebuilding the runtime from it**.
@@ -752,12 +866,12 @@ impl FlowView {
     /// **The undo history goes with it.** A stored delta names runtime indices,
     /// and every index means something else in a different document.
     pub fn set_document(&mut self, document: FlowDocument) -> crate::runtime::LoadReport {
-        let report = self.editor.load_document(document);
-        // The index is built from the routes, so they have to exist first —
-        // and the whole-document rebuild is the one place that is allowed to
-        // be proportional to the file rather than to the screen.
+        let report = self.editor.load_document(document.clone());
         self.editor.rebuild_all_geometry();
         self.rebuild_spatial_index();
+        self.workbook.save_active_board(document, self.viewport);
+        self.active_editor_revision = self.editor.revision();
+        self.workbook_revision += 1;
         report
     }
 
@@ -1303,6 +1417,95 @@ impl FlowView {
             self.editor.rebuild_dirty_geometry();
         }
         cx.notify();
+    }
+
+    fn board_bar(&self, view: Entity<FlowView>, cx: &App) -> impl IntoElement {
+        div()
+            .occlude()
+            .h(px(36.0))
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .px(px(8.0))
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .children(self.workbook.boards.iter().map(|board| {
+                let id = board.id;
+                let active = id == self.workbook.active_board;
+                let name = board.name.clone();
+                let rename = self
+                    .renaming_board
+                    .as_ref()
+                    .filter(|rename| rename.id == id)
+                    .map(|rename| rename.input.clone());
+                div()
+                    .id(format!("flow-board-{}", id.get()))
+                    .h(px(28.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.0))
+                    .px(px(8.0))
+                    .rounded(cx.theme().radius)
+                    .when(active, |this| this.bg(cx.theme().secondary))
+                    .when_some(rename, |this, input| {
+                        this.child(Input::new(&input).small().w(px(140.0)))
+                    })
+                    .when(
+                        self.renaming_board
+                            .as_ref()
+                            .is_none_or(|rename| rename.id != id),
+                        |this| this.child(name),
+                    )
+                    .child(
+                        div()
+                            .id(format!("close-flow-board-{}", id.get()))
+                            .px(px(4.0))
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t(flow::Text::BoardClose, cx))
+                            .on_mouse_down(MouseButton::Left, {
+                                let view = view.clone();
+                                move |_, window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.delete_board(id);
+                                        cx.notify();
+                                        this.focus_handle.clone().focus(window, cx);
+                                    });
+                                }
+                            }),
+                    )
+                    .on_mouse_down(MouseButton::Left, {
+                        let view = view.clone();
+                        move |event, window, cx| {
+                            view.update(cx, |this, cx| {
+                                if event.click_count == 2 {
+                                    window.prevent_default();
+                                    this.begin_board_rename(id, window, cx);
+                                } else {
+                                    this.switch_board(id);
+                                    cx.notify();
+                                }
+                            });
+                        }
+                    })
+            }))
+            .child(
+                div()
+                    .id("add-flow-board")
+                    .h(px(28.0))
+                    .px(px(8.0))
+                    .rounded(cx.theme().radius)
+                    .child(t(flow::Text::BoardAdd, cx))
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        view.update(cx, |this, cx| {
+                            this.create_board();
+                            this.focus_handle.clone().focus(window, cx);
+                            cx.notify();
+                        });
+                    }),
+            )
     }
 
     fn palette_state(&self) -> palette::PaletteState {
@@ -2714,6 +2917,15 @@ impl FlowView {
             return;
         }
 
+        if self.renaming_board.is_some() {
+            match event.keystroke.key.as_str() {
+                "enter" => self.commit_board_rename(window, cx),
+                "escape" => self.cancel_board_rename(window, cx),
+                _ => {}
+            }
+            return;
+        }
+
         match event.keystroke.key.as_str() {
             PAN_KEY => self.pan_key_held = true,
             "escape" => {
@@ -3330,14 +3542,15 @@ impl Render for FlowView {
         let handles = nodes::handles(&self.snapshot, cx);
         let grips = nodes::resize_grips(&self.snapshot, cx);
         let selection = nodes::selection_box(&self.snapshot, cx);
+        let boards = self.board_bar(cx.entity(), cx);
 
         div()
             .id("flow-canvas")
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .size_full()
-            .relative()
-            .overflow_hidden()
+            .flex()
+            .flex_col()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .on_action(cx.listener(Self::on_undo))
@@ -3351,78 +3564,87 @@ impl Render for FlowView {
             .on_action(cx.listener(Self::on_commit_text))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_key_up(cx.listener(Self::on_key_up))
-            .child(
-                canvas(
-                    // Prepaint: the hitbox every mouse listener gates on — it
-                    // has to exist before paint, because paint is where the
-                    // listeners are registered and they capture it — and §10's
-                    // pictures, which have to be *laid out* here for the same
-                    // structural reason: GPUI allows an element to be
-                    // prepainted in this phase and in no other. They are
-                    // painted in the paint closure below, at the point in the
-                    // paint order the image run occupies.
-                    move |bounds, window, cx| {
-                        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-                        let pictures = prepainted
-                            .update(cx, |this, cx| this.prepaint_pictures(bounds, window, cx));
-                        (hitbox, pictures)
-                    },
-                    move |bounds, (hitbox, mut pictures), window, cx| {
-                        view.update(cx, |this, cx| {
-                            this.paint(bounds, &hitbox, &mut pictures, window, cx)
-                        });
-                    },
-                )
-                .absolute()
-                .size_full(),
-            )
-            // **The rich half.** One layer above the canvas, absolutely
-            // positioned, holding tens of elements — never one per document
-            // node. See `views::nodes`.
-            .child(
-                nodes::layer()
-                    .children(nodes)
-                    .children(selection)
-                    .children(handles)
-                    .children(grips),
-            )
-            // **§45's palette.** Chrome rather than content, so it sits above
-            // the rich layer and is positioned against the pane rather than
-            // against the document — a control anchored in world space would
-            // pan away from the user.
+            .child(boards)
             .child(
                 div()
-                    .absolute()
-                    .top(px(12.0))
-                    .left(px(12.0))
-                    .child(palette::palette(cx.entity(), self.palette_state(), cx)),
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .overflow_hidden()
+                    .child(
+                        canvas(
+                            // Prepaint: the hitbox every mouse listener gates on — it
+                            // has to exist before paint, because paint is where the
+                            // listeners are registered and they capture it — and §10's
+                            // pictures, which have to be *laid out* here for the same
+                            // structural reason: GPUI allows an element to be
+                            // prepainted in this phase and in no other. They are
+                            // painted in the paint closure below, at the point in the
+                            // paint order the image run occupies.
+                            move |bounds, window, cx| {
+                                let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+                                let pictures = prepainted.update(cx, |this, cx| {
+                                    this.prepaint_pictures(bounds, window, cx)
+                                });
+                                (hitbox, pictures)
+                            },
+                            move |bounds, (hitbox, mut pictures), window, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.paint(bounds, &hitbox, &mut pictures, window, cx)
+                                });
+                            },
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+                    // **The rich half.** One layer above the canvas, absolutely
+                    // positioned, holding tens of elements — never one per document
+                    // node. See `views::nodes`.
+                    .child(
+                        nodes::layer()
+                            .children(nodes)
+                            .children(selection)
+                            .children(handles)
+                            .children(grips),
+                    )
+                    // **§45's palette.** Chrome rather than content, so it sits above
+                    // the rich layer and is positioned against the pane rather than
+                    // against the document — a control anchored in world space would
+                    // pan away from the user.
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(12.0))
+                            .left(px(12.0))
+                            .child(palette::palette(cx.entity(), self.palette_state(), cx)),
+                    )
+                    // **The contextual property panel** (Phase 11), beside the palette
+                    // and under it. Chrome, like the palette, and `children` rather
+                    // than `child` for the same reason the caret is: a canvas with
+                    // nothing selected builds no panel at all.
+                    .children(panel.map(|state| {
+                        div()
+                            .absolute()
+                            .top(px(properties::PANEL_TOP_PIXELS))
+                            .bottom(px(properties::PANEL_BOTTOM_PIXELS))
+                            .left(px(12.0))
+                            .min_h(px(properties::PANEL_MIN_PIXELS))
+                            .child(properties::panel(
+                                cx.entity(),
+                                &state,
+                                self.prompt
+                                    .as_ref()
+                                    .map(|prompt| (prompt.kind, &prompt.input)),
+                                &self.opacity,
+                                &self.panel_scroll,
+                                cx,
+                            ))
+                    }))
+                    // **§9's caret, above everything.** `children` rather than `child`
+                    // so an idle canvas builds no element at all — text editing costs
+                    // one `Option` when nobody is typing.
+                    .children(editor),
             )
-            // **The contextual property panel** (Phase 11), beside the palette
-            // and under it. Chrome, like the palette, and `children` rather
-            // than `child` for the same reason the caret is: a canvas with
-            // nothing selected builds no panel at all.
-            .children(panel.map(|state| {
-                div()
-                    .absolute()
-                    .top(px(properties::PANEL_TOP_PIXELS))
-                    .bottom(px(properties::PANEL_BOTTOM_PIXELS))
-                    .left(px(12.0))
-                    .min_h(px(properties::PANEL_MIN_PIXELS))
-                    .child(properties::panel(
-                        cx.entity(),
-                        &state,
-                        self.prompt
-                            .as_ref()
-                            .map(|prompt| (prompt.kind, &prompt.input)),
-                        &self.opacity,
-                        &self.panel_scroll,
-                        cx,
-                    ))
-            }))
-            // **§9's caret, above everything.** `children` rather than `child`
-            // so an idle canvas builds no element at all — text editing costs
-            // one `Option` when nobody is typing.
-            .children(editor)
     }
 }
 

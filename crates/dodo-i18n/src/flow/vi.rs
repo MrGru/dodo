@@ -92,6 +92,8 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::LinkPlaceholder => "Dán một liên kết".into(),
         Text::ColorPlaceholder => "Mã màu hex".into(),
         Text::ColorFromTheme => "Theo giao diện".into(),
+        Text::BoardAdd => "+".into(),
+        Text::BoardClose => "Đóng bảng vẽ".into(),
         Text::StorageProblem(detail) => {
             format!("Không thể lưu hoặc tải sơ đồ: {detail}").into()
         }

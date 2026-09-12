@@ -190,6 +190,10 @@ pub enum Text {
     /// to show — the theme is answering.
     ColorFromTheme,
 
+    // ---- workbook tabs ----
+    BoardAdd,
+    BoardClose,
+
     // Phase 8: the app-owned persisted document.
     StorageProblem(String),
     StorageLoadConflict,

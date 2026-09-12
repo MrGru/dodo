@@ -91,6 +91,8 @@ samples! {
     plain LinkPlaceholder;
     plain ColorPlaceholder;
     plain ColorFromTheme;
+    term BoardAdd;
+    plain BoardClose;
     with StorageProblem(DETAIL.into()) [DETAIL];
     plain StorageLoadConflict;
 
