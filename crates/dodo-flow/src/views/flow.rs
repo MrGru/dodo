@@ -372,6 +372,7 @@ pub struct FlowView {
     /// Serialized boards; only `editor` is a live runtime, for the active board.
     workbook: FlowWorkbook,
     active_editor_revision: u64,
+    active_viewport: Viewport,
     viewport: Viewport,
     budgets: RenderBudgets,
     focus_handle: FocusHandle,
@@ -551,6 +552,7 @@ impl FlowView {
             editor: FlowEditor::new(),
             workbook: FlowWorkbook::new(),
             active_editor_revision: 0,
+            active_viewport: Viewport::default(),
             viewport: Viewport::default(),
             grid: GridSettings::default(),
             grid_limits: GridLimits::from_budgets(&budgets),
@@ -756,13 +758,20 @@ impl FlowView {
     }
 
     fn save_active_board_if_changed(&mut self) {
-        if self.editor.revision() == self.active_editor_revision {
+        let document_changed = self.editor.revision() != self.active_editor_revision;
+        let viewport_changed = self.viewport != self.active_viewport;
+        if !document_changed && !viewport_changed {
             return;
         }
-        self.workbook
-            .save_active_board(self.editor.to_document(), self.viewport);
+        if document_changed {
+            self.workbook
+                .save_active_board(self.editor.to_document(), self.viewport);
+            self.workbook_revision += 1;
+        } else {
+            self.workbook.active_board_mut().viewport = self.viewport;
+        }
         self.active_editor_revision = self.editor.revision();
-        self.workbook_revision += 1;
+        self.active_viewport = self.viewport;
     }
 
     fn set_workbook(&mut self, workbook: FlowWorkbook) {
@@ -777,6 +786,7 @@ impl FlowView {
         self.editor.rebuild_all_geometry();
         self.rebuild_spatial_index();
         self.viewport = viewport;
+        self.active_viewport = viewport;
         self.interaction = InteractionMachine::new();
         self.hovered = None;
         self.editing = None;
@@ -871,6 +881,7 @@ impl FlowView {
         self.rebuild_spatial_index();
         self.workbook.save_active_board(document, self.viewport);
         self.active_editor_revision = self.editor.revision();
+        self.active_viewport = self.viewport;
         self.workbook_revision += 1;
         report
     }

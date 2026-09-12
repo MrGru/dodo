@@ -176,15 +176,35 @@ impl FlowWorkbook {
 #[cfg(test)]
 mod tests {
     use super::FlowWorkbook;
+    use crate::{
+        geometry::{Vec2, Viewport},
+        models::ElementKind,
+    };
 
     #[test]
     fn boards_are_created_selected_renamed_and_deleted_without_losing_the_last_one() {
         let mut workbook = FlowWorkbook::new();
         let first = workbook.active_board;
+        workbook.active_board_mut().document.add_node(
+            ElementKind::default(),
+            Vec2::ZERO,
+            Vec2::ONE,
+        );
+        workbook.active_board_mut().viewport = Viewport::new(Vec2::new(10.0, 20.0), 2.0, Vec2::ONE);
         let second = workbook.create_board();
+        workbook.active_board_mut().document.add_node(
+            ElementKind::default(),
+            Vec2::new(30.0, 40.0),
+            Vec2::ONE,
+        );
 
         assert_eq!(workbook.active_board, second);
         assert!(workbook.select_board(first));
+        assert_eq!(workbook.active_board().document.nodes.len(), 1);
+        assert_eq!(
+            workbook.active_board().viewport.pan(),
+            Vec2::new(10.0, 20.0)
+        );
         assert!(workbook.rename_board(first, "Sketches".into()));
         assert_eq!(workbook.board(first).unwrap().name, "Sketches");
         assert!(workbook.delete_board(first));
