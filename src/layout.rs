@@ -603,6 +603,7 @@ impl Layout {
         // the updater's `AvailableUpdate` global, not a second mechanism.
         let update = updater::AvailableUpdate::get(cx).map(|info| {
             Button::new("update-available")
+                .h(TITLE_BAR_HEIGHT - px(8.))
                 .child(
                     h_flex()
                         .gap_1()
@@ -619,6 +620,7 @@ impl Layout {
             .items_center()
             .justify_center()
             .size_6()
+            .mr_1()
             .child(AppIcon::Dodo.view().with_size(px(20.)));
 
         let divider = || div().w(px(1.)).h_5().bg(cx.theme().title_bar_border);
