@@ -1469,7 +1469,18 @@ impl FlowView {
                     .rounded(cx.theme().radius)
                     .when(active, |this| this.bg(cx.theme().secondary))
                     .when_some(rename, |this, input| {
-                        this.child(Input::new(&input).small().w(px(140.0)))
+                        // **The context that lets a letter be a letter** — see
+                        // [`TYPING_CONTEXT`]. Without it the tab's own name field
+                        // sits on the canvas's dispatch path, so every bare-letter
+                        // tool binding wins and typing switches tools instead of
+                        // editing the name. `occlude` keeps the click that places
+                        // the caret from also reaching the tab's press handler.
+                        this.child(
+                            div()
+                                .key_context(TYPING_CONTEXT)
+                                .occlude()
+                                .child(Input::new(&input).small().w(px(140.0))),
+                        )
                     })
                     .when(
                         self.renaming_board
