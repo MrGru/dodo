@@ -327,6 +327,18 @@ impl InputMethod {
         Self::reconcile_event_tap(cx);
     }
 
+    /// Opens the macOS Accessibility pane in System Settings so the user can
+    /// grant the permission the Event Tap needs. It is navigation, not a
+    /// permission mechanism: granting still happens in System Settings, and the
+    /// window-activation re-check ([`Self::reconcile_event_tap_after_activation`])
+    /// picks up the grant and hides the prompt that offered this.
+    #[cfg(target_os = "macos")]
+    pub fn open_accessibility_settings(cx: &mut App) {
+        cx.open_url(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        );
+    }
+
     #[cfg(target_os = "macos")]
     fn reconcile_event_tap(cx: &mut App) {
         if cx.try_global::<InputMethod>().is_none() {
