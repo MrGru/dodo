@@ -278,3 +278,271 @@ pub(super) mod row_layout {
         );
     }
 }
+
+/// The Settings search box is `List::new(&state).searchable(true)`, hosted in
+/// the Settings dialog. It went missing after the gpui-kit 0.6 migration, so
+/// [`super::super::view::SettingsView`] now draws the always-visible query input
+/// in **normal layout flow** and defers only the expanded result list.
+///
+/// These render that box exactly as `open()` builds it — a real `Root`, a real
+/// `Dialog`, the real window size, `collapsed_height` and the `Settings` panel
+/// beside it — in both states. The searchable list draws its query input above
+/// the delegate's body, so a body sitting well below the box's top proves the
+/// input rendered with real height; and the collapsed box's own height proves it
+/// is the in-flow input (~one row) rather than the floated result list.
+pub(super) mod search_box {
+    use gpui_kit::component::IndexPath;
+    use gpui_kit::component::list::{List, ListState};
+    use gpui_kit::component::v_flex;
+    use gpui_kit::prelude::FluentBuilder as _;
+    use gpui_kit::{
+        AnyElement, AppContext as _, Bounds, Context, InteractiveElement as _, IntoElement,
+        ParentElement as _, Pixels, Render, Styled as _, TestAppContext, VisualTestContext, Window,
+        WindowBounds, WindowOptions, div, point, px, size,
+    };
+
+    struct Delegate;
+
+    impl gpui_kit::component::list::ListDelegate for Delegate {
+        type Item = gpui_kit::component::list::ListItem;
+
+        fn items_count(&self, _: usize, _: &gpui_kit::App) -> usize {
+            0
+        }
+
+        fn render_item(
+            &mut self,
+            _: IndexPath,
+            _: &mut Window,
+            _: &mut Context<ListState<Self>>,
+        ) -> Option<Self::Item> {
+            None
+        }
+
+        fn render_initial(
+            &mut self,
+            _: &mut Window,
+            _: &mut Context<ListState<Self>>,
+        ) -> Option<AnyElement> {
+            // Tag the body so its top edge is measurable. The searchable input,
+            // when it renders, pushes this below itself.
+            Some(
+                div()
+                    .debug_selector(|| "body".into())
+                    .h(px(10.))
+                    .into_any_element(),
+            )
+        }
+
+        fn set_selected_index(
+            &mut self,
+            _: Option<IndexPath>,
+            _: &mut Window,
+            _: &mut Context<ListState<Self>>,
+        ) {
+        }
+    }
+
+    // ---- The real dialog ----------------------------------------------------
+    //
+    // `Root::new` only dereferences an `NSView` under `#[cfg(not(test))]` in
+    // gpui-kit 0.6, so a real `Dialog` *can* be hosted in a test window now
+    // (the `row_layout` note above predates that). This is the faithful
+    // reproduction: the search box drawn as `SettingsView::render` builds it,
+    // inside a real dialog mounted on a real `Root`.
+
+    use gpui_kit::StyleRefinement;
+    use gpui_kit::component::setting::{SelectIndex, SettingGroup, SettingPage, Settings};
+    use gpui_kit::component::{Root, WindowExt as _};
+
+    /// Kept in sync with `view::RESULTS_HEIGHT` (private to that module). The
+    /// expanded box is far taller than the collapsed one, which is what the
+    /// state assertions key off.
+    const RESULTS_HEIGHT: f32 = 232.;
+
+    /// The dialog body: a faithful clone of `SettingsView::render` — the
+    /// search-box slot (in normal flow when collapsed, a `deferred` overlay when
+    /// searching) *and* the `Settings` panel below it, so the box is measured in
+    /// the exact company it keeps in production.
+    struct DialogBody {
+        state: gpui_kit::Entity<ListState<Delegate>>,
+        searching: bool,
+    }
+
+    fn collapsed(window: &Window) -> Pixels {
+        window.rem_size() * 2. + px(3.)
+    }
+
+    impl Render for DialogBody {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let collapsed = collapsed(window);
+            let searching = self.searching;
+
+            let search_box = v_flex().overflow_hidden().child(
+                div()
+                    .debug_selector(|| "box".into())
+                    .size_full()
+                    .child(List::new(&self.state).search_placeholder("Search")),
+            );
+
+            v_flex()
+                .w_full()
+                .h(px(440.))
+                .gap_2()
+                .child(
+                    div()
+                        .relative()
+                        .w_full()
+                        .flex_none()
+                        .h(collapsed)
+                        .map(|slot| {
+                            if searching {
+                                slot.child(
+                                    gpui_kit::deferred(
+                                        search_box
+                                            .absolute()
+                                            .top_0()
+                                            .left_0()
+                                            .right_0()
+                                            .h(px(RESULTS_HEIGHT)),
+                                    )
+                                    .with_priority(1),
+                                )
+                            } else {
+                                slot.child(search_box.size_full())
+                            }
+                        }),
+                )
+                .child(
+                    div().flex_1().min_h_0().child(
+                        Settings::new("dodo-settings-0")
+                            .sidebar_width(px(200.))
+                            .header_style(&StyleRefinement::default().hidden())
+                            .default_selected_index(SelectIndex {
+                                page_ix: 0,
+                                group_ix: None,
+                            })
+                            .pages(vec![
+                                SettingPage::new("General")
+                                    .group(SettingGroup::new().title("General")),
+                            ]),
+                    ),
+                )
+        }
+    }
+
+    /// A base view that mounts the dialog layer, since `Root::render` does not
+    /// mount it itself.
+    struct Base;
+
+    impl Render for Base {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let dialog_layer = Root::render_dialog_layer(window, cx);
+            div().size_full().children(dialog_layer)
+        }
+    }
+
+    /// Opens the Settings dialog holding the search-box body in the given state
+    /// and returns the bounds of the box and of the delegate's list body.
+    fn measure(cx: &mut TestAppContext, searching: bool) -> (Bounds<Pixels>, Bounds<Pixels>) {
+        cx.update(gpui_kit::component::init);
+
+        // The real app opens a 900x620 window; the dialog is 760 wide and, with
+        // the settings body's fixed height, tall enough that the dialog's own
+        // `overflow_y_scrollbar` engages — the condition a huge test viewport
+        // would hide.
+        let window = cx
+            .update(|cx| {
+                cx.open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds {
+                            origin: point(px(0.), px(0.)),
+                            size: size(px(900.), px(620.)),
+                        })),
+                        ..Default::default()
+                    },
+                    |window, cx| {
+                        let view = cx.new(|_| Base);
+                        cx.new(|cx| Root::new(view, window, cx))
+                    },
+                )
+            })
+            .unwrap();
+        let cx = &mut VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            let body = cx.new(|cx| DialogBody {
+                state: cx.new(|cx| ListState::new(Delegate, window, cx).searchable(true)),
+                searching,
+            });
+            window.open_dialog(cx, move |dialog, _, _| {
+                dialog.title("Settings").w(px(760.)).child(body.clone())
+            });
+        });
+        cx.run_until_parked();
+        // Advance past the dialog's slide-down animation and redraw so bounds
+        // settle.
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(500));
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let box_bounds = cx
+            .debug_bounds("box")
+            .expect("the search box drew in the dialog");
+        let body = cx
+            .debug_bounds("body")
+            .expect("the list body drew in the dialog");
+        (box_bounds, body)
+    }
+
+    /// The regression: at rest (empty query) the query input must render, and it
+    /// must be the **in-flow** box — one input row tall — not the floated result
+    /// list. Before the fix the box lived inside the `deferred` overlay, which
+    /// stopped painting it under gpui-kit 0.6.
+    #[gpui_kit::test]
+    fn the_collapsed_search_input_draws_in_normal_flow(cx: &mut TestAppContext) {
+        let (search_box, body) = measure(cx, false);
+        assert!(
+            search_box.size.width >= px(200.),
+            "the collapsed search box lost its width in the dialog: {search_box:?}"
+        );
+        // A collapsed box is a single input row (`h_8` ≈ 2rem + rule); the
+        // floated result list would be RESULTS_HEIGHT tall. Well under half of
+        // that proves this is the in-flow input, not the overlay.
+        assert!(
+            search_box.size.height < px(RESULTS_HEIGHT / 2.),
+            "the collapsed box is too tall to be the in-flow input row: {search_box:?}"
+        );
+        // The input sits above the delegate's body, so the body landing below
+        // the box's top proves the input rendered with real height.
+        assert!(
+            body.top() - search_box.top() >= px(24.),
+            "the collapsed search box drew no query input (body {:?} vs box {:?})",
+            body.top(),
+            search_box.top(),
+        );
+    }
+
+    /// While searching, the result list floats over the panel: the box is the
+    /// tall `deferred` overlay, and the query input still renders at its top.
+    #[gpui_kit::test]
+    fn the_expanded_result_list_floats_over_the_panel(cx: &mut TestAppContext) {
+        let (search_box, body) = measure(cx, true);
+        assert!(
+            search_box.size.height >= px(RESULTS_HEIGHT - 8.),
+            "the expanded search box did not grow into the floating result list: {search_box:?}"
+        );
+        assert!(
+            body.top() - search_box.top() >= px(24.),
+            "the expanded search box drew no query input (body {:?} vs box {:?})",
+            body.top(),
+            search_box.top(),
+        );
+    }
+}

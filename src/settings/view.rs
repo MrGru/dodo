@@ -17,8 +17,10 @@ use crate::layout::Layout;
 /// that the list's own `size_full` layout has a definite box to fill; an empty
 /// query collapses the box back to [`collapsed_height`].
 ///
-/// The box is drawn as an overlay, so growing to this height covers the
-/// settings panel instead of pushing it down.
+/// While searching the box is drawn as a `deferred` overlay, so growing to this
+/// height covers the settings panel instead of pushing it down. **Collapsed, it
+/// is drawn in normal layout flow instead** — see [`SettingsView::render`] for
+/// why the always-visible query input must not depend on the overlay path.
 const RESULTS_HEIGHT: f32 = 232.;
 
 /// Height of the search box with no results under it.
@@ -162,6 +164,21 @@ impl Render for SettingsView {
         let searching = !self.search.read(cx).delegate().query.is_empty();
         let collapsed = collapsed_height(window);
 
+        // The search box itself: one `List` widget — the query input plus, once
+        // the user types, the result list under it — inside the bordered card.
+        // Styled the same whether it sits in normal flow or floats.
+        let search_box = v_flex()
+            .overflow_hidden()
+            .bg(cx.theme().background)
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded(cx.theme().radius)
+            .when(searching, |this| this.shadow_md())
+            .child(
+                List::new(&self.search)
+                    .search_placeholder(t(shell::Text::SearchSettingsPlaceholder, cx)),
+            );
+
         v_flex()
             .key_context(SEARCH_CONTEXT)
             .on_action(cx.listener(Self::dismiss_results))
@@ -170,39 +187,42 @@ impl Render for SettingsView {
             .gap_2()
             .child(
                 // The slot the search box occupies in the layout. It never grows:
-                // the box itself is drawn by the overlay below, so results float
-                // over the settings panel rather than pushing it down.
-                div().relative().w_full().flex_none().h(collapsed).child(
-                    // `deferred` paints after the rest of the dialog, which is
-                    // what puts the results on top of the panel; `left_0` +
-                    // `right_0` size the box from the slot's own edges, so the
-                    // input inside it gets a real width to lay text out in.
-                    deferred(
-                        v_flex()
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .right_0()
-                            .h(if searching {
-                                px(RESULTS_HEIGHT)
-                            } else {
-                                collapsed
-                            })
-                            .overflow_hidden()
-                            .bg(cx.theme().background)
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .rounded(cx.theme().radius)
-                            .when(searching, |this| this.shadow_md())
-                            .child(
-                                List::new(&self.search).search_placeholder(t(
-                                    shell::Text::SearchSettingsPlaceholder,
-                                    cx,
-                                )),
-                            ),
-                    )
-                    .with_priority(1),
-                ),
+                // it always reserves just the collapsed height, so the settings
+                // panel below never moves.
+                div()
+                    .relative()
+                    .w_full()
+                    .flex_none()
+                    .h(collapsed)
+                    .map(|slot| {
+                        if searching {
+                            // Expanded: the result list floats over the panel.
+                            // `deferred` paints after the rest of the dialog,
+                            // which puts the results on top of the panel; `left_0`
+                            // + `right_0` size the box from the slot's own edges,
+                            // so the input inside it gets a real width to lay text
+                            // out in.
+                            slot.child(
+                                deferred(
+                                    search_box
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .right_0()
+                                        .h(px(RESULTS_HEIGHT)),
+                                )
+                                .with_priority(1),
+                            )
+                        } else {
+                            // Collapsed: just the query input, drawn in normal
+                            // layout flow. Keeping the always-visible box out of
+                            // the `deferred` overlay is what the gpui-kit 0.6
+                            // migration needed — the overlay path stopped
+                            // painting it, so the box must not depend on it to
+                            // appear at rest.
+                            slot.child(search_box.size_full())
+                        }
+                    }),
             )
             .child(
                 div().flex_1().min_h_0().child(
