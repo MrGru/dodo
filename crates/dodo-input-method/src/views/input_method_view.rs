@@ -11,10 +11,12 @@
 //! user clicked something. A control that reads the global every frame shows
 //! whatever has arrived.
 //!
-//! That is also why the two either/or settings are [`RadioGroup`]s rather than
-//! the dropdowns the settings page used: a dropdown owns an `Entity<SelectState>`
-//! whose selected row is a second copy of the setting, and the copy is what would
-//! drift.
+//! That is also why the two either/or settings are segmented [`ButtonGroup`]s
+//! rather than the dropdowns the settings page used: a dropdown owns an
+//! `Entity<SelectState>` whose selected row is a second copy of the setting, and
+//! the copy is what would drift. A `ButtonGroup` in its default `multiple(false)`
+//! mode is single-select and holds nothing — it reads the live setting each frame
+//! to decide which segment is `primary`.
 //!
 //! The shortcut recorder is the one thing here with fields, and it is the
 //! exception that proves the rule: what it holds is *what the user is doing right
@@ -23,11 +25,11 @@
 //! [`InputMethod`] every frame, and the recorded combination goes straight to
 //! [`InputMethod::set_language_switch`] without being kept here first.
 //!
-use gpui_kit::component::button::Button;
-use gpui_kit::component::radio::RadioGroup;
+use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
-    ActiveTheme, Disableable as _, Selectable as _, StyledExt as _, h_flex, v_flex,
+    ActiveTheme, Disableable as _, Selectable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -35,7 +37,8 @@ use gpui_kit::*;
 use dodo_ime_core::LanguageId;
 
 use crate::InputMethod;
-use crate::i18n::{Str, input_method, t, tray};
+use crate::i18n::{Str, input_method, shell, t};
+#[cfg(target_os = "macos")]
 use crate::models::event_tap::EventTapStatus;
 use crate::models::keyboard_hook::KeyboardHookStatus;
 use crate::models::settings::{Scheme, Shortcut, ShortcutKey, ShortcutModifiers, Tone};
@@ -114,63 +117,97 @@ impl InputMethodView {
             .child(div().text_sm().child(t(problem, cx)))
     }
 
-    /// One setting: what it is and what it does on the left, the control on the
-    /// right. `min_w_0` on the text column is what lets a long description wrap
-    /// instead of pushing the control off the pane.
-    fn row(title: Str, description: Str, control: impl IntoElement, cx: &App) -> impl IntoElement {
+    /// A compact grouped settings card: one bordered box with the section
+    /// header and its controls laid out inside it by the caller.
+    fn card(cx: &App) -> Div {
+        v_flex()
+            .gap_4()
+            .p_4()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+    }
+
+    /// A card's two responsive columns: the section header on the left, its
+    /// controls on the right, stacking to one column when the pane is narrow.
+    fn columns() -> Div {
+        h_flex().items_start().flex_wrap().gap_6()
+    }
+
+    /// The bold heading of a card section or a control.
+    fn heading(title: Str, cx: &App) -> impl IntoElement {
+        div().font_bold().child(t(title, cx))
+    }
+
+    /// A muted one-line description under a heading or label.
+    fn note(text: Str, cx: &App) -> impl IntoElement {
+        div()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(t(text, cx))
+    }
+
+    /// A control preceded by its own compact inline label — used for the
+    /// segmented controls and the shortcut recorder, which sit below the label.
+    fn field(label: Str, control: impl IntoElement, cx: &App) -> impl IntoElement {
+        v_flex()
+            .gap_1()
+            .child(div().text_sm().child(t(label, cx)))
+            .child(control)
+    }
+
+    /// A labelled toggle: the label and its description on the left, the switch
+    /// held to the right. `min_w_0` lets the description wrap rather than push
+    /// the switch off the card.
+    fn toggle_field(
+        label: Str,
+        description: Option<Str>,
+        switch: Switch,
+        cx: &App,
+    ) -> impl IntoElement {
         h_flex()
             .items_start()
-            .gap_4()
-            .py_2()
+            .justify_between()
+            .gap_3()
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
                     .gap_1()
-                    .child(div().child(t(title, cx)))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t(description, cx)),
-                    ),
+                    .child(div().text_sm().child(t(label, cx)))
+                    .when_some(description, |this, description| {
+                        this.child(Self::note(description, cx))
+                    }),
             )
-            .child(div().flex_shrink_0().child(control))
+            .child(div().flex_shrink_0().child(switch))
     }
 
-    fn description() -> Str {
-        let description = if cfg!(target_os = "windows") {
-            input_method::Text::WindowsDescription
-        } else {
-            input_method::Text::Description
-        };
-        description.into()
-    }
-
-    #[allow(
-        dead_code,
-        reason = "kept portable so every target type-checks each platform's label conversion"
-    )]
-    fn event_tap_status_line(status: EventTapStatus) -> Str {
-        let label = match status {
-            EventTapStatus::Inactive => input_method::Text::EventTapInactive,
-            EventTapStatus::NeedsAccessibility => input_method::Text::EventTapNeedsAccessibility,
-            EventTapStatus::Running => input_method::Text::EventTapRunning,
-            EventTapStatus::Failed => input_method::Text::EventTapFailed,
-        };
-        label.into()
-    }
-
-    /// macOS owns the Accessibility grant; dodo only reports its state.
+    /// macOS owns the Accessibility grant; dodo only reports its state. The row
+    /// is shown only while permission is missing (see `render`) and the button
+    /// opens the System Settings pane that grants it; the window-activation
+    /// re-check in `src/layout.rs` hides the row once the grant lands.
     #[cfg(target_os = "macos")]
-    fn event_tap_status_card(cx: &App) -> impl IntoElement {
+    fn accessibility_warning(cx: &App) -> impl IntoElement {
         h_flex()
-            .items_center()
+            .items_start()
             .gap_3()
             .p_3()
             .rounded(cx.theme().radius)
             .border_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().danger)
+            .bg(cx.theme().danger.opacity(0.1))
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .justify_center()
+                    .size(px(20.))
+                    .rounded_full()
+                    .bg(cx.theme().danger)
+                    .text_color(cx.theme().danger_foreground)
+                    .text_sm()
+                    .font_bold()
+                    .child(WARNING_GLYPH),
+            )
             .child(
                 v_flex()
                     .flex_1()
@@ -179,89 +216,73 @@ impl InputMethodView {
                     .child(
                         div()
                             .font_bold()
-                            .child(t(input_method::Text::EventTapStatus, cx)),
+                            .text_color(cx.theme().danger)
+                            .child(t(input_method::Text::AccessibilityRequired, cx)),
                     )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t(
-                                Self::event_tap_status_line(InputMethod::event_tap_status(cx)),
-                                cx,
-                            )),
-                    ),
+                    .child(Self::note(
+                        input_method::Text::AccessibilityRequiredDescription.into(),
+                        cx,
+                    )),
+            )
+            .child(
+                div().flex_shrink_0().child(
+                    Button::new("input-method-open-accessibility")
+                        .outline()
+                        .label(t(input_method::Text::OpenAccessibilitySettings, cx))
+                        .on_click(|_, _, cx| InputMethod::open_accessibility_settings(cx)),
+                ),
             )
     }
 
     fn active_languages_choice(cx: &App) -> impl IntoElement {
         let active = InputMethod::active_languages(cx);
         let count = active.iter().count();
-        h_flex().gap_3().children(LanguageId::ALL.map(|language| {
+        v_flex().gap_2().children(LanguageId::ALL.map(|language| {
             let enabled = active.contains(language);
-            h_flex()
-                .items_center()
-                .gap_1()
-                .child(
-                    Switch::new(format!("input-method-active-language-{}", language.code()))
-                        .checked(enabled)
-                        .disabled(enabled && count == 1)
-                        .on_click(move |checked: &bool, _, cx| {
-                            InputMethod::set_language_enabled(language, *checked, cx)
-                        }),
-                )
+            Checkbox::new(format!("input-method-active-language-{}", language.code()))
                 // Keyboard language names are endonyms, so they deliberately
                 // stay recognizable regardless of dodo's display language.
-                .child(div().text_sm().child(language_label(language)))
+                .label(SharedString::from(language_label(language)))
+                .checked(enabled)
+                .disabled(enabled && count == 1)
+                .on_click(move |checked: &bool, _, cx| {
+                    InputMethod::set_language_enabled(language, *checked, cx)
+                })
         }))
     }
 
+    /// The current input language as a segmented control over the enabled
+    /// languages, mirroring the segmented style used for scheme and tone.
     fn language_choice(cx: &App) -> impl IntoElement {
-        let active = InputMethod::active_languages(cx);
-        let selected = active
-            .iter()
-            .position(|language| language == InputMethod::language(cx));
-        RadioGroup::horizontal("input-method-language")
-            .children(active.iter().map(language_label))
-            .selected_index(selected)
-            .on_click(move |ix: &usize, _, cx| {
-                if let Some(language) = active.iter().nth(*ix) {
+        let current = InputMethod::language(cx);
+        let languages: Vec<LanguageId> = InputMethod::active_languages(cx).iter().collect();
+        ButtonGroup::new("input-method-language")
+            .outline()
+            .compact()
+            .small()
+            .children(languages.iter().map(|&language| {
+                let selected = language == current;
+                let button = Button::new(SharedString::from(format!(
+                    "input-method-language-{}",
+                    language.code()
+                )))
+                .label(SharedString::from(language_label(language)))
+                .selected(selected);
+                if selected { button.primary() } else { button }
+            }))
+            .on_click(move |selected: &Vec<usize>, _, cx| {
+                if let Some(&language) = selected.first().and_then(|&ix| languages.get(ix)) {
                     InputMethod::set_language(language, cx);
                 }
             })
     }
 
-    /// Keeps the label at the left while there is room, then wraps its bounded
-    /// control group below it instead of letting either column overlap.
-    fn language_switch_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .items_start()
-            .flex_wrap()
-            .gap_4()
-            .py_2()
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w(px(180.))
-                    .gap_1()
-                    .child(div().child(t(input_method::Text::LanguageSwitch, cx)))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t(input_method::Text::LanguageSwitchDescription, cx)),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(260.))
-                    .child(self.language_switch_choice(cx)),
-            )
-    }
-
-    /// The recorder field, the beep switch, and whatever the last recording
-    /// attempt has to say.
-    fn language_switch_choice(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The shortcut recorder button and whatever the last recording attempt has
+    /// to say beneath it. Its focus handle is what makes it a recorder rather
+    /// than a button: gpui delivers key and modifier events to the focused
+    /// element, and with nothing focused the dispatch path is the window root,
+    /// which carries none of them here.
+    fn recorder_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let switch = InputMethod::language_switch(cx);
         let label: SharedString = if self.recording {
             t(input_method::Text::ShortcutRecording, cx)
@@ -269,60 +290,34 @@ impl InputMethodView {
             shortcut_display(switch.shortcut, cx).into()
         };
         v_flex()
-            .w_full()
-            .gap_2()
+            .gap_1()
             .child(
-                h_flex()
-                    .w_full()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_3()
+                div()
+                    .track_focus(&self.recorder)
+                    .when(self.recording, |this| this.key_context(RECORDER_CONTEXT))
+                    .on_key_down(cx.listener(Self::key_recorded))
+                    .on_modifiers_changed(cx.listener(Self::modifiers_recorded))
                     .child(
-                        div()
-                            // The focus handle is what makes this a recorder
-                            // rather than a button: gpui delivers key and
-                            // modifier events to the focused element, and with
-                            // nothing focused the dispatch path is the window
-                            // root, which carries none of them here.
-                            .track_focus(&self.recorder)
-                            .when(self.recording, |this| this.key_context(RECORDER_CONTEXT))
-                            .on_key_down(cx.listener(Self::key_recorded))
-                            .on_modifiers_changed(cx.listener(Self::modifiers_recorded))
-                            .child(
-                                Button::new("input-method-language-switch-recorder")
-                                    .outline()
-                                    .selected(self.recording)
-                                    .label(label)
-                                    .on_click(cx.listener(Self::start_recording)),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                Switch::new("input-method-language-switch-beep")
-                                    .checked(switch.beep)
-                                    .on_click(|checked: &bool, _, cx| {
-                                        let mut switch = InputMethod::language_switch(cx);
-                                        switch.beep = *checked;
-                                        InputMethod::set_language_switch(switch, cx);
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child(t(input_method::Text::ShortcutBeep, cx)),
-                            ),
+                        Button::new("input-method-language-switch-recorder")
+                            .outline()
+                            .selected(self.recording)
+                            .label(label)
+                            .on_click(cx.listener(Self::start_recording)),
                     ),
             )
             .when_some(self.recorder_hint(), |this, hint| {
-                this.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(t(hint, cx)),
-                )
+                this.child(Self::note(hint, cx))
+            })
+    }
+
+    /// The beep-on-switch toggle. A setting, so it reads [`InputMethod`] live.
+    fn beep_switch(cx: &App) -> Switch {
+        Switch::new("input-method-language-switch-beep")
+            .checked(InputMethod::language_switch(cx).beep)
+            .on_click(|checked: &bool, _, cx| {
+                let mut switch = InputMethod::language_switch(cx);
+                switch.beep = *checked;
+                InputMethod::set_language_switch(switch, cx);
             })
     }
 
@@ -477,27 +472,36 @@ impl InputMethodView {
     /// Telex or VNI. The labels are proper nouns and identical in every
     /// language, so `input_method::Text::Telex` and `…Vni` both answer `_`.
     fn scheme_choice(cx: &App) -> impl IntoElement {
-        let selected = Scheme::ALL
-            .iter()
-            .position(|scheme| *scheme == InputMethod::settings(cx).scheme);
-
-        RadioGroup::horizontal("input-method-scheme")
+        let current = InputMethod::settings(cx).scheme;
+        ButtonGroup::new("input-method-scheme")
+            .outline()
+            .compact()
+            .small()
             .children(Scheme::ALL.map(|scheme| {
-                t(
-                    match scheme {
-                        Scheme::Telex => input_method::Text::Telex,
-                        Scheme::Vni => input_method::Text::Vni,
-                    },
-                    cx,
-                )
+                let selected = scheme == current;
+                let label = match scheme {
+                    Scheme::Telex => input_method::Text::Telex,
+                    Scheme::Vni => input_method::Text::Vni,
+                };
+                let id = match scheme {
+                    Scheme::Telex => "input-method-scheme-telex",
+                    Scheme::Vni => "input-method-scheme-vni",
+                };
+                let button = Button::new(id).label(t(label, cx)).selected(selected);
+                // Leaving the group's variant unset lets the chosen segment
+                // carry `primary` while the rest stay default — a selection
+                // that reads at a glance, unlike outline's own faint tint.
+                if selected { button.primary() } else { button }
             }))
-            .selected_index(selected)
-            // The index is into `Scheme::ALL`, which is what built the labels, so
-            // the two cannot disagree about which row is which scheme. An index
-            // past the end is dropped rather than defaulting to Telex: a stray
-            // one should change nothing, not silently reset the user's scheme.
-            .on_click(|ix: &usize, _, cx| {
-                if let Some(scheme) = Scheme::ALL.get(*ix).copied() {
+            // The index is into `Scheme::ALL`, which is what built the segments,
+            // so the two cannot disagree about which is which. An index past the
+            // end is dropped rather than defaulting to Telex: a stray one should
+            // change nothing, not silently reset the user's scheme.
+            .on_click(|selected: &Vec<usize>, _, cx| {
+                if let Some(scheme) = selected
+                    .first()
+                    .and_then(|&ix| Scheme::ALL.get(ix).copied())
+                {
                     InputMethod::set_scheme(scheme, cx);
                 }
             })
@@ -505,23 +509,26 @@ impl InputMethodView {
 
     /// Where the tone mark sits in a syllable that could take it in two places.
     fn tone_choice(cx: &App) -> impl IntoElement {
-        let selected = Tone::ALL
-            .iter()
-            .position(|tone| *tone == InputMethod::settings(cx).tone_placement);
-
-        RadioGroup::horizontal("input-method-tone")
+        let current = InputMethod::settings(cx).tone_placement;
+        ButtonGroup::new("input-method-tone")
+            .outline()
+            .compact()
+            .small()
             .children(Tone::ALL.map(|tone| {
-                t(
-                    match tone {
-                        Tone::Modern => input_method::Text::ToneModern,
-                        Tone::Traditional => input_method::Text::ToneTraditional,
-                    },
-                    cx,
-                )
+                let selected = tone == current;
+                let label = match tone {
+                    Tone::Modern => input_method::Text::ToneModern,
+                    Tone::Traditional => input_method::Text::ToneTraditional,
+                };
+                let id = match tone {
+                    Tone::Modern => "input-method-tone-modern",
+                    Tone::Traditional => "input-method-tone-traditional",
+                };
+                let button = Button::new(id).label(t(label, cx)).selected(selected);
+                if selected { button.primary() } else { button }
             }))
-            .selected_index(selected)
-            .on_click(|ix: &usize, _, cx| {
-                if let Some(tone) = Tone::ALL.get(*ix).copied() {
+            .on_click(|selected: &Vec<usize>, _, cx| {
+                if let Some(tone) = selected.first().and_then(|&ix| Tone::ALL.get(ix).copied()) {
                     InputMethod::set_tone_placement(tone, cx);
                 }
             })
@@ -623,6 +630,13 @@ fn shortcut_display(shortcut: Shortcut, cx: &App) -> String {
     parts.join(" ")
 }
 
+/// The exclamation in the accessibility warning's badge. A bare `"!"` in a
+/// `.child` would trip `i18n_lint`, which classifies by position not content;
+/// as a named const it is out of a text sink, the same dodge the modifier
+/// glyphs below use. Punctuation, identical in every interface language.
+#[cfg(target_os = "macos")]
+const WARNING_GLYPH: &str = "!";
+
 /// macOS prints the four modifiers as glyphs on the keys themselves; every
 /// other platform spells them.
 ///
@@ -687,66 +701,181 @@ fn page_root() -> Div {
 
 impl Render for InputMethodView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Header: the tool's own title, then a one-line subtitle.
         let root = page_root().gap_4().child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(t(Self::description(), cx)),
+            v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .text_lg()
+                        .font_bold()
+                        .child(t(shell::Text::InputMethod, cx)),
+                )
+                .child(Self::note(input_method::Text::Description.into(), cx)),
         );
+
+        // The accessibility grant is macOS's; the row is shown only while it is
+        // missing and vanishes once granted (the window-activation re-check in
+        // `src/layout.rs` refreshes the status that gates it).
         #[cfg(target_os = "macos")]
-        let root = root.child(Self::event_tap_status_card(cx)).child(Self::row(
-            input_method::Text::BrowserFix.into(),
-            input_method::Text::BrowserFixDescription.into(),
-            Self::browser_fix_switch(cx),
-            cx,
-        ));
+        let root = root.when(
+            InputMethod::event_tap_status(cx) == EventTapStatus::NeedsAccessibility,
+            |this| this.child(Self::accessibility_warning(cx)),
+        );
+        // Windows keeps its own Keyboard Hook status card.
         #[cfg(target_os = "windows")]
         let root = root.child(Self::keyboard_hook_status_card(cx));
 
-        root.child(Self::row(
-            input_method::Text::ActiveLanguages.into(),
-            input_method::Text::ActiveLanguagesDescription.into(),
-            Self::active_languages_choice(cx),
-            cx,
-        ))
-        .child(Self::row(
-            tray::Text::KeyboardInput.into(),
-            input_method::Text::LanguageDescription.into(),
-            Self::language_choice(cx),
-            cx,
-        ))
-        .child(self.language_switch_row(cx))
-        .when_some(InputMethod::store_error(cx), |this, problem| {
+        // A broken settings file is surfaced above the cards.
+        let root = root.when_some(InputMethod::store_error(cx), |this, problem| {
             this.child(Self::storage_problem(problem, cx))
-        })
-        .child(
-            v_flex()
-                .gap_1()
-                .child(Self::row(
-                    input_method::Text::Scheme.into(),
-                    input_method::Text::SchemeDescription.into(),
-                    Self::scheme_choice(cx),
-                    cx,
-                ))
-                .child(Self::row(
-                    input_method::Text::TonePlacement.into(),
-                    input_method::Text::TonePlacementDescription.into(),
-                    Self::tone_choice(cx),
-                    cx,
-                ))
-                .child(Self::row(
-                    input_method::Text::SpellCheck.into(),
-                    input_method::Text::SpellCheckDescription.into(),
-                    Self::spell_check_switch(cx),
-                    cx,
-                ))
-                .child(Self::row(
-                    input_method::Text::BracketShortcuts.into(),
-                    input_method::Text::BracketShortcutsDescription.into(),
-                    Self::bracket_shortcuts_switch(cx),
-                    cx,
-                )),
-        )
+        });
+
+        // Languages, and the current input language.
+        let root = root.child(
+            Self::card(cx).child(
+                Self::columns()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(200.))
+                            .gap_2()
+                            .child(Self::heading(
+                                input_method::Text::ActiveLanguages.into(),
+                                cx,
+                            ))
+                            .child(Self::note(
+                                input_method::Text::ActiveLanguagesDescription.into(),
+                                cx,
+                            ))
+                            .child(Self::active_languages_choice(cx)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(200.))
+                            .gap_2()
+                            .child(Self::heading(
+                                input_method::Text::CurrentLanguage.into(),
+                                cx,
+                            ))
+                            .child(Self::note(
+                                input_method::Text::LanguageDescription.into(),
+                                cx,
+                            ))
+                            .child(Self::language_choice(cx)),
+                    ),
+            ),
+        );
+
+        // Language switching: the shortcut recorder and the beep toggle.
+        let root = root.child(
+            Self::card(cx).child(
+                Self::columns()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(200.))
+                            .gap_1()
+                            .child(Self::heading(input_method::Text::LanguageSwitch.into(), cx))
+                            .child(Self::note(
+                                input_method::Text::LanguageSwitchDescription.into(),
+                                cx,
+                            )),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(240.))
+                            .gap_4()
+                            .child(Self::field(
+                                input_method::Text::SwitchShortcut.into(),
+                                self.recorder_button(cx),
+                                cx,
+                            ))
+                            .child(Self::toggle_field(
+                                input_method::Text::ShortcutBeep.into(),
+                                Some(input_method::Text::BeepDescription.into()),
+                                Self::beep_switch(cx),
+                                cx,
+                            )),
+                    ),
+            ),
+        );
+
+        // Vietnamese input.
+        let root = root.child(
+            Self::card(cx).child(
+                Self::columns()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(200.))
+                            .gap_1()
+                            .child(Self::heading(
+                                input_method::Text::VietnameseInput.into(),
+                                cx,
+                            ))
+                            .child(Self::note(
+                                input_method::Text::VietnameseInputDescription.into(),
+                                cx,
+                            )),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(240.))
+                            .gap_4()
+                            .child(Self::field(
+                                input_method::Text::Scheme.into(),
+                                Self::scheme_choice(cx),
+                                cx,
+                            ))
+                            .child(Self::field(
+                                input_method::Text::TonePlacement.into(),
+                                Self::tone_choice(cx),
+                                cx,
+                            ))
+                            .child(Self::toggle_field(
+                                input_method::Text::SpellCheck.into(),
+                                Some(input_method::Text::SpellCheckDescription.into()),
+                                Self::spell_check_switch(cx),
+                                cx,
+                            ))
+                            .child(Self::toggle_field(
+                                input_method::Text::BracketShortcuts.into(),
+                                Some(input_method::Text::BracketShortcutsDescription.into()),
+                                Self::bracket_shortcuts_switch(cx),
+                                cx,
+                            )),
+                    ),
+            ),
+        );
+
+        // Browser address bars (macOS only): a single full-width row.
+        #[cfg(target_os = "macos")]
+        let root = root.child(
+            Self::card(cx).child(
+                h_flex()
+                    .items_start()
+                    .justify_between()
+                    .gap_4()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(Self::heading(input_method::Text::BrowserFix.into(), cx))
+                            .child(Self::note(
+                                input_method::Text::BrowserFixDescription.into(),
+                                cx,
+                            )),
+                    )
+                    .child(div().flex_shrink_0().child(Self::browser_fix_switch(cx))),
+            ),
+        );
+
+        root
     }
 }
 

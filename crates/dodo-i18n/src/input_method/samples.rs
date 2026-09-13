@@ -6,7 +6,14 @@ use super::Text;
 
 samples! {
     plain Description;
-    plain WindowsDescription;
+    plain AccessibilityRequired;
+    plain AccessibilityRequiredDescription;
+    plain OpenAccessibilitySettings;
+    plain CurrentLanguage;
+    plain SwitchShortcut;
+    plain BeepDescription;
+    plain VietnameseInput;
+    plain VietnameseInputDescription;
     plain StorageProblem;
     with StoreError(DETAIL.into()) [DETAIL];
     plain StoreMissingVersion;

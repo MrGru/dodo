@@ -7,11 +7,18 @@ use super::Text;
 pub(crate) fn text(text: Text) -> Cow<'static, str> {
     match text {
         Text::Description => {
-            "Configure Vietnamese input. Event Tap requires macOS Accessibility permission and works while Dodo is open.".into()
+            "Configure keyboard input, languages and typing behavior.".into()
         }
-        Text::WindowsDescription => {
-            "Configure Vietnamese input. Keyboard Hook works while Dodo is open.".into()
+        Text::AccessibilityRequired => "Accessibility permission required (macOS)".into(),
+        Text::AccessibilityRequiredDescription => {
+            "Dodo needs accessibility permission to monitor keyboard input.".into()
         }
+        Text::OpenAccessibilitySettings => "Open Accessibility Settings".into(),
+        Text::CurrentLanguage => "Current input language".into(),
+        Text::SwitchShortcut => "Switch shortcut".into(),
+        Text::BeepDescription => "Play a sound when the input language changes.".into(),
+        Text::VietnameseInput => "Vietnamese input".into(),
+        Text::VietnameseInputDescription => "Configure how Vietnamese is typed.".into(),
         Text::StorageProblem => "Settings file".into(),
         Text::StoreError(detail) => {
             format!("The input method's settings could not be read or saved: {detail}").into()
@@ -41,7 +48,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::KeyboardHookFailed => {
             "Keyboard Hook could not start. Keys are passing through unchanged.".into()
         }
-        Text::Scheme => "Input scheme".into(),
+        Text::Scheme => "Input method".into(),
         Text::SchemeDescription => {
             "Telex marks tones with letters (aa, ow, s, f); VNI marks them with digits (a6, o7, 1, 2).".into()
         }
@@ -51,17 +58,17 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::TonePlacementDescription => {
             "Modern puts the mark on the main vowel (hoà); traditional puts it on the first (hòa).".into()
         }
-        Text::ToneModern => "Modern".into(),
-        Text::ToneTraditional => "Traditional".into(),
+        Text::ToneModern => "Modern (hoà)".into(),
+        Text::ToneTraditional => "Traditional (hòa)".into(),
         Text::SpellCheck => "Spell check".into(),
         Text::SpellCheckDescription => {
-            "Hand back the keys as typed when the result is not a Vietnamese syllable, so English words survive.".into()
+            "Keep English words unchanged when the input is not valid Vietnamese.".into()
         }
         Text::BracketShortcuts => "Bracket shortcuts".into(),
         Text::BracketShortcutsDescription => {
-            "In Telex, [ and ] type ơ and ư — the only way to type uơ (thuở, huơ).".into()
+            "In Telex, [ and ] type ơ and ư — the only way to type ươ (thuở, huơ).".into()
         }
-        Text::ActiveLanguages => "Active languages".into(),
+        Text::ActiveLanguages => "Languages".into(),
         Text::ActiveLanguagesDescription => {
             "Choose the languages shown in the menu and used by the switch shortcut.".into()
         }
@@ -70,7 +77,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::LanguageSwitchDescription => {
             "Cycles the enabled languages. Click the shortcut, then press the combination you want.".into()
         }
-        Text::ShortcutBeep => "Beep".into(),
+        Text::ShortcutBeep => "Beep when switching".into(),
         Text::ShortcutSpace => "Space".into(),
         Text::ShortcutEnter => "Enter".into(),
         Text::ShortcutTab => "Tab".into(),
@@ -91,7 +98,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::ShortcutArrowDown => "Down".into(),
         Text::BrowserFix => "Browser address bars".into(),
         Text::BrowserFixDescription => {
-            "Work around browsers that keep an autocomplete suggestion selected while you type, which would otherwise put the tone mark on the wrong letter.".into()
+            "Work around browsers that keep an autocomplete suggestion selected while you type.".into()
         }
     }
 }

@@ -66,11 +66,11 @@ Encode and decode Base64, URL, and Hex data, plus quickly inspect JWT headers an
 
 ![Encoder / Decoder](docs/screenshots/encoder-decoder.png)
 
-### Vietnamese Input Method
+### Input & Language
 
 Built-in Vietnamese Telex/VNI input for macOS and Windows with configurable language switching and typing behavior.
 
-![Input Method](docs/screenshots/input-method.png)
+![Input & Language](docs/screenshots/input-method.png)
 
 ## Quick Navigation
 

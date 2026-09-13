@@ -76,7 +76,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::FeatureDragToReorder => "Drag to reorder".into(),
         Text::FeatureMoveUp => "Move up".into(),
         Text::FeatureMoveDown => "Move down".into(),
-        Text::InputMethod => "Input method".into(),
+        Text::InputMethod => "Input & Language".into(),
         Text::StartWithOs => "Start with OS".into(),
         Text::StartWithOsDescription => {
                 "Start Dodo in the tray when you sign in. macOS requires macOS 13+ and a bundled Dodo.app; Windows adds a per-user Startup Apps entry.".into()

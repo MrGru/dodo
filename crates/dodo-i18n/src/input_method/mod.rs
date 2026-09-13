@@ -13,11 +13,14 @@ pub(crate) mod samples;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Text {
     Description,
-    #[cfg_attr(
-        not(target_os = "windows"),
-        allow(dead_code, reason = "Windows-only input-method copy.")
-    )]
-    WindowsDescription,
+    AccessibilityRequired,
+    AccessibilityRequiredDescription,
+    OpenAccessibilitySettings,
+    CurrentLanguage,
+    SwitchShortcut,
+    BeepDescription,
+    VietnameseInput,
+    VietnameseInputDescription,
     StorageProblem,
     StoreError(String),
     StoreMissingVersion,

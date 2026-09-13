@@ -78,7 +78,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::FeatureDragToReorder => "Kéo để sắp xếp lại".into(),
         Text::FeatureMoveUp => "Chuyển lên".into(),
         Text::FeatureMoveDown => "Chuyển xuống".into(),
-        Text::InputMethod => "Bộ gõ".into(),
+        Text::InputMethod => "Nhập & Ngôn ngữ".into(),
         Text::StartWithOs => "Khởi động cùng hệ điều hành".into(),
         Text::StartWithOsDescription => {
                 "Khởi động Dodo trong khay khi bạn đăng nhập. macOS cần macOS 13 trở lên và Dodo.app đã đóng gói; Windows thêm mục Khởi động cho người dùng hiện tại.".into()

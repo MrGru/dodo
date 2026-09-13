@@ -7,11 +7,18 @@ use super::Text;
 pub(crate) fn text(text: Text) -> Cow<'static, str> {
     match text {
         Text::Description => {
-            "Cấu hình gõ tiếng Việt. Chặn sự kiện cần quyền Trợ năng của macOS và hoạt động khi Dodo đang mở.".into()
+            "Cấu hình nhập bàn phím, ngôn ngữ và cách gõ.".into()
         }
-        Text::WindowsDescription => {
-            "Cấu hình gõ tiếng Việt. Keyboard Hook hoạt động khi Dodo đang mở.".into()
+        Text::AccessibilityRequired => "Cần quyền Trợ năng (macOS)".into(),
+        Text::AccessibilityRequiredDescription => {
+            "Dodo cần quyền Trợ năng để theo dõi thao tác bàn phím.".into()
         }
+        Text::OpenAccessibilitySettings => "Mở cài đặt Trợ năng".into(),
+        Text::CurrentLanguage => "Ngôn ngữ nhập hiện tại".into(),
+        Text::SwitchShortcut => "Phím tắt chuyển".into(),
+        Text::BeepDescription => "Phát âm thanh khi ngôn ngữ nhập thay đổi.".into(),
+        Text::VietnameseInput => "Gõ tiếng Việt".into(),
+        Text::VietnameseInputDescription => "Cấu hình cách gõ tiếng Việt.".into(),
         Text::StorageProblem => "Tệp thiết lập".into(),
         Text::StoreError(detail) => {
             format!("Không thể đọc hoặc lưu thiết lập bộ gõ: {detail}").into()
@@ -51,17 +58,17 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::TonePlacementDescription => {
             "Kiểu mới đặt dấu trên nguyên âm chính (hoà); kiểu cũ đặt trên nguyên âm đầu (hòa).".into()
         }
-        Text::ToneModern => "Kiểu mới".into(),
-        Text::ToneTraditional => "Kiểu cũ".into(),
+        Text::ToneModern => "Kiểu mới (hoà)".into(),
+        Text::ToneTraditional => "Kiểu cũ (hòa)".into(),
         Text::SpellCheck => "Kiểm tra chính tả".into(),
         Text::SpellCheckDescription => {
-            "Trả lại đúng các ký tự đã gõ khi kết quả không phải âm tiết tiếng Việt, để từ tiếng Anh không bị đổi.".into()
+            "Giữ nguyên từ tiếng Anh khi nội dung không phải tiếng Việt hợp lệ.".into()
         }
         Text::BracketShortcuts => "Phím ngoặc".into(),
         Text::BracketShortcutsDescription => {
-            "Trong Telex, [ và ] gõ ơ và ư — cách duy nhất để gõ uơ (thuở, huơ).".into()
+            "Trong Telex, [ và ] gõ ơ và ư — cách duy nhất để gõ ươ (thuở, huơ).".into()
         }
-        Text::ActiveLanguages => "Ngôn ngữ đang bật".into(),
+        Text::ActiveLanguages => "Ngôn ngữ".into(),
         Text::ActiveLanguagesDescription => {
             "Chọn các ngôn ngữ có trong menu và được phím tắt chuyển đổi sử dụng.".into()
         }
@@ -70,7 +77,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::LanguageSwitchDescription => {
             "Luân chuyển các ngôn ngữ đang bật. Nhấp vào phím tắt rồi nhấn tổ hợp phím bạn muốn.".into()
         }
-        Text::ShortcutBeep => "Âm báo".into(),
+        Text::ShortcutBeep => "Âm báo khi chuyển".into(),
         Text::ShortcutSpace => "Phím cách".into(),
         Text::ShortcutEnter => "Phím Enter".into(),
         Text::ShortcutTab => "Phím Tab".into(),
@@ -91,7 +98,7 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::ShortcutArrowDown => "Mũi tên xuống".into(),
         Text::BrowserFix => "Thanh địa chỉ trình duyệt".into(),
         Text::BrowserFixDescription => {
-            "Xử lý các trình duyệt vẫn bôi đen gợi ý tự động trong lúc bạn gõ, nếu không dấu thanh sẽ rơi vào sai chữ.".into()
+            "Xử lý các trình duyệt vẫn bôi đen gợi ý tự động trong lúc bạn gõ.".into()
         }
     }
 }
