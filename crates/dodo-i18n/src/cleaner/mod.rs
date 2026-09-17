@@ -87,6 +87,7 @@ pub enum Text {
     CleanupFailureCount(usize),
     PermissionTitle,
     PermissionExplanation,
+    PermissionCleanupExplanation,
     PermissionOpenSettings,
     PartialPermissionDenied,
     PartialRootUnavailable,

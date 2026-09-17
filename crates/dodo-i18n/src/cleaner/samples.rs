@@ -63,6 +63,7 @@ samples! {
     with CleanupFailureCount(NUMBER) [NUMBER_TEXT];
     plain PermissionTitle;
     plain PermissionExplanation;
+    plain PermissionCleanupExplanation;
     plain PermissionOpenSettings;
     plain PartialPermissionDenied;
     plain PartialRootUnavailable;

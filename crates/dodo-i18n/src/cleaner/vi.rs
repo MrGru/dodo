@@ -99,6 +99,9 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::PermissionExplanation => {
                 "Một số danh mục Cleaner cần Toàn quyền truy cập ổ đĩa để kiểm tra an toàn dữ liệu macOS được bảo vệ.".into()
             }
+        Text::PermissionCleanupExplanation => {
+                "Một số mục không thể chuyển vào Thùng rác nếu không có Toàn quyền truy cập ổ đĩa. Hãy cấp quyền rồi chạy lại quá trình dọn dẹp.".into()
+            }
         Text::PermissionOpenSettings => {
                 "Mở cài đặt".into()
             }

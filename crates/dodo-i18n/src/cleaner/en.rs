@@ -82,6 +82,10 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
                 "Some Cleaner categories need Full Disk Access to inspect protected macOS data safely."
                     .into()
             }
+        Text::PermissionCleanupExplanation => {
+                "Some items could not be moved to the Trash without Full Disk Access. Grant it, then run the cleanup again."
+                    .into()
+            }
         Text::PermissionOpenSettings => {
                 "Open settings".into()
             }

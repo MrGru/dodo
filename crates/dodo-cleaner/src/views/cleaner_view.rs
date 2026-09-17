@@ -339,7 +339,11 @@ impl CleanerView {
                 let _ = this.update_in(cx, |this, window, cx| {
                     this.permission_check_tasks.remove(&category);
                     if matches!(result, Ok(PermissionState::Denied)) {
-                        this.show_permission_prompt(window, cx);
+                        this.show_permission_prompt(
+                            cleaner::Text::PermissionExplanation.into(),
+                            window,
+                            cx,
+                        );
                     } else {
                         this.run_scan(category, scanner, cx);
                     }
@@ -352,13 +356,19 @@ impl CleanerView {
     /// raised only when a scan actually needs the permission and it is
     /// actually denied — never a panel occupying the main content area.
     #[cfg(target_os = "macos")]
-    fn show_permission_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_permission_prompt(
+        &mut self,
+        explanation: Str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let service = self.permission_service.clone();
         window.open_alert_dialog(cx, move |alert, _, cx| {
             let service = service.clone();
+            let explanation = explanation.clone();
             alert
                 .title(t(cleaner::Text::PermissionTitle, cx))
-                .description(t(cleaner::Text::PermissionExplanation, cx))
+                .description(t(explanation, cx))
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t(cleaner::Text::PermissionOpenSettings, cx))
@@ -585,16 +595,16 @@ impl CleanerView {
                         .cancel_text(t(cleaner::Text::CancelScan, cx))
                         .show_cancel(true),
                 )
-                .on_ok(move |_, _, cx| {
-                    confirm_view.update(cx, |this, cx| this.start_cleanup(cx));
+                .on_ok(move |_, window, cx| {
+                    confirm_view.update(cx, |this, cx| this.start_cleanup(window, cx));
                     true
                 })
         });
     }
 
-    fn start_cleanup(&mut self, cx: &mut Context<Self>) {
+    fn start_cleanup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let items = self.selected_items_for_active_category();
-        self.run_cleanup(items, cx);
+        self.run_cleanup(items, window, cx);
     }
 
     /// Runs the shared Trash-move pipeline over an explicit item list rather
@@ -606,9 +616,10 @@ impl CleanerView {
     pub(super) fn start_uninstall_cleanup(
         &mut self,
         items: Vec<CleanableItem>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.run_cleanup(items, cx);
+        self.run_cleanup(items, window, cx);
     }
 
     /// Cleans exactly the category the items belong to (every caller hands
@@ -650,7 +661,12 @@ impl CleanerView {
         self.cleanup_tasks.insert(CleanerCategory::TrashBins, task);
     }
 
-    fn run_cleanup(&mut self, items: Vec<CleanableItem>, cx: &mut Context<Self>) {
+    fn run_cleanup(
+        &mut self,
+        items: Vec<CleanableItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(category) = items.first().map(|item| item.category) else {
             return;
         };
@@ -662,7 +678,7 @@ impl CleanerView {
 
         let is_docker = category == CleanerCategory::DockerCache;
 
-        let task = cx.spawn(async move |this, cx| {
+        let task = cx.spawn_in(window, async move |this, cx| {
             let report = cx
                 .background_executor()
                 .spawn(async move {
@@ -698,9 +714,27 @@ impl CleanerView {
                 })
                 .await;
 
-            let _ = this.update(cx, |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
+                // A Full Disk Access denial is the one cleanup failure the user
+                // can fix, so raise the same prompt the scan path uses and let
+                // them grant it and retry — instead of leaving only raw
+                // permission errors in the report (captain defect #1).
+                let needs_full_disk_access = report
+                    .failures
+                    .iter()
+                    .any(|failure| matches!(failure.error, CleanupError::PermissionRequired(_)));
                 this.state.finish_cleaning(category, report);
                 this.cleanup_tasks.remove(&category);
+                #[cfg(target_os = "macos")]
+                if needs_full_disk_access {
+                    this.show_permission_prompt(
+                        cleaner::Text::PermissionCleanupExplanation.into(),
+                        window,
+                        cx,
+                    );
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = (needs_full_disk_access, window);
                 cx.notify();
             });
         });
@@ -772,9 +806,10 @@ impl CleanerView {
                             .cancel_text(t(cleaner::Text::CancelScan, cx))
                             .show_cancel(true),
                     )
-                    .on_ok(move |_, _, cx| {
-                        confirm_view
-                            .update(cx, |this, cx| this.run_cleanup(vec![item.clone()], cx));
+                    .on_ok(move |_, window, cx| {
+                        confirm_view.update(cx, |this, cx| {
+                            this.run_cleanup(vec![item.clone()], window, cx)
+                        });
                         true
                     })
             });

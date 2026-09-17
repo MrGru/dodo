@@ -6,6 +6,7 @@ use crate::ai_apps;
 use crate::core::category::CleanerCategory;
 use crate::core::errors::CleanupError;
 use crate::core::item::CleanableItem;
+use crate::core::permissions::MacPermission;
 use crate::core::report::{CleanupItemFailure, CleanupItemSuccess, CleanupReport};
 use crate::core::safety::{AllowedRoot, DeletionPolicy, dedupe_nested_paths, validate_path};
 use crate::macos::applications::locations;
@@ -113,10 +114,18 @@ pub fn cleanup_items(items: &[CleanableItem]) -> CleanupReport {
                     trashed_path: receipt.trashed_path,
                     logical_size: item.logical_size,
                 }),
-                Err(message) => failures.push(CleanupItemFailure {
+                Err(error) => failures.push(CleanupItemFailure {
                     id: item.id,
                     path: path.clone(),
-                    error: CleanupError::Trash(message),
+                    // A Full Disk Access / TCC denial is the one trash failure
+                    // the user can fix, so it maps to `PermissionRequired`,
+                    // which the view turns into an actionable prompt; anything
+                    // else stays a raw `Trash` message in the report.
+                    error: if error.permission_denied {
+                        CleanupError::PermissionRequired(MacPermission::FullDiskAccess)
+                    } else {
+                        CleanupError::Trash(error.message)
+                    },
                 }),
             },
             Err(error) => failures.push(CleanupItemFailure {

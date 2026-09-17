@@ -149,8 +149,9 @@ impl UninstallReviewDialog {
                 items.push(candidate.item.clone());
             }
         }
-        self.page
-            .update(cx, |page, cx| page.start_uninstall_cleanup(items, cx));
+        self.page.update(cx, |page, cx| {
+            page.start_uninstall_cleanup(items, window, cx)
+        });
         window.close_dialog(cx);
     }
 }
