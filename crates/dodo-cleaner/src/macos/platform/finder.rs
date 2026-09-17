@@ -3,25 +3,53 @@ use std::path::{Path, PathBuf};
 /// Reveals `path` in Finder with the item selected in its containing folder.
 ///
 /// Shells out to `/usr/bin/open -R`, the documented reveal-and-select command,
-/// rather than `NSWorkspace activateFileViewerSelectingURLs:`. The objc2 call
-/// returns no status yet silently revealed nothing from inside dodo's GPUI
-/// event loop (the click handler is reached and the path is valid — "Copy
-/// path" on the same row works — but no Finder window ever comes forward).
-/// `open -R` goes through LaunchServices in a separate process, so it is
-/// independent of the caller's main-thread/autorelease-pool/run-loop context,
-/// and it is exactly how `windows::platform` (`explorer /select,`) and
-/// `linux::platform` (`xdg-open`) already reveal. The guard stays the same:
-/// only a path that is positively gone refuses; a path the process cannot stat
-/// (a sandbox container without Full Disk Access) is still handed to Finder,
-/// which has its own access — "cannot stat" is not "gone".
+/// rather than `NSWorkspace activateFileViewerSelectingURLs:` — that objc2 call
+/// returns no status and cannot report why nothing appeared.
+///
+/// **The `__CFBundleIdentifier` strip is the actual fix, not hygiene.** A
+/// terminal that runs `cargo run` (Ghostty, Terminal, iTerm…) exports
+/// `__CFBundleIdentifier=<the terminal's id>`, which dodo and every child it
+/// spawns inherit. LaunchServices reads that variable to decide *which app is
+/// asking*, so the reveal was attributed to the terminal — a background app —
+/// and macOS suppresses a background app's attempt to bring Finder forward.
+/// From a shell the same `open -R` works only because the terminal really is
+/// frontmost. Removing the variable makes the request come from `open` itself,
+/// so Finder activates. (A properly bundled `.app` launched from Finder gets
+/// dodo's own id here and never hit this; the bug is specific to the unbundled,
+/// terminal-launched binary — which is exactly the `cargo run` dev build.) The
+/// same stale id also broke the earlier in-process `NSWorkspace` reveal, for
+/// the identical reason.
+///
+/// This mirrors how `windows::platform` (`explorer /select,`) and
+/// `linux::platform` (`xdg-open`) reveal. The guard stays the same: only a path
+/// that is positively gone refuses; a path the process cannot stat (a sandbox
+/// container without Full Disk Access) is still handed to Finder, which has its
+/// own access — "cannot stat" is not "gone".
 pub fn reveal_in_finder(path: &Path) -> Result<(), String> {
     let path = revealable_path(path)?;
-    std::process::Command::new("/usr/bin/open")
+    let output = std::process::Command::new("/usr/bin/open")
         .arg("-R")
         .arg(&path)
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    Ok(())
+        .env_remove("__CFBundleIdentifier")
+        .output()
+        .map_err(|error| format!("could not run /usr/bin/open -R: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr.trim();
+    let status = match output.status.code() {
+        Some(code) => format!("exit code {code}"),
+        None => "a signal".to_string(),
+    };
+    if detail.is_empty() {
+        Err(format!("open -R {} failed with {status}", path.display()))
+    } else {
+        Err(format!(
+            "open -R {} failed with {status}: {detail}",
+            path.display()
+        ))
+    }
 }
 
 /// Confirms an item is worth revealing. Deliberately no `canonicalize()`: that
