@@ -32,9 +32,16 @@ pub fn move_to_trash(path: &Path) -> Result<TrashReceipt, String> {
 /// itself is well known to exit non-zero even on success, so this only
 /// reports whether the process could be *started*, never whether the
 /// selection actually happened.
+///
+/// Uses `raw_arg` so only the path is quoted (`/select,"C:\..."`). A plain
+/// `.arg("/select,C:\\Program Files\\...")` gets the whole token wrapped in
+/// quotes by `CommandLineToArgvW`, which `explorer.exe` (which parses its own
+/// command line rather than through that API) mis-reads for any path with a
+/// space — it then opens the containing drive without selecting anything.
 pub fn reveal_in_explorer(path: &Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt as _;
     std::process::Command::new("explorer")
-        .arg(format!("/select,{}", path.display()))
+        .raw_arg(format!("/select,\"{}\"", path.display()))
         .spawn()
         .map_err(|error| error.to_string())?;
     Ok(())

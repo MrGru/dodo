@@ -1,64 +1,65 @@
 use std::path::{Path, PathBuf};
 
 use objc2_app_kit::NSWorkspace;
-use objc2_foundation::NSString;
+use objc2_foundation::{NSArray, NSURL};
 
-/// Resolves an existing path before asking Finder to select it. The old
-/// `activateFileViewerSelectingURLs:` call returns no status, so failures were
-/// reported as success; `selectFile:inFileViewerRootedAtPath:` returns one.
+/// Reveals `path` in Finder with the item selected in its containing folder.
+///
+/// Uses `activateFileViewerSelectingURLs:`, the canonical reveal-and-select
+/// API, rather than `selectFile:inFileViewerRootedAtPath:` — the latter, given
+/// a non-empty root, opened a window rooted there instead of reliably showing
+/// the enclosing folder, which is the "does not open the containing folder"
+/// report. `activateFileViewerSelectingURLs:` reports no status, so the only
+/// guard is that the item is not positively gone; a path the process cannot
+/// stat (a sandbox container without Full Disk Access) is still handed to
+/// Finder, which has its own access — "cannot stat" is not "gone".
 pub fn reveal_in_finder(path: &Path) -> Result<(), String> {
-    let (path, root) = finder_selection(path)?;
-    let selected = NSString::from_str(&path.to_string_lossy());
-    let root = NSString::from_str(&root.to_string_lossy());
-    if NSWorkspace::sharedWorkspace().selectFile_inFileViewerRootedAtPath(Some(&selected), &root) {
-        Ok(())
-    } else {
-        Err(format!("Finder could not reveal {}", path.display()))
-    }
+    let path = revealable_path(path)?;
+    let Some(url) = NSURL::from_path(&path, path.is_dir(), None) else {
+        return Err(format!("could not convert {} to file URL", path.display()));
+    };
+    let urls = NSArray::from_retained_slice(&[url]);
+    NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(&urls);
+    Ok(())
 }
 
-fn finder_selection(path: &Path) -> Result<(PathBuf, PathBuf), String> {
-    let path = path
-        .canonicalize()
-        .map_err(|error| format!("{}: {error}", path.display()))?;
-    let root = path
-        .parent()
-        .ok_or_else(|| format!("{} has no containing folder", path.display()))?
-        .to_path_buf();
-    Ok((path, root))
+/// Confirms an item is worth revealing. Deliberately no `canonicalize()`: that
+/// needs read access to every path component and so fails for the very
+/// sandbox-container paths this has to reveal. Only a positive "not found"
+/// refuses; a permission error falls through to Finder.
+fn revealable_path(path: &Path) -> Result<PathBuf, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(path.to_path_buf()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(format!("{} no longer exists", path.display()))
+        }
+        Err(_) => Ok(path.to_path_buf()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
 
-    use super::finder_selection;
+    use super::revealable_path;
 
     #[test]
-    fn reveal_selection_canonicalizes_an_existing_child() {
+    fn revealable_path_accepts_an_existing_item() {
         let temp = std::env::temp_dir().join(format!("dodo-cleaner-finder-{}", std::process::id()));
         let nested = temp.join("parent").join("child");
         fs::create_dir_all(&nested).expect("creates target");
 
-        let (path, root) = finder_selection(&temp.join("parent").join(".").join("child"))
-            .expect("resolves target");
-        assert_eq!(path, nested.canonicalize().expect("canonical target"));
-        assert_eq!(
-            root,
-            temp.join("parent")
-                .canonicalize()
-                .expect("canonical parent")
-        );
+        assert_eq!(revealable_path(&nested).expect("resolves target"), nested);
 
         fs::remove_dir_all(temp).expect("removes temp tree");
     }
 
     #[test]
-    fn reveal_selection_rejects_a_missing_path() {
+    fn revealable_path_rejects_a_missing_item() {
         let missing = std::env::temp_dir().join(format!(
             "dodo-cleaner-finder-missing-{}",
             std::process::id()
         ));
-        assert!(finder_selection(&missing).is_err());
+        assert!(revealable_path(&missing).is_err());
     }
 }
