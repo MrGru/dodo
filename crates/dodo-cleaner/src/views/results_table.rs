@@ -493,11 +493,8 @@ impl ResultsTableDelegate {
             RowAction::Reveal => {
                 let path = item.path.clone();
                 button
-                    .on_click(move |_, _, cx| {
-                        let path = path.clone();
-                        let _ = view.update_in(cx, |view, window, cx| {
-                            view.reveal_in_finder(path, window, cx)
-                        });
+                    .on_click(move |_, window, cx| {
+                        CleanerView::reveal_in_finder(path.clone(), window, cx);
                     })
                     .into_any_element()
             }
@@ -521,11 +518,14 @@ impl ResultsTableDelegate {
             RowAction::Uninstall => {
                 let item = item.clone();
                 button
-                    .on_click(move |_, _, cx| {
+                    .on_click(move |_, window, cx| {
                         let item = item.clone();
-                        let _ = view.update_in(cx, |view, window, cx| {
-                            view.begin_uninstall_review(item, window, cx)
-                        });
+                        // Plain `update` (not `update_in`): the window is
+                        // already borrowed as the handler's `&mut Window`, so
+                        // `update_in`'s re-entry into it fails — the same bug
+                        // reveal had. `Err` here only means the view is gone.
+                        _ = view
+                            .update(cx, |view, cx| view.begin_uninstall_review(item, window, cx));
                     })
                     .into_any_element()
             }

@@ -547,6 +547,14 @@ SidebarMenu::new().children(View::ALL.map(|view| {
 }))
 ```
 
+Use `entity.update(cx, ...)` here, **never `update_in`** — and when the handler body needs a
+`Window`, capture the `&mut Window` the closure is handed and pass it in
+(`view.update(cx, |v, cx| v.method(item, window, cx))`). `update_in` re-derives the window from
+`App::with_window`, which `.take()`s it off `cx.windows`; but during a click that window is already
+borrowed out as the handler's `&mut Window`, so the re-entry returns `Err` and a discarded `let _ =`
+swallows it — the action silently never runs. This was the Cleaner "Reveal in Finder does nothing"
+bug (`results_table.rs`, both the Reveal and Uninstall buttons).
+
 ### Collapsed, the rail is 48px and every inset is countable
 
 The collapsed width is `COLLAPSED_WIDTH` in `sidebar/mod.rs` — **48px, and not exported**, so

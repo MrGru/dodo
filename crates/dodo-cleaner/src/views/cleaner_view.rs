@@ -490,12 +490,14 @@ impl CleanerView {
         cx.notify();
     }
 
-    pub(super) fn reveal_in_finder(
-        &mut self,
-        path: std::path::PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Reveals `path` in the platform file manager. Takes no `self` and a bare
+    /// `App`, so the row button can call it directly from its `on_click` with
+    /// the `Window` the handler is handed. Routing this through
+    /// `WeakEntity::update_in` was the reveal-does-nothing bug: `update_in`
+    /// re-enters the current window via `App::with_window`, but during a click
+    /// that window is already borrowed out as the handler's `&mut Window`, so
+    /// the re-entry fails and the discarded `Result` swallowed it silently.
+    pub(super) fn reveal_in_finder(path: std::path::PathBuf, window: &mut Window, cx: &mut App) {
         #[cfg(target_os = "macos")]
         let result = platform::reveal_in_finder(path.as_path());
         #[cfg(target_os = "windows")]
