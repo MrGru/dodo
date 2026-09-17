@@ -109,3 +109,10 @@ pub(crate) mod views;
 pub(crate) mod windows;
 
 pub use views::CleanerView;
+
+/// Reveals a path in Finder with the item selected in its containing folder.
+/// Exposed so `examples/reveal.rs` can exercise the reveal outside the GPUI
+/// event loop — the isolation probe for the "Reveal in Finder does nothing"
+/// bug (see `macos::platform::finder`).
+#[cfg(target_os = "macos")]
+pub use macos::platform::reveal_in_finder;

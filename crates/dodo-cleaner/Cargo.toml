@@ -109,3 +109,10 @@ gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, fe
 [[example]]
 name = "cleaner"
 path = "examples/cleaner.rs"
+
+# Isolation probe for macOS "Reveal in Finder". Calls `reveal_in_finder`
+# directly, outside the GPUI event loop, so the reveal can be verified without
+# driving the app. See the file's own module doc.
+[[example]]
+name = "reveal"
+path = "examples/reveal.rs"

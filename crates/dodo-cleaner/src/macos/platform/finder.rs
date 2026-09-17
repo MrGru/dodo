@@ -1,25 +1,26 @@
 use std::path::{Path, PathBuf};
 
-use objc2_app_kit::NSWorkspace;
-use objc2_foundation::{NSArray, NSURL};
-
 /// Reveals `path` in Finder with the item selected in its containing folder.
 ///
-/// Uses `activateFileViewerSelectingURLs:`, the canonical reveal-and-select
-/// API, rather than `selectFile:inFileViewerRootedAtPath:` — the latter, given
-/// a non-empty root, opened a window rooted there instead of reliably showing
-/// the enclosing folder, which is the "does not open the containing folder"
-/// report. `activateFileViewerSelectingURLs:` reports no status, so the only
-/// guard is that the item is not positively gone; a path the process cannot
-/// stat (a sandbox container without Full Disk Access) is still handed to
-/// Finder, which has its own access — "cannot stat" is not "gone".
+/// Shells out to `/usr/bin/open -R`, the documented reveal-and-select command,
+/// rather than `NSWorkspace activateFileViewerSelectingURLs:`. The objc2 call
+/// returns no status yet silently revealed nothing from inside dodo's GPUI
+/// event loop (the click handler is reached and the path is valid — "Copy
+/// path" on the same row works — but no Finder window ever comes forward).
+/// `open -R` goes through LaunchServices in a separate process, so it is
+/// independent of the caller's main-thread/autorelease-pool/run-loop context,
+/// and it is exactly how `windows::platform` (`explorer /select,`) and
+/// `linux::platform` (`xdg-open`) already reveal. The guard stays the same:
+/// only a path that is positively gone refuses; a path the process cannot stat
+/// (a sandbox container without Full Disk Access) is still handed to Finder,
+/// which has its own access — "cannot stat" is not "gone".
 pub fn reveal_in_finder(path: &Path) -> Result<(), String> {
     let path = revealable_path(path)?;
-    let Some(url) = NSURL::from_path(&path, path.is_dir(), None) else {
-        return Err(format!("could not convert {} to file URL", path.display()));
-    };
-    let urls = NSArray::from_retained_slice(&[url]);
-    NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(&urls);
+    std::process::Command::new("/usr/bin/open")
+        .arg("-R")
+        .arg(&path)
+        .spawn()
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
