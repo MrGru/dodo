@@ -778,6 +778,7 @@ impl ContainersView {
         let count = self.state.selection.count();
         let startable = self.state.bulk_startable_ids();
         let stoppable = self.state.bulk_stoppable_ids();
+        let has_selection = !self.state.selection.is_empty();
 
         h_flex()
             .w_full()
@@ -793,11 +794,11 @@ impl ContainersView {
             .border_color(cx.theme().border)
             .bg(cx.theme().accent.opacity(0.3))
             .text_sm()
-            .child(
-                div()
-                    .font_medium()
-                    .child(t(docker::Text::BulkSelected(count), cx)),
-            )
+            .when(has_selection, |this| {
+                // using text-xs following the button xsmall that uses XS for its inner text
+                this.child(t(docker::Text::BulkSelected(count), cx))
+                    .text_xs()
+            })
             .child(div().flex_1())
             .child(
                 Button::new("bulk-start")
@@ -1298,7 +1299,7 @@ impl Render for ContainersView {
             .overflow_hidden()
             .bg(cx.theme().background)
             .child(self.render_toolbar(cx))
-            .when(has_selection, |this| this.child(self.render_bulk_bar(cx)))
+            .child(self.render_bulk_bar(cx))
             .when_some(action_error, |this, message| {
                 this.child(self.render_action_banner(message, cx))
             })
