@@ -1273,7 +1273,6 @@ impl Render for ContainersView {
             .state
             .action_error()
             .map(|message| t(message.clone(), cx));
-        let has_selection = !self.state.selection.is_empty();
 
         v_flex()
             .size_full()
