@@ -42,7 +42,7 @@ use std::collections::HashSet;
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use dodo_ime_core::{Key, LanguageId};
+use dodo_ime_core::{Key, LanguageId, Modifiers};
 use futures_channel::mpsc::UnboundedSender;
 use windows_sys::Win32::Foundation::{CloseHandle, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
@@ -55,10 +55,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, ToUnicodeEx, VK_CAPITAL,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
-    HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MB_OK, SetWindowsHookExW,
-    UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
+    CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, HC_ACTION, HHOOK,
+    KBDLLHOOKSTRUCT, LLKHF_INJECTED, MB_OK, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN,
 };
 
 use crate::models::browser_rewrite::BrowserRewrite;
@@ -233,7 +233,10 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     };
 
-    if wparam == WM_KEYUP as usize {
+    // A key released while Alt is held arrives as `WM_SYSKEYUP`. Dropping it left
+    // the key in `pressed`, so its next ordinary press read as an autorepeat,
+    // which resets the word in flight and lets the key through untouched.
+    if wparam == WM_KEYUP as usize || wparam == WM_SYSKEYUP as usize {
         state.pressed.remove(&event.vkCode);
         let route = handling(HookEvent::KeyUp {
             suppress: state.suppressed_key_ups.take(event.vkCode),
@@ -243,6 +246,15 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         } else {
             unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
         };
+    }
+    if wparam == WM_SYSKEYDOWN as usize {
+        // Alt plus a key — Alt+Tab, Alt+D, a menu accelerator — is a shortcut
+        // that may move focus, and macOS resets on every shortcut. Alt itself
+        // types nothing and keeps the word, as any modifier does.
+        if !keeps_composition(windows_key_event(event.vkCode, None, Modifiers::default()).key) {
+            state.composer.reset();
+        }
+        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
     if wparam != WM_KEYDOWN as usize {
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
@@ -295,7 +307,7 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
     }
     // From here the key is text, so where it would land has to be known.
     let Some(target) =
-        window.and_then(|(foreground, thread, _)| target_identity(foreground, thread))
+        window.map(|(foreground, _, process)| TargetIdentity::new(process, foreground))
     else {
         state.composer.reset();
         target_changed(&mut state.target, None);
@@ -410,29 +422,6 @@ fn process_image_name(process_id: u32) -> Option<String> {
         .next()
         .filter(|name| !name.is_empty())
         .map(str::to_ascii_lowercase)
-}
-
-/// The focused control retained text belongs to, when there is one.
-///
-/// Only the composing path needs this. Requiring it before the language switch
-/// was matched made the shortcut depend on there being somewhere to type.
-fn target_identity(foreground: usize, thread: u32) -> Option<TargetIdentity> {
-    let mut gui = GUITHREADINFO {
-        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-        ..GUITHREADINFO::default()
-    };
-    if unsafe { GetGUIThreadInfo(thread, &mut gui) } == 0 || gui.hwndFocus.is_null() {
-        return None;
-    }
-    // The caret owner (`gui.hwndCaret`) is deliberately not part of the identity:
-    // a lazily created caret flips it on the first typed character and would
-    // reset composition mid-word, stranding an English restore. See
-    // `models::keyboard_hook::TargetIdentity`.
-    Some(TargetIdentity::new(
-        foreground,
-        thread,
-        gui.hwndFocus as usize,
-    ))
 }
 
 /// The physical keyboard, as opposed to what dodo's own message queue remembers.

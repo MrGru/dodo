@@ -50,7 +50,10 @@ must never press or release it while the user is physically holding Shift.
 builds the 256-byte layout state from `GetAsyncKeyState`, folds in the arriving key, and tracks Caps
 Lock. Character case and `Modifiers` must come from that same physical snapshot. A modifier arrives as a
 key-down (and autorepeats while held), unlike macOS's `FlagsChanged`, so it must pass without
-resetting the word in flight. Injected, repeated,
+resetting the word in flight. The composition target is the foreground process and window, as on
+macOS the process; nothing from `GetGUIThreadInfo` (caret or focus) may join it, because both flip
+mid-word and a mid-word reset is exactly what breaks English words like `workflow` and
+`playwright`. Injected, repeated,
 unknown, command, and uncertain-target events pass through; `Drop` unregisters both keyboard and
 mouse hooks before callback state is freed.
 
