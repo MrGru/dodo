@@ -138,7 +138,20 @@ impl SuppressedKeyUps {
 }
 
 /// One complete, ordered Windows input batch for a rewritten plan.
-pub(crate) fn output_inputs(plan: &OutputPlan, rewrite: &BrowserRewrite) -> Vec<WindowsInput> {
+///
+/// `shift_held` is whether the user is physically holding Shift as the batch is
+/// sent. macOS spells the Chromium `Shift`+`Left` as one arrow event carrying a
+/// Shift *flag*, which leaves the real modifier alone; Windows has no flag, so
+/// the batch presses and releases `VK_SHIFT` itself. Releasing it while the user
+/// is holding Shift — typing a capitalised or all-caps word into Chrome — tells
+/// every application, and `GetAsyncKeyState`, that Shift is up, so every letter
+/// after the first rewritten one arrives lowercase until the key repeats. A held
+/// Shift already extends the selection, so the batch then sends only `Left`.
+pub(crate) fn output_inputs(
+    plan: &OutputPlan,
+    rewrite: &BrowserRewrite,
+    shift_held: bool,
+) -> Vec<WindowsInput> {
     let inserted = plan
         .insert
         .as_deref()
@@ -155,24 +168,29 @@ pub(crate) fn output_inputs(plan: &OutputPlan, rewrite: &BrowserRewrite) -> Vec<
             .saturating_add(usize::from(rewrite.extend_selection) * 4),
     );
     if rewrite.extend_selection {
+        let press_shift = !shift_held;
+        if press_shift {
+            inputs.push(WindowsInput::Key {
+                virtual_key: vk::SHIFT as u16,
+                key_up: false,
+            });
+        }
         inputs.extend([
             WindowsInput::Key {
-                virtual_key: vk::SHIFT as u16,
-                key_up: false,
-            },
-            WindowsInput::Key {
                 virtual_key: vk::LEFT as u16,
                 key_up: false,
             },
             WindowsInput::Key {
                 virtual_key: vk::LEFT as u16,
-                key_up: true,
-            },
-            WindowsInput::Key {
-                virtual_key: vk::SHIFT as u16,
                 key_up: true,
             },
         ]);
+        if press_shift {
+            inputs.push(WindowsInput::Key {
+                virtual_key: vk::SHIFT as u16,
+                key_up: true,
+            });
+        }
     }
     if let Some(text) = rewrite.commit_character {
         push_unicode(&mut inputs, text);
@@ -209,7 +227,7 @@ fn push_unicode(inputs: &mut Vec<WindowsInput>, text: &str) {
 
 /// Number of fully paired Windows `INPUT`s in one verbatim plan.
 pub(crate) fn input_event_count(plan: &OutputPlan) -> usize {
-    output_inputs(plan, &BrowserRewrite::verbatim(plan)).len()
+    output_inputs(plan, &BrowserRewrite::verbatim(plan), false).len()
 }
 
 /// Commits a staged plan only when `SendInput` accepted every event.
@@ -481,6 +499,18 @@ pub fn key_event(vkey: u32, text: Option<char>, modifiers: Modifiers) -> KeyEven
     }
 }
 
+/// Whether a key the composer cannot use leaves the word in flight alone.
+///
+/// Only a modifier does. It types nothing and moves no caret — `⇧` in the
+/// middle of a word is how a capital letter is typed — and Windows reports it
+/// as a key-down, then again on every autorepeat while it is held. The macOS
+/// tap never sees one as a key-down at all (`FlagsChanged`), which is why the
+/// same all-caps word composed there and not here. Any other untranslatable
+/// key leaves the end cursor unknown and resets.
+pub(crate) fn keeps_composition(key: Key) -> bool {
+    key == Key::Modifier
+}
+
 /// Process exactly one known, plain physical key-down.
 pub fn handling(event: HookEvent) -> Handling {
     match event {
@@ -501,8 +531,9 @@ pub fn handling(event: HookEvent) -> Handling {
 mod tests {
     use super::{
         CapsLock, Handling, HookEvent, PhysicalKeys, SuppressedKeyUps, TargetIdentity,
-        WindowsInput, adopt_after_send, handling, input_event_count, key_event, layout_state,
-        modifiers, output_inputs, physical_modifiers, target_changed, vk, with_key_down,
+        WindowsInput, adopt_after_send, handling, input_event_count, keeps_composition, key_event,
+        layout_state, modifiers, output_inputs, physical_modifiers, target_changed, vk,
+        with_key_down,
     };
     use crate::models::browser_rewrite::BrowserRewrite;
     use crate::models::direct_output::OutputPlan;
@@ -1035,14 +1066,17 @@ mod tests {
         let mut before = chromium_address_bar_after(
             "ưin".into(),
             true,
-            &output_inputs(restore, &BrowserRewrite::verbatim(restore)),
+            &output_inputs(restore, &BrowserRewrite::verbatim(restore), false),
         );
         before.push_str("ow");
         assert_eq!(before, "ưwindow");
 
         let rewrite = BrowserRewrite::plan(true, Some("chrome.exe"), restore);
-        let mut after =
-            chromium_address_bar_after("ưin".into(), true, &output_inputs(restore, &rewrite));
+        let mut after = chromium_address_bar_after(
+            "ưin".into(),
+            true,
+            &output_inputs(restore, &rewrite, false),
+        );
         after.push_str("ow");
         assert_eq!(after, "window");
     }
@@ -1056,7 +1090,7 @@ mod tests {
         };
         let rewrite = BrowserRewrite::plan(true, Some("chrome.exe"), &plan);
         assert_eq!(
-            output_inputs(&plan, &rewrite),
+            output_inputs(&plan, &rewrite, false),
             vec![
                 WindowsInput::Key {
                     virtual_key: vk::SHIFT as u16,
@@ -1086,6 +1120,75 @@ mod tests {
         );
     }
 
+    /// A physically held Shift must survive the Chromium batch: the batch may
+    /// neither press nor release `VK_SHIFT`, or the rest of a capitalised word
+    /// reaches the browser lowercase. macOS never had this, because its arrow
+    /// carries Shift as a flag rather than as a separate key.
+    #[test]
+    fn a_held_shift_is_never_released_by_the_chromium_batch() {
+        let plan = OutputPlan {
+            delete_before: 1,
+            insert: Some("Ó".into()),
+            pass_through: false,
+        };
+        let rewrite = BrowserRewrite::plan(true, Some("chrome.exe"), &plan);
+        let inputs = output_inputs(&plan, &rewrite, true);
+        assert!(
+            !inputs.iter().any(|input| matches!(
+                input,
+                WindowsInput::Key { virtual_key, .. } if *virtual_key == vk::SHIFT as u16
+            )),
+            "{inputs:?}"
+        );
+        assert_eq!(
+            inputs[..2],
+            [
+                WindowsInput::Key {
+                    virtual_key: vk::LEFT as u16,
+                    key_up: false,
+                },
+                WindowsInput::Key {
+                    virtual_key: vk::LEFT as u16,
+                    key_up: true,
+                },
+            ]
+        );
+        // Otherwise the batch is exactly the one sent without a held Shift.
+        let mut unheld = output_inputs(&plan, &rewrite, false);
+        unheld.retain(|input| {
+            !matches!(
+                input,
+                WindowsInput::Key { virtual_key, .. } if *virtual_key == vk::SHIFT as u16
+            )
+        });
+        assert_eq!(inputs, unheld);
+    }
+
+    /// A modifier types nothing and moves no caret. macOS never even offers one
+    /// to the composer (`FlagsChanged` is not a key-down); Windows reports it as
+    /// a key-down — repeatedly, while it is held — so it must be told apart from
+    /// an unknown key rather than resetting the word in flight.
+    #[test]
+    fn a_modifier_key_down_keeps_the_word_in_flight() {
+        assert!(keeps_composition(Key::Modifier));
+        for key in [Key::Other, Key::Character, Key::Backspace, Key::Space] {
+            assert!(!keeps_composition(key), "{key:?}");
+        }
+        // Every key a held modifier autorepeats as is a modifier.
+        for vkey in [
+            vk::LSHIFT,
+            vk::RSHIFT,
+            vk::SHIFT,
+            vk::LCONTROL,
+            vk::LMENU,
+            vk::LWIN,
+        ] {
+            assert!(keeps_composition(
+                key_event(vkey, None, Modifiers::default()).key
+            ));
+        }
+    }
+
     #[test]
     fn firefox_output_commits_the_suggestion_before_the_extra_backspace() {
         let plan = OutputPlan {
@@ -1094,7 +1197,7 @@ mod tests {
             pass_through: false,
         };
         let rewrite = BrowserRewrite::plan(true, Some("firefox.exe"), &plan);
-        let inputs = output_inputs(&plan, &rewrite);
+        let inputs = output_inputs(&plan, &rewrite, false);
         assert_eq!(
             inputs[..2],
             [
@@ -1244,7 +1347,7 @@ mod tests {
             let plan = composer.process(event);
             if plan.transforms() {
                 let rewrite = BrowserRewrite::plan(true, Some("notepad.exe"), &plan);
-                document = plain_document_after(document, &output_inputs(&plan, &rewrite));
+                document = plain_document_after(document, &output_inputs(&plan, &rewrite, false));
             }
             if plan.pass_through
                 && let Some(typed) = event.typed()
@@ -1295,7 +1398,7 @@ mod tests {
             let plan = composer.process(event);
             if plan.transforms() {
                 let rewrite = BrowserRewrite::plan(true, Some("notepad.exe"), &plan);
-                document = plain_document_after(document, &output_inputs(&plan, &rewrite));
+                document = plain_document_after(document, &output_inputs(&plan, &rewrite, false));
             }
             if plan.pass_through
                 && let Some(typed) = event.typed()

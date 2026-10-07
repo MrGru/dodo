@@ -163,13 +163,11 @@ impl InputMethod {
         }
     }
 
-    #[cfg(target_os = "macos")]
     pub fn browser_address_bar_fix(cx: &App) -> bool {
         cx.try_global::<InputMethod>()
             .is_none_or(|state| state.document.browser_address_bar_fix)
     }
 
-    #[cfg(target_os = "macos")]
     pub fn set_browser_address_bar_fix(on: bool, cx: &mut App) {
         Self::edit(cx, |document| document.browser_address_bar_fix = on);
     }

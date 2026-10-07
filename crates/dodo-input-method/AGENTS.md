@@ -40,13 +40,17 @@ configuration changes discard retained composition.
 Browser address bars need the adjustment in `models/browser_rewrite.rs`: Chromium extends the
 selection; Safari and Firefox insert then remove a zero-width character. Unknown applications are
 left unchanged. Both hosts use that one table — macOS supplies a bundle identifier and Windows a
-process image name — while the browser switch remains macOS-only and defaults on.
+process image name — and both read the one `browser_address_bar_fix` switch, which defaults on.
+macOS carries Shift as a flag on the arrow event; Windows has to press `VK_SHIFT` itself, so it
+must never press or release it while the user is physically holding Shift.
 
 ## Keyboard Hook
 
 `GetKeyboardState` is thread-local and stale in a background low-level hook. The Windows service
 builds the 256-byte layout state from `GetAsyncKeyState`, folds in the arriving key, and tracks Caps
-Lock. Character case and `Modifiers` must come from that same physical snapshot. Injected, repeated,
+Lock. Character case and `Modifiers` must come from that same physical snapshot. A modifier arrives as a
+key-down (and autorepeats while held), unlike macOS's `FlagsChanged`, so it must pass without
+resetting the word in flight. Injected, repeated,
 unknown, command, and uncertain-target events pass through; `Drop` unregisters both keyboard and
 mouse hooks before callback state is freed.
 

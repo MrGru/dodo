@@ -76,7 +76,7 @@ pub enum Strategy {
 /// worst case is the strategy that does not help — but putting an application that is
 /// not a browser here is, because [`Strategy::CommitSuggestion`] types a
 /// character into it.
-const BROWSERS: [(&str, Strategy); 21] = [
+const BROWSERS: [(&str, Strategy); 27] = [
     // Blink: macOS bundle identifiers and Windows process image names.
     ("com.google.Chrome", Strategy::ExtendSelection),
     ("com.google.Chrome.canary", Strategy::ExtendSelection),
@@ -91,10 +91,15 @@ const BROWSERS: [(&str, Strategy); 21] = [
     ("vivaldi.exe", Strategy::ExtendSelection),
     ("com.operasoftware.Opera", Strategy::ExtendSelection),
     ("opera.exe", Strategy::ExtendSelection),
-    // Arc and Cốc Cốc.
+    // Arc and Cốc Cốc. Cốc Cốc's Windows image is `browser.exe` (Yandex
+    // Browser, also Blink, ships the same name), so `coccoc.exe` alone never
+    // matched it. A non-browser that happens to share the name only gains a
+    // `Shift`+`Left` whose arithmetic is identical without a suggestion.
     ("company.thebrowser.Browser", Strategy::ExtendSelection),
+    ("arc.exe", Strategy::ExtendSelection),
     ("com.coccoc.Coccoc", Strategy::ExtendSelection),
     ("coccoc.exe", Strategy::ExtendSelection),
+    ("browser.exe", Strategy::ExtendSelection),
     // WebKit.
     ("com.apple.Safari", Strategy::CommitSuggestion),
     (
@@ -108,6 +113,10 @@ const BROWSERS: [(&str, Strategy); 21] = [
         Strategy::CommitSuggestion,
     ),
     ("firefox.exe", Strategy::CommitSuggestion),
+    ("librewolf.exe", Strategy::CommitSuggestion),
+    ("waterfox.exe", Strategy::CommitSuggestion),
+    ("floorp.exe", Strategy::CommitSuggestion),
+    ("zen.exe", Strategy::CommitSuggestion),
 ];
 
 impl Strategy {
@@ -321,8 +330,10 @@ mod tests {
             "com.operasoftware.Opera",
             "opera.exe",
             "company.thebrowser.Browser",
+            "arc.exe",
             "com.coccoc.Coccoc",
             "coccoc.exe",
+            "browser.exe",
         ] {
             assert_eq!(
                 Strategy::for_application_id(id),
@@ -336,6 +347,10 @@ mod tests {
             "org.mozilla.firefox",
             "org.mozilla.firefoxdeveloperedition",
             "firefox.exe",
+            "librewolf.exe",
+            "waterfox.exe",
+            "floorp.exe",
+            "zen.exe",
         ] {
             assert_eq!(
                 Strategy::for_application_id(id),
