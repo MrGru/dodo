@@ -534,8 +534,7 @@ impl InputMethodView {
             })
     }
 
-    /// The Event Tap's browser-address-bar workaround.
-    #[cfg(target_os = "macos")]
+    /// The browser-address-bar workaround, read by both listeners.
     fn browser_fix_switch(cx: &App) -> Switch {
         Switch::new("input-method-browser-address-bar-fix")
             .checked(InputMethod::browser_address_bar_fix(cx))
@@ -852,9 +851,9 @@ impl Render for InputMethodView {
             ),
         );
 
-        // Browser address bars (macOS only): a single full-width row.
-        #[cfg(target_os = "macos")]
-        let root = root.child(
+        // Browser address bars: a single full-width row. Both listeners read
+        // it, so it is offered wherever there is a listener.
+        root.child(
             Self::card(cx).child(
                 h_flex()
                     .items_start()
@@ -873,9 +872,7 @@ impl Render for InputMethodView {
                     )
                     .child(div().flex_shrink_0().child(Self::browser_fix_switch(cx))),
             ),
-        );
-
-        root
+        )
     }
 }
 

@@ -42,7 +42,7 @@ use std::collections::HashSet;
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use dodo_ime_core::{Key, LanguageId};
+use dodo_ime_core::{Key, LanguageId, Modifiers};
 use futures_channel::mpsc::UnboundedSender;
 use windows_sys::Win32::Foundation::{CloseHandle, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
@@ -51,13 +51,14 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyState, GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, ToUnicodeEx, VK_CAPITAL,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, MapVirtualKeyW,
+    SendInput, ToUnicodeEx, VK_CAPITAL,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
-    HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MB_OK, SetWindowsHookExW,
-    UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
+    CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, HC_ACTION, HHOOK,
+    KBDLLHOOKSTRUCT, LLKHF_INJECTED, MB_OK, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN,
 };
 
 use crate::models::browser_rewrite::BrowserRewrite;
@@ -65,8 +66,9 @@ use crate::models::direct_output::OutputPlan;
 use crate::models::event_tap::DirectComposer;
 use crate::models::keyboard_hook::{
     CapsLock, Handling, HookEvent, KeyboardHookStatus, PhysicalKeys, SuppressedKeyUps,
-    TargetIdentity, WindowsInput, adopt_after_send, handling, key_event as windows_key_event,
-    layout_state, output_inputs, physical_modifiers, target_changed, vk, with_key_down,
+    TargetIdentity, WindowsInput, adopt_after_send, handling, keeps_composition,
+    key_event as windows_key_event, layout_state, output_inputs, physical_modifiers,
+    target_changed, vk, with_key_down,
 };
 use crate::models::live_switch::LiveSwitch;
 use crate::models::settings::SettingsDocument;
@@ -94,6 +96,9 @@ struct State {
     switch: LiveSwitch,
     /// Where a cycle performed on the callback path is reported.
     language_changes: UnboundedSender<LanguageId>,
+    /// Whether the browser address-bar workaround is switched on — the same
+    /// setting the macOS tap reads, so one switch means one thing everywhere.
+    browser_fix: bool,
     pressed: HashSet<u32>,
     suppressed_key_ups: SuppressedKeyUps,
     target: Option<TargetIdentity>,
@@ -117,6 +122,7 @@ impl KeyboardHook {
             composer: DirectComposer::new(document.vietnamese.to_config()),
             switch: LiveSwitch::new(&document),
             language_changes,
+            browser_fix: document.browser_address_bar_fix,
             pressed: HashSet::new(),
             suppressed_key_ups: SuppressedKeyUps::default(),
             target: None,
@@ -171,6 +177,7 @@ impl KeyboardHook {
         if let Ok(mut state) = self.state.lock() {
             state.composer.reconfigure(document.vietnamese.to_config());
             state.switch.adopt(&document);
+            state.browser_fix = document.browser_address_bar_fix;
             state.pressed.clear();
             state.target = None;
         }
@@ -226,7 +233,10 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     };
 
-    if wparam == WM_KEYUP as usize {
+    // A key released while Alt is held arrives as `WM_SYSKEYUP`. Dropping it left
+    // the key in `pressed`, so its next ordinary press read as an autorepeat,
+    // which resets the word in flight and lets the key through untouched.
+    if wparam == WM_KEYUP as usize || wparam == WM_SYSKEYUP as usize {
         state.pressed.remove(&event.vkCode);
         let route = handling(HookEvent::KeyUp {
             suppress: state.suppressed_key_ups.take(event.vkCode),
@@ -236,6 +246,15 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         } else {
             unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
         };
+    }
+    if wparam == WM_SYSKEYDOWN as usize {
+        // Alt plus a key — Alt+Tab, Alt+D, a menu accelerator — is a shortcut
+        // that may move focus, and macOS resets on every shortcut. Alt itself
+        // types nothing and keeps the word, as any modifier does.
+        if !keeps_composition(windows_key_event(event.vkCode, None, Modifiers::default()).key) {
+            state.composer.reset();
+        }
+        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
     if wparam != WM_KEYDOWN as usize {
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
@@ -279,9 +298,16 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         state.suppressed_key_ups.suppress(event.vkCode);
         return 1;
     }
+    // A modifier that is not the shortcut types nothing. It passes before the
+    // target is asked for and without touching the word in flight: Windows
+    // repeats a held Shift as key-downs, and resetting on each one made an
+    // all-caps or capitalised word compose nowhere. See `keeps_composition`.
+    if keeps_composition(key.key) {
+        return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
+    }
     // From here the key is text, so where it would land has to be known.
     let Some(target) =
-        window.and_then(|(foreground, thread, _)| target_identity(foreground, thread))
+        window.map(|(foreground, _, process)| TargetIdentity::new(process, foreground))
     else {
         state.composer.reset();
         target_changed(&mut state.target, None);
@@ -294,7 +320,7 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         state.composer.reset();
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
-    if key.key == Key::Other || key.key == Key::Modifier {
+    if key.key == Key::Other {
         state.composer.reset();
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
@@ -318,8 +344,8 @@ unsafe extern "system" fn callback(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
     }
     let application_id = window.and_then(|(_, _, process)| process_image_name(process));
-    let rewrite = BrowserRewrite::plan(true, application_id.as_deref(), &plan);
-    let (sent, requested) = send_output(&plan, &rewrite);
+    let rewrite = BrowserRewrite::plan(state.browser_fix, application_id.as_deref(), &plan);
+    let (sent, requested) = send_output(&plan, &rewrite, key.modifiers.shift);
     if !adopt_after_send(&mut state.composer, next, sent, requested) {
         state.suppressed_key_ups.allow(event.vkCode);
         return unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) };
@@ -396,29 +422,6 @@ fn process_image_name(process_id: u32) -> Option<String> {
         .next()
         .filter(|name| !name.is_empty())
         .map(str::to_ascii_lowercase)
-}
-
-/// The focused control retained text belongs to, when there is one.
-///
-/// Only the composing path needs this. Requiring it before the language switch
-/// was matched made the shortcut depend on there being somewhere to type.
-fn target_identity(foreground: usize, thread: u32) -> Option<TargetIdentity> {
-    let mut gui = GUITHREADINFO {
-        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-        ..GUITHREADINFO::default()
-    };
-    if unsafe { GetGUIThreadInfo(thread, &mut gui) } == 0 || gui.hwndFocus.is_null() {
-        return None;
-    }
-    // The caret owner (`gui.hwndCaret`) is deliberately not part of the identity:
-    // a lazily created caret flips it on the first typed character and would
-    // reset composition mid-word, stranding an English restore. See
-    // `models::keyboard_hook::TargetIdentity`.
-    Some(TargetIdentity::new(
-        foreground,
-        thread,
-        gui.hwndFocus as usize,
-    ))
 }
 
 /// The physical keyboard, as opposed to what dodo's own message queue remembers.
@@ -502,8 +505,8 @@ fn one_character(units: &[u16]) -> Option<char> {
     (characters.next().is_none() && !character.is_control()).then_some(character)
 }
 
-fn send_output(plan: &OutputPlan, rewrite: &BrowserRewrite) -> (usize, usize) {
-    let events: Vec<_> = output_inputs(plan, rewrite)
+fn send_output(plan: &OutputPlan, rewrite: &BrowserRewrite, shift_held: bool) -> (usize, usize) {
+    let events: Vec<_> = output_inputs(plan, rewrite, shift_held)
         .into_iter()
         .map(|event| match event {
             WindowsInput::Key {
@@ -511,7 +514,7 @@ fn send_output(plan: &OutputPlan, rewrite: &BrowserRewrite) -> (usize, usize) {
                 key_up,
             } => key_input(
                 virtual_key,
-                0,
+                scan_code(virtual_key),
                 (if key_up { KEYEVENTF_KEYUP } else { 0 })
                     | if virtual_key == vk::LEFT as u16 {
                         KEYEVENTF_EXTENDEDKEY
@@ -542,6 +545,16 @@ fn send_output(plan: &OutputPlan, rewrite: &BrowserRewrite) -> (usize, usize) {
         }
     };
     (sent, requested)
+}
+
+/// The scan code a real press of `virtual_key` carries.
+///
+/// The macOS tap posts real key codes; a Windows `INPUT` with a zero scan code
+/// is a key no keyboard can produce, and Chromium derives a DOM `code` from the
+/// scan code, so a page reading `event.code` saw a Backspace with no key.
+fn scan_code(virtual_key: u16) -> u16 {
+    let scan = unsafe { MapVirtualKeyW(u32::from(virtual_key), MAPVK_VK_TO_VSC) };
+    u16::try_from(scan).unwrap_or(0)
 }
 
 fn key_input(vk: u16, scan: u16, flags: u32) -> INPUT {

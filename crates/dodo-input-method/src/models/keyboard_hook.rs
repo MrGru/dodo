@@ -59,49 +59,43 @@ pub(crate) enum WindowsInput {
     Unicode { unit: u16, key_up: bool },
 }
 
-/// The Windows signals that prove composition is still aimed at one control.
+/// The Windows signals that prove composition is still aimed at one target.
 ///
-/// It is the foreground window, its GUI thread, and the focused control — the
-/// three things that are stable for as long as the caret stays in one field.
+/// It is the foreground process and its foreground window — the same question
+/// the macOS tap asks (the target *process*, nothing finer), plus the top-level
+/// window so switching between two windows of one application still resets.
 ///
-/// # Why the caret owner is deliberately *not* one of them
+/// # Why nothing below the top-level window is part of it
 ///
-/// `GetGUIThreadInfo`'s `hwndCaret` was once part of this identity, and it was
-/// the source of a Windows-only bug the macOS Event Tap never had: it corrupted
-/// English words such as `workflow`, `follow` and `window`, and nothing else.
+/// Twice now a finer Windows signal has flipped mid-word with the caret never
+/// moving, and each time it broke only English words — `workflow`, `follow`,
+/// `window`, `playwright`. The engine keeps one word's worth of state and
+/// restores `work` from it once `k` proves the run is not Vietnamese; a reset in
+/// between strands the provisional `ư` (`ưorkflow`, `playửight`). Vietnamese
+/// needs no restore and composes from a clean state, which is why it looked fine.
 ///
-/// A caret is a system resource, and a control that has keyboard focus does not
-/// necessarily own one *yet* — several UI toolkits call `CreateCaret` lazily, on
-/// the first character typed. So `hwndCaret` reads `0` on the first keystroke
-/// and the control's own handle on the second, with focus unchanged throughout.
-/// That is a spurious target change, and it fires on exactly the keystroke where
-/// dodo has just replaced a literal `w` with a provisional `ư`: the reset throws
-/// away the shared engine's per-word English-restore state (`literal_mode`, the
-/// undo watermark and the `raw` ledger it rebuilds `work` from), stranding the
-/// `ư` mid-word. Vietnamese is untouched, because each syllable composes from a
-/// clean state and needs no such restore — which is why only English words broke.
+/// - `GetGUIThreadInfo`'s `hwndCaret`: several toolkits call `CreateCaret`
+///   lazily, on the first character, so it read `0` then the control's handle.
+/// - `GetGUIThreadInfo`'s `hwndFocus`, and the call itself: Chromium and
+///   Electron (Chrome, Edge, VS Code, Slack…) create their accessibility child
+///   window lazily and move Win32 focus onto it, and the call can fail outright
+///   for a thread that is busy or on another desktop. Either reads as a target
+///   change, or as "no target", in the middle of a word.
 ///
-/// The macOS host tracks only the target *process* and never the caret, and it
-/// is correct, so the caret buys nothing here that the other signals and the
-/// callback do not already provide: a real caret move is a mouse-down (the mouse
-/// hook resets), an arrow/Home/End (a boundary key that commits the syllable), or
-/// a focus change to another control (`focus`, above). The remaining case — a
-/// program moving the caret inside one control with no observable event — is the
-/// same residual risk macOS already accepts, not a regression this reopens.
+/// A real caret move is already observed without them: a mouse-down (the mouse
+/// hook resets), an arrow/Home/End/Tab (a boundary key), or a shortcut — every
+/// key with Control, Alt or Windows held resets, including Alt+Tab, Alt+D and
+/// Control+L. A program moving the caret inside one window with no observable
+/// event is the residual risk macOS has always accepted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TargetIdentity {
-    foreground: usize,
-    thread: u32,
-    focus: usize,
+    process: u32,
+    window: usize,
 }
 
 impl TargetIdentity {
-    pub(crate) fn new(foreground: usize, thread: u32, focus: usize) -> Self {
-        Self {
-            foreground,
-            thread,
-            focus,
-        }
+    pub(crate) fn new(process: u32, window: usize) -> Self {
+        Self { process, window }
     }
 }
 
@@ -138,7 +132,20 @@ impl SuppressedKeyUps {
 }
 
 /// One complete, ordered Windows input batch for a rewritten plan.
-pub(crate) fn output_inputs(plan: &OutputPlan, rewrite: &BrowserRewrite) -> Vec<WindowsInput> {
+///
+/// `shift_held` is whether the user is physically holding Shift as the batch is
+/// sent. macOS spells the Chromium `Shift`+`Left` as one arrow event carrying a
+/// Shift *flag*, which leaves the real modifier alone; Windows has no flag, so
+/// the batch presses and releases `VK_SHIFT` itself. Releasing it while the user
+/// is holding Shift — typing a capitalised or all-caps word into Chrome — tells
+/// every application, and `GetAsyncKeyState`, that Shift is up, so every letter
+/// after the first rewritten one arrives lowercase until the key repeats. A held
+/// Shift already extends the selection, so the batch then sends only `Left`.
+pub(crate) fn output_inputs(
+    plan: &OutputPlan,
+    rewrite: &BrowserRewrite,
+    shift_held: bool,
+) -> Vec<WindowsInput> {
     let inserted = plan
         .insert
         .as_deref()
@@ -155,24 +162,29 @@ pub(crate) fn output_inputs(plan: &OutputPlan, rewrite: &BrowserRewrite) -> Vec<
             .saturating_add(usize::from(rewrite.extend_selection) * 4),
     );
     if rewrite.extend_selection {
+        let press_shift = !shift_held;
+        if press_shift {
+            inputs.push(WindowsInput::Key {
+                virtual_key: vk::SHIFT as u16,
+                key_up: false,
+            });
+        }
         inputs.extend([
             WindowsInput::Key {
-                virtual_key: vk::SHIFT as u16,
-                key_up: false,
-            },
-            WindowsInput::Key {
                 virtual_key: vk::LEFT as u16,
                 key_up: false,
             },
             WindowsInput::Key {
                 virtual_key: vk::LEFT as u16,
-                key_up: true,
-            },
-            WindowsInput::Key {
-                virtual_key: vk::SHIFT as u16,
                 key_up: true,
             },
         ]);
+        if press_shift {
+            inputs.push(WindowsInput::Key {
+                virtual_key: vk::SHIFT as u16,
+                key_up: true,
+            });
+        }
     }
     if let Some(text) = rewrite.commit_character {
         push_unicode(&mut inputs, text);
@@ -209,7 +221,7 @@ fn push_unicode(inputs: &mut Vec<WindowsInput>, text: &str) {
 
 /// Number of fully paired Windows `INPUT`s in one verbatim plan.
 pub(crate) fn input_event_count(plan: &OutputPlan) -> usize {
-    output_inputs(plan, &BrowserRewrite::verbatim(plan)).len()
+    output_inputs(plan, &BrowserRewrite::verbatim(plan), false).len()
 }
 
 /// Commits a staged plan only when `SendInput` accepted every event.
@@ -481,6 +493,18 @@ pub fn key_event(vkey: u32, text: Option<char>, modifiers: Modifiers) -> KeyEven
     }
 }
 
+/// Whether a key the composer cannot use leaves the word in flight alone.
+///
+/// Only a modifier does. It types nothing and moves no caret — `⇧` in the
+/// middle of a word is how a capital letter is typed — and Windows reports it
+/// as a key-down, then again on every autorepeat while it is held. The macOS
+/// tap never sees one as a key-down at all (`FlagsChanged`), which is why the
+/// same all-caps word composed there and not here. Any other untranslatable
+/// key leaves the end cursor unknown and resets.
+pub(crate) fn keeps_composition(key: Key) -> bool {
+    key == Key::Modifier
+}
+
 /// Process exactly one known, plain physical key-down.
 pub fn handling(event: HookEvent) -> Handling {
     match event {
@@ -501,8 +525,9 @@ pub fn handling(event: HookEvent) -> Handling {
 mod tests {
     use super::{
         CapsLock, Handling, HookEvent, PhysicalKeys, SuppressedKeyUps, TargetIdentity,
-        WindowsInput, adopt_after_send, handling, input_event_count, key_event, layout_state,
-        modifiers, output_inputs, physical_modifiers, target_changed, vk, with_key_down,
+        WindowsInput, adopt_after_send, handling, input_event_count, keeps_composition, key_event,
+        layout_state, modifiers, output_inputs, physical_modifiers, target_changed, vk,
+        with_key_down,
     };
     use crate::models::browser_rewrite::BrowserRewrite;
     use crate::models::direct_output::OutputPlan;
@@ -1035,14 +1060,17 @@ mod tests {
         let mut before = chromium_address_bar_after(
             "ưin".into(),
             true,
-            &output_inputs(restore, &BrowserRewrite::verbatim(restore)),
+            &output_inputs(restore, &BrowserRewrite::verbatim(restore), false),
         );
         before.push_str("ow");
         assert_eq!(before, "ưwindow");
 
         let rewrite = BrowserRewrite::plan(true, Some("chrome.exe"), restore);
-        let mut after =
-            chromium_address_bar_after("ưin".into(), true, &output_inputs(restore, &rewrite));
+        let mut after = chromium_address_bar_after(
+            "ưin".into(),
+            true,
+            &output_inputs(restore, &rewrite, false),
+        );
         after.push_str("ow");
         assert_eq!(after, "window");
     }
@@ -1056,7 +1084,7 @@ mod tests {
         };
         let rewrite = BrowserRewrite::plan(true, Some("chrome.exe"), &plan);
         assert_eq!(
-            output_inputs(&plan, &rewrite),
+            output_inputs(&plan, &rewrite, false),
             vec![
                 WindowsInput::Key {
                     virtual_key: vk::SHIFT as u16,
@@ -1086,6 +1114,75 @@ mod tests {
         );
     }
 
+    /// A physically held Shift must survive the Chromium batch: the batch may
+    /// neither press nor release `VK_SHIFT`, or the rest of a capitalised word
+    /// reaches the browser lowercase. macOS never had this, because its arrow
+    /// carries Shift as a flag rather than as a separate key.
+    #[test]
+    fn a_held_shift_is_never_released_by_the_chromium_batch() {
+        let plan = OutputPlan {
+            delete_before: 1,
+            insert: Some("Ó".into()),
+            pass_through: false,
+        };
+        let rewrite = BrowserRewrite::plan(true, Some("chrome.exe"), &plan);
+        let inputs = output_inputs(&plan, &rewrite, true);
+        assert!(
+            !inputs.iter().any(|input| matches!(
+                input,
+                WindowsInput::Key { virtual_key, .. } if *virtual_key == vk::SHIFT as u16
+            )),
+            "{inputs:?}"
+        );
+        assert_eq!(
+            inputs[..2],
+            [
+                WindowsInput::Key {
+                    virtual_key: vk::LEFT as u16,
+                    key_up: false,
+                },
+                WindowsInput::Key {
+                    virtual_key: vk::LEFT as u16,
+                    key_up: true,
+                },
+            ]
+        );
+        // Otherwise the batch is exactly the one sent without a held Shift.
+        let mut unheld = output_inputs(&plan, &rewrite, false);
+        unheld.retain(|input| {
+            !matches!(
+                input,
+                WindowsInput::Key { virtual_key, .. } if *virtual_key == vk::SHIFT as u16
+            )
+        });
+        assert_eq!(inputs, unheld);
+    }
+
+    /// A modifier types nothing and moves no caret. macOS never even offers one
+    /// to the composer (`FlagsChanged` is not a key-down); Windows reports it as
+    /// a key-down — repeatedly, while it is held — so it must be told apart from
+    /// an unknown key rather than resetting the word in flight.
+    #[test]
+    fn a_modifier_key_down_keeps_the_word_in_flight() {
+        assert!(keeps_composition(Key::Modifier));
+        for key in [Key::Other, Key::Character, Key::Backspace, Key::Space] {
+            assert!(!keeps_composition(key), "{key:?}");
+        }
+        // Every key a held modifier autorepeats as is a modifier.
+        for vkey in [
+            vk::LSHIFT,
+            vk::RSHIFT,
+            vk::SHIFT,
+            vk::LCONTROL,
+            vk::LMENU,
+            vk::LWIN,
+        ] {
+            assert!(keeps_composition(
+                key_event(vkey, None, Modifiers::default()).key
+            ));
+        }
+    }
+
     #[test]
     fn firefox_output_commits_the_suggestion_before_the_extra_backspace() {
         let plan = OutputPlan {
@@ -1094,7 +1191,7 @@ mod tests {
             pass_through: false,
         };
         let rewrite = BrowserRewrite::plan(true, Some("firefox.exe"), &plan);
-        let inputs = output_inputs(&plan, &rewrite);
+        let inputs = output_inputs(&plan, &rewrite, false);
         assert_eq!(
             inputs[..2],
             [
@@ -1156,15 +1253,11 @@ mod tests {
 
     #[test]
     fn target_changes_and_uncertainty_reset_retained_text() {
-        let target = TargetIdentity::new(1, 2, 3);
+        let target = TargetIdentity::new(1, 2);
         let mut observed = None;
         assert!(!target_changed(&mut observed, Some(target)));
         assert!(!target_changed(&mut observed, Some(target)));
-        for changed in [
-            TargetIdentity::new(9, 2, 3),
-            TargetIdentity::new(1, 9, 3),
-            TargetIdentity::new(1, 2, 9),
-        ] {
+        for changed in [TargetIdentity::new(9, 2), TargetIdentity::new(1, 9)] {
             let mut observed = Some(target);
             assert!(target_changed(&mut observed, Some(changed)));
         }
@@ -1173,40 +1266,65 @@ mod tests {
         assert!(composer.process(KeyEvent::character('d')).pass_through);
         assert!(target_changed(
             &mut observed,
-            Some(TargetIdentity::new(1, 2, 5))
+            Some(TargetIdentity::new(1, 5))
         ));
         composer.reset();
-        let after_focus_change = composer.process(KeyEvent::character('d'));
-        assert!(after_focus_change.pass_through);
-        assert!(!after_focus_change.transforms());
+        let after_window_change = composer.process(KeyEvent::character('d'));
+        assert!(after_window_change.pass_through);
+        assert!(!after_window_change.transforms());
 
         assert!(target_changed(&mut observed, None));
         assert_eq!(observed, None);
     }
 
-    /// The Windows-only regression this fix is for: the caret owner is not part
-    /// of the composition target, so a control that creates its caret lazily on
-    /// the first character does not read as a target change on the keystroke that
-    /// begins an English rewrite. Two identities that would once have differed
-    /// only in their caret owner are equal, so composition — and with it the
-    /// shared engine's English-restore state — survives.
+    /// The Windows-only regression class: nothing finer than the foreground
+    /// window is part of the target, so a control creating its caret, or a
+    /// Chromium window moving focus onto its lazily created accessibility
+    /// child, cannot read as a target change mid-word. The identity is built
+    /// from the process and the top-level window alone, so two keystrokes in
+    /// one window are one target whatever happened inside it.
     #[test]
-    fn a_lazy_caret_does_not_read_as_a_target_change() {
-        // Same window, thread and focused control; the caret owner used to be a
-        // fourth field and went 0 -> control-handle on the first typed character.
-        let before_first_key = TargetIdentity::new(0x100, 7, 0x200);
-        let after_caret_created = TargetIdentity::new(0x100, 7, 0x200);
-        let mut observed = Some(before_first_key);
+    fn only_the_process_and_its_foreground_window_identify_the_target() {
+        let mut observed = Some(TargetIdentity::new(42, 0x100));
         assert!(
-            !target_changed(&mut observed, Some(after_caret_created)),
-            "a caret appearing must not reset an in-flight English word"
+            !target_changed(&mut observed, Some(TargetIdentity::new(42, 0x100))),
+            "a change inside the window must not reset an in-flight English word"
         );
 
-        // A real move — the focused control itself changing — still resets.
+        // Another window, of this process or another, still resets.
         assert!(target_changed(
             &mut observed,
-            Some(TargetIdentity::new(0x100, 7, 0x999))
+            Some(TargetIdentity::new(42, 0x999))
         ));
+        assert!(target_changed(
+            &mut observed,
+            Some(TargetIdentity::new(7, 0x999))
+        ));
+    }
+
+    /// What a spurious reset does to `playwright`, stated as the output the
+    /// user saw. It takes two resets, one either side of the `w`, which is what
+    /// a focus handle flipping between Chromium's top-level and accessibility
+    /// windows produced.
+    #[test]
+    fn two_spurious_resets_turn_playwright_into_vietnamese() {
+        let mut composer = DirectComposer::new(VietnameseConfig::default());
+        let mut document = String::new();
+        for (at, key) in "playwright".chars().enumerate() {
+            if at == 4 || at == 5 {
+                composer.reset();
+            }
+            let plan = composer.process(KeyEvent::character(key));
+            document = plain_document_after(
+                document,
+                &output_inputs(&plan, &BrowserRewrite::verbatim(&plan), false),
+            );
+            if plan.pass_through {
+                document.push(key);
+            }
+        }
+        assert_eq!(document, "playưright");
+        assert_eq!(windows_document("playwright"), "playwright");
     }
 
     /// Apply one verbatim Windows `SendInput` batch to a plain end-cursor
@@ -1244,7 +1362,7 @@ mod tests {
             let plan = composer.process(event);
             if plan.transforms() {
                 let rewrite = BrowserRewrite::plan(true, Some("notepad.exe"), &plan);
-                document = plain_document_after(document, &output_inputs(&plan, &rewrite));
+                document = plain_document_after(document, &output_inputs(&plan, &rewrite, false));
             }
             if plan.pass_through
                 && let Some(typed) = event.typed()
@@ -1295,7 +1413,7 @@ mod tests {
             let plan = composer.process(event);
             if plan.transforms() {
                 let rewrite = BrowserRewrite::plan(true, Some("notepad.exe"), &plan);
-                document = plain_document_after(document, &output_inputs(&plan, &rewrite));
+                document = plain_document_after(document, &output_inputs(&plan, &rewrite, false));
             }
             if plan.pass_through
                 && let Some(typed) = event.typed()
