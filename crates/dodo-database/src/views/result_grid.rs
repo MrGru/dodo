@@ -86,7 +86,7 @@ const HEADER_LINE_RATIO: f32 = 1.15;
 /// Not set anywhere — it is what the body already gets — so it exists to be
 /// checked against the row height below.
 #[cfg(test)]
-const BODY_LINE_RATIO: f32 = 1.618_034;
+const BODY_LINE_RATIO: f32 = std::f32::consts::GOLDEN_RATIO;
 
 /// Cell padding. **No vertical padding at all**, and that is the whole reason
 /// the header fits: `render_cell` uses a column's own `paddings` in place of the
