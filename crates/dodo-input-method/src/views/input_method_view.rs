@@ -853,7 +853,7 @@ impl Render for InputMethodView {
 
         // Browser address bars: a single full-width row. Both listeners read
         // it, so it is offered wherever there is a listener.
-        let root = root.child(
+        root.child(
             Self::card(cx).child(
                 h_flex()
                     .items_start()
@@ -872,9 +872,7 @@ impl Render for InputMethodView {
                     )
                     .child(div().flex_shrink_0().child(Self::browser_fix_switch(cx))),
             ),
-        );
-
-        root
+        )
     }
 }
 
