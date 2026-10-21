@@ -145,6 +145,11 @@ impl Provenance {
 /// earlier than it needed to, which is visible, recoverable and merely ugly.
 pub const UNMEASURED_DISCOUNT: f32 = 0.5;
 
+/// Reserved inside the safe ceiling for the fixed palette and property glyphs.
+/// The windowless chrome test tessellates every possible glyph at once and
+/// checks this reserve is at least twice that total for future controls.
+pub const CHROME_PATH_VERTEX_RESERVE: u32 = 100_000;
+
 /// The bytes `gpui_macos` uploads per path vertex.
 ///
 /// `PathRasterizationVertex` is `{ xy: Point<ScaledPixels>, st: Point<f32>,

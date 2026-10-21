@@ -55,3 +55,47 @@ pub mod properties;
 
 pub use flow::FlowView;
 pub use keymap::{Redo, SelectTool, Undo, init};
+
+#[cfg(test)]
+mod chrome_budget_tests {
+    use crate::budgets::{CHROME_PATH_VERTEX_RESERVE, for_host};
+    use dodo_paths::HostOs;
+
+    #[test]
+    fn fixed_chrome_and_canvas_fit_every_safe_ceiling() {
+        // A panel cannot repeat a row or an action as selection size grows.
+        use crate::properties::{
+            ElementAction, Labelled, SelectionItem, SelectionKind, sections_for,
+        };
+        for &kind in SelectionKind::ALL {
+            for labelled in [Labelled::No, Labelled::Yes] {
+                let item = SelectionItem::new(kind, labelled);
+                for count in [1, 2, 100] {
+                    let sections = sections_for(&vec![item; count]);
+                    for (index, section) in sections.iter().enumerate() {
+                        assert!(!sections[..index].contains(section));
+                    }
+                }
+                for (loose, grouped) in [(false, false), (true, false), (false, true)] {
+                    let actions = ElementAction::for_selection(kind, loose, grouped);
+                    for (index, action) in actions.iter().enumerate() {
+                        assert!(!actions[..index].contains(action));
+                    }
+                }
+            }
+        }
+        // All glyph variants together overcount mutually exclusive rows and actions.
+        let chrome =
+            super::palette::chrome_vertex_bound() + super::properties::chrome_vertex_bound();
+        for host in [HostOs::MacOs, HostOs::Windows, HostOs::Unix] {
+            let safe = for_host(host).safe_path_vertex_ceiling;
+            assert!(
+                chrome * 2 <= CHROME_PATH_VERTEX_RESERVE as usize,
+                "{host:?}: {chrome}"
+            );
+            assert!(safe >= CHROME_PATH_VERTEX_RESERVE);
+            let canvas = safe.saturating_sub(CHROME_PATH_VERTEX_RESERVE);
+            assert!(canvas + CHROME_PATH_VERTEX_RESERVE <= safe);
+        }
+    }
+}

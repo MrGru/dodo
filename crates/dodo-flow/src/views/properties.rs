@@ -1543,6 +1543,32 @@ fn arrowhead(tip: Vec2, from: Vec2, length: f32) -> Outline {
 }
 
 #[cfg(test)]
+pub(super) fn chrome_vertex_bound() -> usize {
+    let bounds = Bounds {
+        origin: gpui_kit::point(px(0.0), px(0.0)),
+        size: gpui_kit::size(px(BUTTON_PIXELS), px(BUTTON_PIXELS)),
+    };
+    let box_ = inset(bounds);
+    PanelGlyph::every()
+        .into_iter()
+        .chain(
+            [
+                ElementAction::Group,
+                ElementAction::Ungroup,
+                ElementAction::Crop,
+            ]
+            .into_iter()
+            .map(PanelGlyph::Action),
+        )
+        .flat_map(|glyph| strokes(glyph, box_, Color::WHITE))
+        .filter_map(|(outline, paint)| {
+            build_path(&outline, paint, GLYPH_QUALITY.flattening_tolerance)
+        })
+        .map(|path| path.vertices.len())
+        .sum()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

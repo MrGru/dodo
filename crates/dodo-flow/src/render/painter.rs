@@ -16,9 +16,8 @@
 //!   per triangle, so `path.vertices.len()` is exactly the number that is
 //!   uploaded — 104 bytes each, against a 256 MiB instance buffer. That is the
 //!   number [`crate::budgets`] is written about and the number the sink
-//!   returns; the estimate in `render::shapes` is only ever a bound on it, and
-//!   the calibration test at the bottom of this file is what keeps the bound
-//!   true.
+//!   returns. The plan uses estimates to choose what to draw, and this painter
+//!   separately caps the actual tessellated vertices before submitting paths.
 //!
 //! # §9's text wraps, and where it wraps is decided elsewhere
 //!
@@ -60,6 +59,7 @@ use gpui_kit::{
 };
 
 use crate::{
+    budgets,
     geometry::{Rect, Vec2},
     models::{Color, FontFamily, NodeIndex},
     render::{
@@ -296,6 +296,7 @@ pub struct WindowPainter<'a> {
     /// and an image primitive with no entry paints nothing and says so through
     /// [`PaintStats::images`](crate::render::PaintStats::images).
     pictures: &'a mut [PictureElement],
+    remaining_vertices: usize,
 }
 
 /// **The three faces §9's [`FontFamily`] resolves to**, chosen once per frame
@@ -381,6 +382,10 @@ impl<'a> WindowPainter<'a> {
             text,
             fonts,
             pictures: &mut [],
+            remaining_vertices: budgets::current()
+                .safe_path_vertex_ceiling
+                .saturating_sub(budgets::CHROME_PATH_VERTEX_RESERVE)
+                as usize,
         }
     }
 
@@ -426,6 +431,15 @@ impl<'a> WindowPainter<'a> {
         }
         moved
     }
+}
+
+// Estimates choose LOD, but only tessellation knows the actual upload size.
+pub(crate) fn reserve_vertices(remaining: &mut usize, vertices: usize) -> bool {
+    if vertices > *remaining {
+        return false;
+    }
+    *remaining -= vertices;
+    true
 }
 
 impl PrimitiveSink for WindowPainter<'_> {
@@ -489,6 +503,9 @@ impl PrimitiveSink for WindowPainter<'_> {
         let background = to_background(path.paint.color());
 
         if let Some(cached) = path.key.and_then(|key| self.geometry.get(&key)) {
+            if !reserve_vertices(&mut self.remaining_vertices, cached.vertices.len()) {
+                return 0;
+            }
             let built = cached.clone();
             let vertices = built.vertices.len() as u32;
             self.window.paint_path(built, background);
@@ -504,6 +521,9 @@ impl PrimitiveSink for WindowPainter<'_> {
             return 0;
         };
 
+        if !reserve_vertices(&mut self.remaining_vertices, built.vertices.len()) {
+            return 0;
+        }
         let vertices = built.vertices.len() as u32;
         if let Some(key) = path.key {
             self.geometry.insert(key, built.clone());
@@ -685,13 +705,79 @@ mod tests {
         ]
     }
 
-    /// **The calibration that makes vertex accounting mean something.**
-    ///
-    /// `render::shapes`'s estimate is spent against a ceiling whose failure
-    /// mode is a black window, so it must be an upper bound on what
-    /// tessellation actually produces — never an under-count. This builds every
-    /// shape for real and checks the bound holds, which is the only way that
-    /// claim stays true as shapes are added.
+    #[test]
+    fn actual_vertex_guard_handles_oversized_and_crowded_frames_on_every_host() {
+        use crate::budgets::for_host;
+        use dodo_paths::HostOs;
+
+        let outline = shapes::ellipse(Rect::new(Vec2::ZERO, Vec2::new(160.0, 90.0)));
+        let built = build_path(&outline, PathPaint::Fill(Color::WHITE), 0.1).unwrap();
+        let vertices = built.vertices.len();
+        assert!(vertices > 0);
+        for host in [HostOs::MacOs, HostOs::Windows, HostOs::Unix] {
+            let budget = for_host(host);
+            let ceiling = budget
+                .safe_path_vertex_ceiling
+                .saturating_sub(budgets::CHROME_PATH_VERTEX_RESERVE)
+                as usize;
+            let mut remaining = ceiling;
+            assert!(!reserve_vertices(&mut remaining, ceiling + 1));
+            let mut drawn = 0;
+            for _ in 0..=ceiling / vertices {
+                if reserve_vertices(&mut remaining, vertices) {
+                    drawn += vertices;
+                }
+            }
+            assert!(drawn > 0 && drawn <= ceiling, "{host:?}: {drawn}");
+            assert!(drawn + vertices > ceiling);
+            assert!(drawn < budget.hard_path_vertex_ceiling as usize);
+        }
+    }
+
+    #[test]
+    fn intersecting_fill_can_exceed_its_estimate() {
+        let mut outline = Outline::new();
+        for i in 0..101 {
+            let angle = ((i * 50) % 101) as f32 * std::f32::consts::TAU / 101.0;
+            let point = Vec2::new(100.0 + angle.cos() * 90.0, 100.0 + angle.sin() * 90.0);
+            if i == 0 {
+                outline.move_to(point);
+            } else {
+                outline.line_to(point);
+            }
+        }
+        outline.close();
+        let paint = PathPaint::Fill(Color::WHITE);
+        let quality = RenderQuality::BALANCED;
+        let estimated = outline.estimated_vertices(paint, quality);
+        let actual = build_path(&outline, paint, quality.flattening_tolerance)
+            .unwrap()
+            .vertices
+            .len();
+        assert!(actual > estimated as usize, "{actual} vs {estimated}");
+        for host in [
+            dodo_paths::HostOs::MacOs,
+            dodo_paths::HostOs::Windows,
+            dodo_paths::HostOs::Unix,
+        ] {
+            let budget = budgets::for_host(host);
+            let ceiling = budget
+                .safe_path_vertex_ceiling
+                .saturating_sub(budgets::CHROME_PATH_VERTEX_RESERVE)
+                as usize;
+            let mut remaining = ceiling;
+            let mut painted = 0;
+            while reserve_vertices(&mut remaining, actual) {
+                painted += actual;
+            }
+            assert!(painted > 0 && painted <= ceiling);
+            assert!(painted + actual > ceiling);
+        }
+    }
+
+    /// The estimate is conservative for the ordinary shapes on the canvas.
+    /// Intersecting outlines can exceed it, so the painter also counts actual
+    /// vertices before submitting a path.
     #[test]
     fn the_estimate_is_an_upper_bound_on_every_real_tessellation() {
         for quality in [

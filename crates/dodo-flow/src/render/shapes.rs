@@ -194,7 +194,7 @@ impl Outline {
         points
     }
 
-    /// **The pre-tessellation vertex bound the budget is spent against.**
+    /// **The pre-tessellation vertex estimate the budget is spent against.**
     ///
     /// `Path<Pixels>` stores three vertices per triangle —
     /// `PathBuilder::build_path` pushes `v0, v1, v2` for every index triple, so

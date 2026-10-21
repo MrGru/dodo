@@ -82,8 +82,8 @@
 //! and [`PaintStats`] accumulates them. This is not instrumentation. macOS
 //! stops presenting the drawable past ~2.58 M path vertices in a frame and the
 //! window goes **solid black** — see [`crate::budgets`] — so the count is a
-//! correctness signal, and [`PaintPlan::enforce_vertex_ceiling`] spends it
-//! before the frame rather than after.
+//! correctness signal. [`PaintPlan::enforce_vertex_ceiling`] spends estimates
+//! before tessellation; the window painter also checks the actual count.
 //!
 //! # The clip is a property of the plan, not of the painters
 //!
@@ -356,7 +356,7 @@ impl PathPrimitive {
         }
     }
 
-    /// The upper bound on the vertices this path will paint. See
+    /// An estimate of the vertices this path will paint. See
     /// [`Outline::estimated_vertices`] for how good the bound is.
     pub fn estimated_vertices(&self) -> u32 {
         self.outline.estimated_vertices(self.paint, self.quality)
@@ -834,10 +834,9 @@ impl PaintPlan {
         &self.images
     }
 
-    /// The upper bound on the path vertices this frame will paint, available
-    /// **before** any tessellation happens. That ordering is the whole point:
-    /// the ceiling has to be respected before the vertices exist, because by
-    /// the time they exist the frame is already over budget.
+    /// The estimated path vertices this frame will paint, available
+    /// **before** any tessellation happens. The painter checks actual counts
+    /// before submitting paths because an estimate can be too low.
     pub fn estimated_path_vertices(&self) -> u32 {
         self.paths
             .iter()

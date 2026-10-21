@@ -1692,6 +1692,95 @@ mod tests {
         )
     }
 
+    #[test]
+    fn adversarial_scenes_paint_within_each_hosts_actual_vertex_budget() {
+        use crate::budgets::{CHROME_PATH_VERTEX_RESERVE, for_host};
+        use crate::render::painter::{build_path, reserve_vertices};
+        use crate::render::plan::{ImagePrimitive, PrimitiveSink, QuadPrimitive, TextPrimitive};
+        use crate::scenes::{self, BENCH_PANE, SceneSpec};
+        use dodo_paths::HostOs;
+
+        struct TessellatingSink {
+            remaining: usize,
+        }
+        impl PrimitiveSink for TessellatingSink {
+            fn quad(&mut self, _: &QuadPrimitive) {}
+            fn image(&mut self, _: &ImagePrimitive) -> u32 {
+                1
+            }
+            fn text(&mut self, _: &TextPrimitive) -> u32 {
+                0
+            }
+            fn path(&mut self, path: &PathPrimitive) -> u32 {
+                let Some(built) =
+                    build_path(&path.outline, path.paint, path.quality.flattening_tolerance)
+                else {
+                    return 0;
+                };
+                let vertices = built.vertices.len();
+                if reserve_vertices(&mut self.remaining, vertices) {
+                    vertices as u32
+                } else {
+                    0
+                }
+            }
+        }
+
+        for spec in [SceneSpec::DENSE, SceneSpec::SCATTERED] {
+            let mut world = scenes::build(&spec);
+            let index = SpatialIndex::for_world(&world);
+            for style in [
+                crate::models::RenderStyle::Clean,
+                crate::models::RenderStyle::Sketch,
+            ] {
+                world.settings_mut().render_style = style;
+                for host in [HostOs::MacOs, HostOs::Windows, HostOs::Unix] {
+                    let budget = for_host(host);
+                    for zoom in [0.01, 1.0, 100.0] {
+                        let mut viewport = spec.viewport(BENCH_PANE);
+                        viewport.zoom_around(BENCH_PANE * 0.5, zoom);
+                        let mut visible = VisibleSet::new();
+                        index.query_visible(&world, &viewport, &mut visible);
+                        let mut snapshot = RenderSnapshot::new();
+                        snapshot.extract(
+                            &world,
+                            &visible,
+                            &viewport,
+                            &budget,
+                            &crate::render::registry::NodeRendererRegistry::with_generic_kinds(),
+                            None,
+                            None,
+                            Rect::new(Vec2::ZERO, viewport.size()),
+                        );
+                        let mut plan = PaintPlan::new();
+                        let options = SceneOptions::new(
+                            GridSettings::default(),
+                            GridLimits::from_budgets(&budget),
+                        );
+                        plan_scene(&mut plan, &world, &snapshot, &viewport, ink(), &options);
+                        plan.enforce_vertex_ceiling(&budget);
+                        let mut sink = TessellatingSink {
+                            remaining: budget
+                                .safe_path_vertex_ceiling
+                                .saturating_sub(CHROME_PATH_VERTEX_RESERVE)
+                                as usize,
+                        };
+                        let painted = plan.paint_into(&mut sink);
+                        assert!(
+                            painted.paths > 0 || painted.quads > 0,
+                            "{} {style:?} {host:?}",
+                            spec.name
+                        );
+                        assert!(
+                            painted.path_vertices + CHROME_PATH_VERTEX_RESERVE
+                                <= budget.safe_path_vertex_ceiling
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// A locality-preserving grid of nodes, each joined to its right-hand
     /// neighbour — the shape of a real diagram rather than a random graph.
     fn document(columns: u32, rows: u32) -> GraphWorld {
