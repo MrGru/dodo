@@ -74,9 +74,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 [dev-dependencies]
-# `examples/api_explorer.rs` only. The four syntax grammars match the full app;
-# the application runner and fallback icons stay out of the shipped graph.
+# Test support exercises tab lifetimes; the example uses the four syntax
+# grammars matching the full app. These features stay out of the shipped graph.
 gpui-kit = { package = "gpui-kit", version = "0.6", default-features = false, features = [
+    "test-support",
     "tree-sitter",
     "tree-sitter-html",
     "tree-sitter-yaml",

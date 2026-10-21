@@ -181,12 +181,14 @@ impl ApiExplorer {
         .detach();
 
         let url = tab.read(cx).request.url.clone();
-        let watched = tab.clone();
+        let watched = tab.downgrade();
         cx.subscribe_in(
             &url,
             window,
             move |this, url, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::Change) {
+                if matches!(event, InputEvent::Change)
+                    && let Some(watched) = watched.upgrade()
+                {
                     let text = url.read(cx).value().to_string();
                     this.on_url_changed(&watched, text, window, cx);
                 }
@@ -200,12 +202,14 @@ impl ApiExplorer {
         // from disagreeing.
         for slot in ScriptSlot::ALL {
             let editor = tab.read(cx).request.script_editor(slot).clone();
-            let checked = tab.clone();
+            let checked = tab.downgrade();
             cx.subscribe_in(
                 &editor,
                 window,
                 move |this, _, event: &InputEvent, window, cx| {
-                    if matches!(event, InputEvent::Change) {
+                    if matches!(event, InputEvent::Change)
+                        && let Some(checked) = checked.upgrade()
+                    {
                         let engine = this.engine.clone();
                         checked.update(cx, |tab, cx| tab.check_script(slot, engine, window, cx));
                     }
@@ -1298,5 +1302,36 @@ mod tests {
     fn finds_the_existing_tab_for_a_collection_request() {
         assert_eq!(tab_index_for_node([None, Some(7), Some(9)], 7), Some(1));
         assert_eq!(tab_index_for_node([None, Some(7), Some(9)], 8), None);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
+
+    use super::ApiExplorer;
+
+    #[gpui_kit::test]
+    fn closing_a_tab_and_window_releases_their_tabs(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.new(|cx| ApiExplorer::new(window, cx))
+            })
+            .unwrap()
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let explorer = window.root(&mut visual).unwrap();
+        let closed_tab = explorer.read_with(&visual, |view, _| view.tabs[0].downgrade());
+        explorer.update(&mut visual, |view, cx| view.close_tab(0, cx));
+        visual.run_until_parked();
+        assert!(closed_tab.upgrade().is_none());
+
+        visual.update(|window, cx| explorer.update(cx, |view, cx| view.open_tab(window, cx)));
+        let window_tab = explorer.read_with(&visual, |view, _| view.tabs[0].downgrade());
+        drop(explorer);
+        visual.update(|window, _| window.remove_window());
+        visual.run_until_parked();
+        assert!(window_tab.upgrade().is_none());
     }
 }
