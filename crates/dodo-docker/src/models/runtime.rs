@@ -278,7 +278,14 @@ pub fn candidate_paths(program: &str, os: HostOs) -> Vec<&'static str> {
             "/opt/homebrew/bin/docker",
             "/Applications/Docker.app/Contents/Resources/bin/docker",
         ],
-        ("podman", HostOs::MacOs) => vec!["/opt/homebrew/bin/podman", "/usr/local/bin/podman"],
+        // `/opt/podman/bin` is where the official podman.io `.pkg` installer
+        // puts the binary — it only reaches a shell through `/etc/paths.d`,
+        // which a Finder-launched app never reads.
+        ("podman", HostOs::MacOs) => vec![
+            "/opt/homebrew/bin/podman",
+            "/usr/local/bin/podman",
+            "/opt/podman/bin/podman",
+        ],
         ("kubectl", HostOs::MacOs) => vec!["/opt/homebrew/bin/kubectl", "/usr/local/bin/kubectl"],
         ("osascript", HostOs::MacOs) => vec!["/usr/bin/osascript"],
         ("open", HostOs::MacOs) => vec!["/usr/bin/open"],
@@ -493,6 +500,11 @@ mod tests {
     fn candidate_paths_are_declared_for_known_tools() {
         assert!(!candidate_paths("docker", HostOs::MacOs).is_empty());
         assert!(!candidate_paths("systemctl", HostOs::Unix).is_empty());
+    }
+
+    #[test]
+    fn podman_candidates_cover_the_official_macos_installer() {
+        assert!(candidate_paths("podman", HostOs::MacOs).contains(&"/opt/podman/bin/podman"));
     }
 
     #[test]
