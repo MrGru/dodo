@@ -55,6 +55,13 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::FillFromUri => "Điền từ URI".into(),
         Text::UriFilled => "Đã điền từ URI. Hãy kiểm tra các trường trước khi lưu.".into(),
         Text::UriIgnored(parts) => format!("Đã đọc nhưng không áp dụng: {parts}").into(),
+        Text::UseLocalContainer { engine, container } => {
+            format!("Dùng {engine} local ({container})").into()
+        }
+        Text::LocalContainerFilled(container) => format!(
+            "Đã điền từ container đang chạy {container}. Hãy kiểm tra các trường trước khi lưu."
+        )
+        .into(),
         Text::UriTlsNotApplied => {
             "URI này yêu cầu TLS, nhưng ứng dụng khách Redis của dodo kết nối mà không dùng \
                  TLS."

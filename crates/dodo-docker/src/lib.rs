@@ -147,7 +147,19 @@ use std::time::Duration;
 
 use gpui_kit::{App, KeyBinding, actions};
 
+pub use models::port::PortMapping;
+pub use models::running::RunningContainer;
 pub use views::{DockerPage, DockerView};
+
+/// Every container running on the engine this tool connects to — Docker, or a
+/// Podman machine — with its image, environment and ports. Empty when no
+/// engine answers. Blocking: call it off the UI thread. The only entry point
+/// another tool reaches, through `main.rs`; see [`models::running`].
+pub fn running_containers() -> Vec<RunningContainer> {
+    services::engine::BollardEngine::new()
+        .running_containers()
+        .unwrap_or_default()
+}
 
 /// How often the active Docker page re-lists its data in the background, without
 /// the user pressing Refresh. Five seconds is Docker Desktop's own list cadence:

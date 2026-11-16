@@ -56,6 +56,13 @@ pub(crate) fn text(text: Text) -> Cow<'static, str> {
         Text::FillFromUri => "Fill from URI".into(),
         Text::UriFilled => "Filled in from the URI. Check the fields before saving.".into(),
         Text::UriIgnored(parts) => format!("Read but not applied: {parts}").into(),
+        Text::UseLocalContainer { engine, container } => {
+            format!("Use local {engine} ({container})").into()
+        }
+        Text::LocalContainerFilled(container) => format!(
+            "Filled in from the running container {container}. Check the fields before saving."
+        )
+        .into(),
         Text::UriTlsNotApplied => {
             "This URI asks for TLS, but dodo's Redis client connects without it.".into()
         }

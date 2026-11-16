@@ -46,6 +46,9 @@ samples! {
     plain FillFromUri;
     plain UriFilled;
     with UriIgnored(DETAIL.into()) [DETAIL];
+    with UseLocalContainer { engine: "PostgreSQL".into(), container: DETAIL.into() }
+        ["PostgreSQL", DETAIL];
+    with LocalContainerFilled(DETAIL.into()) [DETAIL];
     plain UriTlsNotApplied;
     plain UriEmpty;
     plain UriNoScheme;

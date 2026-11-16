@@ -45,6 +45,18 @@
 //! tested; this file only moves the answer into the inputs. A failure fills
 //! nothing at all, so the user is never left guessing which fields came from
 //! their paste.
+//!
+//! # Filling the form from a local container
+//!
+//! A *new* connection also looks, once and in the background as the dialog
+//! opens, for a SQL database running in a Docker or Podman container on this
+//! machine ([`crate::models::local`] decides what qualifies). When one is
+//! found, a button naming it appears above the URI row; pressing it fills the
+//! form exactly the way Fill from URI does — same `apply`, same rule that a
+//! typed name is kept, and nothing saved or tested as a side effect. No
+//! button is drawn while the lookup runs or when it finds nothing, so a
+//! machine with no container engine sees the form unchanged. Editing an
+//! existing connection never looks: that profile already says where it goes.
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
@@ -63,7 +75,8 @@ use crate::i18n::{Language, LanguageExt, Str, db_connection, t};
 use crate::models::connection::{ConnectionProfile, SslMode};
 use crate::models::engine::{Address, Engine};
 use crate::models::error::DbError;
-use crate::models::uri::{self, ParsedUri, UriError};
+use crate::models::local::{self, LocalDatabase};
+use crate::models::uri::{self, UriError};
 use crate::services;
 
 /// The word for one TLS mode. Beside `SslMode::ALL` rather than on the enum
@@ -139,6 +152,13 @@ pub struct ConnectionForm {
     password: Entity<InputState>,
     file: Entity<InputState>,
 
+    /// The database container found for a new connection, once the background
+    /// lookup has answered with one.
+    local: Option<LocalDatabase>,
+    /// The form was last filled from [`Self::local`]; drives the notice.
+    local_filled: bool,
+    local_task: Option<Task<()>>,
+
     password_revealed: bool,
     test: TestState,
     test_task: Option<Task<()>>,
@@ -160,7 +180,7 @@ pub fn open(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<ConnectionForm> {
-    let form = cx.new(|cx| ConnectionForm::new(profile, window, cx));
+    let form = cx.new(|cx| ConnectionForm::new(profile, editing, window, cx));
 
     let body = form.clone();
     let title = if editing {
@@ -188,7 +208,30 @@ pub fn open(
 }
 
 impl ConnectionForm {
-    fn new(profile: ConnectionProfile, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        profile: ConnectionProfile,
+        editing: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let local_task = (!editing)
+            .then(crate::local_container_source)
+            .flatten()
+            .map(|source| {
+                let id = profile.id;
+                cx.spawn(async move |this, cx| {
+                    let found = cx
+                        .background_executor()
+                        .spawn(async move { local::first_database(&source(), id) })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.local = found;
+                        this.local_task = None;
+                        cx.notify();
+                    });
+                })
+            });
+
         let name_placeholder = t(db_connection::Text::FieldNamePlaceholder, cx);
         let file_placeholder = t(db_connection::Text::FieldFilePlaceholder, cx);
         let uri_placeholder = t(db_connection::Text::FieldUriPlaceholder, cx);
@@ -230,6 +273,9 @@ impl ConnectionForm {
                 })
             },
             profile,
+            local: None,
+            local_filled: false,
+            local_task,
             password_revealed: false,
             test: TestState::Idle,
             test_task: None,
@@ -276,8 +322,10 @@ impl ConnectionForm {
 
         self.profile = next;
         self.test = TestState::Idle;
-        // Whatever the URI said, it does not describe this engine any more.
+        // Whatever the URI or the container said, it does not describe this
+        // engine any more.
         self.uri_state = UriState::Idle;
+        self.local_filled = false;
         cx.notify();
     }
 
@@ -297,7 +345,8 @@ impl ConnectionForm {
             }
         };
 
-        self.apply(&parsed, window, cx);
+        self.apply(&parsed.profile, parsed.suggested_name(), window, cx);
+        self.local_filled = false;
         self.uri_state = UriState::Filled {
             ignored: parsed.ignored,
             tls_unsupported: parsed.tls_unsupported,
@@ -307,18 +356,35 @@ impl ConnectionForm {
         cx.notify();
     }
 
-    /// Pushes a parsed profile into every input, and into the two fields the
+    /// Fills the form from the database container the background lookup found.
+    /// The same shape as [`Self::fill_from_uri`]: fields only, nothing saved.
+    fn fill_from_local(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(found) = self.local.clone() else {
+            return;
+        };
+        self.apply(&found.profile, found.container.clone(), window, cx);
+        self.local_filled = true;
+        self.uri_state = UriState::Idle;
+        self.test = TestState::Idle;
+        cx.notify();
+    }
+
+    /// Pushes a profile into every input, and into the two fields the
     /// profile itself owns (the engine and the TLS mode).
     ///
     /// Every input is written, including the ones this engine does not show:
     /// [`Self::collected`] reads them all, so leaving the previous engine's
     /// host behind would save it.
-    fn apply(&mut self, parsed: &ParsedUri, window: &mut Window, cx: &mut Context<Self>) {
-        let profile = &parsed.profile;
-
+    fn apply(
+        &mut self,
+        profile: &ConnectionProfile,
+        suggested_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // A name the user typed is theirs. Only a blank one is filled in.
         if self.name.read(cx).value().trim().is_empty() {
-            self.set_text(&self.name.clone(), parsed.suggested_name(), window, cx);
+            self.set_text(&self.name.clone(), suggested_name, window, cx);
         }
         self.set_text(&self.host.clone(), profile.host.clone(), window, cx);
         self.set_text(&self.port.clone(), profile.port.to_string(), window, cx);
@@ -612,6 +678,47 @@ impl ConnectionForm {
             .into_any_element()
     }
 
+    /// The local-container button and, once pressed, its notice. Nothing at all
+    /// until the lookup has found a database.
+    fn local_row(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let found = self.local.as_ref()?;
+        let label = t(
+            db_connection::Text::UseLocalContainer {
+                engine: found.profile.engine.display_name().to_string(),
+                container: found.container.clone(),
+            },
+            cx,
+        );
+        Some(
+            v_flex()
+                .w_full()
+                .gap_2()
+                .child(
+                    h_flex().w_full().child(
+                        Button::new("db-fill-from-local")
+                            .small()
+                            .outline()
+                            .icon(AppIcon::Database)
+                            .label(label)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.fill_from_local(window, cx);
+                            })),
+                    ),
+                )
+                .when(self.local_filled, |this| {
+                    this.child(notice(
+                        Tone::Success,
+                        t(
+                            db_connection::Text::LocalContainerFilled(found.container.clone()),
+                            cx,
+                        ),
+                        cx,
+                    ))
+                })
+                .into_any_element(),
+        )
+    }
+
     fn file_fields(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         vec![self.text_field(
             db_connection::Text::FieldFile.into(),
@@ -671,6 +778,7 @@ impl Render for ConnectionForm {
         v_flex()
             .w_full()
             .gap_3()
+            .children(self.local_row(cx))
             .child(self.uri_row(cx))
             .child(self.text_field(
                 db_connection::Text::FieldName.into(),

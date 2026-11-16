@@ -60,6 +60,14 @@ pub enum Text {
     FillFromUri,
     UriFilled,
     UriIgnored(String),
+    /// The button that fills the form from a database container running on
+    /// this machine. `engine` is a product name, `container` the container's.
+    UseLocalContainer {
+        engine: String,
+        container: String,
+    },
+    /// Shown once that button has filled the form.
+    LocalContainerFilled(String),
     UriTlsNotApplied,
     UriEmpty,
     UriNoScheme,

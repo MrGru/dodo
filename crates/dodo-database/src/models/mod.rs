@@ -14,7 +14,8 @@
 //! the password-free persisted query schema ([`library`]), the proof that a
 //! row has a catalog-backed unique identity ([`identity`]),
 //! and the sole generated-mutation SQL owner ([`statement`]), and how a pasted
-//! connection URI becomes a filled-in form ([`uri`]).
+//! connection URI becomes a filled-in form ([`uri`]), and how a database
+//! running in a local container is recognised from plain data ([`local`]).
 //!
 //! The three exceptions to "nothing but data", all deliberate:
 //!
@@ -33,6 +34,7 @@ pub mod engine;
 pub mod error;
 pub mod identity;
 pub mod library;
+pub mod local;
 pub mod page;
 pub mod query;
 pub mod split;
