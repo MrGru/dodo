@@ -172,10 +172,20 @@ fn ssl_mode(mode: SslMode) -> PgSslMode {
 /// dodo ships no root certificate bundle of its own and does not intend to: the
 /// platform verifier is the same one `reqwest` already uses here, so a server
 /// certificate is trusted on exactly the terms the operating system says.
+///
+/// The crypto provider is named rather than taken from
+/// `ClientConfig::builder()`'s process default: dodo's graph enables both of
+/// rustls' providers (`ring` arrives through `hyper-rustls`), and with two
+/// enabled and none installed that default *panics* — which aborted the whole
+/// app on the first PostgreSQL connection that tried TLS. `aws-lc-rs` is the
+/// one the MySQL driver already uses.
 fn tls_connector() -> Result<tokio_postgres_rustls::MakeRustlsConnect, DbError> {
     use rustls_platform_verifier::BuilderVerifierExt as _;
 
-    let config = rustls::ClientConfig::builder()
+    let provider = std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|err| DbError::Unreachable(format!("TLS could not be set up: {err}")))?
         .with_platform_verifier()
         .map_err(|err| DbError::Unreachable(format!("TLS could not be set up: {err}")))?
         .with_no_client_auth();
@@ -2393,5 +2403,15 @@ mod tests {
             }
         }
         raw
+    }
+}
+
+#[cfg(test)]
+mod tls_tests {
+    /// Building the connector must not depend on a process-wide default
+    /// provider, which panics while two rustls providers are enabled.
+    #[::core::prelude::v1::test]
+    fn the_tls_connector_builds_without_a_default_provider() {
+        assert!(super::tls_connector().is_ok());
     }
 }
