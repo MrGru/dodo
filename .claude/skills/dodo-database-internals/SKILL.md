@@ -29,8 +29,10 @@ Sixteen things worth knowing before touching it:
   names another tool — only `crate::{database,i18n,app_icon,paths}` — so
   `grep -rn '^use crate::' crates/dodo-database/src/ | grep -vE 'crate::(i18n|app_icon|paths)'`
   returns nothing. (Other modules are *mentioned* in its doc comments; a pointer is not an edge.)
-  The design report proposed a "detect running database containers" prefill on the connection form
-  and it was dropped in *every* round, precisely so no compile-time edge exists between two tools.
+  The "use local database" button on a new connection's form detects a SQL database running in a
+  Docker/Podman container **without** that edge: `models/local.rs` decides from plain data, and
+  `main.rs` hands in Docker's container list through `observe_local_containers` — the same
+  inverted-`fn` move `dodo-input-method`'s `observe_languages` made. Keep it that way.
 - **The `Driver` capability set grows only with controls that read it.** Round 2 added `cancel`
   and `explain`; round 3 added `detail` and the DDL source; round 5 adds the optional mutation
   dialect read by the editing controls. `services/mod.rs` states it, and states how a non-SQL

@@ -43,6 +43,10 @@
 //!   command's captured output back into a status. Pure and platform-keyed by
 //!   [`crate::paths::HostOs`], the same trick `crate::paths` uses, so it is
 //!   unit tested for all three platforms without spawning a process.
+//!
+//! - [`running`] — the one shape handed to another tool: a running
+//!   container's image, environment and ports, for the Database Explorer's
+//!   "use local database" button (converted in `main.rs`).
 
 pub mod container;
 pub mod image;
@@ -50,6 +54,7 @@ pub mod inspect;
 pub mod logs;
 pub mod network;
 pub mod port;
+pub mod running;
 pub mod runtime;
 pub mod size;
 pub mod stats;

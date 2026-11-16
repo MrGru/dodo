@@ -113,8 +113,8 @@ The conventions:
 | Crate | Size | Inbound surface | What left the root manifest |
 |---|---|---|---|
 | `dodo-cleaner` | 93 files, 25,646 lines | `CleanerView`, `paths` | — |
-| `dodo-docker` | 43 files | `DockerPage`, `DockerView`, `init`, `paths` | `bollard`, `tokio` (`futures-util` stayed: the tray and input method also await a stream) |
-| `dodo-database` | 52 files | `DatabaseView`, `init`, `models::uri` | the four drivers, `sqlformat`, two rustls lines |
+| `dodo-docker` | 44 files | `DockerPage`, `DockerView`, `init`, `paths`, `running_containers` | `bollard`, `tokio` (`futures-util` stayed: the tray and input method also await a stream) |
+| `dodo-database` | 53 files | `DatabaseView`, `init`, `models::uri`, `observe_local_containers` | the four drivers, `sqlformat`, two rustls lines |
 | `dodo-api-explorer` | 77 files | `ApiExplorer`, `init`, `ScriptPolicy`, `ConsentPolicy`, `RequestSnapshot`, `services::curl` | `rquickjs` |
 | `dodo-updater` | — | `init`, the dialog | `reqwest` |
 | `dodo-input-method` | — | `InputMethod`, `init`, `load`, `views::InputMethodView` | — |

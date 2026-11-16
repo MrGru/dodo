@@ -32,6 +32,7 @@ use crate::models::inspect::{InspectDetail, InspectKind};
 use crate::models::logs::{LogLine, LogStream, lines_from_frames, tail};
 use crate::models::network::Network;
 use crate::models::port::PortMapping;
+use crate::models::running::RunningContainer;
 use crate::models::stats::{CpuSample, cpu_percent};
 use crate::models::status::ContainerStatus;
 use crate::models::time::parse_rfc3339_to_unix;
@@ -72,6 +73,44 @@ impl BollardEngine {
             .build()
             .ok();
         Self { runtime }
+    }
+
+    /// Every running container with its environment, for
+    /// [`crate::running_containers`]. Not on [`DockerEngine`]: no page of this
+    /// tool reads a container's environment, so no fake should have to supply
+    /// one. One inspect per container, because the list summary carries no
+    /// environment; a failed inspect keeps the row with an empty one.
+    pub fn running_containers(&self) -> Result<Vec<RunningContainer>, DockerError> {
+        self.block_on(async {
+            let docker = connect()?;
+            // `all` left off: the engine lists running containers only.
+            let options = ListContainersOptionsBuilder::new().build();
+            let summaries = docker
+                .list_containers(Some(options))
+                .await
+                .map_err(unreachable)?;
+
+            let mut containers = Vec::with_capacity(summaries.len());
+            for summary in &summaries {
+                let row = row_from_summary(summary);
+                let config = match docker.inspect_container(&row.id, None).await {
+                    Ok(details) => details.config,
+                    Err(_) => None,
+                };
+                let image = config
+                    .as_ref()
+                    .and_then(|config| config.image.clone())
+                    .filter(|image| !image.is_empty())
+                    .unwrap_or(row.image);
+                containers.push(RunningContainer {
+                    name: row.name,
+                    image,
+                    env: config.and_then(|config| config.env).unwrap_or_default(),
+                    ports: row.ports,
+                });
+            }
+            Ok(containers)
+        })
     }
 
     /// Drives one already-connected interaction to completion on the runtime.

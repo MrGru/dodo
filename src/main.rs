@@ -299,6 +299,10 @@ fn main() {
         docker::init(cx);
         // Binds copy-cell and copy-row while the Database result grid has focus.
         database::init(cx);
+        // The connection form's "use local database" button reads Docker's
+        // running containers. The two tools do not depend on each other, so
+        // this file — the only one naming both — hands the function over.
+        database::observe_local_containers(local_database_containers);
         // Binds undo, redo and the drawing-tool keys inside the Flow Canvas.
         flow::init(cx);
         // Binds the Mermaid preview's zoom shortcuts, scoped to the workspace.
@@ -407,6 +411,30 @@ fn main() {
 ///
 /// Fallible rather than panicking, because the tray's caller must not take the
 /// process down; `main` still treats a failure at launch as fatal.
+/// Docker's running containers in the Database Explorer's own plain shape.
+/// Only published ports cross: an unpublished one is unreachable from here.
+fn local_database_containers() -> Vec<database::models::local::LocalContainer> {
+    use database::models::local::{LocalContainer, PublishedPort};
+    docker::running_containers()
+        .into_iter()
+        .map(|container| LocalContainer {
+            name: container.name,
+            image: container.image,
+            env: container.env,
+            ports: container
+                .ports
+                .iter()
+                .filter_map(|port| {
+                    Some(PublishedPort {
+                        container: port.container,
+                        host: port.host?,
+                    })
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 fn open_main_window(cx: &mut App) -> Result<WindowHandle<Root>> {
     // A close-to-tray macOS app uses the accessory activation policy to leave
     // the Dock. Restore the regular policy before opening a real window.

@@ -190,6 +190,28 @@ pub use views::DatabaseView;
 
 pub(crate) const KEY_CONTEXT: &str = "DatabaseResult";
 
+/// Lists the containers running on this machine, for the connection form's
+/// "use local database" button. Blocking; always called off the UI thread.
+pub type LocalContainerSource = fn() -> Vec<models::local::LocalContainer>;
+
+static LOCAL_CONTAINERS: std::sync::OnceLock<LocalContainerSource> = std::sync::OnceLock::new();
+
+/// Hands this crate the one function that can list local containers.
+///
+/// The inverted edge `dodo-input-method`'s `observe_languages` set the pattern
+/// for: the Database Explorer must not depend on the Docker tool, so `main.rs`
+/// — the only file that names both — passes the function in. With none
+/// registered (the crate's own launcher, a test) the button simply never
+/// appears. See [`models::local`].
+pub fn observe_local_containers(source: LocalContainerSource) {
+    let _ = LOCAL_CONTAINERS.set(source);
+}
+
+/// The registered source, if any.
+pub(crate) fn local_container_source() -> Option<LocalContainerSource> {
+    LOCAL_CONTAINERS.get().copied()
+}
+
 actions!(database, [DatabaseCopyCell, DatabaseCopyRow]);
 
 /// Registers result-grid copy shortcuts after `gpui_kit::component::init`, so these
